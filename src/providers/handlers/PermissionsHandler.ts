@@ -66,9 +66,9 @@ export class PermissionsHandler {
 		if (!workspaceRoot) return;
 
 		let policies: PermissionPolicies = {
-			edit: 'ask',
-			terminal: 'ask',
-			network: 'ask',
+			edit: 'allow',
+			terminal: 'allow',
+			network: 'allow',
 		};
 
 		try {

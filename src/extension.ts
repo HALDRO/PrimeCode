@@ -19,101 +19,135 @@ export function activate(context: vscode.ExtensionContext) {
 	logger.info('Extension path:', context.extensionPath);
 	logger.info('Extension mode:', context.extensionMode);
 
-	try {
-		// Initialize clipboard context service for tracking copy events
-		const clipboardContextService = ClipboardContextService.getInstance();
-		context.subscriptions.push(clipboardContextService);
+	// Track provider for lazy initialization
+	let provider: ChatProvider | undefined;
+	let providerError: Error | undefined;
 
-		// Create main chat provider
-		logger.info('Creating ChatProvider...');
-		const provider = new ChatProvider(context.extensionUri, context);
-		logger.info('ChatProvider created');
-
-		const disposable = vscode.commands.registerCommand(
-			'primecode.openChat',
-			(column?: vscode.ViewColumn) => {
-				logger.info('openChat command executed');
-				provider.show(column);
-			},
-		);
-
-		const loadConversationDisposable = vscode.commands.registerCommand(
-			'primecode.loadConversation',
-			(filename: string) => {
-				logger.info('loadConversation command executed:', filename);
-				provider.loadConversation(filename);
-			},
-		);
-
-		// Command to open file diff from chat participant
-		const openFileDiffDisposable = vscode.commands.registerCommand(
-			'primecode.openFileDiff',
-			async (filePath: string) => {
-				try {
-					logger.info('openFileDiff command executed:', filePath);
-					const uri = vscode.Uri.file(filePath);
-					const gitExtension = vscode.extensions.getExtension('vscode.git');
-					if (gitExtension?.isActive) {
-						await vscode.commands.executeCommand('git.openChange', uri);
-					} else {
-						await vscode.commands.executeCommand('vscode.open', uri);
-					}
-				} catch (error) {
-					logger.error('Error opening diff:', error);
-					await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(filePath));
+	// Register command FIRST to ensure it's always available
+	const disposable = vscode.commands.registerCommand(
+		'primecode.openChat',
+		async (column?: vscode.ViewColumn) => {
+			logger.info('openChat command executed');
+			try {
+				if (!provider && !providerError) {
+					// Lazy initialize provider on first command execution
+					provider = await initializeProvider(context);
 				}
-			},
-		);
-
-		// Register TextDocumentContentProvider for virtual diff documents
-		// Uses cache-based approach instead of query-string to avoid encoding issues
-		const diffContentProvider = new (class implements vscode.TextDocumentContentProvider {
-			provideTextDocumentContent(uri: vscode.Uri): string {
-				return getDiffContent(uri);
+				if (provider) {
+					provider.show(column);
+				} else if (providerError) {
+					vscode.window.showErrorMessage(`PrimeCode failed to initialize: ${providerError.message}`);
+				}
+			} catch (error) {
+				logger.error('Error in openChat command:', error);
+				vscode.window.showErrorMessage(`PrimeCode error: ${error instanceof Error ? error.message : String(error)}`);
 			}
-		})();
-		const diffProviderDisposable = vscode.workspace.registerTextDocumentContentProvider(
-			'prime-diff',
-			diffContentProvider,
-		);
+		},
+	);
+	context.subscriptions.push(disposable);
+	logger.info('Command primecode.openChat registered');
 
-		// Periodically cleanup diff cache
-		const cacheCleanupInterval = setInterval(cleanupDiffCache, 60000);
-		context.subscriptions.push({ dispose: () => clearInterval(cacheCleanupInterval) });
+	// Initialize provider and other components
+	async function initializeProvider(ctx: vscode.ExtensionContext): Promise<ChatProvider | undefined> {
+		try {
+			// Initialize clipboard context service for tracking copy events
+			const clipboardContextService = ClipboardContextService.getInstance();
+			ctx.subscriptions.push(clipboardContextService);
 
-		// Register webview view provider for sidebar chat (using shared provider instance)
-		logger.info('Registering WebviewViewProvider...');
-		const webviewProvider = new ChatWebviewProvider(context.extensionUri, context, provider);
-		const webviewProviderDisposable = vscode.window.registerWebviewViewProvider(
-			'primecode.chat',
-			webviewProvider,
-		);
-		logger.info('WebviewViewProvider registered');
+			// Create main chat provider
+			logger.info('Creating ChatProvider...');
+			const newProvider = new ChatProvider(ctx.extensionUri, ctx);
+			logger.info('ChatProvider created');
 
-		// Create status bar item
-		const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-		statusBarItem.text = 'PrimeCode';
-		statusBarItem.tooltip = 'Open PrimeCode';
-		statusBarItem.command = 'primecode.openChat';
-		statusBarItem.show();
+			const loadConversationDisposable = vscode.commands.registerCommand(
+				'primecode.loadConversation',
+				(filename: string) => {
+					logger.info('loadConversation command executed:', filename);
+					newProvider.loadConversation(filename);
+				},
+			);
 
-		context.subscriptions.push(
-			disposable,
-			loadConversationDisposable,
-			openFileDiffDisposable,
-			diffProviderDisposable,
-			webviewProviderDisposable,
-			statusBarItem,
-		);
+			// Command to open file diff from chat participant
+			const openFileDiffDisposable = vscode.commands.registerCommand(
+				'primecode.openFileDiff',
+				async (filePath: string) => {
+					try {
+						logger.info('openFileDiff command executed:', filePath);
+						const uri = vscode.Uri.file(filePath);
+						const gitExtension = vscode.extensions.getExtension('vscode.git');
+						if (gitExtension?.isActive) {
+							await vscode.commands.executeCommand('git.openChange', uri);
+						} else {
+							await vscode.commands.executeCommand('vscode.open', uri);
+						}
+					} catch (error) {
+						logger.error('Error opening diff:', error);
+						await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(filePath));
+					}
+				},
+			);
 
-		logger.info('Extension activation completed successfully!');
+			// Register TextDocumentContentProvider for virtual diff documents
+			// Uses cache-based approach instead of query-string to avoid encoding issues
+			const diffContentProvider = new (class implements vscode.TextDocumentContentProvider {
+				provideTextDocumentContent(uri: vscode.Uri): string {
+					return getDiffContent(uri);
+				}
+			})();
+			const diffProviderDisposable = vscode.workspace.registerTextDocumentContentProvider(
+				'prime-diff',
+				diffContentProvider,
+			);
 
-		// Show output channel to make it visible
-		logger.show(true);
-	} catch (error) {
-		logger.error('Extension activation failed:', error);
-		throw error;
+			// Periodically cleanup diff cache
+			const cacheCleanupInterval = setInterval(cleanupDiffCache, 60000);
+			ctx.subscriptions.push({ dispose: () => clearInterval(cacheCleanupInterval) });
+
+			// Register webview view provider for sidebar chat (using shared provider instance)
+			logger.info('Registering WebviewViewProvider...');
+			const webviewProvider = new ChatWebviewProvider(ctx.extensionUri, ctx, newProvider);
+			const webviewProviderDisposable = vscode.window.registerWebviewViewProvider(
+				'primecode.chat',
+				webviewProvider,
+			);
+			logger.info('WebviewViewProvider registered');
+
+			ctx.subscriptions.push(
+				loadConversationDisposable,
+				openFileDiffDisposable,
+				diffProviderDisposable,
+				webviewProviderDisposable,
+			);
+
+			logger.info('Provider initialization completed successfully!');
+			return newProvider;
+		} catch (error) {
+			logger.error('Provider initialization failed:', error);
+			providerError = error instanceof Error ? error : new Error(String(error));
+			return undefined;
+		}
 	}
+
+	// Try to initialize provider eagerly but don't block activation
+	initializeProvider(context).then(p => {
+		provider = p;
+		if (p) {
+			// Create status bar item only after successful initialization
+			const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+			statusBarItem.text = 'PrimeCode';
+			statusBarItem.tooltip = 'Open PrimeCode';
+			statusBarItem.command = 'primecode.openChat';
+			statusBarItem.show();
+			context.subscriptions.push(statusBarItem);
+			logger.info('Extension activation completed successfully!');
+		}
+	}).catch(error => {
+		logger.error('Async provider initialization failed:', error);
+		providerError = error instanceof Error ? error : new Error(String(error));
+	});
+
+	// Show output channel to make it visible
+	logger.show(true);
 }
 
 export function deactivate() {

@@ -1166,7 +1166,7 @@ const mockVSCodeApi: VSCodeApi = {
 			mockVSCodeApi.postMessage({ type: 'getRules' });
 		} else if (msg.type === 'getPermissions') {
 			dispatchMockMessage('permissionsUpdated', {
-				policies: { edit: 'ask', terminal: 'ask', network: 'ask' },
+				policies: { edit: 'allow', terminal: 'allow', network: 'allow' },
 			});
 		} else if (msg.type === 'setPermissions') {
 			const { policies } = msg as {

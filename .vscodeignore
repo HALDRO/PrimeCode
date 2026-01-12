@@ -8,6 +8,7 @@ vsc-extension-quickstart.md
 **/eslint.config.mjs
 **/*.map
 **/*.ts
+!**/*.d.ts
 **/.vscode-test.*
 backup
 .claude
@@ -29,7 +30,13 @@ vite.config.webview.ts
 tsconfig.base.json
 tsconfig.extension.json
 biome.json
+esbuild.config.mjs
 out/__tests__/**
 out/__mocks__/**
 out/build-cache/**
 out/1.png
+out/providers/**
+out/services/**
+out/shared/**
+out/types/**
+out/utils/**

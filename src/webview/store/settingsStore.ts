@@ -374,9 +374,9 @@ export const useSettingsStore = create<SettingsState>(set => ({
 	rules: [],
 
 	policies: {
-		edit: 'ask',
-		terminal: 'ask',
-		network: 'ask',
+		edit: 'allow',
+		terminal: 'allow',
+		network: 'allow',
 	},
 
 	access: [],

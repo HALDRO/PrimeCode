@@ -2,7 +2,7 @@
 	"name": "primecode",
 	"displayName": "PrimeCode",
 	"description": "Universal AI CLI Interface - Unified chat for Claude Code, OpenCode and more",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"publisher": "HALDRO",
 	"author": "HALDRO",
 	"repository": {
@@ -59,7 +59,7 @@
 				"command": "primecode.openChat",
 				"title": "Open PrimeCode",
 				"category": "PrimeCode",
-				"icon": "icon.png"
+				"icon": "public/icon.png"
 			}
 		],
 		"menus": {
@@ -139,7 +139,7 @@
 				{
 					"id": "primecode",
 					"title": "PrimeCode",
-					"icon": "icon.png"
+					"icon": "public/icon.png"
 				}
 			]
 		},
@@ -258,19 +258,19 @@
 		}
 	},
 	"scripts": {
-		"vscode:prepublish": "bun run build",
-		"build": "bun run build:extension && bun run build:webview",
-		"build:extension": "tsc -b ./tsconfig.json",
+		"vscode:prepublish": "npm run build",
+		"build": "npm run build:extension && npm run build:webview",
+		"build:extension": "node esbuild.config.mjs --production",
 		"build:webview": "vite build --config vite.config.webview.ts",
-		"watch": "concurrently \"bun run watch:extension\" \"vite build --config vite.config.webview.ts --watch\"",
-		"watch:extension": "tsc -b -w ./tsconfig.json",
+		"watch": "concurrently \"npm run watch:extension\" \"vite build --config vite.config.webview.ts --watch\"",
+		"watch:extension": "node esbuild.config.mjs --watch",
 		"watch:webview": "vite build --config vite.config.webview.ts --watch",
 		"dev": "vite",
 		"pack": "vsce package --no-dependencies --out PrimeCode-$npm_package_version.vsix",
 		"release": "vsce publish --no-dependencies",
 		"lint:tsc": "tsc -b --pretty false ./tsconfig.json",
 		"lint:biome": "biome check --max-diagnostics=500 src/",
-		"lint": "bun run lint:fix && bun run lint:tsc",
+		"lint": "npm run lint:fix && npm run lint:tsc",
 		"lint:fix": "biome check --write --unsafe src/",
 		"format": "biome format --write src/",
 		"test": "vitest run",
@@ -301,6 +301,7 @@
 		"autoprefixer": "^10.4.20",
 		"babel-plugin-react-compiler": "^1.0.0",
 		"concurrently": "^9.2.1",
+		"esbuild": "^0.27.2",
 		"eslint": "^9.39.2",
 		"eslint-plugin-react-compiler": "^19.1.0-rc.2",
 		"eslint-plugin-tailwind-canonical-classes": "^1.1.0",
