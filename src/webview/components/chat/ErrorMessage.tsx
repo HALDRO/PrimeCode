@@ -119,7 +119,7 @@ export const ErrorMessage: React.FC<ErrorMessageProps> = ({
 				title: parsed.title,
 				accentColor: 'var(--color-error)',
 				gradientFrom: 'var(--color-error)',
-				gradientTo: '#c0392b',
+				gradientTo: 'color-mix(in srgb, var(--vscode-errorForeground) 80%, black)',
 				resumeLabel: 'Resume',
 			};
 		}
@@ -131,7 +131,8 @@ export const ErrorMessage: React.FC<ErrorMessageProps> = ({
 					title: 'Stopped by user',
 					accentColor: 'var(--color-warning, #f0ad4e)',
 					gradientFrom: 'var(--color-warning, #f0ad4e)',
-					gradientTo: '#d68910',
+					gradientTo:
+						'color-mix(in srgb, var(--vscode-editorGutter-modifiedBackground) 80%, black)',
 					resumeLabel: 'Continue',
 				};
 			case 'cli_crash':
@@ -140,7 +141,7 @@ export const ErrorMessage: React.FC<ErrorMessageProps> = ({
 					title: 'CLI process crashed unexpectedly',
 					accentColor: 'var(--color-error)',
 					gradientFrom: 'var(--color-error)',
-					gradientTo: '#c0392b',
+					gradientTo: 'color-mix(in srgb, var(--vscode-errorForeground) 80%, black)',
 					resumeLabel: 'Retry',
 				};
 			case 'connection_lost':
@@ -149,7 +150,7 @@ export const ErrorMessage: React.FC<ErrorMessageProps> = ({
 					title: 'Connection lost',
 					accentColor: 'var(--color-error)',
 					gradientFrom: 'var(--color-error)',
-					gradientTo: '#c0392b',
+					gradientTo: 'color-mix(in srgb, var(--vscode-errorForeground) 80%, black)',
 					resumeLabel: 'Reconnect',
 				};
 			case 'timeout':
@@ -158,7 +159,8 @@ export const ErrorMessage: React.FC<ErrorMessageProps> = ({
 					title: 'Request timed out',
 					accentColor: 'var(--color-warning, #f0ad4e)',
 					gradientFrom: 'var(--color-warning, #f0ad4e)',
-					gradientTo: '#d68910',
+					gradientTo:
+						'color-mix(in srgb, var(--vscode-editorGutter-modifiedBackground) 80%, black)',
 					resumeLabel: 'Retry',
 				};
 			default:
@@ -167,7 +169,8 @@ export const ErrorMessage: React.FC<ErrorMessageProps> = ({
 					title: parsed.title,
 					accentColor: 'var(--color-warning, #f0ad4e)',
 					gradientFrom: 'var(--color-warning, #f0ad4e)',
-					gradientTo: '#d68910',
+					gradientTo:
+						'color-mix(in srgb, var(--vscode-editorGutter-modifiedBackground) 80%, black)',
 					resumeLabel: 'Continue',
 				};
 		}
@@ -347,7 +350,7 @@ export const ErrorMessage: React.FC<ErrorMessageProps> = ({
 				{expanded && hasDetails && (
 					<div
 						className={cn(
-							'px-3 py-2 border-t border-white/5',
+							'px-3 py-2 border-t border-(--border-subtle)',
 							'text-md leading-relaxed text-vscode-foreground/80',
 							'font-mono whitespace-pre-wrap wrap-break-word',
 							'max-h-(--content-max-height-lg) overflow-y-auto',

@@ -92,7 +92,7 @@ const TodoHoverPopup = React.memo<{ todos: TodoItem[] }>(({ todos }) => {
 		<div className="absolute bottom-[calc(100%+8px)] left-1/2 -translate-x-1/2 z-100 pointer-events-none">
 			<div className="bg-(--tool-bg-header) border border-(--tool-border-color) rounded-lg overflow-hidden min-w-(--popup-min-width) max-w-(--popup-max-width) pointer-events-auto">
 				{/* Header */}
-				<div className="flex items-center gap-1.5 h-(--tool-header-height) px-(--tool-header-padding) border-b border-white/5 bg-(--tool-bg-header)">
+				<div className="flex items-center gap-1.5 h-(--tool-header-height) px-(--tool-header-padding) border-b border-(--border-subtle) bg-(--tool-bg-header)">
 					<TodoListIcon size={14} className="text-vscode-foreground opacity-80 shrink-0" />
 					<span className="text-sm text-vscode-foreground opacity-90">
 						{completedCount} of {totalCount} Done
@@ -144,7 +144,7 @@ const TodoSection: React.FC<{ hasFiles: boolean }> = React.memo(({ hasFiles }) =
 			onMouseEnter={() => setShowTodoPopup(true)}
 			onMouseLeave={() => setShowTodoPopup(false)}
 		>
-			<span className="flex items-center gap-(--gap-1-5) bg-transparent border-none px-(--gap-2) py-(--gap-1) rounded-sm cursor-default text-vscode-foreground opacity-70 transition-all duration-100 ease-out text-sm font-(family-name:--vscode-font-family) hover:bg-white/10 hover:opacity-100 whitespace-nowrap">
+			<span className="flex items-center gap-(--gap-1-5) bg-transparent border-none px-(--gap-2) py-(--gap-1) rounded-sm cursor-default text-vscode-foreground opacity-70 transition-all duration-100 ease-out text-sm font-(family-name:--vscode-font-family) hover:bg-vscode-list-hoverBackground hover:opacity-100 whitespace-nowrap">
 				<TodoListIcon size={12} className="shrink-0" />
 				<span>
 					{currentTodos.filter(t => t.status === 'completed').length}/{currentTodos.length}
@@ -162,7 +162,7 @@ const FileRow = React.memo<{
 	onAccept: () => void;
 	onReject: () => void;
 }>(({ file, onOpenDiff, onAccept, onReject }) => (
-	<div className="flex items-center h-(--file-row-height) text-sm font-(family-name:--vscode-font-family) rounded-sm transition-colors hover:bg-white/5 box-border">
+	<div className="flex items-center h-(--file-row-height) text-sm font-(family-name:--vscode-font-family) rounded-sm transition-colors hover:bg-(--alpha-5) box-border">
 		{/* Spacer - same width as header chevron */}
 		<span className="shrink-0 w-(--icon-md)" />
 

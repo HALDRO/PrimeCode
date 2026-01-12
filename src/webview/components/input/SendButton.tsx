@@ -80,7 +80,7 @@ export const SendButton: React.FC<SendButtonProps> = ({
 			return isHovered ? 'var(--color-stop-hover)' : 'var(--color-stop)';
 		}
 		if (isDisabled) {
-			return 'var(--vscode-foreground, rgba(255,255,255,0.8))';
+			return 'var(--vscode-foreground)';
 		}
 		if (isHovered || showPulse) {
 			return 'var(--color-thinking)';

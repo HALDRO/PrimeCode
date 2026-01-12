@@ -33,7 +33,7 @@ export const Switch: React.FC<SwitchProps> = ({
 	>
 		<div
 			className={cn(
-				'bg-white rounded-full shadow-[0_1px_2px_rgba(0,0,0,0.3)] transition-transform duration-200 ease-out',
+				'bg-vscode-button-foreground rounded-full shadow-[0_1px_2px_color-mix(in_srgb,var(--vscode-editor-background)_60%,transparent)] transition-transform duration-200 ease-out',
 				'w-(--switch-thumb) h-(--switch-thumb)',
 				checked ? 'translate-x-[14px]' : 'translate-x-(--switch-thumb-offset)',
 			)}

@@ -231,7 +231,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = React.memo(
 						</div>
 
 						{accessRequest && !isMcpTool(accessRequest.tool, mcpServerNames) && (
-							<div className="px-(--tool-header-padding) py-1 border-b border-white/6 bg-(--tool-bg-header)">
+							<div className="px-(--tool-header-padding) py-1 border-b border-(--border-subtle) bg-(--tool-bg-header)">
 								<InlineToolAccessGate
 									requestId={accessRequest.requestId}
 									tool={accessRequest.tool}

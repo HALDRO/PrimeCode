@@ -25,11 +25,11 @@
 						"code": 5,
 						"message": 6
 					},
-					"background": {
-						"activeOnStart": true,
-						"beginsPattern": "^\\[\\d+\\].*Starting compilation|^\\[\\d+\\].*File change detected|^\\[\\d+\\].*vite.*building",
-						"endsPattern": "^\\[\\d+\\].*Watching for file changes|^\\[\\d+\\].*Found \\d+ error"
-					}
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": "^\\$|vite|Starting compilation|File change detected",
+					"endsPattern": "ready in \\d+|Watching for file changes|Found \\d+ error"
+				}
 				}
 			],
 			"presentation": {

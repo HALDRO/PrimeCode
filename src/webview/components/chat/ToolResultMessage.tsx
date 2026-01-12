@@ -451,7 +451,7 @@ export const ToolResultMessage: React.FC<ToolResultMessageProps> = React.memo(
 
 						{/* Attachments (e.g., screenshots, generated images) */}
 						{attachments && attachments.length > 0 && (
-							<div className="p-(--tool-content-padding) border-t border-white/5 flex flex-wrap gap-2">
+							<div className="p-(--tool-content-padding) border-t border-(--border-subtle) flex flex-wrap gap-2">
 								{attachments.map(att => {
 									const isDataUrl = att.url?.startsWith('data:');
 									const isFileUrl = att.url?.startsWith('file://');
@@ -465,7 +465,7 @@ export const ToolResultMessage: React.FC<ToolResultMessageProps> = React.memo(
 												<img
 													src={att.url}
 													alt={displayName}
-													className="max-w-(--content-max-height-lg) max-h-(--content-max-height-md) rounded border border-white/10 object-contain"
+													className="max-w-(--content-max-height-lg) max-h-(--content-max-height-md) rounded border border-vscode-panel-border object-contain"
 												/>
 												<span className="text-xs text-vscode-foreground opacity-60">
 													{displayName}
@@ -482,7 +482,7 @@ export const ToolResultMessage: React.FC<ToolResultMessageProps> = React.memo(
 												type="button"
 												key={att.id}
 												onClick={() => postMessage('openFile', { filePath })}
-												className="flex items-center gap-1.5 px-2 py-1 bg-white/5 hover:bg-white/10 rounded text-xs cursor-pointer border-none text-vscode-textLink-foreground"
+												className="flex items-center gap-1.5 px-2 py-1 bg-(--alpha-5) hover:bg-vscode-list-hoverBackground rounded text-xs cursor-pointer border-none text-vscode-textLink-foreground"
 											>
 												{isImage ? '🖼️' : '📎'} {displayName}
 											</button>
@@ -497,7 +497,7 @@ export const ToolResultMessage: React.FC<ToolResultMessageProps> = React.memo(
 												href={att.url}
 												target="_blank"
 												rel="noopener noreferrer"
-												className="flex items-center gap-1.5 px-2 py-1 bg-white/5 hover:bg-white/10 rounded text-xs text-vscode-textLink-foreground hover:underline"
+												className="flex items-center gap-1.5 px-2 py-1 bg-(--alpha-5) hover:bg-vscode-list-hoverBackground rounded text-xs text-vscode-textLink-foreground hover:underline"
 											>
 												{isImage ? '🖼️' : '📎'} {displayName}
 											</a>
@@ -508,7 +508,7 @@ export const ToolResultMessage: React.FC<ToolResultMessageProps> = React.memo(
 									return (
 										<div
 											key={att.id}
-											className="flex items-center gap-1.5 px-2 py-1 bg-white/5 rounded text-xs"
+											className="flex items-center gap-1.5 px-2 py-1 bg-(--alpha-5) rounded text-xs"
 										>
 											<span className="text-vscode-foreground opacity-80">📎 {displayName}</span>
 										</div>
@@ -665,7 +665,7 @@ export const ToolResultMessage: React.FC<ToolResultMessageProps> = React.memo(
 					</div>
 
 					{expanded && (
-						<div className="pl-(--collapsible-indent) border-l border-white/6 ml-(--gap-1) py-1">
+						<div className="pl-(--collapsible-indent) border-l border-(--border-subtle) ml-(--gap-1) py-1">
 							<pre className="text-sm text-vscode-foreground opacity-70 whitespace-pre-wrap m-0">
 								{previewContent}
 							</pre>

@@ -16,26 +16,27 @@ import { OperationStatus } from './SettingsUI';
 
 const AgentsHelpContent = () => (
 	<div className="flex flex-col gap-1.5 text-sm">
-		<div className="font-semibold text-white/90">Agents Configuration</div>
-		<div className="text-white/70">
+		<div className="font-semibold text-vscode-foreground">Agents Configuration</div>
+		<div className="text-vscode-foreground">
 			All rules, commands, skills, and hooks are stored in{' '}
-			<code className="bg-white/10 px-1 rounded text-xs">.agents/</code> directory as the single
+			<code className="bg-(--alpha-10) px-1 rounded text-xs">.agents/</code> directory as the single
 			source of truth.
 		</div>
-		<div className="flex flex-col gap-0.5 text-white/70">
+		<div className="flex flex-col gap-0.5 text-vscode-foreground">
 			<div>
-				<span className="text-blue-400">Import</span> — copies from{' '}
-				<code className="bg-white/10 px-0.5 rounded text-xs">.claude/</code>,{' '}
-				<code className="bg-white/10 px-0.5 rounded text-xs">.cursor/</code> and{' '}
-				<code className="bg-white/10 px-0.5 rounded text-xs">.opencode/</code> into{' '}
-				<code className="bg-white/10 px-0.5 rounded text-xs">.agents/</code> (skips duplicates)
+				<span className="text-vscode-button-background">Import</span> — copies from{' '}
+				<code className="bg-(--alpha-10) px-0.5 rounded text-xs">.claude/</code>,{' '}
+				<code className="bg-(--alpha-10) px-0.5 rounded text-xs">.cursor/</code> and{' '}
+				<code className="bg-(--alpha-10) px-0.5 rounded text-xs">.opencode/</code> into{' '}
+				<code className="bg-(--alpha-10) px-0.5 rounded text-xs">.agents/</code> (skips duplicates)
 			</div>
 			<div>
-				<span className="text-green-400">Sync</span> — copies from{' '}
-				<code className="bg-white/10 px-0.5 rounded text-xs">.agents/</code> back to CLI directories
+				<span className="text-vscode-editorGutter-addedBackground">Sync</span> — copies from{' '}
+				<code className="bg-(--alpha-10) px-0.5 rounded text-xs">.agents/</code> back to CLI
+				directories
 			</div>
 		</div>
-		<div className="text-white/50 text-xs">
+		<div className="text-vscode-descriptionForeground text-xs">
 			Manage everything in one place while keeping all CLIs in sync.
 		</div>
 	</div>
@@ -47,7 +48,7 @@ export const RulesSettingsPanel: React.FC = () => {
 
 	return (
 		<div className="animate-fade-in">
-			<div className="flex items-center justify-center gap-(--gap-1-5) border-b border-white/10 pb-1.5 mb-2 mt-1.5">
+			<div className="flex items-center justify-center gap-(--gap-1-5) border-b border-vscode-panel-border pb-1.5 mb-2 mt-1.5">
 				{[
 					{ id: 'rules', label: 'Rules' },
 					{ id: 'commands', label: 'Commands' },
@@ -61,8 +62,8 @@ export const RulesSettingsPanel: React.FC = () => {
 						className={cn(
 							'px-2 py-0.5 text-sm font-medium rounded transition-colors',
 							activeTab === tab.id
-								? 'bg-white/10 text-white/90'
-								: 'text-white/60 hover:bg-white/5 hover:text-white/80',
+								? 'bg-vscode-list-hoverBackground text-vscode-foreground'
+								: 'text-vscode-descriptionForeground hover:bg-(--alpha-5) hover:text-vscode-foreground',
 						)}
 					>
 						{tab.label}
@@ -71,7 +72,7 @@ export const RulesSettingsPanel: React.FC = () => {
 				<Tooltip content={<AgentsHelpContent />} position="bottom" delay={200}>
 					<button
 						type="button"
-						className="ml-1 p-0.5 rounded text-white/40 hover:text-white/70 hover:bg-white/5 transition-colors"
+						className="ml-1 p-0.5 rounded text-vscode-descriptionForeground hover:text-vscode-foreground hover:bg-(--alpha-5) transition-colors"
 					>
 						<HelpCircleIcon size={14} />
 					</button>

@@ -21,7 +21,7 @@ export const buttonVariants = cva(
 				secondary:
 					'bg-vscode-button-secondaryBackground text-vscode-button-secondaryForeground hover:bg-vscode-button-secondaryHoverBackground',
 				ghost: 'bg-transparent text-vscode-foreground hover:bg-(--alpha-10)',
-				danger: 'bg-error text-white hover:opacity-90',
+				danger: 'bg-error text-vscode-button-foreground hover:opacity-90',
 				tool: 'bg-transparent text-vscode-foreground hover:bg-(--alpha-10) rounded-md',
 				icon: 'bg-transparent text-vscode-icon-foreground hover:bg-(--alpha-10) rounded-md p-(--gap-1)',
 			},

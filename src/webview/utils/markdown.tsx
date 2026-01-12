@@ -148,41 +148,49 @@ const syntaxHighlightStyles = cn(
 const components: Components = {
 	// Headings
 	h1: ({ children }) => (
-		<h1 className="text-sm font-bold text-white/90 mt-1.5 mb-0.5 first:mt-0 pb-0.5 border-b border-white/10">
+		<h1 className="text-sm font-bold text-vscode-foreground mt-1.5 mb-0.5 first:mt-0 pb-0.5 border-b border-vscode-panel-border">
 			{children}
 		</h1>
 	),
 	h2: ({ children }) => (
-		<h2 className="text-sm font-semibold text-white/90 mt-1.5 mb-0.5 first:mt-0">{children}</h2>
+		<h2 className="text-sm font-semibold text-vscode-foreground mt-1.5 mb-0.5 first:mt-0">
+			{children}
+		</h2>
 	),
 	h3: ({ children }) => (
-		<h3 className="text-base font-semibold text-white/90 mt-1 mb-0.5 first:mt-0">{children}</h3>
+		<h3 className="text-base font-semibold text-vscode-foreground mt-1 mb-0.5 first:mt-0">
+			{children}
+		</h3>
 	),
 	h4: ({ children }) => (
-		<h4 className="text-base font-medium text-white/90 mt-1 mb-0.5 first:mt-0">{children}</h4>
+		<h4 className="text-base font-medium text-vscode-foreground mt-1 mb-0.5 first:mt-0">
+			{children}
+		</h4>
 	),
 	h5: ({ children }) => (
-		<h5 className="text-md font-bold text-white/80 mt-1 mb-0.5 first:mt-0 uppercase tracking-wide">
+		<h5 className="text-md font-bold text-vscode-foreground mt-1 mb-0.5 first:mt-0 uppercase tracking-wide">
 			{children}
 		</h5>
 	),
 	h6: ({ children }) => (
-		<h6 className="text-md font-semibold text-white/70 mt-1 mb-0.5 first:mt-0">{children}</h6>
+		<h6 className="text-md font-semibold text-vscode-descriptionForeground mt-1 mb-0.5 first:mt-0">
+			{children}
+		</h6>
 	),
 
 	// Paragraphs
 	p: ({ children }) => (
-		<p className="text-base leading-relaxed text-white/80 mb-0.5 last:mb-0">{children}</p>
+		<p className="text-base leading-relaxed text-vscode-foreground mb-0.5 last:mb-0">{children}</p>
 	),
 
 	// Lists
 	ul: ({ children }) => (
-		<ul className="list-disc list-inside pl-(--gap-4) mb-0.5 text-base text-white/80 marker:text-white/50 space-y-0 [&>li::marker]:text-[1.2em]">
+		<ul className="list-disc list-inside pl-(--gap-4) mb-0.5 text-base text-vscode-foreground marker:text-vscode-descriptionForeground space-y-0 [&>li::marker]:text-[1.2em]">
 			{children}
 		</ul>
 	),
 	ol: ({ children }) => (
-		<ol className="list-decimal list-inside pl-(--gap-4) mb-0.5 text-base text-white/80 marker:text-white/50 space-y-0">
+		<ol className="list-decimal list-inside pl-(--gap-4) mb-0.5 text-base text-vscode-foreground marker:text-vscode-descriptionForeground space-y-0">
 			{children}
 		</ol>
 	),
@@ -192,7 +200,7 @@ const components: Components = {
 	a: ({ href, children }) => (
 		<a
 			href={href}
-			className="text-blue-400 hover:text-blue-300 hover:underline transition-colors decoration-blue-400/30 underline-offset-2"
+			className="text-vscode-textLink-foreground hover:text-vscode-textLink-activeForeground hover:underline transition-colors decoration-vscode-textLink-foreground/30 underline-offset-2"
 			target="_blank"
 			rel="noopener noreferrer"
 		>
@@ -202,17 +210,19 @@ const components: Components = {
 
 	// Blockquotes
 	blockquote: ({ children }) => (
-		<blockquote className="border-l-2 border-blue-500/50 bg-blue-500/5 px-2 py-0.5 my-0.5 rounded-r text-white/70 italic text-base">
+		<blockquote className="border-l-2 border-vscode-textLink-foreground/50 bg-vscode-textBlockQuote-background px-2 py-0.5 my-0.5 rounded-r text-vscode-descriptionForeground italic text-base">
 			{children}
 		</blockquote>
 	),
 
 	// Horizontal Rule
-	hr: () => <hr className="border-none h-px bg-white/10 my-0.5" />,
+	hr: () => <hr className="border-none h-px bg-vscode-panel-border my-0.5" />,
 
 	// Formatting
-	strong: ({ children }) => <strong className="font-semibold text-white/95">{children}</strong>,
-	em: ({ children }) => <em className="italic text-white/80">{children}</em>,
+	strong: ({ children }) => (
+		<strong className="font-semibold text-vscode-foreground">{children}</strong>
+	),
+	em: ({ children }) => <em className="italic text-vscode-foreground">{children}</em>,
 	del: ({ children }) => <del className="line-through opacity-70">{children}</del>,
 
 	// Code Blocks & Inline Code
@@ -246,7 +256,7 @@ const components: Components = {
 				<div className="group/codeblock isolate relative my-0.5 rounded-lg border border-(--tool-border-color) overflow-hidden bg-(--tool-bg-header)">
 					{/* Floating controls - absolute positioned, z-index scoped by isolate */}
 					<div className="absolute right-0 top-0 z-1 flex items-center gap-1 p-1 opacity-0 group-hover/codeblock:opacity-100 transition-opacity bg-(--tool-bg-header) rounded-bl">
-						<span className="text-xs font-mono text-white/30 pointer-events-none select-none">
+						<span className="text-xs font-mono text-vscode-descriptionForeground/50 pointer-events-none select-none">
 							{displayName}
 						</span>
 						<CopyButton code={codeContent} />
@@ -256,7 +266,7 @@ const components: Components = {
 						<code
 							className={cn(
 								'block p-(--tool-content-padding) font-mono text-md leading-(--line-height-code) whitespace-pre',
-								'text-[#d4d4d4] bg-(--tool-bg-header) w-fit min-w-full',
+								'text-vscode-foreground bg-(--tool-bg-header) w-fit min-w-full',
 								syntaxHighlightStyles,
 								className,
 							)}
@@ -286,10 +296,10 @@ const components: Components = {
 						onClick={handleClick}
 						className={cn(
 							'inline-flex items-center gap-1 px-1 py-px mx-0.5 rounded-sm',
-							'bg-transparent hover:bg-white/10 text-blue-400 hover:text-blue-300',
+							'bg-transparent hover:bg-vscode-list-hoverBackground text-vscode-textLink-foreground hover:text-vscode-textLink-activeForeground',
 							'text-md font-mono',
 							'transition-colors duration-150 cursor-pointer',
-							'hover:underline underline-offset-2 decoration-blue-400/50',
+							'hover:underline underline-offset-2 decoration-vscode-textLink-foreground/50',
 						)}
 					>
 						<FileTypeIcon name={fileName} size={11} />
@@ -302,7 +312,7 @@ const components: Components = {
 		// Regular inline code - styled like a hovered link
 		return (
 			<code
-				className="px-1 py-px mx-0.5 rounded-sm bg-white/10 text-blue-300 text-md font-mono"
+				className="px-1 py-px mx-0.5 rounded-sm bg-(--alpha-10) text-vscode-textLink-foreground text-md font-mono"
 				{...props}
 			>
 				{children}
@@ -316,7 +326,7 @@ const components: Components = {
 			<img
 				src={src}
 				alt={alt || 'Image'}
-				className="max-w-full h-auto rounded border border-white/10"
+				className="max-w-full h-auto rounded border border-vscode-panel-border"
 				loading="lazy"
 			/>
 		</div>
@@ -329,7 +339,7 @@ const components: Components = {
 		</div>
 	),
 	thead: ({ children }) => (
-		<thead className="bg-(--tool-bg-header) text-vscode-foreground font-medium border-b border-white/5">
+		<thead className="bg-(--tool-bg-header) text-vscode-foreground font-medium border-b border-(--border-subtle)">
 			{children}
 		</thead>
 	),
@@ -337,17 +347,17 @@ const components: Components = {
 		<tbody className="text-vscode-foreground/90 bg-(--tool-bg-header)">{children}</tbody>
 	),
 	tr: ({ children }) => (
-		<tr className="border-b border-white/5 last:border-b-0 hover:bg-white/2 transition-colors">
+		<tr className="border-b border-(--border-subtle) last:border-b-0 hover:bg-(--alpha-5) transition-colors">
 			{children}
 		</tr>
 	),
 	th: ({ children }) => (
-		<th className="px-(--tool-content-padding) py-1.5 text-left font-medium text-sm text-vscode-descriptionForeground border-r border-white/5 last:border-r-0">
+		<th className="px-(--tool-content-padding) py-1.5 text-left font-medium text-sm text-vscode-descriptionForeground border-r border-(--border-subtle) last:border-r-0">
 			{children}
 		</th>
 	),
 	td: ({ children }) => (
-		<td className="px-(--tool-content-padding) py-1.5 text-md border-r border-white/5 last:border-r-0">
+		<td className="px-(--tool-content-padding) py-1.5 text-md border-r border-(--border-subtle) last:border-r-0">
 			{children}
 		</td>
 	),

@@ -10,4 +10,5 @@ backup
 cli-sources/
 _wgun/
 docs/.*
+scripts/.*
 AGENTS.md

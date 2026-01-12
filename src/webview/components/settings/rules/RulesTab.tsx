@@ -139,7 +139,7 @@ export const RulesTab: React.FC = () => {
 									<button
 										type="button"
 										onClick={() => postMessage('openFile', { filePath: rule.path })}
-										className="p-1 rounded hover:bg-white/10 text-white/50 hover:text-white/80 transition-colors"
+										className="p-1 rounded hover:bg-vscode-list-hoverBackground text-vscode-descriptionForeground hover:text-vscode-foreground transition-colors"
 									>
 										<EditIcon size={12} />
 									</button>

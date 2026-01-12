@@ -59,9 +59,9 @@ const NavButton = React.memo<{
 			onClick={onClick}
 			aria-label={item.label}
 			className={cn(
-				'flex items-center gap-1.5 px-1.5 h-(--btn-height-sm) bg-transparent border-none rounded-sm cursor-pointer transition-all duration-75 text-sm text-white/60',
-				'hover:bg-white/5 hover:text-white/90',
-				isActive && 'bg-white/10 text-white/90',
+				'flex items-center gap-1.5 px-1.5 h-(--btn-height-sm) bg-transparent border-none rounded-sm cursor-pointer transition-all duration-75 text-sm text-vscode-descriptionForeground',
+				'hover:bg-vscode-list-hoverBackground hover:text-vscode-foreground',
+				isActive && 'bg-vscode-list-hoverBackground text-vscode-foreground',
 				className ?? 'w-full',
 			)}
 		>

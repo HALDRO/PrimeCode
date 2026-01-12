@@ -20,8 +20,8 @@
 <p align="center">
   <img src="https://img.shields.io/badge/version-1.1.0-blue.svg" alt="Version">
   <img src="https://img.shields.io/badge/status-beta-orange.svg" alt="Status">
-  <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">
-  <img src="https://img.shields.io/badge/VS%20Code-1.94+-purple.svg" alt="VS Code">
+  <img src="https://img.shields.io/badge/license-Apache--2.0-green.svg" alt="License">
+  <img src="https://img.shields.io/badge/VS%20Code-1.107+-purple.svg" alt="VS Code">
 </p>
 
 <p align="center">

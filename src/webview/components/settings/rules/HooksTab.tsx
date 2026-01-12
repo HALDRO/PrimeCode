@@ -116,13 +116,13 @@ export const HooksTab: React.FC = () => {
 
 			{isCreatingHook && (
 				<SettingsGroup>
-					<div className="p-3 flex flex-col gap-3 bg-black/20 rounded-md">
-						<h3 className="text-xs font-semibold uppercase tracking-wider text-white/50">
+					<div className="p-3 flex flex-col gap-3 bg-(--alpha-5) rounded-md">
+						<h3 className="text-xs font-semibold uppercase tracking-wider text-vscode-descriptionForeground">
 							New Hook
 						</h3>
 
 						<div className="flex flex-col gap-1">
-							<label htmlFor="hook-name" className="text-xs text-white/50">
+							<label htmlFor="hook-name" className="text-xs text-vscode-descriptionForeground">
 								Name
 							</label>
 							<input
@@ -131,20 +131,20 @@ export const HooksTab: React.FC = () => {
 								value={newHookName}
 								onChange={e => setNewHookName(e.target.value)}
 								placeholder="my-hook-rule"
-								className="w-full px-2 py-1.5 text-xs bg-white/5 border border-white/10 rounded text-white/90 placeholder:text-white/30 focus:outline-none focus:border-white/30"
+								className="w-full px-2 py-1.5 text-xs bg-vscode-input-background border border-vscode-input-border rounded text-vscode-input-foreground placeholder:text-vscode-input-placeholderForeground focus:outline-none focus:border-vscode-focusBorder"
 							/>
 						</div>
 
 						<div className="grid grid-cols-2 gap-2">
 							<div className="flex flex-col gap-1">
-								<label htmlFor="hook-event" className="text-xs text-white/50">
+								<label htmlFor="hook-event" className="text-xs text-vscode-descriptionForeground">
 									Event
 								</label>
 								<select
 									id="hook-event"
 									value={newHookEvent}
 									onChange={e => setNewHookEvent(e.target.value)}
-									className="w-full px-2 py-1.5 text-xs bg-white/5 border border-white/10 rounded text-white/90 focus:outline-none focus:border-white/30"
+									className="w-full px-2 py-1.5 text-xs bg-vscode-input-background border border-vscode-input-border rounded text-vscode-input-foreground focus:outline-none focus:border-vscode-focusBorder"
 								>
 									<option value="bash">bash</option>
 									<option value="code_edit">code_edit</option>
@@ -152,7 +152,7 @@ export const HooksTab: React.FC = () => {
 								</select>
 							</div>
 							<div className="flex flex-col gap-1">
-								<label htmlFor="hook-pattern" className="text-xs text-white/50">
+								<label htmlFor="hook-pattern" className="text-xs text-vscode-descriptionForeground">
 									Pattern (Regex)
 								</label>
 								<input
@@ -161,20 +161,20 @@ export const HooksTab: React.FC = () => {
 									value={newHookPattern}
 									onChange={e => setNewHookPattern(e.target.value)}
 									placeholder="rm -rf .*"
-									className="w-full px-2 py-1.5 text-xs bg-white/5 border border-white/10 rounded text-white/90 placeholder:text-white/30 focus:outline-none focus:border-white/30"
+									className="w-full px-2 py-1.5 text-xs bg-vscode-input-background border border-vscode-input-border rounded text-vscode-input-foreground placeholder:text-vscode-input-placeholderForeground focus:outline-none focus:border-vscode-focusBorder"
 								/>
 							</div>
 						</div>
 
 						<div className="flex flex-col gap-1">
-							<label htmlFor="hook-content" className="text-xs text-white/50">
+							<label htmlFor="hook-content" className="text-xs text-vscode-descriptionForeground">
 								Message / Warning
 							</label>
 							<textarea
 								id="hook-content"
 								value={newHookContent}
 								onChange={e => setNewHookContent(e.target.value)}
-								className="w-full h-20 px-2 py-1.5 text-xs font-mono bg-white/5 border border-white/10 rounded text-white/90 placeholder:text-white/30 focus:outline-none focus:border-white/30 resize-y"
+								className="w-full h-20 px-2 py-1.5 text-xs font-mono bg-vscode-input-background border border-vscode-input-border rounded text-vscode-input-foreground placeholder:text-vscode-input-placeholderForeground focus:outline-none focus:border-vscode-focusBorder resize-y"
 								placeholder="Warning text to show the user..."
 							/>
 						</div>
@@ -193,7 +193,9 @@ export const HooksTab: React.FC = () => {
 
 			<SettingsGroup>
 				{hooks.isLoading ? (
-					<div className="p-4 text-center text-white/50 text-xs">Loading hooks...</div>
+					<div className="p-4 text-center text-vscode-descriptionForeground text-xs">
+						Loading hooks...
+					</div>
 				) : hooks.items.length === 0 ? (
 					<EmptyState>No hook rules found. Create one or import from Claude.</EmptyState>
 				) : (
@@ -209,7 +211,7 @@ export const HooksTab: React.FC = () => {
 									<button
 										type="button"
 										onClick={() => handleOpenHook(hook.name)}
-										className="p-1 rounded hover:bg-white/10 text-white/50 hover:text-white/80 transition-colors"
+										className="p-1 rounded hover:bg-vscode-list-hoverBackground text-vscode-descriptionForeground hover:text-vscode-foreground transition-colors"
 									>
 										<EditIcon size={12} />
 									</button>
@@ -218,7 +220,7 @@ export const HooksTab: React.FC = () => {
 									<button
 										type="button"
 										onClick={() => handleDeleteHook(hook.name)}
-										className="p-1 rounded hover:bg-red-500/20 text-white/50 hover:text-red-400 transition-colors"
+										className="p-1 rounded hover:bg-vscode-errorForeground/20 text-vscode-descriptionForeground hover:text-vscode-errorForeground transition-colors"
 									>
 										<TrashIcon size={12} />
 									</button>

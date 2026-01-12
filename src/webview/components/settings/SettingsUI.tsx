@@ -32,7 +32,7 @@ interface GroupTitleProps {
 export const GroupTitle: React.FC<GroupTitleProps> = ({ children, className }) => (
 	<h3
 		className={cn(
-			'text-xs font-medium text-white/50 mb-(--gap-2) uppercase tracking-wide',
+			'text-xs font-medium text-vscode-descriptionForeground mb-(--gap-2) uppercase tracking-wide',
 			className,
 		)}
 	>
@@ -52,7 +52,7 @@ interface SettingsGroupProps {
 export const SettingsGroup: React.FC<SettingsGroupProps> = ({ children, className }) => (
 	<div
 		className={cn(
-			'border border-white/10 rounded overflow-hidden mb-(--gap-6) mx-(--gap-1) bg-white/2',
+			'border border-vscode-panel-border rounded overflow-hidden mb-(--gap-6) mx-(--gap-1) bg-(--alpha-5)',
 			className,
 		)}
 	>
@@ -83,12 +83,12 @@ export const SettingRow: React.FC<SettingRowProps> = ({
 		<div
 			className={cn(
 				'flex items-center px-2.5 py-1.5 gap-2 min-h-(--settings-row-height)',
-				!last && 'border-b border-white/6',
-				'hover:bg-white/3 transition-colors',
+				!last && 'border-b border-(--border-subtle)',
+				'hover:bg-vscode-list-hoverBackground transition-colors',
 				className,
 			)}
 		>
-			<span className="flex-1 text-sm text-white/90 whitespace-nowrap">{title}</span>
+			<span className="flex-1 text-sm text-vscode-foreground whitespace-nowrap">{title}</span>
 			<div className="shrink-0 ml-auto">{children}</div>
 		</div>
 	);
@@ -146,9 +146,10 @@ export const StatusMessage: React.FC<StatusMessageProps> = ({
 		<div
 			className={cn(
 				'text-2xs px-2 py-1 rounded flex items-center gap-1.5',
-				isLoading && 'bg-blue-500/10 text-blue-400',
-				success && 'bg-green-500/10 text-green-400',
-				error && 'bg-red-500/10 text-red-400',
+				isLoading && 'bg-vscode-button-background/10 text-vscode-button-background',
+				success &&
+					'bg-vscode-editorGutter-addedBackground/10 text-vscode-editorGutter-addedBackground',
+				error && 'bg-vscode-errorForeground/10 text-vscode-errorForeground',
 				className,
 			)}
 		>
@@ -230,25 +231,29 @@ export const ExpandableRow: React.FC<ExpandableRowProps> = ({
 	last = false,
 	children,
 }) => (
-	<div className={cn(!last && 'border-b border-white/6')}>
+	<div className={cn(!last && 'border-b border-(--border-subtle)')}>
 		<button
 			type="button"
 			onClick={onToggle}
-			className="w-full flex items-center justify-between px-2.5 py-1.5 gap-2 min-h-(--settings-row-height) hover:bg-white/3 transition-colors"
+			className="w-full flex items-center justify-between px-2.5 py-1.5 gap-2 min-h-(--settings-row-height) hover:bg-vscode-list-hoverBackground transition-colors"
 		>
 			<div className="flex items-center gap-2">
 				{statusDot !== 'none' && (
 					<div
 						className={cn(
 							'w-1.5 h-1.5 rounded-full',
-							statusDot === 'connected' ? 'bg-green-500' : 'bg-white/20',
+							statusDot === 'connected'
+								? 'bg-vscode-editorGutter-addedBackground'
+								: 'bg-(--alpha-20)',
 						)}
 					/>
 				)}
 				<span
 					className={cn(
 						'text-sm',
-						statusDot === 'connected' || statusDot === 'none' ? 'text-white/80' : 'text-white/50',
+						statusDot === 'connected' || statusDot === 'none'
+							? 'text-vscode-foreground'
+							: 'text-vscode-descriptionForeground',
 					)}
 				>
 					{title}
@@ -256,15 +261,17 @@ export const ExpandableRow: React.FC<ExpandableRowProps> = ({
 				{badge}
 			</div>
 			<div className="flex items-center gap-2">
-				{subtitle && <span className="text-2xs text-white/40">{subtitle}</span>}
+				{subtitle && <span className="text-2xs text-vscode-descriptionForeground">{subtitle}</span>}
 				{expanded ? (
-					<ChevronDownIcon size={12} className="text-white/40" />
+					<ChevronDownIcon size={12} className="text-vscode-descriptionForeground" />
 				) : (
-					<ChevronRightIcon size={12} className="text-white/40" />
+					<ChevronRightIcon size={12} className="text-vscode-descriptionForeground" />
 				)}
 			</div>
 		</button>
-		{expanded && <div className="bg-black/20 border-t border-white/5 space-y-0.5">{children}</div>}
+		{expanded && (
+			<div className="bg-(--alpha-5) border-t border-(--border-subtle) space-y-0.5">{children}</div>
+		)}
 	</div>
 );
 
@@ -281,11 +288,11 @@ interface ModelListProps {
 export const ModelList: React.FC<ModelListProps> = ({ children, maxHeight = 160, className }) => (
 	<div className="p-(--gap-2)">
 		<ScrollContainer
-			className={cn('border border-white/10 rounded', className)}
+			className={cn('border border-vscode-panel-border rounded', className)}
 			style={{ maxHeight }}
 			autoHide="scroll"
 		>
-			<div className="divide-y divide-white/6">{children}</div>
+			<div className="divide-y divide-(--border-subtle)">{children}</div>
 		</ScrollContainer>
 	</div>
 );
@@ -303,7 +310,7 @@ interface ModelItemProps {
 
 export const ModelItem: React.FC<ModelItemProps> = ({ name, id, children }) => (
 	<div className="flex items-center justify-between px-2.5 py-1.5 min-h-(--settings-row-height)">
-		<span className="text-sm text-white/90 truncate flex-1" title={id || name}>
+		<span className="text-sm text-vscode-foreground truncate flex-1" title={id || name}>
 			{name}
 		</span>
 		<div className="flex items-center gap-2 shrink-0">{children}</div>
@@ -326,10 +333,10 @@ export const SettingsStatusIndicator: React.FC<StatusIndicatorProps> = ({
 	className,
 }) => {
 	const colorMap = {
-		loading: 'rgba(255, 255, 255, 0.5)',
-		success: 'rgb(34, 197, 94)',
-		error: 'rgb(239, 68, 68)',
-		idle: 'rgba(255, 255, 255, 0.4)',
+		loading: 'var(--vscode-descriptionForeground)',
+		success: 'var(--vscode-editorGutter-addedBackground)',
+		error: 'var(--vscode-errorForeground)',
+		idle: 'var(--vscode-descriptionForeground)',
 	};
 
 	const color = colorMap[status];
@@ -364,10 +371,10 @@ export const SettingsBadge: React.FC<SettingsBadgeProps> = ({
 	className,
 }) => {
 	const variantClasses = {
-		default: 'bg-white/8 text-white/60',
-		blue: 'bg-blue-500/20 text-blue-400',
-		purple: 'bg-purple-500/20 text-purple-400',
-		green: 'bg-green-500/20 text-green-400',
+		default: 'bg-(--alpha-10) text-vscode-descriptionForeground',
+		blue: 'bg-(--alpha-10) text-vscode-button-background',
+		purple: 'bg-(--alpha-10) text-vscode-focusBorder',
+		green: 'bg-(--alpha-10) text-vscode-editorGutter-addedBackground',
 	};
 
 	return (
@@ -389,7 +396,7 @@ interface ErrorBoxProps {
 export const ErrorBox: React.FC<ErrorBoxProps> = ({ children, className }) => (
 	<div
 		className={cn(
-			'mx-2.5 mb-1.5 p-1.5 bg-red-500/10 border border-red-500/20 rounded text-xs text-red-400',
+			'mx-2.5 mb-1.5 p-1.5 bg-vscode-errorForeground/10 border border-vscode-errorForeground/20 rounded text-xs text-vscode-errorForeground',
 			className,
 		)}
 	>
@@ -407,7 +414,9 @@ interface EmptyStateProps {
 }
 
 export const EmptyState: React.FC<EmptyStateProps> = ({ children, className }) => (
-	<div className={cn('px-2.5 py-2 text-sm text-white/50', className)}>{children}</div>
+	<div className={cn('px-2.5 py-2 text-sm text-vscode-descriptionForeground', className)}>
+		{children}
+	</div>
 );
 
 // =============================================================================
@@ -461,14 +470,14 @@ export const CLIStatusBar: React.FC<CLIStatusBarProps> = ({
 
 	// Status color logic - error takes priority
 	const statusColor = error
-		? 'rgb(239, 68, 68)'
+		? 'var(--vscode-errorForeground)'
 		: isChecking
-			? 'rgba(255, 255, 255, 0.5)'
+			? 'var(--vscode-descriptionForeground)'
 			: installed
 				? updateAvailable
-					? 'rgb(251, 191, 36)'
-					: 'rgb(34, 197, 94)'
-				: 'rgb(239, 68, 68)';
+					? 'var(--vscode-editorGutter-modifiedBackground)'
+					: 'var(--vscode-editorGutter-addedBackground)'
+				: 'var(--vscode-errorForeground)';
 
 	// Status text logic - error takes priority
 	const statusText = error
@@ -488,14 +497,14 @@ export const CLIStatusBar: React.FC<CLIStatusBarProps> = ({
 		!error && (variant === 'claude' ? updateAvailable || !installed : !installed && !isChecking);
 
 	return (
-		<div className="mt-2.5 p-2.5 mx-(--gap-1) bg-white/3 border border-white/8 rounded text-xs">
+		<div className="mt-2.5 p-2.5 mx-(--gap-1) bg-(--alpha-10) border border-vscode-panel-border rounded text-xs">
 			{/* Header row */}
 			<div className={cn('flex items-center justify-between', showInstallCommand && 'mb-2')}>
 				<div className="flex items-center gap-1.5">
 					<TerminalIcon size={12} className="opacity-60" />
-					<span className="text-white/60 font-medium">{config.name}</span>
+					<span className="text-vscode-descriptionForeground font-medium">{config.name}</span>
 					{version && (
-						<span className="px-(--gap-2) py-px bg-white/8 rounded-sm text-white/70">
+						<span className="px-(--gap-2) py-px bg-(--alpha-10) rounded-sm text-vscode-foreground">
 							v{version}
 						</span>
 					)}
@@ -517,10 +526,10 @@ export const CLIStatusBar: React.FC<CLIStatusBarProps> = ({
 							onClick={onRefresh}
 							disabled={isChecking}
 							className={cn(
-								'bg-none border-none p-(--gap-1)_(--gap-2) text-white/50 flex items-center rounded-sm',
+								'bg-none border-none p-(--gap-1)_(--gap-2) text-vscode-descriptionForeground flex items-center rounded-sm',
 								isChecking
 									? 'cursor-not-allowed opacity-50'
-									: 'cursor-pointer hover:bg-white/10 hover:text-white/80',
+									: 'cursor-pointer hover:bg-vscode-list-hoverBackground hover:text-vscode-foreground',
 							)}
 						>
 							<RefreshIcon size={11} />
@@ -530,7 +539,7 @@ export const CLIStatusBar: React.FC<CLIStatusBarProps> = ({
 						<button
 							type="button"
 							onClick={onOpenDocs}
-							className="bg-none border-none p-(--gap-1)_(--gap-2) cursor-pointer text-white/50 flex items-center rounded-sm hover:bg-white/10 hover:text-white/80"
+							className="bg-none border-none p-(--gap-1)_(--gap-2) cursor-pointer text-vscode-descriptionForeground flex items-center rounded-sm hover:bg-vscode-list-hoverBackground hover:text-vscode-foreground"
 						>
 							<ExternalLinkIcon size={11} />
 						</button>
@@ -540,11 +549,11 @@ export const CLIStatusBar: React.FC<CLIStatusBarProps> = ({
 
 			{/* Install/Update command */}
 			{showInstallCommand && (
-				<div className="flex items-center gap-1.5 p-(--gap-2)_(--gap-3) bg-black/30 hover:bg-black/30 rounded-sm">
+				<div className="flex items-center gap-1.5 p-(--gap-2)_(--gap-3) bg-(--alpha-10) hover:bg-(--alpha-10) rounded-sm">
 					<code className="flex-1 text-xs">
-						<span className="text-[#e5c07b]">npm</span>
-						<span className="text-white/90"> i -g </span>
-						<span className="text-[#98c379]">{config.package}</span>
+						<span className="text-vscode-editorGutter-modifiedBackground">npm</span>
+						<span className="text-vscode-foreground"> i -g </span>
+						<span className="text-vscode-editorGutter-addedBackground">{config.package}</span>
 					</code>
 					<Tooltip content={copied ? 'Copied!' : 'Copy command'} position="top" delay={200}>
 						<button
@@ -552,7 +561,9 @@ export const CLIStatusBar: React.FC<CLIStatusBarProps> = ({
 							onClick={handleCopy}
 							className={cn(
 								'bg-none border-none p-0.5 cursor-pointer flex items-center rounded-sm',
-								copied ? 'text-green-500' : 'text-white/50',
+								copied
+									? 'text-vscode-editorGutter-addedBackground'
+									: 'text-vscode-descriptionForeground',
 							)}
 						>
 							{copied ? <CheckCircleIcon size={11} /> : <CopyIcon size={11} />}
@@ -563,9 +574,9 @@ export const CLIStatusBar: React.FC<CLIStatusBarProps> = ({
 
 			{/* Loading providers state (OpenCode only) */}
 			{variant === 'opencode' && installed && isLoadingProviders && !error && (
-				<div className="mt-2 pt-2 border-t border-white/6 flex items-center gap-1.5">
-					<RefreshIcon size={10} className="animate-spin text-white/50" />
-					<span className="text-white/50">Loading providers...</span>
+				<div className="mt-2 pt-2 border-t border-(--border-subtle) flex items-center gap-1.5">
+					<RefreshIcon size={10} className="animate-spin text-vscode-descriptionForeground" />
+					<span className="text-vscode-descriptionForeground">Loading providers...</span>
 				</div>
 			)}
 		</div>

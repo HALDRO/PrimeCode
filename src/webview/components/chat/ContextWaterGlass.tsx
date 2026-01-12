@@ -22,12 +22,12 @@ export const ContextWaterGlass: React.FC<ContextWaterGlassProps> = ({ isVisible 
 	// Water color based on fill level
 	const getWaterColor = (opacityScale = 1) => {
 		if (percentage > 90) {
-			return `rgba(239, 68, 68, ${0.25 * opacityScale})`;
+			return `color-mix(in srgb, var(--vscode-errorForeground) ${25 * opacityScale}%, transparent)`;
 		} // Muted Red
 		if (percentage > 70) {
-			return `rgba(245, 158, 11, ${0.2 * opacityScale})`;
+			return `color-mix(in srgb, var(--vscode-editorGutter-modifiedBackground) ${20 * opacityScale}%, transparent)`;
 		} // Muted Amber
-		return `rgba(168, 85, 247, ${0.15 * opacityScale})`; // Muted Purple
+		return `color-mix(in srgb, var(--vscode-focusBorder) ${15 * opacityScale}%, transparent)`; // Muted Purple
 	};
 
 	return (
@@ -48,7 +48,7 @@ export const ContextWaterGlass: React.FC<ContextWaterGlassProps> = ({ isVisible 
 				<title>Context Usage</title>
 				<defs>
 					<linearGradient id="waterGradient" x1="0" y1="0" x2="0" y2="1">
-						<stop offset="0%" stopColor="rgba(255,255,255,0.1)" />
+						<stop offset="0%" stopColor="var(--alpha-muted)" />
 						<stop offset="100%" stopColor="transparent" />
 					</linearGradient>
 					{/* Blur for depth of field on back wave */}
@@ -85,7 +85,7 @@ export const ContextWaterGlass: React.FC<ContextWaterGlassProps> = ({ isVisible 
 					<path
 						d="M 0 0 Q 25 5 50 0 T 100 0 T 150 0 T 200 0 V 100 H 0 Z"
 						fill={getWaterColor(1)}
-						stroke="rgba(255,255,255,0.08)"
+						stroke="var(--border-subtle)"
 						strokeWidth="0.3"
 						className="transition-colors duration-700"
 					>
@@ -103,7 +103,7 @@ export const ContextWaterGlass: React.FC<ContextWaterGlassProps> = ({ isVisible 
 					<path
 						d="M 0 0 Q 25 5 50 0 T 100 0 T 150 0 T 200 0"
 						fill="none"
-						stroke="rgba(255,255,255,0.2)"
+						stroke="var(--alpha-20)"
 						strokeWidth="0.4"
 						strokeLinecap="round"
 					>
@@ -119,7 +119,7 @@ export const ContextWaterGlass: React.FC<ContextWaterGlassProps> = ({ isVisible 
 
 					{/* Bubbles for "alive" effect */}
 					{[0, 1, 2, 3, 4].map(i => (
-						<circle key={`bubble-${i}`} r={0.5 + (i % 3) * 0.5} fill="rgba(255,255,255,0.25)">
+						<circle key={`bubble-${i}`} r={0.5 + (i % 3) * 0.5} fill="var(--alpha-25)">
 							<animate
 								attributeName="cx"
 								values={`${15 + i * 20};${25 + i * 20};${15 + i * 20}`}

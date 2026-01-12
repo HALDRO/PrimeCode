@@ -174,10 +174,10 @@ export const McpSettingsPanel: React.FC = () => {
 						type="button"
 						onClick={() => setActiveTab(t.id)}
 						className={cn(
-							'px-2 h-(--btn-height-sm) text-sm rounded-md border border-white/10 transition-all',
+							'px-2 h-(--btn-height-sm) text-sm rounded-md border border-vscode-panel-border transition-all',
 							activeTab === t.id
-								? 'bg-white/10 text-white/90 border-white/20'
-								: 'bg-transparent text-white/60 hover:bg-white/5 hover:text-white/85',
+								? 'bg-vscode-list-hoverBackground text-vscode-foreground border-vscode-focusBorder'
+								: 'bg-transparent text-vscode-descriptionForeground hover:bg-(--alpha-5) hover:text-vscode-foreground',
 						)}
 					>
 						{t.label}
@@ -188,13 +188,13 @@ export const McpSettingsPanel: React.FC = () => {
 			{activeTab === 'installed' && (
 				<SettingsGroup>
 					{installedRows.length === 0 ? (
-						<div className="px-2.5 py-3 text-sm text-white/50 text-center">
+						<div className="px-2.5 py-3 text-sm text-vscode-descriptionForeground text-center">
 							No MCP servers configured yet.
 							<br />
 							<button
 								type="button"
 								onClick={openMcpConfig}
-								className="text-blue-400 hover:text-blue-300 underline mt-1"
+								className="text-vscode-textLink-foreground hover:text-vscode-textLink-activeForeground underline mt-1"
 							>
 								Add one in .agents/mcp.json
 							</button>
@@ -212,21 +212,21 @@ export const McpSettingsPanel: React.FC = () => {
 
 							// Status dot color
 							const dotColor = !enabled
-								? 'bg-white/20'
+								? 'bg-(--alpha-20)'
 								: status === 'connected'
-									? 'bg-green-500'
+									? 'bg-vscode-editorGutter-addedBackground'
 									: status === 'failed' || status === 'timeout'
-										? 'bg-red-500'
+										? 'bg-vscode-errorForeground'
 										: status === 'needs_auth'
-											? 'bg-yellow-500'
-											: 'bg-white/30';
+											? 'bg-vscode-editorGutter-modifiedBackground'
+											: 'bg-(--alpha-30)';
 
 							return (
 								<div
 									key={r.name}
 									className={cn(
-										'px-2.5 py-2 hover:bg-white/3 transition-colors',
-										!isLast && 'border-b border-white/6',
+										'px-2.5 py-2 hover:bg-vscode-list-hoverBackground transition-colors',
+										!isLast && 'border-b border-(--border-subtle)',
 										!enabled && 'opacity-50',
 									)}
 								>
@@ -236,7 +236,9 @@ export const McpSettingsPanel: React.FC = () => {
 										<div
 											className={cn(
 												'w-6 h-6 rounded-full flex items-center justify-center text-sm font-semibold shrink-0',
-												enabled ? 'bg-white/8 text-white/70' : 'bg-white/5 text-white/40',
+												enabled
+													? 'bg-(--alpha-10) text-vscode-foreground'
+													: 'bg-(--alpha-5) text-vscode-descriptionForeground',
 											)}
 										>
 											{displayName.charAt(0).toUpperCase()}
@@ -247,7 +249,7 @@ export const McpSettingsPanel: React.FC = () => {
 											<span
 												className={cn(
 													'text-sm font-medium truncate',
-													enabled ? 'text-white/90' : 'text-white/50',
+													enabled ? 'text-vscode-foreground' : 'text-vscode-descriptionForeground',
 												)}
 											>
 												{displayName}
@@ -265,8 +267,8 @@ export const McpSettingsPanel: React.FC = () => {
 													className={cn(
 														'text-2xs px-1 py-0.5 rounded border transition-colors',
 														isExpanded
-															? 'bg-white/10 text-white/70 border-white/20'
-															: 'bg-transparent text-white/40 border-white/10 hover:bg-white/5 hover:text-white/60',
+															? 'bg-vscode-list-hoverBackground text-vscode-foreground border-vscode-focusBorder'
+															: 'bg-transparent text-vscode-descriptionForeground border-vscode-panel-border hover:bg-(--alpha-5) hover:text-vscode-foreground',
 													)}
 												>
 													{toolsCount} tools
@@ -305,12 +307,12 @@ export const McpSettingsPanel: React.FC = () => {
 
 									{/* Tools list (expandable) */}
 									{enabled && toolsCount > 0 && isExpanded && (
-										<div className="mt-1.5 pt-1.5 border-t border-white/5">
+										<div className="mt-1.5 pt-1.5 border-t border-(--border-subtle)">
 											<div className="flex flex-wrap gap-1">
 												{tools.map(tool => (
 													<span
 														key={tool.name}
-														className="text-xs px-1.5 py-0.5 rounded bg-white/5 text-white/55 border border-white/8 font-mono"
+														className="text-xs px-1.5 py-0.5 rounded bg-(--alpha-5) text-vscode-descriptionForeground border border-vscode-panel-border font-mono"
 														title={tool.description || tool.name}
 													>
 														{tool.name}
@@ -322,7 +324,9 @@ export const McpSettingsPanel: React.FC = () => {
 
 									{/* Error message */}
 									{r.status?.error && (
-										<div className="text-2xs text-red-400/70 mt-1 truncate">{r.status.error}</div>
+										<div className="text-2xs text-vscode-errorForeground/70 mt-1 truncate">
+											{r.status.error}
+										</div>
 									)}
 								</div>
 							);
@@ -334,14 +338,14 @@ export const McpSettingsPanel: React.FC = () => {
 			{activeTab === 'marketplace' && (
 				<>
 					{mcpMarketplace.error && (
-						<div className="p-2 mx-1 mb-2 bg-red-500/10 border border-red-500/20 rounded text-sm text-red-300">
+						<div className="p-2 mx-1 mb-2 bg-vscode-errorForeground/10 border border-vscode-errorForeground/20 rounded text-sm text-vscode-errorForeground">
 							{mcpMarketplace.error}
 						</div>
 					)}
 
 					<SettingsGroup>
 						{/* Search and sort controls */}
-						<div className="flex items-center gap-1 px-2.5 py-2 border-b border-white/6">
+						<div className="flex items-center gap-1 px-2.5 py-2 border-b border-(--border-subtle)">
 							<TextInput
 								value={search}
 								onChange={e => setSearch(e.target.value)}
@@ -355,8 +359,8 @@ export const McpSettingsPanel: React.FC = () => {
 								className={cn(
 									'h-7 px-2 text-sm rounded border transition-colors shrink-0',
 									sortBy === 'stars'
-										? 'bg-white/10 text-white/90 border-white/20'
-										: 'bg-transparent text-white/50 border-white/10 hover:bg-white/5 hover:text-white/70',
+										? 'bg-vscode-list-hoverBackground text-vscode-foreground border-vscode-focusBorder'
+										: 'bg-transparent text-vscode-descriptionForeground border-vscode-panel-border hover:bg-(--alpha-5) hover:text-vscode-foreground',
 								)}
 							>
 								★
@@ -368,8 +372,8 @@ export const McpSettingsPanel: React.FC = () => {
 								className={cn(
 									'h-7 px-2 text-sm rounded border transition-colors shrink-0',
 									sortBy === 'downloads'
-										? 'bg-white/10 text-white/90 border-white/20'
-										: 'bg-transparent text-white/50 border-white/10 hover:bg-white/5 hover:text-white/70',
+										? 'bg-vscode-list-hoverBackground text-vscode-foreground border-vscode-focusBorder'
+										: 'bg-transparent text-vscode-descriptionForeground border-vscode-panel-border hover:bg-(--alpha-5) hover:text-vscode-foreground',
 								)}
 							>
 								↓
@@ -383,7 +387,7 @@ export const McpSettingsPanel: React.FC = () => {
 
 						{/* Items list */}
 						{marketplaceItems.length === 0 ? (
-							<div className="px-2.5 py-3 text-sm text-white/50 text-center">
+							<div className="px-2.5 py-3 text-sm text-vscode-descriptionForeground text-center">
 								{search
 									? 'No MCP servers found matching your search.'
 									: 'No MCP servers available.'}
@@ -399,8 +403,8 @@ export const McpSettingsPanel: React.FC = () => {
 									<div
 										key={item.mcpId}
 										className={cn(
-											'px-2.5 py-2 hover:bg-white/3 transition-colors',
-											!isLast && 'border-b border-white/6',
+											'px-2.5 py-2 hover:bg-vscode-list-hoverBackground transition-colors',
+											!isLast && 'border-b border-(--border-subtle)',
 										)}
 									>
 										{/* Main row */}
@@ -410,8 +414,8 @@ export const McpSettingsPanel: React.FC = () => {
 												className={cn(
 													'w-6 h-6 rounded-full flex items-center justify-center text-sm font-semibold shrink-0',
 													isInstalled
-														? 'bg-green-500/20 text-green-400'
-														: 'bg-white/8 text-white/70',
+														? 'bg-vscode-editorGutter-addedBackground/20 text-vscode-editorGutter-addedBackground'
+														: 'bg-(--alpha-10) text-vscode-foreground',
 												)}
 											>
 												{item.name.charAt(0).toUpperCase()}
@@ -419,7 +423,7 @@ export const McpSettingsPanel: React.FC = () => {
 
 											{/* Name + stats */}
 											<div className="flex items-center gap-1.5 flex-1 min-w-0">
-												<span className="text-sm font-medium text-white/90 truncate">
+												<span className="text-sm font-medium text-vscode-foreground truncate">
 													{item.name}
 												</span>
 												{/* Stats badges */}
@@ -427,7 +431,7 @@ export const McpSettingsPanel: React.FC = () => {
 													<div className="flex items-center gap-1.5 shrink-0">
 														{stars > 0 && (
 															<span
-																className="text-2xs px-1 py-0.5 rounded bg-transparent text-white/40 border border-white/10"
+																className="text-2xs px-1 py-0.5 rounded bg-transparent text-vscode-descriptionForeground border border-vscode-panel-border"
 																title="GitHub Stars"
 															>
 																★ {stars >= 1000 ? `${(stars / 1000).toFixed(1)}k` : stars}
@@ -435,7 +439,7 @@ export const McpSettingsPanel: React.FC = () => {
 														)}
 														{downloads > 0 && (
 															<span
-																className="text-2xs px-1 py-0.5 rounded bg-transparent text-white/40 border border-white/10"
+																className="text-2xs px-1 py-0.5 rounded bg-transparent text-vscode-descriptionForeground border border-vscode-panel-border"
 																title="Downloads"
 															>
 																↓{' '}
@@ -467,7 +471,7 @@ export const McpSettingsPanel: React.FC = () => {
 
 										{/* Description */}
 										{item.description && (
-											<div className="text-xs text-white/50 mt-1 ml-(--gap-7) line-clamp-2">
+											<div className="text-xs text-vscode-descriptionForeground mt-1 ml-(--gap-7) line-clamp-2">
 												{item.description}
 											</div>
 										)}
@@ -478,7 +482,7 @@ export const McpSettingsPanel: React.FC = () => {
 												{(item.tags || []).slice(0, 5).map(t => (
 													<span
 														key={t}
-														className="text-xs px-1.5 py-0.5 rounded bg-white/5 text-white/55 border border-white/8 font-mono"
+														className="text-xs px-1.5 py-0.5 rounded bg-(--alpha-5) text-vscode-descriptionForeground border border-vscode-panel-border font-mono"
 													>
 														{t}
 													</span>

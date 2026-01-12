@@ -330,7 +330,7 @@ export const ProviderManager: React.FC = () => {
 					<button
 						type="button"
 						onClick={handleRefresh}
-						className="text-2xs text-white/40 hover:text-white/60 pr-1"
+						className="text-2xs text-vscode-descriptionForeground hover:text-vscode-foreground pr-1"
 					>
 						<RefreshIcon size={10} />
 					</button>
@@ -338,7 +338,7 @@ export const ProviderManager: React.FC = () => {
 			</div>
 
 			{/* Connected Providers List */}
-			<div className="border border-white/10 rounded overflow-hidden mb-(--gap-6) mx-(--gap-1)">
+			<div className="border border-vscode-panel-border rounded overflow-hidden mb-(--gap-6) mx-(--gap-1)">
 				{/* Add Provider Row - pinned at the top */}
 				{availableForConnection.length > 0 && (
 					<ExpandableRow
@@ -377,7 +377,9 @@ export const ProviderManager: React.FC = () => {
 									<>
 										{provider.env && provider.env.length > 0 && (
 											<SettingRow title="Environment">
-												<span className="text-xs font-mono text-white/50">{provider.env[0]}</span>
+												<span className="text-xs font-mono text-vscode-descriptionForeground">
+													{provider.env[0]}
+												</span>
 											</SettingRow>
 										)}
 
@@ -485,7 +487,7 @@ export const ProviderManager: React.FC = () => {
 												<button
 													type="button"
 													onClick={() => handleDisconnectProvider(provider.id)}
-													className="text-2xs text-red-400/70 hover:text-red-400 transition-colors"
+													className="text-2xs text-vscode-errorForeground/70 hover:text-vscode-errorForeground transition-colors"
 												>
 													Disconnect
 												</button>
@@ -659,7 +661,7 @@ const AnthropicConfig: React.FC<AnthropicConfigProps> = ({
 										size="sm"
 										variant="ghost"
 										onClick={onClearKey}
-										className="text-xs px-2 text-red-400/70 hover:text-red-400"
+										className="text-xs px-2 text-vscode-errorForeground/70 hover:text-vscode-errorForeground"
 									>
 										Clear
 									</Button>
@@ -709,7 +711,7 @@ const AnthropicConfig: React.FC<AnthropicConfigProps> = ({
 						<>
 							<div className="flex items-center justify-between px-2.5 py-1.5">
 								<div className="flex items-center gap-1.5">
-									<span className="text-sm text-white/90">Models</span>
+									<span className="text-sm text-vscode-foreground">Models</span>
 									{models.length > 0 && <SettingsBadge>{models.length} found</SettingsBadge>}
 									{modelsStatus.success !== null && <SettingsStatusIndicator status={status} />}
 								</div>
@@ -827,7 +829,7 @@ const OpenAICompatibleConfig: React.FC<OpenAICompatibleConfigProps> = ({
 
 					<div className="flex items-center justify-between px-2.5 py-1.5">
 						<div className="flex items-center gap-1.5">
-							<span className="text-sm text-white/90">Models</span>
+							<span className="text-sm text-vscode-foreground">Models</span>
 							{models.length > 0 && <SettingsBadge>{models.length} found</SettingsBadge>}
 							{testStatus.success !== null && <SettingsStatusIndicator status={status} />}
 						</div>

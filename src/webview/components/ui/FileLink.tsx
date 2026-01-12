@@ -69,9 +69,9 @@ export const FileLink: React.FC<FileLinkProps> = ({
 				className={cn(
 					'flex items-center gap-1.5 px-2 py-0.5 my-px w-full text-left',
 					'text-sm leading-4 cursor-pointer rounded-xl',
-					'bg-white/5 border border-white/10 text-vscode-foreground',
+					'bg-(--alpha-5) border border-vscode-panel-border text-vscode-foreground',
 					'transition-all duration-150 ease-out',
-					'hover:bg-white/10 hover:border-white/15',
+					'hover:bg-vscode-list-hoverBackground hover:border-vscode-focusBorder',
 				)}
 			>
 				<FileTypeIcon name={fileName} size={14} isFolder={isFolder} />
@@ -87,7 +87,7 @@ export const FileLink: React.FC<FileLinkProps> = ({
 				)}
 
 				{line && (
-					<span className="text-vscode-descriptionForeground ml-auto tabular-nums bg-white/5 px-1.5 rounded-lg text-xs">
+					<span className="text-vscode-descriptionForeground ml-auto tabular-nums bg-(--alpha-5) px-1.5 rounded-lg text-xs">
 						:{line}
 					</span>
 				)}

@@ -198,7 +198,7 @@ const DropdownContainer: React.FC<DropdownContainerProps> = ({
 			className={cn(
 				'dropdown-menu z-10000 flex flex-col overflow-hidden',
 				'w-(--dd-width) min-w-(--dd-minw) max-w-(--dd-maxw) max-h-(--dd-maxh)',
-				'bg-(--card-bg-light) border border-white/10 rounded-md shadow-[0_4px_16px_rgba(0,0,0,0.5)]',
+				'bg-(--card-bg-light) border border-vscode-panel-border rounded-md shadow-[0_4px_16px_color-mix(in_srgb,var(--vscode-editor-background)_60%,transparent)]',
 				transitionEnabled && 'transition-[opacity,scale] duration-120 ease-out',
 				isVisible ? 'visible opacity-100 scale-100' : 'invisible opacity-0 scale-96',
 			)}

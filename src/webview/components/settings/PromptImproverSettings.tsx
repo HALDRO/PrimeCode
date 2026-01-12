@@ -175,9 +175,9 @@ User Prompt:
 					/>
 				</SettingRow>
 
-				<div className="px-2.5 py-1.5 border-b border-white/6 last:border-b-0">
+				<div className="px-2.5 py-1.5 border-b border-(--border-subtle) last:border-b-0">
 					<div className="flex items-center justify-between min-h-(--settings-row-height)">
-						<span className="text-sm text-white/90">System Prompt Template</span>
+						<span className="text-sm text-vscode-foreground">System Prompt Template</span>
 						<div className="flex items-center gap-1.5">
 							<Button
 								size="xs"
@@ -204,13 +204,14 @@ User Prompt:
 								onChange={e => saveSetting('promptImproveTemplate', e.target.value)}
 								rows={15}
 								className={cn(
-									'w-full bg-white/5 border border-white/10 rounded-sm p-1.5 text-sm font-mono mt-2',
-									'focus:border-white/20 focus:outline-none transition-all resize-none',
+									'w-full bg-vscode-input-background border border-vscode-input-border rounded-sm p-1.5 text-sm font-mono mt-2',
+									'focus:border-vscode-focusBorder focus:outline-none transition-all resize-none',
 								)}
 								placeholder={DEFAULT_TEMPLATE}
 							/>
-							<div className="mt-1.5 text-xs text-white/40">
-								Use <code className="bg-white/10 px-1 rounded text-white/70">{`{{TEXT}}`}</code>{' '}
+							<div className="mt-1.5 text-xs text-vscode-descriptionForeground">
+								Use{' '}
+								<code className="bg-(--alpha-10) px-1 rounded text-vscode-foreground">{`{{TEXT}}`}</code>{' '}
 								placeholder for the user input.
 							</div>
 						</>
@@ -227,7 +228,7 @@ User Prompt:
 							const secondsValue = Number.parseInt(e.target.value, 10);
 							handleTimeoutChange(secondsValue);
 						}}
-						className="bg-black/20 border border-white/10 rounded-sm px-2 h-7 text-md text-white/90 w-16 text-center focus:border-vscode-focusBorder focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+						className="bg-vscode-input-background border border-vscode-input-border rounded-sm px-2 h-7 text-md text-vscode-input-foreground w-16 text-center focus:border-vscode-focusBorder focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
 					/>
 				</SettingRow>
 			</SettingsGroup>

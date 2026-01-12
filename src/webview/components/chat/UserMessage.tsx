@@ -188,7 +188,7 @@ const RestoreButton = React.memo<{
 			<button
 				type="button"
 				onClick={handleClick}
-				className="flex items-center justify-center w-5 h-5 rounded hover:bg-white/10 text-vscode-foreground opacity-70 hover:opacity-100 transition-all cursor-pointer"
+				className="flex items-center justify-center w-5 h-5 rounded hover:bg-vscode-list-hoverBackground text-vscode-foreground opacity-70 hover:opacity-100 transition-all cursor-pointer"
 			>
 				<Undo2Icon size={14} />
 			</button>
@@ -213,7 +213,7 @@ const UnrevertButton = React.memo<{
 			<button
 				type="button"
 				onClick={handleClick}
-				className="flex items-center justify-center h-5 px-1.5 mt-px rounded text-xs font-medium bg-white/10 hover:bg-white/20 text-vscode-foreground opacity-80 hover:opacity-100 transition-all cursor-pointer"
+				className="flex items-center justify-center h-5 px-1.5 mt-px rounded text-xs font-medium bg-(--alpha-10) hover:bg-vscode-list-hoverBackground text-vscode-foreground opacity-80 hover:opacity-100 transition-all cursor-pointer"
 			>
 				Unrevert
 			</button>
@@ -318,7 +318,10 @@ const MessageTextWithCommands: React.FC<{ text: string; validCommands: Set<strin
 					<span
 						key={`cmd-${start}`}
 						className="text-warning rounded-sm pl-(--gap-0-5) pr-(--gap-1-5) -ml-(--gap-0-5) -mr-(--gap-1-5)"
-						style={{ backgroundColor: '#3d2a0a' }}
+						style={{
+							backgroundColor:
+								'color-mix(in srgb, var(--vscode-editorGutter-modifiedBackground) 15%, transparent)',
+						}}
 					>
 						{command}
 					</span>,

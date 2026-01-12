@@ -38,9 +38,9 @@ export const SubtaskHeader: React.FC<SubtaskHeaderProps> = ({
 				className={cn(
 					'flex items-center justify-center w-5 h-5 rounded-full shrink-0',
 					// Status icon colors
-					isRunning && 'text-blue-400',
-					isCompleted && 'text-green-400',
-					isError && 'text-red-400',
+					isRunning && 'text-vscode-button-background',
+					isCompleted && 'text-vscode-editorGutter-addedBackground',
+					isError && 'text-vscode-errorForeground',
 				)}
 			>
 				{isRunning && (
@@ -50,7 +50,7 @@ export const SubtaskHeader: React.FC<SubtaskHeaderProps> = ({
 				)}
 				{isCompleted && <TodoCheckIcon size={14} />}
 				{isError && (
-					<div className="text-red-400">
+					<div className="text-vscode-errorForeground">
 						<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-label="Error">
 							<title>Error</title>
 							<path d="M8 7.293l3.646-3.647.708.708L8.707 8l3.647 3.646-.708.708L8 8.707l-3.646 3.647-.708-.708L7.293 8 3.646 4.354l.708-.708L8 7.293z" />

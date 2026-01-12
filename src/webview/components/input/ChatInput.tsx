@@ -189,7 +189,7 @@ const ImagePreviewModal: React.FC<{
 				<button
 					type="button"
 					onClick={onClose}
-					className="absolute -top-(--image-preview-close-offset) -right-(--image-preview-close-offset) z-10 w-(--image-preview-close-size) h-(--image-preview-close-size) flex items-center justify-center rounded-full bg-white/(--image-preview-close-bg) text-white/80 hover:bg-white/(--image-preview-close-bg-hover) hover:text-white transition-colors duration-150 cursor-pointer"
+					className="absolute -top-(--image-preview-close-offset) -right-(--image-preview-close-offset) z-10 w-(--image-preview-close-size) h-(--image-preview-close-size) flex items-center justify-center rounded-full bg-(--alpha-10) text-vscode-foreground hover:bg-(--alpha-20) hover:text-vscode-foreground transition-colors duration-150 cursor-pointer"
 					title="Close"
 				>
 					<span className="text-sm leading-none">×</span>
@@ -702,7 +702,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 				className={cn(
 					'w-full bg-(--input-bg) border border-(--input-border) rounded-(--input-radius)',
 					'flex flex-row transition-colors duration-150 relative group',
-					isDragOver && 'bg-blue-500/10 border-(--input-border-focus)',
+					isDragOver && 'bg-vscode-button-background/10 border-(--input-border-focus)',
 				)}
 				onDragOver={handleDragOver}
 				onDragLeave={handleDragLeave}
@@ -711,7 +711,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 				{/* Left Side: Attachments, TextArea, Toolbar */}
 				<div className="flex-1 min-w-0 flex flex-col relative pb-(--gap-0-5)">
 					{isDragOver && (
-						<div className="absolute inset-0 bg-blue-500/10 rounded-lg flex items-center justify-center z-10 pointer-events-none">
+						<div className="absolute inset-0 bg-vscode-button-background/10 rounded-lg flex items-center justify-center z-10 pointer-events-none">
 							<div className="text-vscode-textLink-foreground font-medium">Drop files here</div>
 						</div>
 					)}
@@ -745,7 +745,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 											e.stopPropagation();
 											removeImage(img.id);
 										}}
-										className="absolute top-0 right-0 bg-black/60 hover:bg-black/80 rounded-none rounded-bl-sm w-3.5 h-3.5 flex items-center justify-center cursor-pointer text-white/90 text-[10px] leading-none opacity-0 group-hover/img:opacity-100 transition-opacity duration-150"
+										className="absolute top-0 right-0 bg-(--alpha-60) hover:bg-(--alpha-80) rounded-none rounded-bl-sm w-3.5 h-3.5 flex items-center justify-center cursor-pointer text-vscode-foreground text-[10px] leading-none opacity-0 group-hover/img:opacity-100 transition-opacity duration-150"
 									>
 										×
 									</button>
@@ -777,7 +777,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 										})
 									}
 									title={`${snippet.filePath}:${snippet.startLine}-${snippet.endLine} (click to open)`}
-									backgroundColor="rgba(156, 120, 255, 0.15)"
+									backgroundColor="color-mix(in srgb, var(--vscode-focusBorder) 15%, transparent)"
 								/>
 							))}
 						</div>
@@ -818,7 +818,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 										<span
 											key={`cmd-${highlight.start}`}
 											className="text-warning rounded-sm pl-(--gap-0-5) pr-(--gap-1-5) -ml-(--gap-0-5) -mr-(--gap-1-5)"
-											style={{ backgroundColor: '#3d2a0a' }}
+											style={{
+												backgroundColor:
+													'color-mix(in srgb, var(--vscode-editorGutter-modifiedBackground) 15%, transparent)',
+											}}
 										>
 											{highlight.command}
 										</span>,
@@ -880,7 +883,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 								className={cn(
 									'h-(--input-toolbar-height) rounded-md select-none text-sm font-(family-name:--vscode-font-family) shrink-0 flex items-center gap-(--gap-2) px-(--gap-1-5) transition-all duration-200 border',
 									planMode
-										? 'text-blue-400 bg-blue-500/10 border-blue-500/30'
+										? 'text-vscode-button-background bg-vscode-button-background/10 border-vscode-button-background/30'
 										: 'text-vscode-foreground opacity-70 hover:opacity-100 bg-transparent hover:bg-(--alpha-5) border-transparent',
 								)}
 							>

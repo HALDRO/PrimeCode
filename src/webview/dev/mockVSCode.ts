@@ -230,7 +230,8 @@ const SCENARIO_1_RESEARCHER: MockMessage[] = (() => {
 				rawInput: {
 					file_path: 'src/App.tsx',
 					old_string: 'const [count, setCount] = useState(0);\nreturn <button>{count}</button>;',
-					new_string: 'const [count, setCount] = useState(0);\nconst increment = () => setCount(c => c + 1);\nreturn <button onClick={increment}>{count}</button>;',
+					new_string:
+						'const [count, setCount] = useState(0);\nconst increment = () => setCount(c => c + 1);\nreturn <button onClick={increment}>{count}</button>;',
 				},
 			},
 			delay: 800,
@@ -244,7 +245,8 @@ const SCENARIO_1_RESEARCHER: MockMessage[] = (() => {
 				input: {
 					file_path: 'src/App.tsx',
 					old_string: 'const [count, setCount] = useState(0);\nreturn <button>{count}</button>;',
-					new_string: 'const [count, setCount] = useState(0);\nconst increment = () => setCount(c => c + 1);\nreturn <button onClick={increment}>{count}</button>;',
+					new_string:
+						'const [count, setCount] = useState(0);\nconst increment = () => setCount(c => c + 1);\nreturn <button onClick={increment}>{count}</button>;',
 				},
 				timestamp: Date.now(),
 			},
@@ -1320,24 +1322,178 @@ export function initMockVSCode(): void {
 
 	const rootStyle = document.documentElement.style;
 	const theme = {
+		// Fonts
 		'--vscode-font-family':
 			'-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
 		'--vscode-editor-font-family': '"SF Mono", Monaco, Menlo, Consolas, "Ubuntu Mono", monospace',
 		'--vscode-font-size': '13px',
 		'--vscode-editor-font-size': '13px',
+
+		// Core colors
+		'--vscode-foreground': '#CCCCCC',
+		'--vscode-descriptionForeground': '#9D9D9D',
+		'--vscode-disabledForeground': '#6E7681',
+		'--vscode-errorForeground': '#F85149',
+		'--vscode-icon-foreground': '#CCCCCC',
+
+		// Editor
+		'--vscode-editor-background': '#1F1F1F',
+		'--vscode-editor-foreground': '#CCCCCC',
+
+		// Sidebar
 		'--vscode-sideBar-background': '#181818',
-		'--vscode-editor-background': '#1f1f1f',
-		'--vscode-editor-foreground': '#cccccc',
-		'--vscode-foreground': '#cccccc',
-		'--vscode-descriptionForeground': '#9d9d9d',
-		'--vscode-input-background': '#181818',
-		'--vscode-input-border': '#3c3c3c',
-		'--vscode-panel-border': '#2b2b2b',
+		'--vscode-sideBar-foreground': '#CCCCCC',
+		'--vscode-sideBar-border': '#2B2B2B',
+		'--vscode-sideBarTitle-foreground': '#CCCCCC',
+		'--vscode-sideBarSectionHeader-background': '#181818',
+		'--vscode-sideBarSectionHeader-foreground': '#CCCCCC',
+		'--vscode-sideBarSectionHeader-border': '#2B2B2B',
+
+		// Panel
 		'--vscode-panel-background': '#181818',
-		'--vscode-focusBorder': '#007fd4',
-		'--vscode-textLink-foreground': '#4ea6ea',
-		'--vscode-toolbar-hoverBackground': 'rgba(90, 93, 94, 0.31)',
-		'--vscode-list-hoverBackground': '#2a2d2e',
+		'--vscode-panel-border': '#2B2B2B',
+
+		// Input
+		'--vscode-input-background': '#313131',
+		'--vscode-input-foreground': '#CCCCCC',
+		'--vscode-input-border': '#3C3C3C',
+		'--vscode-input-placeholderForeground': '#989898',
+		'--vscode-inputOption-activeBackground': '#2489DB82',
+		'--vscode-inputOption-activeBorder': '#2488DB',
+
+		// Button
+		'--vscode-button-background': '#0078D4',
+		'--vscode-button-foreground': '#FFFFFF',
+		'--vscode-button-hoverBackground': '#026EC1',
+		'--vscode-button-border': '#FFFFFF12',
+		'--vscode-button-secondaryBackground': '#313131',
+		'--vscode-button-secondaryForeground': '#CCCCCC',
+		'--vscode-button-secondaryHoverBackground': '#3C3C3C',
+
+		// Dropdown
+		'--vscode-dropdown-background': '#313131',
+		'--vscode-dropdown-foreground': '#CCCCCC',
+		'--vscode-dropdown-border': '#3C3C3C',
+		'--vscode-dropdown-listBackground': '#1F1F1F',
+
+		// List
+		'--vscode-list-hoverBackground': '#2A2D2E',
+		'--vscode-list-activeSelectionBackground': '#04395E',
+		'--vscode-list-activeSelectionForeground': '#FFFFFF',
+		'--vscode-list-inactiveSelectionBackground': '#37373D',
+		'--vscode-list-focusBackground': '#04395E',
+
+		// Focus & borders
+		'--vscode-focusBorder': '#0078D4',
+		'--vscode-widget-border': '#313131',
+		'--vscode-contrastBorder': '#2B2B2B',
+
+		// Links
+		'--vscode-textLink-foreground': '#4DAAFC',
+		'--vscode-textLink-activeForeground': '#4DAAFC',
+
+		// Toolbar
+		'--vscode-toolbar-hoverBackground': '#5A5D5E50',
+
+		// Badge
+		'--vscode-badge-background': '#616161',
+		'--vscode-badge-foreground': '#F8F8F8',
+
+		// Activity bar
+		'--vscode-activityBar-background': '#181818',
+		'--vscode-activityBar-foreground': '#D7D7D7',
+		'--vscode-activityBar-inactiveForeground': '#868686',
+		'--vscode-activityBar-border': '#2B2B2B',
+		'--vscode-activityBar-activeBorder': '#0078D4',
+		'--vscode-activityBarBadge-background': '#0078D4',
+		'--vscode-activityBarBadge-foreground': '#FFFFFF',
+
+		// Checkbox
+		'--vscode-checkbox-background': '#313131',
+		'--vscode-checkbox-border': '#3C3C3C',
+
+		// Tabs
+		'--vscode-tab-activeBackground': '#1F1F1F',
+		'--vscode-tab-activeForeground': '#FFFFFF',
+		'--vscode-tab-inactiveBackground': '#181818',
+		'--vscode-tab-inactiveForeground': '#9D9D9D',
+		'--vscode-tab-border': '#2B2B2B',
+		'--vscode-tab-activeBorderTop': '#0078D4',
+		'--vscode-tab-hoverBackground': '#1F1F1F',
+
+		// Title bar
+		'--vscode-titleBar-activeBackground': '#181818',
+		'--vscode-titleBar-activeForeground': '#CCCCCC',
+		'--vscode-titleBar-inactiveBackground': '#1F1F1F',
+		'--vscode-titleBar-inactiveForeground': '#9D9D9D',
+		'--vscode-titleBar-border': '#2B2B2B',
+
+		// Status bar
+		'--vscode-statusBar-background': '#181818',
+		'--vscode-statusBar-foreground': '#CCCCCC',
+		'--vscode-statusBar-border': '#2B2B2B',
+		'--vscode-statusBarItem-hoverBackground': '#F1F1F133',
+		'--vscode-statusBarItem-hoverForeground': '#FFFFFF',
+
+		// Editor widget (tooltips, etc.)
+		'--vscode-editorWidget-background': '#202020',
+		'--vscode-editorWidget-foreground': '#CCCCCC',
+		'--vscode-editorWidget-border': '#313131',
+
+		// Notifications
+		'--vscode-notifications-background': '#1F1F1F',
+		'--vscode-notifications-foreground': '#CCCCCC',
+		'--vscode-notifications-border': '#2B2B2B',
+		'--vscode-notificationCenterHeader-background': '#1F1F1F',
+		'--vscode-notificationCenterHeader-foreground': '#CCCCCC',
+
+		// Quick input
+		'--vscode-quickInput-background': '#222222',
+		'--vscode-quickInput-foreground': '#CCCCCC',
+
+		// Menu
+		'--vscode-menu-background': '#1F1F1F',
+		'--vscode-menu-foreground': '#CCCCCC',
+		'--vscode-menu-selectionBackground': '#0078D4',
+		'--vscode-menu-selectionForeground': '#FFFFFF',
+
+		// Scrollbar
+		'--vscode-scrollbarSlider-background': '#79797966',
+		'--vscode-scrollbarSlider-hoverBackground': '#646464B3',
+		'--vscode-scrollbarSlider-activeBackground': '#BFBFBF66',
+
+		// Terminal
+		'--vscode-terminal-foreground': '#CCCCCC',
+		'--vscode-terminal-background': '#181818',
+
+		// Text
+		'--vscode-textBlockQuote-background': '#2B2B2B',
+		'--vscode-textBlockQuote-border': '#616161',
+		'--vscode-textCodeBlock-background': '#2B2B2B',
+		'--vscode-textPreformat-foreground': '#D0D0D0',
+		'--vscode-textPreformat-background': '#3C3C3C',
+
+		// Progress bar
+		'--vscode-progressBar-background': '#0078D4',
+
+		// Settings
+		'--vscode-settings-dropdownBackground': '#313131',
+		'--vscode-settings-dropdownBorder': '#3C3C3C',
+		'--vscode-settings-headerForeground': '#FFFFFF',
+
+		// Welcome page
+		'--vscode-welcomePage-tileBackground': '#2B2B2B',
+
+		// Editor gutter
+		'--vscode-editorGutter-addedBackground': '#2EA043',
+		'--vscode-editorGutter-deletedBackground': '#F85149',
+		'--vscode-editorGutter-modifiedBackground': '#0078D4',
+
+		// Editor line numbers
+		'--vscode-editorLineNumber-foreground': '#6E7681',
+		'--vscode-editorLineNumber-activeForeground': '#CCCCCC',
+
+		// Custom app colors
 		'--changed-files-added': '#089981',
 		'--changed-files-removed': '#f23645',
 	};
@@ -1346,7 +1502,7 @@ export function initMockVSCode(): void {
 		rootStyle.setProperty(key, value);
 	}
 
-	console.log('[Mock VS Code] Initialized INTERACTIVE API');
+	console.log('[Mock VS Code] Initialized INTERACTIVE API with Dark Modern theme');
 }
 
 export function addSampleMessages(): void {}

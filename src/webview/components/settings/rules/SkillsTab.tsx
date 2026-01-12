@@ -109,13 +109,13 @@ export const SkillsTab: React.FC = () => {
 
 			{isCreatingSkill && (
 				<SettingsGroup>
-					<div className="p-3 flex flex-col gap-3 bg-black/20 rounded-md">
-						<h3 className="text-xs font-semibold uppercase tracking-wider text-white/50">
+					<div className="p-3 flex flex-col gap-3 bg-(--alpha-5) rounded-md">
+						<h3 className="text-xs font-semibold uppercase tracking-wider text-vscode-descriptionForeground">
 							New Skill
 						</h3>
 
 						<div className="flex flex-col gap-1">
-							<label htmlFor="skill-name" className="text-xs text-white/50">
+							<label htmlFor="skill-name" className="text-xs text-vscode-descriptionForeground">
 								Name (Folder/ID)
 							</label>
 							<input
@@ -124,12 +124,12 @@ export const SkillsTab: React.FC = () => {
 								value={newSkillName}
 								onChange={e => setNewSkillName(e.target.value)}
 								placeholder="my-skill"
-								className="w-full px-2 py-1.5 text-xs bg-white/5 border border-white/10 rounded text-white/90 placeholder:text-white/30 focus:outline-none focus:border-white/30"
+								className="w-full px-2 py-1.5 text-xs bg-vscode-input-background border border-vscode-input-border rounded text-vscode-input-foreground placeholder:text-vscode-input-placeholderForeground focus:outline-none focus:border-vscode-focusBorder"
 							/>
 						</div>
 
 						<div className="flex flex-col gap-1">
-							<label htmlFor="skill-desc" className="text-xs text-white/50">
+							<label htmlFor="skill-desc" className="text-xs text-vscode-descriptionForeground">
 								Description
 							</label>
 							<input
@@ -138,19 +138,19 @@ export const SkillsTab: React.FC = () => {
 								value={newSkillDesc}
 								onChange={e => setNewSkillDesc(e.target.value)}
 								placeholder="What does this skill do?"
-								className="w-full px-2 py-1.5 text-xs bg-white/5 border border-white/10 rounded text-white/90 placeholder:text-white/30 focus:outline-none focus:border-white/30"
+								className="w-full px-2 py-1.5 text-xs bg-vscode-input-background border border-vscode-input-border rounded text-vscode-input-foreground placeholder:text-vscode-input-placeholderForeground focus:outline-none focus:border-vscode-focusBorder"
 							/>
 						</div>
 
 						<div className="flex flex-col gap-1">
-							<label htmlFor="skill-content" className="text-xs text-white/50">
+							<label htmlFor="skill-content" className="text-xs text-vscode-descriptionForeground">
 								Instructions / Content
 							</label>
 							<textarea
 								id="skill-content"
 								value={newSkillContent}
 								onChange={e => setNewSkillContent(e.target.value)}
-								className="w-full h-24 px-2 py-1.5 text-xs font-mono bg-white/5 border border-white/10 rounded text-white/90 placeholder:text-white/30 focus:outline-none focus:border-white/30 resize-y"
+								className="w-full h-24 px-2 py-1.5 text-xs font-mono bg-vscode-input-background border border-vscode-input-border rounded text-vscode-input-foreground placeholder:text-vscode-input-placeholderForeground focus:outline-none focus:border-vscode-focusBorder resize-y"
 								placeholder="Describe when and how a model should use this skill..."
 							/>
 						</div>
@@ -173,7 +173,9 @@ export const SkillsTab: React.FC = () => {
 
 			<SettingsGroup>
 				{skills.isLoading ? (
-					<div className="p-4 text-center text-white/50 text-xs">Loading skills...</div>
+					<div className="p-4 text-center text-vscode-descriptionForeground text-xs">
+						Loading skills...
+					</div>
 				) : skills.items.length === 0 ? (
 					<EmptyState>No skills found. Create one or import from CLI.</EmptyState>
 				) : (
@@ -189,7 +191,7 @@ export const SkillsTab: React.FC = () => {
 									<button
 										type="button"
 										onClick={() => handleOpenSkill(skill.name)}
-										className="p-1 rounded hover:bg-white/10 text-white/50 hover:text-white/80 transition-colors"
+										className="p-1 rounded hover:bg-vscode-list-hoverBackground text-vscode-descriptionForeground hover:text-vscode-foreground transition-colors"
 									>
 										<EditIcon size={12} />
 									</button>
@@ -199,7 +201,7 @@ export const SkillsTab: React.FC = () => {
 									<button
 										type="button"
 										onClick={() => handleDeleteSkill(skill.name)}
-										className="p-1 rounded hover:bg-red-500/20 text-white/50 hover:text-red-400 transition-colors"
+										className="p-1 rounded hover:bg-vscode-errorForeground/20 text-vscode-descriptionForeground hover:text-vscode-errorForeground transition-colors"
 									>
 										<TrashIcon size={12} />
 									</button>
