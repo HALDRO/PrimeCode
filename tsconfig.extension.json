@@ -1,0 +1,17 @@
+{
+	"$schema": "https://json.schemastore.org/tsconfig",
+	"extends": "./tsconfig.base.json",
+	"compilerOptions": {
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+		"outDir": "out",
+		"tsBuildInfoFile": "out/build-cache/extension.tsbuildinfo",
+		"rootDir": "src",
+		"declaration": true,
+		"declarationMap": true,
+		"types": ["node", "vscode", "mocha"]
+	},
+	"include": ["src/**/*.ts"],
+	"references": [{ "path": "./src/types" }, { "path": "./src/shared" }, { "path": "./src/webview" }],
+	"exclude": ["src/webview/**/*", "src/types/**/*", "src/shared/**/*", "node_modules", "out"]
+}

@@ -1,0 +1,9 @@
+{
+	"files": [],
+	"references": [
+		{ "path": "./src/types" },
+		{ "path": "./src/shared" },
+		{ "path": "./tsconfig.extension.json" },
+		{ "path": "./src/webview" }
+	]
+}

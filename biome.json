@@ -1,0 +1,205 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.3.10/schema.json",
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true,
+		"defaultBranch": "main"
+	},
+	"files": {
+		"includes": [
+			"**/*.js",
+			"**/*.jsx",
+			"**/*.ts",
+			"**/*.tsx",
+			"**/*.json",
+			"**/*.jsonc",
+			"**/*.css"
+		],
+		"ignoreUnknown": false,
+		"maxSize": 1048576
+	},
+	"formatter": {
+		"enabled": true,
+		"formatWithErrors": false,
+		"indentStyle": "tab",
+		"lineEnding": "lf",
+		"lineWidth": 100,
+		"attributePosition": "auto",
+		"bracketSpacing": true
+	},
+	"assist": {
+		"actions": {
+			"source": {
+				"organizeImports": "on"
+			}
+		}
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true,
+			"correctness": {
+				"recommended": true,
+				"noUnusedVariables": "error",
+				"noUnusedImports": "error",
+				"useExhaustiveDependencies": "warn"
+			},
+			"style": {
+				"recommended": true,
+				"useConsistentArrayType": "error",
+				"useTemplate": "error",
+				"useImportType": "error",
+				"noUselessElse": "off",
+				"useCollapsedElseIf": "off"
+			},
+			"complexity": {
+				"recommended": true,
+				"noExcessiveCognitiveComplexity": {
+					"level": "warn",
+					"options": {
+						"maxAllowedComplexity": 150
+					}
+				},
+				"noUselessFragments": "error",
+				"noStaticOnlyClass": "warn"
+			},
+			"performance": {
+				"recommended": true,
+				"noAccumulatingSpread": "warn"
+			},
+			"security": {
+				"recommended": true
+			},
+			"suspicious": {
+				"recommended": true,
+				"noExplicitAny": "warn",
+				"noImplicitAnyLet": "warn",
+				"noArrayIndexKey": "warn",
+				"noConsole": "off"
+			},
+			"a11y": {
+				"recommended": true,
+				"noStaticElementInteractions": "off",
+				"useKeyWithClickEvents": "off"
+			}
+		}
+	},
+	"javascript": {
+		"parser": {
+			"unsafeParameterDecoratorsEnabled": false,
+			"jsxEverywhere": true
+		},
+		"formatter": {
+			"quoteStyle": "single",
+			"jsxQuoteStyle": "double",
+			"quoteProperties": "asNeeded",
+			"trailingCommas": "all",
+			"semicolons": "always",
+			"arrowParentheses": "asNeeded",
+			"bracketSameLine": false,
+			"bracketSpacing": true
+		},
+		"jsxRuntime": "transparent"
+	},
+	"json": {
+		"parser": {
+			"allowComments": true,
+			"allowTrailingCommas": true
+		},
+		"formatter": {
+			"trailingCommas": "none",
+			"bracketSpacing": true
+		}
+	},
+	"css": {
+		"parser": {
+			"cssModules": false,
+			"allowWrongLineComments": true,
+			"tailwindDirectives": true
+		},
+		"formatter": {
+			"enabled": true,
+			"quoteStyle": "single"
+		},
+		"linter": {
+			"enabled": true
+		}
+	},
+	"overrides": [
+		{
+			"includes": ["**/global.css", "**/tailwind.css"],
+			"linter": {
+				"rules": {
+					"complexity": {
+						"noImportantStyles": "off"
+					}
+				}
+			}
+		},
+		{
+			"includes": ["**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts", "**/*.spec.tsx"],
+			"linter": {
+				"rules": {
+					"suspicious": {
+						"noExplicitAny": "off",
+						"noConsole": "off"
+					},
+					"complexity": {
+						"noExcessiveCognitiveComplexity": "off"
+					}
+				}
+			}
+		},
+		{
+			"includes": ["**/out/**", "**/dist/**", "**/coverage/**"],
+			"formatter": {
+				"enabled": false
+			},
+			"linter": {
+				"enabled": false
+			}
+		},
+		{
+			"includes": ["package.json"],
+			"json": {
+				"formatter": {
+					"expand": "always"
+				}
+			}
+		},
+		{
+			"includes": ["**/*.config.js", "**/*.config.ts", "**/*.config.mjs"],
+			"linter": {
+				"rules": {
+					"style": {
+						"useTemplate": "off"
+					},
+					"suspicious": {
+						"noExplicitAny": "off"
+					}
+				}
+			}
+		},
+		{
+			"includes": ["**/scripts/**", "**/*.mjs"],
+			"linter": {
+				"rules": {
+					"suspicious": {
+						"noConsole": "off"
+					}
+				}
+			}
+		},
+		{
+			"includes": ["**/types/**", "**/types.ts", "**/index.ts"],
+			"linter": {
+				"rules": {
+					"suspicious": {
+						"noExplicitAny": "off"
+					}
+				}
+			}
+		}
+	]
+}

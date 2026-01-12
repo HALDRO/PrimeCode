@@ -1,0 +1,340 @@
+{
+	"name": "primecode",
+	"displayName": "PrimeCode",
+	"description": "Universal AI CLI Interface - Unified chat for Claude Code, OpenCode and more",
+	"version": "0.1.0",
+	"publisher": "HALDRO",
+	"author": "HALDRO",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/HALDRO/PrimeCode"
+	},
+	"license": "Apache-2.0",
+	"engines": {
+		"vscode": "^1.107.0"
+	},
+	"categories": [
+		"Other",
+		"AI",
+		"Chat",
+		"Machine Learning",
+		"Snippets",
+		"Programming Languages",
+		"Education",
+		"Testing",
+		"Formatters",
+		"Linters"
+	],
+	"keywords": [
+		"primecode",
+		"universal cli",
+		"claude code",
+		"opencode",
+		"code explanation",
+		"code generation",
+		"code summary",
+		"code transform",
+		"vibe coding",
+		"prompt language",
+		"copilot",
+		"claude",
+		"ai",
+		"assistant",
+		"chatbot",
+		"chat",
+		"anthropic",
+		"code",
+		"programming",
+		"development",
+		"productivity"
+	],
+	"icon": "public/icon.png",
+	"main": "./out/extension.js",
+	"activationEvents": [
+		"onStartupFinished"
+	],
+	"contributes": {
+		"commands": [
+			{
+				"command": "primecode.openChat",
+				"title": "Open PrimeCode",
+				"category": "PrimeCode",
+				"icon": "icon.png"
+			}
+		],
+		"menus": {
+			"commandPalette": [
+				{
+					"command": "primecode.openChat"
+				}
+			],
+			"editor/context": [
+				{
+					"command": "primecode.openChat",
+					"group": "primecode@1",
+					"when": "editorTextFocus"
+				}
+			],
+			"editor/title": [
+				{
+					"command": "primecode.openChat",
+					"group": "navigation@1",
+					"when": "true"
+				}
+			],
+			"editor/title/context": [
+				{
+					"command": "primecode.openChat",
+					"group": "primecode@1"
+				}
+			],
+			"explorer/context": [
+				{
+					"command": "primecode.openChat",
+					"group": "primecode@1"
+				}
+			],
+			"scm/title": [
+				{
+					"command": "primecode.openChat",
+					"group": "navigation@1",
+					"when": "true"
+				}
+			],
+			"view/title": [
+				{
+					"command": "primecode.openChat",
+					"group": "navigation@1",
+					"when": "view == workbench.explorer.fileView"
+				}
+			],
+			"touchBar": [
+				{
+					"command": "primecode.openChat",
+					"group": "editing",
+					"when": "true"
+				}
+			],
+			"menuBar/file": [
+				{
+					"command": "primecode.openChat",
+					"group": "1_new@1"
+				}
+			]
+		},
+		"views": {
+			"primecode": [
+				{
+					"id": "primecode.chat",
+					"type": "webview",
+					"name": "PrimeCode",
+					"when": "true",
+					"icon": "public/icon.png",
+					"contextualTitle": "PrimeCode"
+				}
+			]
+		},
+		"viewsContainers": {
+			"activitybar": [
+				{
+					"id": "primecode",
+					"title": "PrimeCode",
+					"icon": "icon.png"
+				}
+			]
+		},
+		"configuration": {
+			"title": "PrimeCode",
+			"properties": {
+				"primeCode.provider": {
+					"type": "string",
+					"enum": [
+						"claude",
+						"opencode"
+					],
+					"default": "claude",
+					"description": "Select the CLI provider to use. 'claude' uses Claude Code CLI, 'opencode' uses OpenCode CLI.",
+					"enumDescriptions": [
+						"Claude Code CLI - Anthropic's official coding assistant",
+						"OpenCode CLI - Open source AI coding assistant with multi-agent support"
+					]
+				},
+				"primeCode.opencode.autoStart": {
+					"type": "boolean",
+					"default": true,
+					"description": "Automatically start OpenCode server when the extension activates (only when provider is 'opencode')"
+				},
+				"primeCode.opencode.serverTimeout": {
+					"type": "number",
+					"default": 15000,
+					"description": "Timeout in milliseconds for OpenCode server to start"
+				},
+				"primeCode.opencode.agent": {
+					"type": "string",
+					"default": "",
+					"description": "Default agent to use with OpenCode (leave empty for default agent). Available agents depend on your OpenCode configuration."
+				},
+				"primeCode.opencode.enabledModels": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": [],
+					"description": "List of enabled OpenCode model IDs (format: providerId/modelId) for selection in chat"
+				},
+				"primeCode.providers.disabled": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": [],
+					"description": "List of provider IDs that are hidden from the model dropdown (but keep their model selection). Works for all providers including oai."
+				},
+				"primeCode.access.yoloMode": {
+					"type": "boolean",
+					"default": false,
+					"description": "Enable Yolo Mode to skip all access checks. Use with caution as Claude can execute any command without asking."
+				},
+				"primeCode.proxy.baseUrl": {
+					"type": "string",
+					"default": "http://localhost:11434",
+					"description": "Base URL of the OpenAI-compatible proxy server"
+				},
+				"primeCode.proxy.apiKey": {
+					"type": "string",
+					"default": "",
+					"description": "API key for the proxy server (leave empty if not required)"
+				},
+				"primeCode.proxy.enabledModels": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": [],
+					"description": "List of enabled model IDs from the proxy server"
+				},
+				"primeCode.proxy.useSingleModel": {
+					"type": "boolean",
+					"default": true,
+					"description": "Use only the main selected model for all tasks. When disabled, you can configure separate models for Haiku/Sonnet/Opus task types."
+				},
+				"primeCode.proxy.haikuModel": {
+					"type": "string",
+					"default": "",
+					"description": "Model for fast/simple tasks (Explore agent, quick checks). Leave empty to use main model."
+				},
+				"primeCode.proxy.sonnetModel": {
+					"type": "string",
+					"default": "",
+					"description": "Model for standard tasks. Leave empty to use main model."
+				},
+				"primeCode.proxy.opusModel": {
+					"type": "string",
+					"default": "",
+					"description": "Model for complex tasks (plan mode). Leave empty to use main model."
+				},
+				"primeCode.proxy.subagentModel": {
+					"type": "string",
+					"default": "",
+					"description": "Model for subagents (Explore, etc.). Leave empty to use main model."
+				},
+				"primeCode.promptImprove.model": {
+					"type": "string",
+					"default": "",
+					"description": "Model for Prompt Improver. Leave empty to use main model."
+				},
+				"primeCode.promptImprove.template": {
+					"type": "string",
+					"editPresentation": "multilineText",
+					"default": "",
+					"description": "System prompt template for Prompt Improver."
+				},
+				"primeCode.promptImprove.timeoutMs": {
+					"type": "number",
+					"default": 60000,
+					"description": "Timeout for Prompt Improver in milliseconds."
+				}
+			}
+		}
+	},
+	"scripts": {
+		"vscode:prepublish": "bun run build",
+		"build": "bun run build:extension && bun run build:webview",
+		"build:extension": "tsc -b ./tsconfig.json",
+		"build:webview": "vite build --config vite.config.webview.ts",
+		"watch": "concurrently \"bun run watch:extension\" \"vite build --config vite.config.webview.ts --watch\"",
+		"watch:extension": "tsc -b -w ./tsconfig.json",
+		"watch:webview": "vite build --config vite.config.webview.ts --watch",
+		"dev": "vite",
+		"pack": "vsce package --no-dependencies --out PrimeCode-$npm_package_version.vsix",
+		"release": "vsce publish --no-dependencies",
+		"lint:tsc": "tsc -b --pretty false ./tsconfig.json",
+		"lint:biome": "biome check --max-diagnostics=500 src/",
+		"lint": "bun run lint:fix && bun run lint:tsc",
+		"lint:fix": "biome check --write --unsafe src/",
+		"format": "biome format --write src/",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"test:coverage": "vitest run --coverage",
+		"test:vscode": "vscode-test"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.3.10",
+		"@tailwindcss/cli": "^4.0.9",
+		"@tailwindcss/node": "^4.1.18",
+		"@tailwindcss/postcss": "^4.0.9",
+		"@tailwindcss/typography": "^0.5.19",
+		"@tailwindcss/vite": "^4.1.18",
+		"@types/js-yaml": "^4.0.9",
+		"@types/mocha": "^10.0.10",
+		"@types/node": "20.x",
+		"@types/react": "^19.2.7",
+		"@types/react-dom": "^19.2.3",
+		"@types/vscode": "^1.107.0",
+		"@typescript-eslint/eslint-plugin": "^8.52.0",
+		"@typescript-eslint/parser": "^8.52.0",
+		"@vitejs/plugin-react": "^5.1.2",
+		"@vitest/coverage-v8": "^4.0.16",
+		"@vscode/test-cli": "^0.0.10",
+		"@vscode/test-electron": "^2.5.2",
+		"@vscode/vsce": "^3.5.0",
+		"autoprefixer": "^10.4.20",
+		"babel-plugin-react-compiler": "^1.0.0",
+		"concurrently": "^9.2.1",
+		"eslint": "^9.39.2",
+		"eslint-plugin-react-compiler": "^19.1.0-rc.2",
+		"eslint-plugin-tailwind-canonical-classes": "^1.1.0",
+		"postcss": "^8.5.3",
+		"tailwindcss": "^4.1.18",
+		"typescript": "^5.8.3",
+		"vite": "^7.3.0",
+		"vitest": "^4.0.16"
+	},
+	"trustedDependencies": [
+		"@biomejs/biome"
+	],
+	"dependencies": {
+		"@anthropic-ai/claude-agent-sdk": "^0.2.2",
+		"@anthropic-ai/sdk": "^0.71.2",
+		"@floating-ui/react": "^0.27.16",
+		"@modelcontextprotocol/sdk": "^1.25.1",
+		"@opencode-ai/sdk": "^1.1.6",
+		"@sinclair/typebox": "^0.34.45",
+		"class-variance-authority": "^0.7.1",
+		"clsx": "^2.1.1",
+		"js-yaml": "^4.1.1",
+		"lucide-react": "^0.562.0",
+		"openai": "^6.16.0",
+		"overlayscrollbars": "^2.13.0",
+		"overlayscrollbars-react": "^0.5.6",
+		"react": "^19.2.3",
+		"react-dom": "^19.2.3",
+		"react-markdown": "^10.1.0",
+		"react-virtuoso": "^4.18.1",
+		"rehype-highlight": "^7.0.2",
+		"remark-gfm": "^4.0.1",
+		"tailwind-merge": "^3.4.0",
+		"vscode-icons-js": "^11.6.1",
+		"zustand": "^5.0.9"
+	}
+}

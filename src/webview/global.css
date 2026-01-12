@@ -1,0 +1,529 @@
+/**
+ * @file Global CSS styles and VS Code theme bridge
+ * @description Unified design system with minimal, consistent tokens.
+ *              All sizes, colors, and spacing defined in one place.
+ *              Core colors derived from VS Code --vscode-* theme variables.
+ */
+
+@import 'tailwindcss';
+@import 'overlayscrollbars/overlayscrollbars.css';
+@plugin '@tailwindcss/typography';
+
+/* Tailwind v4: Source directories for class scanning */
+@source '../';
+@source './';
+@source '../components/';
+@source '../store/';
+@source '../hooks/';
+@source '../utils/';
+
+/* ============================================
+   DESIGN SYSTEM - UNIFIED TOKENS
+   ============================================ */
+:root {
+	/* ===========================================
+	   TYPOGRAPHY - 5 sizes
+	   =========================================== */
+	--text-2xs: 9px; /* tiny labels, badges */
+	--text-xs: 10px; /* metadata, badges, hints */
+	--text-sm: 11px; /* labels, secondary text, tool headers */
+	--text-md: 12px; /* medium text */
+	--text-base: 13px; /* body text, messages */
+
+	--font-ui: var(--vscode-font-family);
+	--font-mono: var(--vscode-editor-font-family);
+
+	/* ===========================================
+	   SPACING - 10 steps
+	   =========================================== */
+	--gap-0: 0px;
+	--gap-0-5: 1px;
+	--gap-1: 2px;
+	--gap-1-5: 3px;
+	--gap-2: 4px;
+	--gap-2-5: 5px;
+	--gap-3: 6px;
+	--gap-4: 8px;
+	--gap-5: 10px;
+	--gap-6: 12px;
+	--gap-7: 16px;
+
+	/* ===========================================
+	   HEIGHTS - 4 sizes for all elements
+	   =========================================== */
+	--h-xs: 18px; /* badges, small tags */
+	--h-sm: 20px; /* dropdown items, small buttons */
+	--h-md: 24px; /* standard buttons, inputs */
+	--h-lg: 28px; /* headers, large buttons */
+
+	/* ===========================================
+	   ICONS - 3 sizes
+	   =========================================== */
+	--icon-sm: 12px;
+	--icon-md: 14px;
+	--icon-lg: 16px;
+
+	/* ===========================================
+	   RADIUS - 3 sizes
+	   =========================================== */
+	--radius-sm: 3px;
+	--radius-md: 6px;
+	--radius-lg: 8px;
+
+	/* ===========================================
+	   OPACITY/ALPHA - semantic names
+	   =========================================== */
+	--alpha-subtle: rgba(255, 255, 255, 0.05);
+	--alpha-muted: rgba(255, 255, 255, 0.1);
+	--alpha-soft: rgba(255, 255, 255, 0.15);
+	--alpha-medium: rgba(255, 255, 255, 0.3);
+	--alpha-strong: rgba(255, 255, 255, 0.5);
+	--alpha-bold: rgba(255, 255, 255, 0.7);
+	--alpha-solid: rgba(255, 255, 255, 0.9);
+
+	/* ===========================================
+	   SEMANTIC COLORS
+	   =========================================== */
+	/* Status */
+	--color-success: #089981;
+	--color-error: #f23645;
+	--color-warning: #f7a825;
+	--color-info: #3b82f6;
+
+	/* Accent */
+	--color-accent: #a855f7;
+	--color-accent-muted: rgba(168, 85, 247, 0.15);
+
+	/* Special */
+	--color-thinking: #9c27b0;
+	--color-mcp: #3b82f6;
+	--color-stop: #ef4444;
+
+	/* Glows (for status indicators) */
+	--glow-success: rgba(8, 153, 129, 0.5);
+	--glow-error: rgba(242, 54, 69, 0.5);
+	--glow-warning: rgba(247, 168, 37, 0.5);
+	--glow-info: rgba(59, 130, 246, 0.5);
+	--glow-accent: rgba(168, 85, 247, 0.5);
+	--glow-thinking: rgba(156, 39, 176, 0.5);
+
+	/* ===========================================
+	   SURFACES & BORDERS
+	   =========================================== */
+	--surface-base: var(--vscode-sideBar-background);
+	--surface-raised: color-mix(in srgb, var(--vscode-sideBar-background) 90%, black);
+	--surface-overlay: color-mix(in srgb, var(--vscode-sideBar-background) 85%, black);
+
+	--border-subtle: rgba(255, 255, 255, 0.06);
+	--border-muted: rgba(255, 255, 255, 0.1);
+	--border-default: var(--vscode-panel-border);
+	--border-focus: var(--vscode-focusBorder);
+
+	/* ===========================================
+	   COMPONENT TOKENS (derived from base)
+	   =========================================== */
+	/* Layout */
+	--layout-padding: var(--gap-4);
+	--content-gap: var(--gap-2);
+
+	/* Cards/Panels */
+	--card-bg: var(--surface-overlay);
+	--card-border: var(--border-subtle);
+	--card-radius: var(--radius-md);
+	--card-padding: var(--gap-3);
+
+	/* Inputs */
+	--input-bg: var(--surface-raised);
+	--input-border: var(--border-subtle);
+	--input-radius: var(--radius-lg);
+	--input-height: var(--h-md);
+
+	/* Buttons */
+	--btn-height: var(--h-sm);
+	--btn-padding: var(--gap-4);
+	--btn-radius: var(--radius-sm);
+
+	/* Dropdowns */
+	--dropdown-item-height: var(--h-sm);
+	--dropdown-padding: var(--gap-4);
+
+	/* Tooltips */
+	--tooltip-bg: #1e1e1e;
+	--tooltip-padding: var(--gap-2) var(--gap-4);
+	--tooltip-radius: var(--radius-sm);
+	--tooltip-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+
+	/* File changes */
+	--diff-added: var(--color-success);
+	--diff-removed: var(--color-error);
+}
+
+/* ===========================================
+   TAILWIND THEME MAPPING
+   =========================================== */
+@theme inline {
+	/* Typography - font sizes (creates text-2xs, text-xs, etc. utilities) */
+	--text-2xs: var(--text-2xs);
+	--text-xs: var(--text-xs);
+	--text-sm: var(--text-sm);
+	--text-md: var(--text-md);
+	--text-base: var(--text-base);
+
+	/* Colors */
+	--color-bg-primary: var(--surface-base);
+	--color-bg-raised: var(--surface-raised);
+	--color-bg-overlay: var(--surface-overlay);
+	--color-fg-primary: var(--vscode-foreground);
+	--color-fg-muted: var(--vscode-descriptionForeground);
+
+	/* Status colors for Tailwind */
+	--color-success: var(--color-success);
+	--color-error: var(--color-error);
+	--color-warning: var(--color-warning);
+	--color-info: var(--color-info);
+
+	/* Spacing */
+	--spacing-1: var(--gap-1);
+	--spacing-2: var(--gap-2);
+	--spacing-3: var(--gap-3);
+	--spacing-4: var(--gap-4);
+	--spacing-5: var(--gap-6);
+	--spacing-6: var(--gap-7);
+
+	/* Radius */
+	--radius-sm: var(--radius-sm);
+	--radius-md: var(--radius-md);
+	--radius-lg: var(--radius-lg);
+
+	/* VS Code theme variables */
+	--color-vscode-editor-background: var(--vscode-editor-background);
+	--color-vscode-editor-foreground: var(--vscode-editor-foreground);
+	--color-vscode-panel-border: var(--vscode-panel-border);
+	--color-vscode-sideBar-background: var(--vscode-sideBar-background);
+	--color-vscode-button-background: var(--vscode-button-background);
+	--color-vscode-button-foreground: var(--vscode-button-foreground);
+	--color-vscode-button-hoverBackground: var(--vscode-button-hoverBackground);
+	--color-vscode-button-secondaryBackground: var(--vscode-button-secondaryBackground);
+	--color-vscode-button-secondaryForeground: var(--vscode-button-secondaryForeground);
+	--color-vscode-button-secondaryHoverBackground: var(--vscode-button-secondaryHoverBackground);
+	--color-vscode-input-background: var(--vscode-input-background);
+	--color-vscode-input-foreground: var(--vscode-input-foreground);
+	--color-vscode-input-border: var(--vscode-input-border);
+	--color-vscode-list-hoverBackground: var(--vscode-list-hoverBackground);
+	--color-vscode-focusBorder: var(--vscode-focusBorder);
+	--color-vscode-descriptionForeground: var(--vscode-descriptionForeground);
+	--color-vscode-textLink-foreground: var(--vscode-textLink-foreground);
+	--color-vscode-toolbar-hoverBackground: var(--vscode-toolbar-hoverBackground);
+	--color-vscode-widget-border: var(--vscode-widget-border);
+	--color-vscode-icon-foreground: var(--vscode-icon-foreground);
+	--color-vscode-dropdown-background: var(--vscode-dropdown-background);
+	--color-vscode-dropdown-foreground: var(--vscode-dropdown-foreground);
+	--color-vscode-dropdown-border: var(--vscode-dropdown-border);
+
+	/* Typography for prose */
+	--color-prose-body: var(--vscode-foreground);
+	--color-prose-headings: var(--vscode-foreground);
+	--color-prose-lead: var(--vscode-descriptionForeground);
+	--color-prose-links: var(--vscode-textLink-foreground);
+	--color-prose-bold: var(--vscode-foreground);
+	--color-prose-counters: var(--vscode-descriptionForeground);
+	--color-prose-bullets: var(--vscode-descriptionForeground);
+	--color-prose-hr: var(--vscode-panel-border);
+	--color-prose-quotes: var(--vscode-descriptionForeground);
+	--color-prose-quote-borders: var(--vscode-textLink-foreground);
+	--color-prose-captions: var(--vscode-descriptionForeground);
+	--color-prose-code: var(--vscode-foreground);
+	--color-prose-pre-code: var(--vscode-editor-foreground);
+	--color-prose-pre-bg: var(--vscode-editor-background);
+	--color-prose-th-borders: var(--vscode-panel-border);
+	--color-prose-td-borders: var(--vscode-panel-border);
+
+	/* Animations */
+	--animate-fade-in: fadeIn 0.15s ease-out;
+	--animate-scale-in: scaleIn 0.15s ease-out;
+
+	@keyframes fadeIn {
+		from {
+			opacity: 0;
+		}
+		to {
+			opacity: 1;
+		}
+	}
+
+	@keyframes scaleIn {
+		from {
+			opacity: 0;
+			transform: scale(0.95);
+		}
+		to {
+			opacity: 1;
+			transform: scale(1);
+		}
+	}
+}
+
+/* ===========================================
+   BASE STYLES
+   =========================================== */
+html,
+body {
+	margin: 0;
+	padding: 0;
+	background-color: var(--surface-base);
+	color: var(--vscode-foreground);
+	font-family: var(--font-ui);
+	font-size: var(--text-base);
+	height: 100vh;
+	width: 100vw;
+	overflow: hidden;
+}
+
+code,
+pre {
+	font-family: var(--font-mono);
+}
+
+/* ===========================================
+   SCROLLBARS
+   =========================================== */
+.os-theme-dark {
+	--os-size: 8px;
+	--os-padding-perpendicular: 2px;
+	--os-padding-axis: 2px;
+	--os-track-border-radius: var(--radius-sm);
+	--os-track-bg: transparent;
+	--os-track-bg-hover: var(--alpha-subtle);
+	--os-handle-border-radius: var(--radius-sm);
+	--os-handle-bg: var(--alpha-soft);
+	--os-handle-bg-hover: var(--alpha-medium);
+	--os-handle-bg-active: var(--alpha-strong);
+}
+
+* {
+	scrollbar-width: thin;
+	scrollbar-color: var(--alpha-muted) transparent;
+}
+
+*::-webkit-scrollbar {
+	width: 8px;
+	height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+	background: transparent;
+	border-radius: var(--radius-sm);
+}
+
+*::-webkit-scrollbar-thumb {
+	background-color: var(--alpha-muted);
+	border-radius: var(--radius-sm);
+	border: 2px solid transparent;
+	background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+	background-color: var(--alpha-soft);
+}
+
+/* ===========================================
+   UTILITY CLASSES
+   =========================================== */
+/* Text sizes */
+.text-xs {
+	font-size: var(--text-xs);
+}
+.text-sm {
+	font-size: var(--text-sm);
+}
+.text-base {
+	font-size: var(--text-base);
+}
+
+/* Hover states */
+div:hover > .user-copy-btn {
+	opacity: 1 !important;
+}
+
+/* Container queries */
+@container (max-width: 400px) {
+	.hide-on-narrow {
+		display: none !important;
+	}
+	.show-on-narrow {
+		display: inline !important;
+	}
+}
+
+@container (min-width: 401px) {
+	.show-on-narrow {
+		display: none !important;
+	}
+}
+
+.show-on-narrow {
+	display: none;
+}
+
+/* ===========================================
+   COMPONENT TOKENS
+   =========================================== */
+:root {
+	/* Layout */
+	--layout-padding-x: var(--layout-padding);
+	--content-padding-x: var(--gap-7);
+	--message-gap: var(--gap-2);
+	--message-padding-y: var(--gap-1);
+
+	/* Header */
+	--header-height: 30px;
+	--header-gap: var(--gap-2);
+	--header-btn-size: 26px;
+	--header-item-hover: var(--vscode-toolbar-hoverBackground, var(--alpha-muted));
+
+	/* Tabs & Badges */
+	--tab-height: var(--h-sm);
+	--badge-height: var(--h-xs);
+	--tag-height: var(--h-sm);
+
+	/* Tools */
+	--tool-header-height: 26px;
+	--tool-header-padding: var(--gap-3);
+	--tool-header-padding-y: var(--gap-2);
+	--tool-content-padding: var(--gap-3);
+	--tool-block-margin: var(--gap-2);
+	--tool-utility-block-margin: var(--gap-1);
+	--tool-bg-header: var(--card-bg);
+	--tool-border-color: var(--card-border);
+	--collapsible-indent: var(--gap-6);
+
+	/* Files */
+	--file-row-height: 22px;
+	--changed-files-font-size: var(--text-sm);
+	--changed-files-added: var(--diff-added);
+	--changed-files-removed: var(--diff-removed);
+
+	/* Panel */
+	--panel-header-bg: var(--surface-overlay);
+	--panel-header-border: var(--border-subtle);
+
+	/* Dropdown */
+	--dropdown-section-title-height: var(--h-sm);
+	--dropdown-footer-height: var(--h-sm);
+	--dropdown-padding-x: 10px;
+	--dropdown-item-padding-x: var(--gap-4);
+
+	/* Input */
+	--input-border-focus: var(--border-focus);
+	--input-text-color: rgb(197, 197, 197);
+	--input-toolbar-height: 22px;
+	--input-min-height: 36px;
+	--input-max-height: 266px;
+	--input-width-sm: 180px;
+	--input-width-md: 200px;
+	--input-width-lg: 280px;
+
+	/* Buttons */
+	--btn-height-xs: var(--h-sm);
+	--btn-height-sm: 22px;
+	--btn-height-md: var(--h-md);
+
+	/* Icon Buttons */
+	--icon-btn-xs: 16px;
+	--icon-btn-sm: var(--h-sm);
+	--icon-btn-md: var(--h-md);
+	--icon-btn-lg: var(--h-lg);
+
+	/* Icons (extended) */
+	--icon-xs: var(--icon-sm);
+	--icon-xl: 20px;
+
+	/* Cards */
+	--card-bg-dark: var(--surface-overlay);
+	--card-bg-medium: var(--surface-raised);
+	--card-bg-light: var(--surface-base);
+
+	/* Modal */
+	--modal-padding: var(--gap-7);
+	--modal-header-padding-y: var(--gap-7);
+	--modal-header-padding-x: var(--gap-7);
+	--modal-width-sm: 450px;
+	--modal-width-md: 600px;
+	--modal-width-lg: 700px;
+	--modal-content-height: 400px;
+
+	/* Tooltip */
+	--tooltip-offset: var(--gap-3);
+	--tooltip-padding-y: var(--gap-2);
+	--tooltip-padding-x: var(--gap-4);
+	--tooltip-z: 10000;
+	/* Image Preview */
+	--image-preview-close-size: var(--h-md);
+	--image-preview-close-offset: var(--gap-6);
+	--image-preview-max-vw: 90vw;
+	--image-preview-max-vh: 90vh;
+	--image-preview-backdrop: 0.8;
+	--image-preview-close-bg: 0.1;
+	--image-preview-close-bg-hover: 0.2;
+
+	/* Context Bar */
+	--context-bar-track: var(--alpha-muted);
+	--context-bar-fill: var(--color-thinking);
+
+	/* Content Heights */
+	--content-max-height-sm: 110px;
+	--content-max-height-md: 150px;
+	--content-max-height-lg: 200px;
+	--content-max-height-xl: 450px;
+
+	/* Popup */
+	--popup-min-width: 220px;
+	--popup-max-width: 320px;
+
+	/* Line Heights */
+	--line-height-code: 18px;
+	--line-height-diff: 19px;
+
+	/* Border */
+	--border-indicator: 2px;
+
+	/* Select */
+	--select-min-width: 120px;
+
+	/* Switch */
+	--switch-width: 28px;
+	--switch-height: 16px;
+	--switch-thumb: 12px;
+	--switch-thumb-offset: 2px;
+
+	/* Send Button */
+	--send-btn-size: 36px;
+	--send-btn-margin: 3px;
+	--send-btn-dot-size: 3px;
+	--send-btn-inset: 4px;
+	--send-btn-border-width: 1.5px;
+
+	/* Settings */
+	--settings-row-height: 28px;
+
+	/* Alpha (numeric aliases) */
+	--alpha-5: var(--alpha-subtle);
+	--alpha-8: rgba(255, 255, 255, 0.08);
+	--alpha-10: var(--alpha-muted);
+	--alpha-15: var(--alpha-soft);
+	--alpha-20: rgba(255, 255, 255, 0.2);
+	--alpha-25: rgba(255, 255, 255, 0.25);
+	--alpha-30: var(--alpha-medium);
+	--alpha-40: rgba(255, 255, 255, 0.4);
+	--alpha-50: var(--alpha-strong);
+	--alpha-60: rgba(255, 255, 255, 0.6);
+	--alpha-70: var(--alpha-bold);
+	--alpha-80: rgba(255, 255, 255, 0.8);
+	--alpha-90: var(--alpha-solid);
+
+	/* Colors (extended) */
+	--color-pending: #9d9d9d;
+	--color-accent-hover: #9333ea;
+	--color-accent-glow: var(--glow-accent);
+	--color-stop-hover: #ff6b6b;
+}

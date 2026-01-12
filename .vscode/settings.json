@@ -1,0 +1,64 @@
+{
+	"editor.formatOnSave": true,
+	"editor.defaultFormatter": "biomejs.biome",
+	"editor.codeActionsOnSave": {
+		"source.fixAll.biome": "explicit",
+		"source.organizeImports.biome": "explicit",
+		"source.fixAll.eslint": "explicit"
+	},
+	"[javascript]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	},
+	"[typescript]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	},
+	"[javascriptreact]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	},
+	"[typescriptreact]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	},
+	"[json]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	},
+	"[jsonc]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	},
+	"[css]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	},
+	"biome.enabled": true,
+	"biome.requireConfiguration": false,
+	"files.associations": {
+		"*.json": "jsonc"
+	},
+	"files.exclude": {
+		"out": false
+	},
+	"search.exclude": {
+		"out": true
+	},
+
+	// TypeScript settings
+	"typescript.tsdk": "node_modules/typescript/lib",
+	"typescript.enablePromptUseWorkspaceTsdk": true,
+	"typescript.preferences.includePackageJsonAutoImports": "on",
+	"typescript.suggest.autoImports": true,
+	"typescript.tsc.autoDetect": "off",
+
+	// ESLint (Tailwind canonicalization autofix)
+	"eslint.enable": true,
+	"eslint.validate": [
+		"javascript",
+		"javascriptreact",
+		"typescript",
+		"typescriptreact"
+	],
+
+	// Tailwind IntelliSense: keep Problems clean (we auto-fix via ESLint)
+	"tailwindCSS.lint.suggestCanonicalClasses": false,
+	"tailwindCSS.lint.cssConflict": false,
+
+	// CSS settings - ignore Tailwind/custom at-rules
+	"css.lint.unknownAtRules": "ignore"
+}
