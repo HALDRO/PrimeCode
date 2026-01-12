@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*' # Срабатывает на теги типа v0.1.0, v1.0.0 и т.д.
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
