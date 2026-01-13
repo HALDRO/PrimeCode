@@ -564,10 +564,29 @@ export class SettingsHandler {
 	}
 
 	private async _fetchProxyModels(baseUrl: string, apiKey: string): Promise<ProxyModel[]> {
-		const normalizedUrl = baseUrl.replace(/\/+$/, '');
-		const modelsUrl = normalizedUrl.endsWith('/v1')
-			? `${normalizedUrl}/models`
-			: `${normalizedUrl}/v1/models`;
+		// Normalize URL: trim whitespace, remove trailing slashes, handle various input formats
+		// Supported formats:
+		//   http://localhost:11434        → http://localhost:11434/v1/models
+		//   http://localhost:11434/       → http://localhost:11434/v1/models
+		//   http://localhost:11434/v1     → http://localhost:11434/v1/models
+		//   http://localhost:11434/v1/    → http://localhost:11434/v1/models
+		//   http://localhost:11434/v1/models → http://localhost:11434/v1/models
+		const trimmedUrl = baseUrl.trim().replace(/\/+$/, '');
+
+		let modelsUrl: string;
+		if (trimmedUrl.endsWith('/v1/models')) {
+			// User provided full path to models endpoint
+			modelsUrl = trimmedUrl;
+		} else if (trimmedUrl.endsWith('/v1')) {
+			// User provided base URL with /v1 suffix
+			modelsUrl = `${trimmedUrl}/models`;
+		} else if (trimmedUrl.endsWith('/models')) {
+			// User provided path ending with /models but without /v1 - assume it's correct
+			modelsUrl = trimmedUrl;
+		} else {
+			// Base URL without path - append /v1/models
+			modelsUrl = `${trimmedUrl}/v1/models`;
+		}
 
 		const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 		if (apiKey) {
