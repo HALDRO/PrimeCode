@@ -44,14 +44,18 @@ export class RulesHandler {
 		const service = this._getRulesService();
 		if (!service) return;
 
-		// Get Claude rules from file system
-		const claudeRules = await service.getRules();
+		// Get managed rules from .agents/rules/
+		const managedRules = await service.getRules();
 
-		// Get OpenCode instructions if provider is opencode
-		const openCodeRules = await this._getOpenCodeInstructionsAsRules();
+		// Get OpenCode derived files (AGENTS.md, .opencode/memories/*)
+		const derivedRules = await this._getOpenCodeInstructionsAsRules();
 
-		// Merge both sources
-		const rules = [...claudeRules, ...openCodeRules];
+		// Filter out derived rules that have the same name as managed rules
+		// to avoid showing duplicates (e.g., if someone created AGENTS.md in .agents/rules/)
+		const managedNames = new Set(managedRules.map(r => r.name));
+		const uniqueDerivedRules = derivedRules.filter(r => !managedNames.has(r.name));
+
+		const rules = [...managedRules, ...uniqueDerivedRules];
 
 		this._deps.postMessage({
 			type: 'ruleList',
@@ -61,7 +65,8 @@ export class RulesHandler {
 
 	/**
 	 * Fetches OpenCode rules from AGENTS.md and .opencode/memories/*.md files.
-	 * These are read-only views of what OpenCode sees.
+	 * These are read-only derived files - they are generated from .agents/rules/
+	 * and should not be toggled directly.
 	 */
 	private async _getOpenCodeInstructionsAsRules(): Promise<Rule[]> {
 		const rules: Rule[] = [];
@@ -69,7 +74,7 @@ export class RulesHandler {
 		if (!workspaceRoot) return rules;
 
 		try {
-			// Check AGENTS.md (root rule)
+			// Check AGENTS.md (root rule) - read-only derived file
 			const agentsMdPath = path.join(workspaceRoot, OPENCODE_AGENTS_MD);
 			try {
 				const stat = await fs.stat(agentsMdPath);
@@ -79,13 +84,14 @@ export class RulesHandler {
 						path: OPENCODE_AGENTS_MD,
 						isEnabled: true,
 						source: 'opencode',
+						isReadOnly: true,
 					});
 				}
 			} catch {
 				// AGENTS.md doesn't exist, that's fine
 			}
 
-			// Check .opencode/memories/*.md
+			// Check .opencode/memories/*.md - read-only derived files
 			const memoriesDir = path.join(workspaceRoot, OPENCODE_MEMORIES_DIR);
 			try {
 				const entries = await fs.readdir(memoriesDir, { withFileTypes: true });
@@ -96,6 +102,7 @@ export class RulesHandler {
 							path: `${OPENCODE_MEMORIES_DIR}/${entry.name}`,
 							isEnabled: true,
 							source: 'opencode',
+							isReadOnly: true,
 						});
 					}
 				}
@@ -133,25 +140,34 @@ export class RulesHandler {
 
 	/**
 	 * Toggle rule enabled/disabled state.
-	 * @param path - Rule path
+	 * @param rulePath - Rule path
 	 * @param enabled - New enabled state
 	 * @param source - Rule source ('claude' | 'opencode'), passed explicitly from UI
 	 */
 	public async toggleRule(
-		path: string,
+		rulePath: string,
 		enabled: boolean,
 		source?: 'claude' | 'opencode',
 	): Promise<void> {
 		const service = this._getRulesService();
 		if (!service) return;
 
+		// Prevent toggling read-only OpenCode derived files (AGENTS.md, .opencode/memories/*)
+		// These are generated from .agents/rules/ and should not be modified directly
+		if (rulePath === OPENCODE_AGENTS_MD || rulePath.startsWith(`${OPENCODE_MEMORIES_DIR}/`)) {
+			logger.warn(
+				`[RulesHandler] Cannot toggle read-only OpenCode rule: ${rulePath}. Toggle the source rule in .agents/rules/ instead.`,
+			);
+			return;
+		}
+
 		const openCodeService = await getOpenCodeService();
 
 		try {
 			// Use explicit source if provided, otherwise infer from path
-			const ruleSource = source ?? (path.includes('.opencode') ? 'opencode' : 'claude');
+			const ruleSource = source ?? (rulePath.includes('.opencode') ? 'opencode' : 'claude');
 
-			await service.toggleRule(path, enabled, ruleSource, openCodeService);
+			await service.toggleRule(rulePath, enabled, ruleSource, openCodeService);
 
 			// Refresh list
 			await this.getRules();

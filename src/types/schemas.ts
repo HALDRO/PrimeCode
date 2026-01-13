@@ -680,6 +680,8 @@ export const RuleSchema = Type.Object({
 	isEnabled: Type.Boolean(),
 	source: Type.Union([Type.Literal('claude'), Type.Literal('opencode')]),
 	content: Type.Optional(Type.String()),
+	/** Read-only rules cannot be toggled (e.g., derived OpenCode files like AGENTS.md) */
+	isReadOnly: Type.Optional(Type.Boolean()),
 });
 export type Rule = Static<typeof RuleSchema>;
 

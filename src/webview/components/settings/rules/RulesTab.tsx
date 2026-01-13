@@ -51,6 +51,10 @@ export const RulesTab: React.FC = () => {
 		postMessage('syncRulesToClaude');
 	};
 
+	// Separate editable rules (.agents/rules/) from read-only derived rules (AGENTS.md, .opencode/memories/)
+	const editableRules = rules.filter(r => !r.isReadOnly);
+	const derivedRules = rules.filter(r => r.isReadOnly);
+
 	return (
 		<>
 			<GroupTitle>Import & Sync</GroupTitle>
@@ -122,17 +126,17 @@ export const RulesTab: React.FC = () => {
 				</SettingRow>
 			</SettingsGroup>
 
-			<GroupTitle>Discovered Rules</GroupTitle>
+			<GroupTitle>Managed Rules (.agents/rules/)</GroupTitle>
 			<SettingsGroup>
-				{rules.length === 0 ? (
-					<EmptyState>No rule files found in .claude/rules or instructions</EmptyState>
+				{editableRules.length === 0 ? (
+					<EmptyState>No rule files found in .agents/rules/</EmptyState>
 				) : (
-					rules.map((rule, i) => (
+					editableRules.map((rule, i) => (
 						<SettingRow
 							key={rule.path}
 							title={rule.name}
 							tooltip={rule.path}
-							last={i === rules.length - 1}
+							last={i === editableRules.length - 1}
 						>
 							<SettingRowActions>
 								<Tooltip content="Edit file" position="top" delay={200}>
@@ -153,6 +157,35 @@ export const RulesTab: React.FC = () => {
 					))
 				)}
 			</SettingsGroup>
+
+			{derivedRules.length > 0 && (
+				<>
+					<GroupTitle>OpenCode Derived (read-only)</GroupTitle>
+					<SettingsGroup>
+						{derivedRules.map((rule, i) => (
+							<SettingRow
+								key={rule.path}
+								title={rule.name}
+								tooltip={`${rule.path} (auto-generated from .agents/rules/)`}
+								last={i === derivedRules.length - 1}
+							>
+								<SettingRowActions>
+									<Tooltip content="View file" position="top" delay={200}>
+										<button
+											type="button"
+											onClick={() => postMessage('openFile', { filePath: rule.path })}
+											className="p-1 rounded hover:bg-vscode-list-hoverBackground text-vscode-descriptionForeground hover:text-vscode-foreground transition-colors"
+										>
+											<EditIcon size={12} />
+										</button>
+									</Tooltip>
+									<SettingsBadge variant="blue">Synced</SettingsBadge>
+								</SettingRowActions>
+							</SettingRow>
+						))}
+					</SettingsGroup>
+				</>
+			)}
 		</>
 	);
 };

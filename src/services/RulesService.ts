@@ -6,8 +6,8 @@
  *                with fallback to legacy `.claude/rules/` if `.agents/rules/` is empty.
  *              - OpenCode: file-based rules using `AGENTS.md` (root) and `.opencode/memories/*.md`.
  *
- *              The service intentionally separates persistence (`.agents/`) from compatibility sync
- *              (copy to/from `.claude/` and `.opencode/`) so the UI can operate on a single canonical location.
+ *              Root rule is determined by alphabetical order of ALL rules (including disabled).
+ *              This ensures stable root selection - toggling a rule doesn't change which rule is root.
  *
  *              Cursor is READ-ONLY: we only import/parse from `.cursor/rules/`, never write to it.
  */
@@ -132,52 +132,62 @@ export class RulesService {
 
 	/**
 	 * Sync rules from `.agents/rules/` to OpenCode format:
-	 * - First active rule → `AGENTS.md` (root)
+	 * - First rule alphabetically (from ALL rules including disabled) that is enabled → `AGENTS.md`
 	 * - Remaining active rules → `.opencode/memories/*.md`
 	 *
-	 * OpenCode compatibility files are treated as derived artifacts.
-	 * This method removes orphaned `.md` files in `.opencode/memories/` that are not in the current active set.
+	 * Root is determined by alphabetical order of ALL rules to ensure stability on toggle.
+	 * If the alphabetically-first rule is disabled, the next enabled rule becomes AGENTS.md.
 	 */
 	public async syncAgentsToOpenCode(
 		_openCodeService?: OpenCodeService,
 	): Promise<{ synced: number }> {
 		const fromDir = path.join(this._workspaceRoot, PATHS.AGENTS_RULES_DIR);
+		const disabledDir = path.join(fromDir, 'disabled');
 		const memoriesDir = path.join(this._workspaceRoot, OPENCODE_MEMORIES_DIR);
 		const agentsMdPath = path.join(this._workspaceRoot, OPENCODE_AGENTS_MD);
 
-		const activeRules = (await this._findMdFiles(fromDir, false))
-			.map(normalizeToPosixPath)
-			// Deterministic ordering is required: the first rule becomes AGENTS.md.
-			.sort((a, b) => a.localeCompare(b));
+		// Get ALL rules (active + disabled) sorted alphabetically
+		const activeRules = (await this._findMdFiles(fromDir, false)).map(normalizeToPosixPath);
+		const disabledRules = (await this._findMdFiles(disabledDir, false)).map(normalizeToPosixPath);
+		const allRules = [...activeRules, ...disabledRules].sort((a, b) => a.localeCompare(b));
 
 		await fs.mkdir(memoriesDir, { recursive: true });
 
 		if (activeRules.length === 0) {
-			// No active rules: remove derived OpenCode artifacts.
+			// No active rules: remove derived OpenCode artifacts
 			try {
 				await fs.unlink(agentsMdPath);
 			} catch {
 				// ignore
 			}
-
 			await this._removeOrphanedMemories(memoriesDir, new Set());
 			logger.info('[RulesService] No active rules to sync to OpenCode');
 			return { synced: 0 };
 		}
 
+		// Find the first rule alphabetically that is enabled (root candidate)
+		const rootRuleName = allRules.find(r => activeRules.includes(r));
+		if (!rootRuleName) {
+			logger.warn('[RulesService] Could not determine root rule');
+			return { synced: 0 };
+		}
+
 		let synced = 0;
 
-		// First rule becomes AGENTS.md (root)
-		const firstRulePath = path.join(fromDir, activeRules[0]);
-		const firstRuleContent = await fs.readFile(firstRulePath, 'utf8');
-		await fs.writeFile(agentsMdPath, firstRuleContent, 'utf8');
+		// Root rule becomes AGENTS.md
+		const rootRulePath = path.join(fromDir, rootRuleName);
+		const rootRuleContent = await fs.readFile(rootRulePath, 'utf8');
+		await fs.writeFile(agentsMdPath, rootRuleContent, 'utf8');
 		synced++;
-		logger.debug(`[RulesService] Synced ${activeRules[0]} → AGENTS.md`);
+		logger.debug(`[RulesService] Synced ${rootRuleName} → AGENTS.md`);
 
-		// Remaining rules go to .opencode/memories/
+		// Remaining active rules go to .opencode/memories/ (sorted)
+		const nonRootActiveRules = activeRules
+			.filter(r => r !== rootRuleName)
+			.sort((a, b) => a.localeCompare(b));
+
 		const expectedMemoryFiles = new Set<string>();
-		for (let i = 1; i < activeRules.length; i++) {
-			const ruleName = activeRules[i];
+		for (const ruleName of nonRootActiveRules) {
 			const srcPath = path.join(fromDir, ruleName);
 			const dstPath = path.join(memoriesDir, ruleName);
 
@@ -330,7 +340,8 @@ export class RulesService {
 			logger.warn('[RulesService] Error scanning file-based rules:', error);
 		}
 
-		return rules;
+		// Sort all rules alphabetically by name for stable display
+		return rules.sort((a, b) => a.name.localeCompare(b.name));
 	}
 
 	private _toRelRoot(base: RuleBaseDir): string {
