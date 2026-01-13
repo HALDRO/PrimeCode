@@ -27,8 +27,8 @@
 					},
 				"background": {
 					"activeOnStart": true,
-					"beginsPattern": "^\\$|vite|Starting compilation|File change detected",
-					"endsPattern": "ready in \\d+|Watching for file changes|Found \\d+ error"
+					"beginsPattern": "^\\$|vite|Starting compilation|File change detected|build started",
+					"endsPattern": "ready in \\d+|Watching for file changes|Found \\d+ error|built in \\d+"
 				}
 				}
 			],

@@ -549,16 +549,29 @@ export class SessionContext {
 	/**
 	 * Update token usage from API response
 	 * SDK sends cumulative tokens per message, so we track the last known values
-	 * and only add the delta to avoid double counting
+	 * and only add the delta to avoid double counting.
+	 *
+	 * IMPORTANT: OpenCode sends different messages with independent cumulative counters.
+	 * Each new messageId has its own token counter starting from 0.
+	 * We must reset tracking when messageId changes to avoid incorrect delta calculations.
 	 */
 	private _lastMessageTokensInput: number = 0;
 	private _lastMessageTokensOutput: number = 0;
 	private _lastMessageReasoningTokens: number = 0;
+	private _lastTokenMessageId: string | undefined;
 
-	public updateTokenUsage(usage: TokenUsageAPI): void {
+	public updateTokenUsage(usage: TokenUsageAPI, messageId?: string): void {
 		const newInput = usage.input_tokens || 0;
 		const newOutput = usage.output_tokens || 0;
 		const newReasoning = usage.reasoning_tokens || 0;
+
+		// Reset tracking when messageId changes (new message has independent token counter)
+		if (messageId && messageId !== this._lastTokenMessageId) {
+			this._lastMessageTokensInput = 0;
+			this._lastMessageTokensOutput = 0;
+			this._lastMessageReasoningTokens = 0;
+			this._lastTokenMessageId = messageId;
+		}
 
 		// Calculate delta from last known values
 		const deltaInput = Math.max(0, newInput - this._lastMessageTokensInput);
@@ -583,6 +596,7 @@ export class SessionContext {
 		this._lastMessageTokensInput = 0;
 		this._lastMessageTokensOutput = 0;
 		this._lastMessageReasoningTokens = 0;
+		this._lastTokenMessageId = undefined;
 	}
 
 	/**

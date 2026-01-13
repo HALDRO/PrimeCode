@@ -2,6 +2,7 @@
  * @file Context usage "water glass" visualization
  * @description A vertical progress indicator that looks like a filling glass of water.
  *              Uses SVG animation for a realistic water surface effect.
+ *              Colors are pre-computed to avoid React Compiler optimization issues.
  */
 
 import type React from 'react';
@@ -19,16 +20,20 @@ export const ContextWaterGlass: React.FC<ContextWaterGlassProps> = ({ isVisible 
 	const totalTokens = totalStats.totalTokensInput + totalStats.totalTokensOutput;
 	const percentage = Math.min((totalTokens / contextLimit) * 100, 100);
 
-	// Water color based on fill level
-	const getWaterColor = (opacityScale = 1) => {
-		if (percentage > 90) {
-			return `color-mix(in srgb, var(--vscode-errorForeground) ${25 * opacityScale}%, transparent)`;
-		} // Muted Red
-		if (percentage > 70) {
-			return `color-mix(in srgb, var(--vscode-editorGutter-modifiedBackground) ${20 * opacityScale}%, transparent)`;
-		} // Muted Amber
-		return `color-mix(in srgb, var(--vscode-focusBorder) ${15 * opacityScale}%, transparent)`; // Muted Purple
-	};
+	// Pre-compute water colors - using static strings to avoid build issues
+	const waterColorFull =
+		percentage > 90
+			? 'rgba(239, 68, 68, 0.25)' // Red
+			: percentage > 70
+				? 'rgba(245, 158, 11, 0.2)' // Amber
+				: 'rgba(168, 85, 247, 0.15)'; // Purple
+
+	const waterColorHalf =
+		percentage > 90
+			? 'rgba(239, 68, 68, 0.125)' // Red half
+			: percentage > 70
+				? 'rgba(245, 158, 11, 0.1)' // Amber half
+				: 'rgba(168, 85, 247, 0.075)'; // Purple half
 
 	return (
 		<div
@@ -48,7 +53,7 @@ export const ContextWaterGlass: React.FC<ContextWaterGlassProps> = ({ isVisible 
 				<title>Context Usage</title>
 				<defs>
 					<linearGradient id="waterGradient" x1="0" y1="0" x2="0" y2="1">
-						<stop offset="0%" stopColor="var(--alpha-muted)" />
+						<stop offset="0%" stopColor="rgba(255,255,255,0.1)" />
 						<stop offset="100%" stopColor="transparent" />
 					</linearGradient>
 					{/* Blur for depth of field on back wave */}
@@ -67,7 +72,7 @@ export const ContextWaterGlass: React.FC<ContextWaterGlassProps> = ({ isVisible 
 					<g filter="url(#waveBlur)">
 						<path
 							d="M 0 0 Q 15 3 30 0 T 60 0 T 90 0 T 120 0 T 150 0 T 180 0 T 210 0 V 100 H 0 Z"
-							fill={getWaterColor(0.5)}
+							fill={waterColorHalf}
 							className="transition-colors duration-700"
 						>
 							<animateTransform
@@ -84,8 +89,8 @@ export const ContextWaterGlass: React.FC<ContextWaterGlassProps> = ({ isVisible 
 					{/* Front Rolling Wave */}
 					<path
 						d="M 0 0 Q 25 5 50 0 T 100 0 T 150 0 T 200 0 V 100 H 0 Z"
-						fill={getWaterColor(1)}
-						stroke="var(--border-subtle)"
+						fill={waterColorFull}
+						stroke="rgba(255,255,255,0.08)"
 						strokeWidth="0.3"
 						className="transition-colors duration-700"
 					>
@@ -103,7 +108,7 @@ export const ContextWaterGlass: React.FC<ContextWaterGlassProps> = ({ isVisible 
 					<path
 						d="M 0 0 Q 25 5 50 0 T 100 0 T 150 0 T 200 0"
 						fill="none"
-						stroke="var(--alpha-20)"
+						stroke="rgba(255,255,255,0.2)"
 						strokeWidth="0.4"
 						strokeLinecap="round"
 					>
@@ -119,7 +124,7 @@ export const ContextWaterGlass: React.FC<ContextWaterGlassProps> = ({ isVisible 
 
 					{/* Bubbles for "alive" effect */}
 					{[0, 1, 2, 3, 4].map(i => (
-						<circle key={`bubble-${i}`} r={0.5 + (i % 3) * 0.5} fill="var(--alpha-25)">
+						<circle key={`bubble-${i}`} r={0.5 + (i % 3) * 0.5} fill="rgba(255,255,255,0.25)">
 							<animate
 								attributeName="cx"
 								values={`${15 + i * 20};${25 + i * 20};${15 + i * 20}`}
