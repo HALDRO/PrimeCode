@@ -98,6 +98,8 @@ export {
 	ParsedHookSchema,
 	type ParsedSkill,
 	ParsedSkillSchema,
+	type ParsedSubagent,
+	ParsedSubagentSchema,
 	// Platform info
 	type PlatformInfo,
 	PlatformInfoSchema,

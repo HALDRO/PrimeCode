@@ -23,6 +23,7 @@ import {
 import { useSettingsStore } from '../../store/settingsStore';
 import { useUIActions } from '../../store/uiStore';
 import { formatDuration, formatTime, formatTokens, getShortFileName } from '../../utils/format';
+import { parseMessageSegments } from '../../utils/messageParser';
 import { STANDARD_MODELS } from '../../utils/models';
 import { useSessionMessage, useVSCode } from '../../utils/vscode';
 import { ClockIcon, TimerIcon, TokensIcon, Undo2Icon } from '../icons';
@@ -293,55 +294,51 @@ MessageStats.displayName = 'MessageStats';
  * Renders message text with command highlights for /command patterns
  * Only highlights valid commands from the provided set
  */
-const MessageTextWithCommands: React.FC<{ text: string; validCommands: Set<string> }> = React.memo(
-	({ text, validCommands }) => {
-		const components: React.ReactNode[] = [];
-		const regex = /\/([a-zA-Z][a-zA-Z0-9_-]*)/g;
-		let lastIndex = 0;
-		let match: RegExpExecArray | null;
+const MessageTextWithCommands: React.FC<{
+	text: string;
+	validCommands: Set<string>;
+	validSubagents: Set<string>;
+}> = React.memo(({ text, validCommands, validSubagents }) => {
+	const segments = parseMessageSegments(text, validCommands, validSubagents);
 
-		// biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec pattern
-		while ((match = regex.exec(text)) !== null) {
-			const start = match.index;
-			const end = start + match[0].length;
-			const command = match[0];
-			const commandName = match[1].toLowerCase();
-
-			// Text before command
-			if (start > lastIndex) {
-				components.push(<span key={`text-${lastIndex}`}>{text.substring(lastIndex, start)}</span>);
-			}
-
-			// Only highlight if command is valid
-			if (validCommands.has(commandName)) {
-				components.push(
-					<span
-						key={`cmd-${start}`}
-						className="text-warning rounded-sm pl-(--gap-0-5) pr-(--gap-1-5) -ml-(--gap-0-5) -mr-(--gap-1-5)"
-						style={{
-							backgroundColor:
-								'color-mix(in srgb, var(--vscode-editorGutter-modifiedBackground) 15%, transparent)',
-						}}
-					>
-						{command}
-					</span>,
+	return (
+		<>
+			{segments.map((segment, index) => {
+				if (segment.type === 'command') {
+					return (
+						<span
+							key={`${index}-${segment.content}`}
+							className="text-warning rounded-sm pl-(--gap-0-5) pr-(--gap-1-5) -ml-(--gap-0-5) -mr-(--gap-1-5)"
+							style={{
+								backgroundColor:
+									'color-mix(in srgb, var(--vscode-editorGutter-modifiedBackground) 15%, transparent)',
+							}}
+						>
+							{segment.content}
+						</span>
+					);
+				}
+				if (segment.type === 'subagent') {
+					return (
+						<span
+							key={`${index}-${segment.content}`}
+							className="text-blue-400 rounded-sm pl-(--gap-0-5) pr-(--gap-1-5) -ml-(--gap-0-5) -mr-(--gap-1-5)"
+							style={{
+								backgroundColor: 'color-mix(in srgb, #60a5fa 15%, transparent)',
+							}}
+						>
+							{segment.content}
+						</span>
+					);
+				}
+				return (
+					// biome-ignore lint/suspicious/noArrayIndexKey: Order is static and safe here
+					<span key={`${index}-text`}>{segment.content}</span>
 				);
-			} else {
-				// Not a valid command, render as plain text
-				components.push(<span key={`text-${start}`}>{command}</span>);
-			}
-
-			lastIndex = end;
-		}
-
-		// Remaining text
-		if (lastIndex < text.length) {
-			components.push(<span key={`text-${lastIndex}`}>{text.substring(lastIndex)}</span>);
-		}
-
-		return <>{components}</>;
-	},
-);
+			})}
+		</>
+	);
+});
 MessageTextWithCommands.displayName = 'MessageTextWithCommands';
 
 export const UserMessage: React.FC<UserMessageProps> = React.memo(({ message }) => {
@@ -360,6 +357,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(({ message }) 
 	const { selectedModel, opencodeProviders } = useSettingsStore();
 	const provider = useSettingsStore(state => state.provider);
 	const customCommands = useSettingsStore(state => state.commands.custom);
+	const subagents = useSettingsStore(state => state.subagents);
 
 	// Build set of valid command names for highlighting
 	const validCommands = useMemo(() => {
@@ -369,6 +367,10 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(({ message }) 
 			...customCommands.map(cmd => cmd.name.toLowerCase()),
 		]);
 	}, [provider, customCommands]);
+
+	const validSubagents = useMemo(() => {
+		return new Set(subagents.items.map(a => a.name.toLowerCase()));
+	}, [subagents.items]);
 
 	// Derived state selector - calculates all primitive stats in one go using stable values
 	const stats = useChatStore(
@@ -862,7 +864,11 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(({ message }) 
 								))}
 							</span>
 						)}
-						<MessageTextWithCommands text={messageText} validCommands={validCommands} />
+						<MessageTextWithCommands
+							text={messageText}
+							validCommands={validCommands}
+							validSubagents={validSubagents}
+						/>
 					</div>
 				</button>
 				<div className="flex items-center text-sm px-1.5 pb-0.5 bg-(--input-bg) pt-1">

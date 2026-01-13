@@ -78,11 +78,16 @@ export class SessionContext {
 
 	// Usage counters
 	private _totalCost: number = 0;
-	private _totalTokensInput: number = 0;
-	private _totalTokensOutput: number = 0;
+	private _mainTokensInput: number = 0;
+	private _mainTokensOutput: number = 0;
+	private _subagentTokensInput: number = 0;
+	private _subagentTokensOutput: number = 0;
 	private _totalReasoningTokens: number = 0;
 	private _totalDuration: number = 0;
 	private _requestCount: number = 0;
+
+	// Track last known context size from main session (for UI display)
+	private _lastMainContextSize: number = 0;
 
 	// Processing state
 	private _isProcessing: boolean = false;
@@ -173,11 +178,21 @@ export class SessionContext {
 	}
 
 	public get totalTokensInput(): number {
-		return this._totalTokensInput;
+		return this._mainTokensInput + this._subagentTokensInput;
 	}
 
 	public get totalTokensOutput(): number {
-		return this._totalTokensOutput;
+		return this._mainTokensOutput + this._subagentTokensOutput;
+	}
+
+	/** Tokens used specifically by subagents (not counting towards main context) */
+	public get subagentTokensInput(): number {
+		return this._subagentTokensInput;
+	}
+
+	/** Last known context size of the main session (usage.input_tokens) */
+	public get mainContextSize(): number {
+		return this._lastMainContextSize;
 	}
 
 	public get totalReasoningTokens(): number {
@@ -560,7 +575,11 @@ export class SessionContext {
 	private _lastMessageReasoningTokens: number = 0;
 	private _lastTokenMessageId: string | undefined;
 
-	public updateTokenUsage(usage: TokenUsageAPI, messageId?: string): void {
+	public updateTokenUsage(
+		usage: TokenUsageAPI,
+		messageId?: string,
+		isChildSession?: boolean,
+	): void {
 		const newInput = usage.input_tokens || 0;
 		const newOutput = usage.output_tokens || 0;
 		const newReasoning = usage.reasoning_tokens || 0;
@@ -578,9 +597,17 @@ export class SessionContext {
 		const deltaOutput = Math.max(0, newOutput - this._lastMessageTokensOutput);
 		const deltaReasoning = Math.max(0, newReasoning - this._lastMessageReasoningTokens);
 
-		// Update totals with delta
-		this._totalTokensInput += deltaInput;
-		this._totalTokensOutput += deltaOutput;
+		// Update totals based on session type
+		if (isChildSession) {
+			this._subagentTokensInput += deltaInput;
+			this._subagentTokensOutput += deltaOutput;
+		} else {
+			this._mainTokensInput += deltaInput;
+			this._mainTokensOutput += deltaOutput;
+			// Track context size only for main session
+			this._lastMainContextSize = newInput;
+		}
+
 		this._totalReasoningTokens += deltaReasoning;
 
 		// Store current values for next delta calculation
@@ -664,8 +691,8 @@ export class SessionContext {
 	} {
 		return {
 			totalCost: this._totalCost,
-			totalTokensInput: this._totalTokensInput,
-			totalTokensOutput: this._totalTokensOutput,
+			totalTokensInput: this.totalTokensInput,
+			totalTokensOutput: this.totalTokensOutput,
 			totalReasoningTokens: this._totalReasoningTokens,
 			totalDuration: this._totalDuration,
 			requestCount: this._requestCount,
@@ -1147,8 +1174,8 @@ export class SessionContext {
 			messageCount: this._conversationMessages.length,
 			totalCost: this._totalCost,
 			totalTokens: {
-				input: this._totalTokensInput,
-				output: this._totalTokensOutput,
+				input: this.totalTokensInput,
+				output: this.totalTokensOutput,
 				reasoning: this._totalReasoningTokens,
 			},
 			totalDuration: this._totalDuration,
@@ -1175,8 +1202,8 @@ export class SessionContext {
 			cliSessionId: this._cliSessionId,
 			providerType: this._providerType,
 			totalCost: this._totalCost,
-			totalTokensInput: this._totalTokensInput,
-			totalTokensOutput: this._totalTokensOutput,
+			totalTokensInput: this.totalTokensInput,
+			totalTokensOutput: this.totalTokensOutput,
 			totalReasoningTokens: this._totalReasoningTokens,
 			totalDuration: this._totalDuration,
 			requestCount: this._requestCount,
@@ -1197,8 +1224,10 @@ export class SessionContext {
 		this._cliSessionId = snapshot.cliSessionId;
 		this._providerType = snapshot.providerType;
 		this._totalCost = snapshot.totalCost;
-		this._totalTokensInput = snapshot.totalTokensInput;
-		this._totalTokensOutput = snapshot.totalTokensOutput;
+		this._mainTokensInput = snapshot.totalTokensInput; // Snapshot stores total, restore to main + 0 subagent
+		this._mainTokensOutput = snapshot.totalTokensOutput;
+		this._subagentTokensInput = 0;
+		this._subagentTokensOutput = 0;
 		this._totalReasoningTokens = snapshot.totalReasoningTokens || 0;
 		this._totalDuration = snapshot.totalDuration;
 		this._requestCount = snapshot.requestCount;
@@ -1272,8 +1301,11 @@ export class SessionContext {
 
 		// Restore stats
 		this._totalCost = data.totalCost || 0;
-		this._totalTokensInput = data.totalTokens?.input || 0;
-		this._totalTokensOutput = data.totalTokens?.output || 0;
+		// Map old persisted totalTokens to mainTokens to maintain continuity
+		this._mainTokensInput = data.totalTokens?.input || 0;
+		this._mainTokensOutput = data.totalTokens?.output || 0;
+		this._subagentTokensInput = 0; // New field, starts at 0 for old sessions
+		this._subagentTokensOutput = 0;
 		this._totalReasoningTokens = data.totalTokens?.reasoning || 0;
 		this._totalDuration = data.totalDuration || 0;
 		// requestCount used to be missing in older persisted formats.

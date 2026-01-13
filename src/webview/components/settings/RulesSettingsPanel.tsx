@@ -11,14 +11,14 @@ import { cn } from '../../lib/cn';
 import { useSettingsStore } from '../../store';
 import { HelpCircleIcon } from '../icons';
 import { Tooltip } from '../ui';
-import { CommandsTab, HooksTab, RulesTab, SkillsTab } from './rules';
+import { CommandsTab, HooksTab, RulesTab, SkillsTab, SubagentsTab } from './rules';
 import { OperationStatus } from './SettingsUI';
 
 const AgentsHelpContent = () => (
 	<div className="flex flex-col gap-1.5 text-sm">
 		<div className="font-semibold text-vscode-foreground">Agents Configuration</div>
 		<div className="text-vscode-foreground">
-			All rules, commands, skills, and hooks are stored in{' '}
+			All rules, commands, skills, hooks, and subagents are stored in{' '}
 			<code className="bg-(--alpha-10) px-1 rounded text-xs">.agents/</code> directory as the single
 			source of truth.
 		</div>
@@ -43,7 +43,9 @@ const AgentsHelpContent = () => (
 );
 
 export const RulesSettingsPanel: React.FC = () => {
-	const [activeTab, setActiveTab] = useState<'rules' | 'commands' | 'skills' | 'hooks'>('rules');
+	const [activeTab, setActiveTab] = useState<
+		'rules' | 'commands' | 'skills' | 'hooks' | 'subagents'
+	>('rules');
 	const { agentsOps } = useSettingsStore();
 
 	return (
@@ -54,6 +56,7 @@ export const RulesSettingsPanel: React.FC = () => {
 					{ id: 'commands', label: 'Commands' },
 					{ id: 'skills', label: 'Skills' },
 					{ id: 'hooks', label: 'Hooks' },
+					{ id: 'subagents', label: 'Subagents' },
 				].map(tab => (
 					<button
 						type="button"
@@ -87,6 +90,7 @@ export const RulesSettingsPanel: React.FC = () => {
 			{activeTab === 'rules' && <RulesTab />}
 			{activeTab === 'skills' && <SkillsTab />}
 			{activeTab === 'hooks' && <HooksTab />}
+			{activeTab === 'subagents' && <SubagentsTab />}
 		</div>
 	);
 };

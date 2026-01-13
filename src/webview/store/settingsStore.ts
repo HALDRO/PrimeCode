@@ -76,6 +76,7 @@ export interface SettingsActions {
 	setAnthropicKeyStatus: (status: Partial<SettingsState['anthropicKeyStatus']>) => void;
 	setEnabledProxyModels: (models: string[]) => void;
 	setProxyTestStatus: (status: Partial<SettingsState['proxyTestStatus']>) => void;
+	setSubagents: (subagents: Partial<SettingsState['subagents']>) => void;
 	setCommands: (commands: Partial<SettingsState['commands']>) => void;
 	setSkills: (skills: Partial<SettingsState['skills']>) => void;
 	setHooks: (hooks: Partial<SettingsState['hooks']>) => void;
@@ -292,6 +293,13 @@ export interface SettingsState {
 		error?: string;
 	};
 
+	// Subagents
+	subagents: {
+		items: import('../../types').ParsedSubagent[];
+		isLoading: boolean;
+		error?: string;
+	};
+
 	// Import/Sync feedback in Settings (avoids noisy toasts)
 	agentsOps: {
 		lastAction?: string;
@@ -432,6 +440,12 @@ export const useSettingsStore = create<SettingsState>(set => ({
 		error: undefined,
 	},
 
+	subagents: {
+		items: [],
+		isLoading: false,
+		error: undefined,
+	},
+
 	agentsConfig: {
 		hasProjectConfig: false,
 		projectPath: undefined,
@@ -488,6 +502,10 @@ export const useSettingsStore = create<SettingsState>(set => ({
 		setHooks: hooks =>
 			set(state => ({
 				hooks: { ...state.hooks, ...hooks },
+			})),
+		setSubagents: subagents =>
+			set(state => ({
+				subagents: { ...state.subagents, ...subagents },
 			})),
 		setMcpServers: mcpServers => set({ mcpServers }),
 		setMcpStatus: mcpStatus => set(state => ({ mcpStatus: { ...state.mcpStatus, ...mcpStatus } })),

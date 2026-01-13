@@ -640,15 +640,17 @@ export class StreamHandler {
 			}
 		}
 
-		// Skip token stats update for child session events (subagents have isolated context)
-		// Their tokens should not be added to the parent session's total
-		if (data.message?.usage && !data.childSessionId) {
+		// Process token stats for both main and child sessions
+		if (data.message?.usage) {
 			// Pass messageId to correctly track tokens per-message
 			// OpenCode sends different messages with independent cumulative counters
 			const messageId = data.fullMessage?.id;
-			this._updateTokenStats(data.message.usage, sessionId, messageId);
+			const isChildSession = !!data.childSessionId;
+			this._updateTokenStats(data.message.usage, sessionId, messageId, isChildSession);
 
 			// Count API calls for OpenCode: each unique assistant message with tokens is an API call
+			// Only for main session to avoid double counting requests in UI summary (or maybe we want to count them?)
+			// Let's count them for total activity tracking.
 			if (sessionId && data.fullMessage?.id && data.fullMessage?.role === 'assistant') {
 				const session = this._sessionManager.getSession(sessionId);
 				if (session) {
@@ -662,8 +664,7 @@ export class StreamHandler {
 		}
 
 		// Aggregate durationMs for OpenCode (comes from message.updated event)
-		// Also skip for child sessions
-		if (data.durationMs && sessionId && !data.childSessionId) {
+		if (data.durationMs && sessionId) {
 			const session = this._sessionManager.getSession(sessionId);
 			if (session) {
 				const messageId = data.fullMessage?.id;
@@ -1702,7 +1703,12 @@ export class StreamHandler {
 		session.lastPartContent.clear();
 	}
 
-	private _updateTokenStats(usage: TokenUsageAPI, sessionId?: string, messageId?: string): void {
+	private _updateTokenStats(
+		usage: TokenUsageAPI,
+		sessionId?: string,
+		messageId?: string,
+		isChildSession?: boolean,
+	): void {
 		const session = sessionId
 			? this._sessionManager.getSession(sessionId)
 			: this._sessionManager.getActiveSession();
@@ -1711,11 +1717,12 @@ export class StreamHandler {
 		logger.debug(
 			`[StreamHandler] Token update: input=${usage.input_tokens}, output=${usage.output_tokens}, ` +
 				`cache_read=${usage.cache_read_input_tokens}, cache_write=${usage.cache_creation_input_tokens}, ` +
-				`reasoning=${usage.reasoning_tokens}, provider=${CLIServiceFactory.getCurrentProvider()}, messageId=${messageId}`,
+				`reasoning=${usage.reasoning_tokens}, provider=${CLIServiceFactory.getCurrentProvider()}, ` +
+				`messageId=${messageId}, isChild=${isChildSession}`,
 		);
 
 		if (session) {
-			session.updateTokenUsage(usage, messageId);
+			session.updateTokenUsage(usage, messageId, isChildSession);
 		}
 
 		// Use postMessage instead of sendAndSaveMessage - token stats should not be saved to conversation history
@@ -1724,7 +1731,12 @@ export class StreamHandler {
 			data: {
 				totalTokensInput: session?.totalTokensInput || 0,
 				totalTokensOutput: session?.totalTokensOutput || 0,
-				currentInputTokens: usage.input_tokens || 0,
+				// For main session: usage.input_tokens IS the current context size.
+				// For subagent: usage.input_tokens is subagent context (ignore for main UI context meter).
+				// Use stored mainContextSize to keep UI stable during subagent execution.
+				currentInputTokens: isChildSession
+					? session?.mainContextSize || 0
+					: usage.input_tokens || 0,
 				currentOutputTokens: usage.output_tokens || 0,
 				cacheCreationTokens: usage.cache_creation_input_tokens || 0,
 				cacheReadTokens: usage.cache_read_input_tokens || 0,

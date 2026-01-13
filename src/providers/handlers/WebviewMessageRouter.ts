@@ -28,6 +28,7 @@ import type { RulesHandler } from './RulesHandler';
 import type { SessionHandler } from './SessionHandler';
 import type { SettingsHandler } from './SettingsHandler';
 import type { SkillsHandler } from './SkillsHandler';
+import type { SubagentsHandler } from './SubagentsHandler';
 
 // =============================================================================
 // Types
@@ -58,6 +59,7 @@ export interface WebviewMessageRouterHandlers {
 	accessHandler: AccessHandler;
 	discoveryHandler: DiscoveryHandler;
 	commandsHandler: CommandsHandler;
+	subagentsHandler: SubagentsHandler;
 	skillsHandler: SkillsHandler;
 	hooksHandler: HooksHandler;
 	promptImproverHandler: PromptImproverHandler;
@@ -128,6 +130,7 @@ export class WebviewMessageRouter {
 			...this._getDiscoveryRoutes(),
 			...this._getPermissionsRoutes(),
 			...this._getCommandsRoutes(),
+			...this._getSubagentsRoutes(),
 			...this._getSkillsRoutes(),
 			...this._getHooksRoutes(),
 			...this._getPromptImproverRoutes(),
@@ -606,6 +609,22 @@ export class WebviewMessageRouter {
 				void handlers.commandsHandler.syncCommands(),
 			importCommandsFromClaude: ({ handlers }: MessageContext) =>
 				void handlers.commandsHandler.importCommands(),
+		};
+	}
+
+	private _getSubagentsRoutes() {
+		return {
+			getSubagents: ({ handlers }: MessageContext) => void handlers.subagentsHandler.getSubagents(),
+			createSubagent: ({ message, handlers }: MessageContext) =>
+				void handlers.subagentsHandler.createSubagent(message),
+			deleteSubagent: ({ message, handlers }: MessageContext) =>
+				void handlers.subagentsHandler.deleteSubagent(message),
+			openSubagentFile: ({ message, handlers }: MessageContext) =>
+				void handlers.subagentsHandler.openSubagentFile(message),
+			importSubagentsFromCLI: ({ handlers }: MessageContext) =>
+				void handlers.subagentsHandler.importSubagentsFromCLI(),
+			syncSubagentsToCLI: ({ handlers }: MessageContext) =>
+				void handlers.subagentsHandler.syncSubagentsToCLI(),
 		};
 	}
 

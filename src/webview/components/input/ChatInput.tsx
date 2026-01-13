@@ -22,6 +22,7 @@ import {
 	useSlashCommandsState,
 } from '../../store';
 import { getShortFileName } from '../../utils/format';
+import { getMessageHighlights } from '../../utils/messageParser';
 import { STANDARD_MODELS } from '../../utils/models';
 import { useSessionMessage, useVSCode } from '../../utils/vscode';
 import {
@@ -230,6 +231,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 	const promptImproveTimeoutSeconds = useSettingsStore(state => state.promptImproveTimeoutSeconds);
 	const provider = useSettingsStore(state => state.provider);
 	const customCommands = useSettingsStore(state => state.commands.custom);
+	const subagents = useSettingsStore(state => state.subagents);
 	const { showSlashCommands, setShowSlashCommands, setSlashFilter } = useSlashCommandsState();
 	const { showFilePicker, setShowFilePicker, setFileFilter } = useFilePickerState();
 	const [showModelDropdown, setShowModelDropdown] = useState(false);
@@ -301,8 +303,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 		}
 	}, [autoFocus]);
 
-	// Find all commands in input and calculate their positions for highlighting
-	// Only highlight valid commands from CLI_COMMANDS, OPENCODE_COMMANDS, or custom commands
+	// Find all commands and subagents in input and calculate their positions for highlighting
 	const commandHighlights = useMemo(() => {
 		// Build set of valid command names based on provider
 		const cliCommands = provider === 'opencode' ? OPENCODE_COMMANDS : CLI_COMMANDS;
@@ -310,24 +311,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 			...cliCommands.map(cmd => cmd.name.toLowerCase()),
 			...customCommands.map(cmd => cmd.name.toLowerCase()),
 		]);
+		const validSubagentNames = new Set(subagents.items.map(a => a.name.toLowerCase()));
 
-		const highlights: Array<{ start: number; end: number; command: string }> = [];
-		const regex = /\/([a-zA-Z][a-zA-Z0-9_-]*)/g;
-		let match: RegExpExecArray | null;
-		// biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec pattern
-		while ((match = regex.exec(inputValue)) !== null) {
-			const commandName = match[1].toLowerCase();
-			// Only highlight if command exists in valid commands list
-			if (validCommandNames.has(commandName)) {
-				highlights.push({
-					start: match.index,
-					end: match.index + match[0].length,
-					command: match[0],
-				});
-			}
-		}
-		return highlights;
-	}, [inputValue, provider, customCommands]);
+		return getMessageHighlights(inputValue, validCommandNames, validSubagentNames);
+	}, [inputValue, provider, customCommands, subagents.items]);
 
 	// Handle pending paste text fallback - insert text if context was not found
 	useEffect(() => {
@@ -745,7 +732,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 											e.stopPropagation();
 											removeImage(img.id);
 										}}
-										className="absolute top-0.5 right-0.5 bg-(--surface-overlay) hover:bg-(--alpha-medium) rounded-[3px] w-4.5 h-4.5 flex items-center justify-center cursor-pointer text-vscode-foreground text-[11px] opacity-0 group-hover/img:opacity-100 transition-opacity duration-150"
+										className="absolute top-0.5 right-0.5 bg-bg-overlay hover:bg-(--alpha-medium) rounded-[3px] w-4.5 h-4.5 flex items-center justify-center cursor-pointer text-vscode-foreground text-[11px] opacity-0 group-hover/img:opacity-100 transition-opacity duration-150"
 									>
 										×
 									</button>
@@ -813,17 +800,22 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 											</span>,
 										);
 									}
-									// Highlighted command
+									// Highlighted command or subagent
+									const isSubagent = highlight.type === 'subagent';
 									elements.push(
 										<span
 											key={`cmd-${highlight.start}`}
-											className="text-warning rounded-sm pl-(--gap-0-5) pr-(--gap-1-5) -ml-(--gap-0-5) -mr-(--gap-1-5)"
+											className={cn(
+												'rounded-sm pl-(--gap-0-5) pr-(--gap-1-5) -ml-(--gap-0-5) -mr-(--gap-1-5)',
+												isSubagent ? 'text-blue-400' : 'text-warning',
+											)}
 											style={{
-												backgroundColor:
-													'color-mix(in srgb, var(--vscode-editorGutter-modifiedBackground) 15%, transparent)',
+												backgroundColor: isSubagent
+													? 'color-mix(in srgb, #60a5fa 15%, transparent)' // Blue-ish
+													: 'color-mix(in srgb, var(--vscode-editorGutter-modifiedBackground) 15%, transparent)',
 											}}
 										>
-											{highlight.command}
+											{highlight.content}
 										</span>,
 									);
 									lastIndex = highlight.end;
@@ -881,7 +873,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 								size="xs"
 								onClick={() => setPlanMode(!planMode)}
 								className={cn(
-									'h-(--input-toolbar-height) rounded-md select-none text-sm font-(family-name:--vscode-font-family) shrink-0 flex items-center gap-(--gap-2) px-(--gap-1-5) transition-all duration-200 border',
+									'h-(--input-toolbar-height) rounded-md select-none text-sm font-(family-name:--vscode-font-family) shrink-0 flex items-center gap-2 px-(--gap-1-5) transition-all duration-200 border',
 									planMode
 										? 'text-vscode-button-background bg-vscode-button-background/10 border-vscode-button-background/30'
 										: 'text-vscode-foreground opacity-70 hover:opacity-100 bg-transparent hover:bg-(--alpha-5) border-transparent',
@@ -903,7 +895,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 										setShowModelDropdown(!showModelDropdown);
 									}}
 									className={cn(
-										'h-(--input-toolbar-height) rounded-md opacity-70 hover:opacity-100 hover:bg-(--alpha-5) text-sm font-(family-name:--vscode-font-family) min-w-0 max-w-full flex items-center gap-(--gap-2) px-(--gap-1-5) transition-all duration-200 border border-transparent',
+										'h-(--input-toolbar-height) rounded-md opacity-70 hover:opacity-100 hover:bg-(--alpha-5) text-sm font-(family-name:--vscode-font-family) min-w-0 max-w-full flex items-center gap-2 px-(--gap-1-5) transition-all duration-200 border border-transparent',
 										showModelDropdown && 'bg-(--alpha-5) opacity-100',
 									)}
 								>

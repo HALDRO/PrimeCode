@@ -738,6 +738,18 @@ export const ParsedHookSchema = Type.Object({
 });
 export type ParsedHook = Static<typeof ParsedHookSchema>;
 
+/**
+ * Parsed subagent from .agents/subagents/*.md
+ * Canonical format that can be synced to CLI-specific subagent locations.
+ */
+export const ParsedSubagentSchema = Type.Object({
+	name: Type.String(),
+	description: Type.String(),
+	prompt: Type.String(),
+	path: Type.String(),
+});
+export type ParsedSubagent = Static<typeof ParsedSubagentSchema>;
+
 // =============================================================================
 // Discovery Status (Rules, Permissions, Skills, Hooks)
 // =============================================================================

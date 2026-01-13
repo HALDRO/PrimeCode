@@ -48,6 +48,8 @@ export interface ChatSession {
 	revertedFromMessageId: string | null;
 	tokenStats: TokenStats;
 	totalStats: TotalStats;
+	isChildSession?: boolean;
+	parentSessionId?: string;
 }
 
 export interface ChatState {
@@ -76,6 +78,8 @@ export interface ChatState {
 
 export interface ChatActions {
 	addMessage: (msg: MessageInput) => void;
+	addMessageToSession: (sessionId: string, msg: MessageInput, parentSessionId?: string) => void;
+	removeChildSession: (sessionId: string) => void;
 	setProcessing: (isProcessing: boolean) => void;
 	setAutoRetrying: (
 		isRetrying: boolean,
@@ -220,6 +224,71 @@ export const useChatStore = create<ChatState>()(
 					});
 				},
 
+				addMessageToSession: (sessionId, msg, parentSessionId) => {
+					set(state => {
+						const message = {
+							id: `msg-${Date.now()}-${Math.random()}`,
+							timestamp: new Date().toISOString(),
+							...msg,
+						} as Message;
+
+						const targetSession = state.sessions.find(s => s.id === sessionId);
+						if (!targetSession) {
+							// Session doesn't exist, create it as child session
+							const newSession: ChatSession = {
+								id: sessionId,
+								messages: [message],
+								input: '',
+								status: 'Ready',
+								lastActive: Date.now(),
+								changedFiles: [],
+								restoreCommits: [],
+								unrevertAvailable: false,
+								revertedFromMessageId: null,
+								tokenStats: { ...DEFAULT_TOKEN_STATS },
+								totalStats: { ...DEFAULT_TOTAL_STATS },
+								isChildSession: true,
+								parentSessionId: parentSessionId || state.activeSessionId,
+							};
+							console.log(
+								`[chatStore] Created child session: ${sessionId} (parent: ${newSession.parentSessionId})`,
+							);
+							return { sessions: [...state.sessions, newSession] };
+						}
+
+						// Session exists, add/update message
+						const existingIdx = targetSession.messages.findIndex(m => m.id === message.id);
+						const newMessages = [...targetSession.messages];
+
+						if (existingIdx !== -1) {
+							newMessages[existingIdx] = {
+								...newMessages[existingIdx],
+								...message,
+								id: newMessages[existingIdx].id,
+							} as Message;
+						} else {
+							newMessages.push(message);
+						}
+
+						const sessions = state.sessions.map(s =>
+							s.id === sessionId ? { ...s, messages: newMessages, lastActive: Date.now() } : s,
+						);
+
+						// Update active session messages if this is the active session
+						const messages = state.activeSessionId === sessionId ? newMessages : state.messages;
+
+						return { sessions, messages };
+					});
+				},
+
+				removeChildSession: sessionId => {
+					set(state => {
+						console.log(`[chatStore] Removed child session: ${sessionId}`);
+						const sessions = state.sessions.filter(s => s.id !== sessionId);
+						return { sessions };
+					});
+				},
+
 				startSubtask: subtask => {
 					set(state => {
 						const exists = state.messages.some(m => m.id === subtask.id);
@@ -293,11 +362,16 @@ export const useChatStore = create<ChatState>()(
 						const newMessages = [...state.messages];
 						newMessages[subtaskIndex] = newSubtask;
 
-						const sessions = state.sessions.map(s =>
+						// Clean up child session if exists
+						let sessions = state.sessions.map(s =>
 							s.id === state.activeSessionId
 								? { ...s, messages: newMessages, lastActive: Date.now() }
 								: s,
 						);
+
+						if (subtask.childSessionId) {
+							sessions = sessions.filter(s => s.id !== subtask.childSessionId);
+						}
 
 						return { messages: newMessages, sessions };
 					});
@@ -324,11 +398,16 @@ export const useChatStore = create<ChatState>()(
 						const newMessages = [...state.messages];
 						newMessages[subtaskIndex] = newSubtask;
 
-						const sessions = state.sessions.map(s =>
+						// Clean up child session if exists
+						let sessions = state.sessions.map(s =>
 							s.id === state.activeSessionId
 								? { ...s, messages: newMessages, lastActive: Date.now() }
 								: s,
 						);
+
+						if (subtask.childSessionId) {
+							sessions = sessions.filter(s => s.id !== subtask.childSessionId);
+						}
 
 						return { messages: newMessages, sessions };
 					});
@@ -575,24 +654,41 @@ export const useChatStore = create<ChatState>()(
 
 						console.debug(`[ChatStore] Switching to session: ${sessionId}`);
 
-						// Save current session state
-						const updatedSessions = state.sessions.map(s =>
-							s.id === state.activeSessionId
-								? {
-										...s,
-										messages: state.messages,
-										input: state.input,
-										status: state.status,
-										changedFiles: state.changedFiles,
-										restoreCommits: state.restoreCommits,
-										unrevertAvailable: state.unrevertAvailable,
-										revertedFromMessageId: state.revertedFromMessageId,
-										tokenStats: state.tokenStats,
-										totalStats: state.totalStats,
-										lastActive: Date.now(),
-									}
-								: s,
+						// Clean up orphaned child sessions
+						const orphanedSessions = state.sessions.filter(
+							s =>
+								s.isChildSession &&
+								!targetSession.messages.some(
+									m => m.type === 'subtask' && m.childSessionId === s.id,
+								),
 						);
+
+						if (orphanedSessions.length > 0) {
+							console.log(
+								`[chatStore] Cleaning up ${orphanedSessions.length} orphaned child sessions`,
+							);
+						}
+
+						// Save current session state
+						const updatedSessions = state.sessions
+							.map(s =>
+								s.id === state.activeSessionId
+									? {
+											...s,
+											messages: state.messages,
+											input: state.input,
+											status: state.status,
+											changedFiles: state.changedFiles,
+											restoreCommits: state.restoreCommits,
+											unrevertAvailable: state.unrevertAvailable,
+											revertedFromMessageId: state.revertedFromMessageId,
+											tokenStats: state.tokenStats,
+											totalStats: state.totalStats,
+											lastActive: Date.now(),
+										}
+									: s,
+							)
+							.filter(s => !orphanedSessions.some(orphan => orphan.id === s.id));
 
 						return {
 							sessions: updatedSessions,
@@ -810,6 +906,8 @@ export const useChatStore = create<ChatState>()(
 				changedFiles: state.changedFiles,
 				tokenStats: state.tokenStats,
 				totalStats: state.totalStats,
+				// Exclude child sessions from persistence
+				sessions: state.sessions.filter(s => !s.isChildSession),
 			}),
 			version: 7,
 			migrate: (persistedState, version) => {

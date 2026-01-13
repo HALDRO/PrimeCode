@@ -422,16 +422,6 @@ export const SimpleDiff: React.FC<SimpleDiffProps> = ({
 				/>
 				{displayLines.map(line => (
 					<div key={`${line.type}-${line.oldLineNumber ?? ''}-${line.newLineNumber ?? ''}`}>
-						{/* Separator before this line if needed */}
-						{line.separatorBefore !== undefined && (
-							<div className="flex items-center min-h-(--line-height-diff) leading-(--line-height-diff) text-sm bg-(--tool-bg-header) border-y border-vscode-widget-border">
-								<div className="w-(--border-indicator) shrink-0 bg-vscode-widget-border h-full" />
-								<div className="px-3 text-vscode-descriptionForeground text-xs select-none">
-									··· {line.separatorBefore} unchanged line{line.separatorBefore !== 1 ? 's' : ''}{' '}
-									···
-								</div>
-							</div>
-						)}
 						{/* Actual diff line */}
 						<div
 							className={cn(

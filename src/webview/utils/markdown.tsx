@@ -309,10 +309,10 @@ const components: Components = {
 			);
 		}
 
-		// Regular inline code - styled like a hovered link
+		// Regular inline code - no syntax highlighting, just background
 		return (
 			<code
-				className="px-1 py-px mx-0.5 rounded-sm bg-(--alpha-10) text-vscode-textLink-foreground text-md font-mono"
+				className="inline-code px-1 py-px mx-0.5 rounded-sm bg-(--alpha-10) text-md font-mono"
 				{...props}
 			>
 				{children}

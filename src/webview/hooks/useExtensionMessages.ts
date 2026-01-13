@@ -304,31 +304,26 @@ const handleChatMessages = (message: ExtensionMessage, ctx: HandlerContext): boo
 			const content =
 				message.type === 'assistant' ? (msg.content ?? '') : (msg.data as string) || '';
 
-			// Determine if this should be hidden (from child session)
-			const shouldHide = !!msg.childSessionId || !!msg.hidden;
+			// If from child session, add to child session instead of main
+			if (msg.childSessionId) {
+				chatActions.addMessageToSession(msg.childSessionId, {
+					type: 'assistant',
+					content,
+					id: msg.id ?? msg.partId,
+					partId: msg.partId,
+					timestamp: new Date().toISOString(),
+				});
+				return true;
+			}
 
+			// Otherwise add to current session
 			chatActions.addMessage({
 				type: 'assistant',
 				content,
-				// Prefer extension-provided id; fallback to partId for streaming identity.
 				id: msg.id ?? msg.partId,
 				partId: msg.partId,
 				timestamp: new Date().toISOString(),
-				hidden: shouldHide,
-				childSessionId: msg.childSessionId,
 			});
-
-			// If it's from a child session, find the subtask with that childSessionId and link
-			if (msg.childSessionId) {
-				const state = useChatStore.getState();
-				const subtask = state.messages.find(
-					m => m.type === 'subtask' && m.childSessionId === msg.childSessionId,
-				);
-				const msgId = msg.id ?? msg.partId;
-				if (subtask?.id && msgId) {
-					chatActions.addChildToSubtask(subtask.id, msgId);
-				}
-			}
 			return true;
 		}
 
@@ -494,14 +489,31 @@ const handleToolMessages = (message: ExtensionMessage, ctx: HandlerContext): boo
 				return true;
 			}
 
-			// Determine if this should be hidden (from child session or has parent)
-			const shouldHide = !!data.parentToolUseId || !!data.childSessionId || !!data.hidden;
+			// If from child session, add to child session instead of main
+			if (data.childSessionId) {
+				chatActions.addMessageToSession(data.childSessionId, {
+					type: 'tool_use',
+					toolName: data.toolName,
+					toolUseId: data.toolUseId,
+					id: data.toolUseId,
+					toolInput: data.toolInput,
+					rawInput: data.rawInput,
+					filePath: data.filePath || undefined,
+					streamingOutput: data.streamingOutput,
+					isRunning: data.isRunning,
+					metadata: data.metadata,
+					timestamp: new Date().toISOString(),
+				});
+				return true;
+			}
+
+			// Otherwise add to current session
+			const shouldHide = !!data.parentToolUseId;
 
 			chatActions.addMessage({
 				type: 'tool_use',
 				toolName: data.toolName,
 				toolUseId: data.toolUseId,
-				// Use toolUseId as message ID to ensure stable linking
 				id: data.toolUseId,
 				toolInput: data.toolInput,
 				rawInput: data.rawInput,
@@ -511,7 +523,6 @@ const handleToolMessages = (message: ExtensionMessage, ctx: HandlerContext): boo
 				metadata: data.metadata,
 				timestamp: new Date().toISOString(),
 				hidden: shouldHide,
-				childSessionId: data.childSessionId,
 			});
 
 			// If it's a child tool call (subtask), link it to the parent
@@ -519,33 +530,7 @@ const handleToolMessages = (message: ExtensionMessage, ctx: HandlerContext): boo
 				chatActions.addChildToSubtask(data.parentToolUseId, data.toolUseId);
 			}
 
-			// If it's from a child session, find the subtask with that childSessionId and link
-			if (data.childSessionId) {
-				const state = useChatStore.getState();
-				const subtask = state.messages.find(
-					m => m.type === 'subtask' && m.childSessionId === data.childSessionId,
-				);
-				if (subtask?.id) {
-					console.log(
-						`[useExtensionMessages] Linking tool_use ${data.toolUseId} to subtask ${subtask.id} via childSessionId ${data.childSessionId}`,
-					);
-					chatActions.addChildToSubtask(subtask.id, data.toolUseId);
-				} else {
-					console.warn(
-						`[useExtensionMessages] No subtask found with childSessionId ${data.childSessionId}. Available subtasks:`,
-						state.messages
-							.filter(m => m.type === 'subtask')
-							.map(m => ({
-								id: m.id,
-								childSessionId: (m as { childSessionId?: string }).childSessionId,
-							})),
-					);
-				}
-			}
-
 			if (isToolInList(data.toolName, FILE_EDIT_TOOLS) || data.toolName === 'TodoWrite') {
-				// Only mark as streaming when the tool is actually running/streaming.
-				// This keeps non-streaming updates (e.g., TodoWrite diffs/merge updates) compact.
 				if (
 					data.isRunning ||
 					(typeof data.streamingOutput === 'string' && data.streamingOutput.length > 0)
@@ -579,14 +564,34 @@ const handleToolMessages = (message: ExtensionMessage, ctx: HandlerContext): boo
 			};
 			const data = (message.type === 'tool_result' ? message : message.data) as ToolResultData;
 
-			// Determine if this should be hidden (from child session or has parent)
-			const shouldHide = !!data.parentToolUseId || !!data.childSessionId || !!data.hidden;
+			// If from child session, add to child session instead of main
+			if (data.childSessionId) {
+				chatActions.addMessageToSession(data.childSessionId, {
+					type: 'tool_result',
+					toolName: data.toolName,
+					toolUseId: data.toolUseId,
+					id: data.toolUseId ? `${data.toolUseId}:result` : undefined,
+					content: data.content,
+					isError: data.isError,
+					timestamp: new Date().toISOString(),
+					estimatedTokens:
+						data.estimatedTokens ?? (data.content ? Math.ceil(data.content.length / 4) : 0),
+					title: data.title,
+					durationMs: data.durationMs,
+					attachments: data.attachments,
+					metadata: data.metadata,
+				});
+				chatActions.setStreamingToolId(null);
+				return true;
+			}
+
+			// Otherwise add to current session
+			const shouldHide = !!data.parentToolUseId;
 
 			chatActions.addMessage({
 				type: 'tool_result',
 				toolName: data.toolName,
 				toolUseId: data.toolUseId,
-				// Use a stable id so repeated updates overwrite instead of append.
 				id: data.toolUseId ? `${data.toolUseId}:result` : undefined,
 				content: data.content,
 				isError: data.isError,
@@ -598,24 +603,12 @@ const handleToolMessages = (message: ExtensionMessage, ctx: HandlerContext): boo
 				durationMs: data.durationMs,
 				attachments: data.attachments,
 				metadata: data.metadata,
-				childSessionId: data.childSessionId,
 			});
 			chatActions.setStreamingToolId(null);
 
 			// If it's a child tool call (subtask), link it to the parent
 			if (data.parentToolUseId) {
 				chatActions.addChildToSubtask(data.parentToolUseId, data.toolUseId);
-			}
-
-			// If it's from a child session, find the subtask with that childSessionId and link
-			if (data.childSessionId) {
-				const state = useChatStore.getState();
-				const subtask = state.messages.find(
-					m => m.type === 'subtask' && m.childSessionId === data.childSessionId,
-				);
-				if (subtask?.id) {
-					chatActions.addChildToSubtask(subtask.id, `${data.toolUseId}:result`);
-				}
 			}
 			return true;
 		}
@@ -983,6 +976,38 @@ const handleSettingsMessages = (message: ExtensionMessage, ctx: HandlerContext):
 					meta?: { operation?: string; message?: string };
 				};
 				settingsActions.setHooks({ items: hooks, isLoading, error });
+				if (meta?.operation && meta.message) {
+					settingsActions.setAgentsOps({
+						lastAction: meta.operation,
+						status: 'success',
+						message: meta.message,
+					});
+					setTimeout(() => {
+						settingsActions.setAgentsOps({ status: 'idle' });
+					}, 3500);
+				}
+				if (error) {
+					settingsActions.setAgentsOps({
+						lastAction: 'error',
+						status: 'error',
+						message: error,
+					});
+					setTimeout(() => {
+						settingsActions.setAgentsOps({ status: 'idle' });
+					}, 6000);
+				}
+			}
+			return true;
+
+		case 'subagentsList':
+			if (message.data) {
+				const { subagents, isLoading, error, meta } = message.data as {
+					subagents: import('../../types').ParsedSubagent[];
+					isLoading: boolean;
+					error?: string;
+					meta?: { operation?: string; message?: string };
+				};
+				settingsActions.setSubagents({ items: subagents, isLoading, error });
 				if (meta?.operation && meta.message) {
 					settingsActions.setAgentsOps({
 						lastAction: meta.operation,
@@ -1678,6 +1703,7 @@ export function useExtensionMessages(): void {
 		vscode.postMessage({ type: 'getSettings' });
 		vscode.postMessage({ type: 'getAccess' });
 		vscode.postMessage({ type: 'getCommands' });
+		vscode.postMessage({ type: 'getSubagents' });
 		vscode.postMessage({ type: 'loadMCPServers' });
 		vscode.postMessage({ type: 'fetchMcpMarketplaceCatalog', data: { forceRefresh: false } });
 		vscode.postMessage({ type: 'loadOpenCodeMcpStatus' });

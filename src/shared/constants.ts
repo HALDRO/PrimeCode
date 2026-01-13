@@ -138,14 +138,17 @@ export const PATHS = {
 	AGENTS_RULES_DIR: '.agents/rules',
 	AGENTS_SKILLS_DIR: '.agents/skills',
 	AGENTS_HOOKS_DIR: '.agents/hooks',
+	AGENTS_SUBAGENTS_DIR: '.agents/subagents',
 
 	// Legacy / Compatibility Paths - Claude
 	CLAUDE_COMMANDS_DIR: '.claude/commands',
 	CLAUDE_RULES_DIR: '.claude/rules',
 	CLAUDE_SKILLS_DIR: '.claude/skills',
+	CLAUDE_AGENTS_DIR: '.claude/agents',
 
 	// Legacy / Compatibility Paths - OpenCode
 	OPENCODE_COMMAND_DIR: '.opencode/command',
+	OPENCODE_AGENT_DIR: '.opencode/agent',
 	OPENCODE_INSTRUCTIONS: 'opencode.json',
 	OPENCODE_SKILL_DIR: '.opencode/skill',
 

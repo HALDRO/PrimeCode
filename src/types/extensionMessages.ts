@@ -12,6 +12,7 @@ import type {
 	MCPServersMap,
 	McpMarketplaceCatalog,
 	OpenCodeProviderData,
+	ParsedSubagent,
 	PlatformInfo,
 	TokenStats,
 	TotalStats,
@@ -638,6 +639,7 @@ export type ExtensionMessage =
 	| CommandsListMessage
 	| SkillsListMessage
 	| HooksListMessage
+	| SubagentsListMessage
 	| CliDiagnosticsMessage
 	| ConversationListMessage
 	| AllConversationsClearedMessage
@@ -683,6 +685,16 @@ export type HooksListMessage = BaseExtensionMessage<
 	'hooksList',
 	{
 		hooks: import('./schemas').ParsedHook[];
+		isLoading: boolean;
+		error?: string;
+		meta?: { operation?: string; message?: string };
+	}
+>;
+
+export type SubagentsListMessage = BaseExtensionMessage<
+	'subagentsList',
+	{
+		subagents: ParsedSubagent[];
 		isLoading: boolean;
 		error?: string;
 		meta?: { operation?: string; message?: string };

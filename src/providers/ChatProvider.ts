@@ -55,6 +55,7 @@ import {
 	SkillsHandler,
 	StreamHandler,
 	type StreamHandlerDeps,
+	SubagentsHandler,
 	WebviewMessageRouter,
 	type WebviewMessageRouterDeps,
 	type WebviewMessageRouterHandlers,
@@ -99,8 +100,10 @@ export class ChatProvider {
 	private readonly _commandsHandler: CommandsHandler;
 	private readonly _skillsHandler: SkillsHandler;
 	private readonly _hooksHandler: HooksHandler;
+	private readonly _subagentsHandler: SubagentsHandler;
 	private readonly _permissionsHandler: PermissionsHandler;
 	private readonly _discoveryHandler: DiscoveryHandler;
+
 	private readonly _promptImproverHandler: PromptImproverHandler;
 	private readonly _messageRouter: WebviewMessageRouter;
 
@@ -151,6 +154,7 @@ export class ChatProvider {
 		this._commandsHandler = this._createCommandsHandler();
 		this._skillsHandler = this._createSkillsHandler();
 		this._hooksHandler = this._createHooksHandler();
+		this._subagentsHandler = this._createSubagentsHandler();
 		this._streamHandler = this._createStreamHandler();
 		this._messageHandler = this._createMessageHandler();
 		this._messageRouter = this._createMessageRouter();
@@ -371,6 +375,10 @@ export class ChatProvider {
 		return new HooksHandler(msg => this._postMessage(msg));
 	}
 
+	private _createSubagentsHandler(): SubagentsHandler {
+		return new SubagentsHandler(msg => this._postMessage(msg));
+	}
+
 	private _createPermissionsHandler(): PermissionsHandler {
 		const deps: PermissionsHandlerDeps = {
 			postMessage: msg => this._postMessage(msg),
@@ -429,6 +437,7 @@ export class ChatProvider {
 			commandsHandler: this._commandsHandler,
 			skillsHandler: this._skillsHandler,
 			hooksHandler: this._hooksHandler,
+			subagentsHandler: this._subagentsHandler,
 			promptImproverHandler: this._promptImproverHandler,
 		};
 		const deps: WebviewMessageRouterDeps = {

@@ -22,6 +22,7 @@ export { SessionHandler, type SessionHandlerDeps } from './SessionHandler';
 export { SettingsHandler, type SettingsHandlerDeps } from './SettingsHandler';
 export { SkillsHandler } from './SkillsHandler';
 export { StreamHandler, type StreamHandlerDeps } from './StreamHandler';
+export { SubagentsHandler } from './SubagentsHandler';
 export {
 	WebviewMessageRouter,
 	type WebviewMessageRouterDeps,

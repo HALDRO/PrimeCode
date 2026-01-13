@@ -340,6 +340,12 @@ pre {
 	font-size: var(--text-base);
 }
 
+/* Inline code - override any hljs syntax highlighting */
+.inline-code,
+.inline-code * {
+	color: var(--vscode-foreground) !important;
+}
+
 /* Hover states */
 div:hover > .user-copy-btn {
 	opacity: 1 !important;

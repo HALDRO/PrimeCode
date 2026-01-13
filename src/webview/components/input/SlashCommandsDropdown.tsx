@@ -17,6 +17,8 @@ const getTypeLabel = (type: string) => {
 			return 'CLI';
 		case 'custom':
 			return 'Custom';
+		case 'subagent':
+			return 'Subagent';
 		default:
 			return 'Prompt';
 	}
@@ -33,7 +35,7 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 	anchorElement,
 	anchorRect,
 }) => {
-	const { provider, commands } = useSettingsStore();
+	const { provider, commands, subagents } = useSettingsStore();
 	const { input, setInput } = useChatInputState();
 	const { slashFilter, setShowSlashCommands, setSlashFilter } = useSlashCommandsState();
 
@@ -98,8 +100,17 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 		}));
 		// Use provider-specific CLI commands
 		const cliCommands = provider === 'opencode' ? OPENCODE_COMMANDS : CLI_COMMANDS;
-		return [...customList, ...cliCommands];
-	}, [commands.custom, provider]);
+
+		const subagentList: CommandItem[] = subagents.items.map(agent => ({
+			id: agent.name,
+			name: agent.name,
+			description: agent.description,
+			type: 'subagent' as const,
+			prompt: `@${agent.name}`,
+		}));
+
+		return [...customList, ...cliCommands, ...subagentList];
+	}, [commands.custom, provider, subagents.items]);
 
 	const filteredCommands = useMemo(() => {
 		const term = slashFilter.toLowerCase().replace(/^\//, '');
@@ -120,6 +131,9 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 				// - OpenCode: MessageHandler detects leading '/' and uses SDK session.command().
 				// - Claude: ClaudeSDKService receives the prompt and handles built-in commands via SDK.
 				replaceCurrentCommand(`/${cmd.id}  `);
+			} else if (cmd.type === 'subagent') {
+				// Subagent type - insert @agent-name
+				replaceCurrentCommand(`${cmd.prompt} `);
 			} else {
 				// Snippet type - insert prompt text directly
 				onSelectCommand(cmd.prompt || '');

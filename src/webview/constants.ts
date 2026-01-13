@@ -14,7 +14,7 @@ export interface CommandItem {
 	id: string;
 	name: string;
 	description: string;
-	type: 'snippet' | 'cli' | 'custom';
+	type: 'snippet' | 'cli' | 'custom' | 'subagent';
 	prompt?: string;
 }
 
