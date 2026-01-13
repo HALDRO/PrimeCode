@@ -764,6 +764,28 @@ export class SessionContext {
 			}
 		}
 
+		// Deduplicate subtask by id - update existing subtask status/result
+		if (message.type === 'subtask' && message.id) {
+			const existingIdx = this._conversationMessages.findIndex(
+				m => m.type === 'subtask' && m.id === message.id,
+			);
+			if (existingIdx !== -1) {
+				// Update existing subtask message (e.g., status change from running to completed)
+				this._conversationMessages[existingIdx] = {
+					...this._conversationMessages[existingIdx],
+					...message,
+					// Preserve childSessionId if already linked
+					childSessionId:
+						(this._conversationMessages[existingIdx] as { childSessionId?: string })
+							.childSessionId || (message as { childSessionId?: string }).childSessionId,
+					timestamp: new Date().toISOString(),
+				} as ConversationMessage;
+				this._debouncedSaveConversation();
+				this._callbacks.onStateChanged?.(this.uiSessionId);
+				return;
+			}
+		}
+
 		// Fallback deduplication: Check for exact duplicate content for same message ID (if ID provided)
 		// This handles race conditions where the same message is added twice
 		if (message.id) {

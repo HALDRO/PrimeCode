@@ -358,6 +358,12 @@ export class OpenCodeService implements ICLIService {
 			controller.abort();
 			this._processing.delete(sid);
 			this._abortControllers.delete(sid);
+
+			// Also abort the session on the server to stop generation
+			this.abortSession(sid).catch(error => {
+				logger.warn('[OpenCodeService] Failed to abort session on server:', error);
+			});
+
 			return true;
 		}
 		return false;

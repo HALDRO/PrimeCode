@@ -238,8 +238,13 @@ export const SubtaskMessage: React.FC<SubtaskMessageProps> = ({ message }) => {
 	);
 
 	const totalDuration = useMemo(() => {
-		let duration = 0;
+		// Use durationMs from server if available (more accurate)
+		if (message.durationMs && message.durationMs > 0) {
+			return message.durationMs;
+		}
 
+		// Fallback: calculate from child messages
+		let duration = 0;
 		for (const msg of children) {
 			if (msg.type === 'tool_result' || msg.type === 'thinking') {
 				if (msg.durationMs) {
@@ -248,7 +253,7 @@ export const SubtaskMessage: React.FC<SubtaskMessageProps> = ({ message }) => {
 			}
 		}
 		return duration;
-	}, [children]);
+	}, [message.durationMs, children]);
 
 	if (!message) {
 		return null;

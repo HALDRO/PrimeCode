@@ -47,6 +47,9 @@ interface ToolUseContent {
 // =============================================================================
 
 export class StreamHandler {
+	/** Track created subtasks to avoid duplicate 'running' messages. Maps toolUseId -> startTime */
+	private readonly _createdSubtasks = new Map<string, number>();
+
 	constructor(
 		private readonly _sessionManager: SessionManager,
 		private readonly _deps: StreamHandlerDeps,
@@ -570,7 +573,8 @@ export class StreamHandler {
 				break;
 
 			case 'tool':
-				if (part.tool && part.state) {
+				if (part.tool) {
+					// Always call handler - it will check state internally
 					this._handleOpenCodeToolUse(part, sessionId, childSessionId);
 				}
 				break;
@@ -711,6 +715,10 @@ export class StreamHandler {
 				});
 			}
 		}
+
+		// Clear subtask tracking to prevent memory leaks from abandoned subtasks
+		// (e.g., user cancel, session end, network error)
+		this._createdSubtasks.clear();
 
 		this._deps.postMessage({
 			type: 'sessionIdle',
@@ -1259,22 +1267,175 @@ export class StreamHandler {
 	private _handleSubtask(data: CLIStreamData, sessionId?: string): void {
 		if (!data.subtask) return;
 		const status = data.subtask.status || 'running';
+		const subtaskId = data.subtask.id || '';
 
-		this._deps.sendAndSaveMessage(
-			{
-				type: 'subtask',
-				id: data.subtask.id,
-				timestamp: new Date().toISOString(),
-				agent: data.subtask.agent,
-				prompt: data.subtask.prompt,
-				description: data.subtask.description,
-				command: data.subtask.command,
+		// Track start time for duration calculation (same logic as _handleTaskTool for OpenCode)
+		if (status === 'running') {
+			// Skip if we already created this subtask
+			if (this._createdSubtasks.has(subtaskId)) {
+				return;
+			}
+
+			const startTime = Date.now();
+			this._createdSubtasks.set(subtaskId, startTime);
+
+			this._deps.sendAndSaveMessage(
+				{
+					type: 'subtask',
+					id: subtaskId,
+					timestamp: new Date().toISOString(),
+					agent: data.subtask.agent,
+					prompt: data.subtask.prompt,
+					description: data.subtask.description,
+					command: data.subtask.command,
+					status,
+					messageID: data.subtask.messageID,
+					startTime: new Date(startTime).toISOString(),
+				},
+				sessionId,
+			);
+		} else if (status === 'completed' || status === 'error') {
+			// Calculate duration from tracked start time
+			const startTime = this._createdSubtasks.get(subtaskId);
+			const durationMs = startTime ? Date.now() - startTime : undefined;
+
+			// Clean up tracking
+			this._createdSubtasks.delete(subtaskId);
+
+			this._deps.sendAndSaveMessage(
+				{
+					type: 'subtask',
+					id: subtaskId,
+					timestamp: new Date().toISOString(),
+					agent: data.subtask.agent,
+					prompt: data.subtask.prompt,
+					description: data.subtask.description,
+					command: data.subtask.command,
+					status,
+					result: data.subtask.result,
+					messageID: data.subtask.messageID,
+					durationMs,
+				},
+				sessionId,
+			);
+		}
+	}
+
+	/**
+	 * Handle task tool calls from OpenCode.
+	 * Task tool spawns a subagent, so we create a subtask message to display in UI.
+	 * The subtask will be linked to a child session when child-session-created event arrives.
+	 */
+	private _handleTaskTool(part: NonNullable<CLIStreamData['part']>, sessionId?: string): void {
+		const state = part.state;
+		const toolUseId = part.callID || part.id || '';
+
+		// Extract task tool input parameters
+		const input = state?.input as {
+			description?: string;
+			prompt?: string;
+			subagent_type?: string;
+			command?: string;
+		};
+
+		const status = state?.status;
+
+		// Debug: log all task tool events to diagnose why subtasks aren't showing
+		logger.debug('[StreamHandler] _handleTaskTool called:', {
+			toolUseId,
+			status,
+			hasState: !!state,
+			inputKeys: input ? Object.keys(input) : [],
+			agent: input?.subagent_type,
+			description: input?.description?.substring(0, 50),
+		});
+
+		// Create subtask only on first pending/running event (avoid duplicates)
+		if (status === 'running' || status === 'pending') {
+			// Skip if we already created this subtask
+			if (this._createdSubtasks.has(toolUseId)) {
+				return;
+			}
+
+			const startTime = Date.now();
+			this._createdSubtasks.set(toolUseId, startTime);
+
+			logger.debug('[StreamHandler] Creating subtask from task tool:', {
+				toolUseId,
+				agent: input?.subagent_type,
+				description: input?.description,
 				status,
-				result: data.subtask.result,
-				messageID: data.subtask.messageID,
-			},
-			sessionId,
-		);
+			});
+
+			this._deps.sendAndSaveMessage(
+				{
+					type: 'subtask',
+					id: toolUseId,
+					timestamp: new Date().toISOString(),
+					agent: input?.subagent_type || 'subagent',
+					prompt: input?.prompt || '',
+					description: input?.description || 'Running subtask...',
+					command: input?.command,
+					status: 'running',
+					startTime: new Date(startTime).toISOString(),
+				},
+				sessionId,
+			);
+		} else if (status === 'completed') {
+			// Calculate duration from tracked start time
+			const startTime = this._createdSubtasks.get(toolUseId);
+			const durationMs = startTime ? Date.now() - startTime : undefined;
+
+			// Clean up tracking
+			this._createdSubtasks.delete(toolUseId);
+
+			const result = state?.output || 'Task completed';
+			logger.debug('[StreamHandler] Completing subtask from task tool:', {
+				toolUseId,
+				durationMs,
+				result: typeof result === 'string' ? result.substring(0, 100) : 'non-string result',
+			});
+
+			this._deps.sendAndSaveMessage(
+				{
+					type: 'subtask',
+					id: toolUseId,
+					timestamp: new Date().toISOString(),
+					agent: input?.subagent_type || 'subagent',
+					prompt: input?.prompt || '',
+					description: input?.description || 'Task completed',
+					status: 'completed',
+					result: typeof result === 'string' ? result : JSON.stringify(result),
+					durationMs,
+				},
+				sessionId,
+			);
+		} else if (status === 'error') {
+			// Calculate duration from tracked start time
+			const startTime = this._createdSubtasks.get(toolUseId);
+			const durationMs = startTime ? Date.now() - startTime : undefined;
+
+			// Clean up tracking
+			this._createdSubtasks.delete(toolUseId);
+
+			const errorMsg = state?.error || 'Task failed';
+			logger.debug('[StreamHandler] Task tool error:', { toolUseId, error: errorMsg, durationMs });
+
+			this._deps.sendAndSaveMessage(
+				{
+					type: 'subtask',
+					id: toolUseId,
+					timestamp: new Date().toISOString(),
+					agent: input?.subagent_type || 'subagent',
+					prompt: input?.prompt || '',
+					description: input?.description || 'Task failed',
+					status: 'error',
+					result: errorMsg,
+					durationMs,
+				},
+				sessionId,
+			);
+		}
 	}
 
 	private _handleOpenCodeToolUse(
@@ -1287,6 +1448,12 @@ export class StreamHandler {
 		const toolNameLower = toolName.toLowerCase();
 		const toolNameDisplay = toolName.charAt(0).toUpperCase() + toolName.slice(1);
 		const toolUseId = part.callID || part.id || '';
+
+		// Special handling for task tool - creates a subtask message
+		if (toolNameLower === 'task') {
+			this._handleTaskTool(part, sessionId);
+			return;
+		}
 
 		const input = state?.input as {
 			filePath?: string;

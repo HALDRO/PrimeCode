@@ -451,6 +451,8 @@ export const ConversationMessageSchema = Type.Union([
 		childSessionId: Type.Optional(Type.String()),
 		result: Type.Optional(Type.String()),
 		messageID: Type.Optional(Type.String()),
+		startTime: Type.Optional(Type.String()),
+		durationMs: Type.Optional(Type.Number()),
 	}),
 	Type.Object({
 		id: Type.Optional(Type.String()),
@@ -475,6 +477,10 @@ export const SubtaskMessageSchema = Type.Object({
 	childSessionId: Type.Optional(Type.String()),
 	result: Type.Optional(Type.String()),
 	messageID: Type.Optional(Type.String()),
+	/** ISO timestamp when subtask started */
+	startTime: Type.Optional(Type.String()),
+	/** Duration in milliseconds (set when completed/error) */
+	durationMs: Type.Optional(Type.Number()),
 });
 export type SubtaskMessage = Static<typeof SubtaskMessageSchema>;
 

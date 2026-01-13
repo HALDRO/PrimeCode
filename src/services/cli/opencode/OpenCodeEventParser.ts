@@ -219,21 +219,10 @@ function handlePartUpdated(props: Record<string, unknown>, sessionId: string): C
 	const part = typed.part;
 	const delta = typed.delta;
 
-	// Handle subtask Part type
-	if (part.type === 'subtask') {
-		return {
-			type: 'subtask',
-			sessionId,
-			subtask: {
-				id: part.id,
-				prompt: part.prompt ?? '',
-				description: part.description ?? '',
-				agent: part.agent ?? '',
-				command: part.command,
-				messageID: part.messageID,
-			},
-		};
-	}
+	// NOTE: We intentionally do NOT handle part.type === 'subtask' separately here.
+	// Subtask lifecycle is managed via the 'task' tool (ToolPart with tool='task'),
+	// which provides status (pending/running/completed/error) for proper UI tracking.
+	// The SubtaskPart is just an input marker and doesn't have status information.
 
 	return {
 		type: 'part-update',
@@ -248,7 +237,7 @@ function handlePartUpdated(props: Record<string, unknown>, sessionId: string): C
 			callID: part.callID,
 			cost: part.cost,
 			tokens: part.tokens,
-			// Subtask fields
+			// Subtask fields (for SubtaskPart, though we don't create separate subtask events)
 			prompt: part.prompt,
 			description: part.description,
 			agent: part.agent,
