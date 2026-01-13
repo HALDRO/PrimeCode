@@ -188,8 +188,8 @@ export interface SettingsState {
 	// Prompt Improver
 	promptImproveModel: string;
 	promptImproveTemplate: string;
-	/** Displayed as seconds in UI (persisted as ms in extension). */
-	promptImproveTimeoutMs: number;
+	/** Timeout in seconds for UI display (persisted as ms in extension settings). */
+	promptImproveTimeoutSeconds: number;
 
 	// OpenCode Configuration
 	opencodeAgent: string;
@@ -327,7 +327,7 @@ export const useSettingsStore = create<SettingsState>(set => ({
 
 	promptImproveModel: '',
 	promptImproveTemplate: '',
-	promptImproveTimeoutMs: 30,
+	promptImproveTimeoutSeconds: 30,
 
 	opencodeAgent: '',
 	opencodeProviders: [],

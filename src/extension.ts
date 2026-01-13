@@ -36,11 +36,15 @@ export function activate(context: vscode.ExtensionContext) {
 				if (provider) {
 					provider.show(column);
 				} else if (providerError) {
-					vscode.window.showErrorMessage(`PrimeCode failed to initialize: ${providerError.message}`);
+					vscode.window.showErrorMessage(
+						`PrimeCode failed to initialize: ${providerError.message}`,
+					);
 				}
 			} catch (error) {
 				logger.error('Error in openChat command:', error);
-				vscode.window.showErrorMessage(`PrimeCode error: ${error instanceof Error ? error.message : String(error)}`);
+				vscode.window.showErrorMessage(
+					`PrimeCode error: ${error instanceof Error ? error.message : String(error)}`,
+				);
 			}
 		},
 	);
@@ -48,7 +52,9 @@ export function activate(context: vscode.ExtensionContext) {
 	logger.info('Command primecode.openChat registered');
 
 	// Initialize provider and other components
-	async function initializeProvider(ctx: vscode.ExtensionContext): Promise<ChatProvider | undefined> {
+	async function initializeProvider(
+		ctx: vscode.ExtensionContext,
+	): Promise<ChatProvider | undefined> {
 		try {
 			// Initialize clipboard context service for tracking copy events
 			const clipboardContextService = ClipboardContextService.getInstance();
@@ -129,22 +135,27 @@ export function activate(context: vscode.ExtensionContext) {
 	}
 
 	// Try to initialize provider eagerly but don't block activation
-	initializeProvider(context).then(p => {
-		provider = p;
-		if (p) {
-			// Create status bar item only after successful initialization
-			const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-			statusBarItem.text = 'PrimeCode';
-			statusBarItem.tooltip = 'Open PrimeCode';
-			statusBarItem.command = 'primecode.openChat';
-			statusBarItem.show();
-			context.subscriptions.push(statusBarItem);
-			logger.info('Extension activation completed successfully!');
-		}
-	}).catch(error => {
-		logger.error('Async provider initialization failed:', error);
-		providerError = error instanceof Error ? error : new Error(String(error));
-	});
+	initializeProvider(context)
+		.then(p => {
+			provider = p;
+			if (p) {
+				// Create status bar item only after successful initialization
+				const statusBarItem = vscode.window.createStatusBarItem(
+					vscode.StatusBarAlignment.Right,
+					100,
+				);
+				statusBarItem.text = 'PrimeCode';
+				statusBarItem.tooltip = 'Open PrimeCode';
+				statusBarItem.command = 'primecode.openChat';
+				statusBarItem.show();
+				context.subscriptions.push(statusBarItem);
+				logger.info('Extension activation completed successfully!');
+			}
+		})
+		.catch(error => {
+			logger.error('Async provider initialization failed:', error);
+			providerError = error instanceof Error ? error : new Error(String(error));
+		});
 
 	// Show output channel to make it visible
 	logger.show(true);

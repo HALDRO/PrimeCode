@@ -17,7 +17,7 @@ export const PromptImproverSettings: React.FC = () => {
 	const {
 		promptImproveModel,
 		promptImproveTemplate,
-		promptImproveTimeoutMs,
+		promptImproveTimeoutSeconds,
 		proxyModels,
 		enabledProxyModels,
 		anthropicModels,
@@ -29,8 +29,8 @@ export const PromptImproverSettings: React.FC = () => {
 
 	// Local state for timeout to allow instant UI updates
 	const storeTimeoutSeconds =
-		typeof promptImproveTimeoutMs === 'number' && Number.isFinite(promptImproveTimeoutMs)
-			? Math.max(1, Math.round(promptImproveTimeoutMs))
+		typeof promptImproveTimeoutSeconds === 'number' && Number.isFinite(promptImproveTimeoutSeconds)
+			? Math.max(1, Math.round(promptImproveTimeoutSeconds))
 			: 30;
 	const [localTimeout, setLocalTimeout] = useState(storeTimeoutSeconds);
 	const debounceRef = useRef<NodeJS.Timeout | null>(null);
@@ -49,7 +49,7 @@ export const PromptImproverSettings: React.FC = () => {
 			if (key === 'promptImproveTemplate') {
 				backendKey = 'promptImprove.template';
 			}
-			if (key === 'promptImproveTimeoutMs') {
+			if (key === 'promptImproveTimeoutSeconds') {
 				backendKey = 'promptImprove.timeoutMs';
 			}
 
@@ -58,7 +58,7 @@ export const PromptImproverSettings: React.FC = () => {
 			}
 
 			// Timeout is shown/stored in the webview as seconds for UX, but persisted as ms in extension.
-			if (key === 'promptImproveTimeoutMs') {
+			if (key === 'promptImproveTimeoutSeconds') {
 				const seconds =
 					typeof value === 'number'
 						? value
@@ -105,14 +105,14 @@ export const PromptImproverSettings: React.FC = () => {
 			setLocalTimeout(validValue);
 			// Update store immediately too
 			// biome-ignore lint/suspicious/noExplicitAny: generic setting update
-			setSettings({ promptImproveTimeoutMs: validValue } as any);
+			setSettings({ promptImproveTimeoutSeconds: validValue } as any);
 
 			// Debounce the backend save
 			if (debounceRef.current) {
 				clearTimeout(debounceRef.current);
 			}
 			debounceRef.current = setTimeout(() => {
-				saveSettingToBackend('promptImproveTimeoutMs', validValue);
+				saveSettingToBackend('promptImproveTimeoutSeconds', validValue);
 			}, 500);
 		},
 		[setSettings, saveSettingToBackend],

@@ -488,10 +488,12 @@ export class StreamHandler {
 		// Track if this event is from a child session (subtask/subagent)
 		const childSessionId = data.childSessionId;
 
-		// Debug: log all part types to diagnose missing tool events
-		logger.debug(
-			`[StreamHandler] part-update: type=${part.type}, tool=${part.tool || 'none'}, id=${partId?.substring(0, 8)}`,
-		);
+		// Debug: log only non-text parts to reduce spam (text updates come very frequently during streaming)
+		if (part.type !== 'text' || part.tool) {
+			logger.debug(
+				`[StreamHandler] part-update: type=${part.type}, tool=${part.tool || 'none'}, id=${partId?.substring(0, 8)}`,
+			);
+		}
 
 		switch (part.type) {
 			case 'text':

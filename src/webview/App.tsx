@@ -17,6 +17,7 @@ import { useOverlayScrollbars } from 'overlayscrollbars-react';
 import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { ChangedFilesPanel } from './components/chat/ChangedFilesPanel';
+import { GenerationStatus } from './components/chat/GenerationStatus';
 import { ResponseItem } from './components/chat/SubtaskMessage';
 import { UserMessage } from './components/chat/UserMessage';
 import { Header } from './components/header/Header';
@@ -115,46 +116,54 @@ interface VirtuosoContext {
 	retryInfo: { attempt: number; message: string; nextRetryAt?: string } | null;
 	stickyTopOffset: number;
 	footerHeightPx: number;
+	isProcessing: boolean;
+	totalSections: number;
 }
 
 const MessageSectionComponent = React.memo<MessageSectionProps>(
-	({ section, context }) => (
-		<section className="relative">
-			<div
-				className="sticky z-40 px-(--layout-padding-x)"
-				style={{ top: `${context.stickyTopOffset}px` }}
-			>
-				<UserMessage message={section.userMessage} />
-			</div>
-			<div className="px-(--content-padding-x)">
-				{section.responses.map((responseItem, idx) => {
-					// Check if there's following content after this item
-					// (text, edit tools, bash, etc - anything that's not a utility tool group)
-					const hasFollowingContent =
-						idx < section.responses.length - 1 &&
-						section.responses.slice(idx + 1).some(item => {
-							if (Array.isArray(item)) return false; // Another tool group - doesn't count
-							return shouldTriggerCollapse(item as Message);
-						});
+	({ section, context }) => {
+		const isLastSection = section.sectionIndex === context.totalSections - 1;
 
-					return (
-						<ResponseItem
-							key={
-								Array.isArray(responseItem) ? responseItem[0]?.id || idx : responseItem.id || idx
-							}
-							item={responseItem}
-							onErrorResume={context.onErrorResume}
-							onErrorDismiss={context.onErrorDismiss}
-							canResume={context.canResume}
-							isAutoRetrying={context.isAutoRetrying}
-							retryInfo={context.retryInfo}
-							hasFollowingContent={hasFollowingContent}
-						/>
-					);
-				})}
-			</div>
-		</section>
-	),
+		return (
+			<section className="relative">
+				<div
+					className="sticky z-40 px-(--layout-padding-x)"
+					style={{ top: `${context.stickyTopOffset}px` }}
+				>
+					<UserMessage message={section.userMessage} />
+				</div>
+				<div className="px-(--content-padding-x)">
+					{section.responses.map((responseItem, idx) => {
+						// Check if there's following content after this item
+						// (text, edit tools, bash, etc - anything that's not a utility tool group)
+						const hasFollowingContent =
+							idx < section.responses.length - 1 &&
+							section.responses.slice(idx + 1).some(item => {
+								if (Array.isArray(item)) return false; // Another tool group - doesn't count
+								return shouldTriggerCollapse(item as Message);
+							});
+
+						return (
+							<ResponseItem
+								key={
+									Array.isArray(responseItem) ? responseItem[0]?.id || idx : responseItem.id || idx
+								}
+								item={responseItem}
+								onErrorResume={context.onErrorResume}
+								onErrorDismiss={context.onErrorDismiss}
+								canResume={context.canResume}
+								isAutoRetrying={context.isAutoRetrying}
+								retryInfo={context.retryInfo}
+								hasFollowingContent={hasFollowingContent}
+							/>
+						);
+					})}
+					{/* Show generation status at the end of the last section during processing */}
+					{isLastSection && context.isProcessing && <GenerationStatus />}
+				</div>
+			</section>
+		);
+	},
 	(prev, next) => {
 		// 1. Context is compared by reference - if context object is stable, skip deep comparison
 		// The context object is memoized in App component, so it only changes when its values change
@@ -358,8 +367,18 @@ export const App: React.FC = () => {
 			retryInfo,
 			stickyTopOffset: 0,
 			footerHeightPx: footerPx,
+			isProcessing,
+			totalSections: sections.length,
 		}),
-		[handleErrorResume, handleErrorDismiss, isProcessing, isAutoRetrying, retryInfo, footerPx],
+		[
+			handleErrorResume,
+			handleErrorDismiss,
+			isProcessing,
+			isAutoRetrying,
+			retryInfo,
+			footerPx,
+			sections.length,
+		],
 	);
 
 	// Memoized itemContent renderer - now only depends on stable reference

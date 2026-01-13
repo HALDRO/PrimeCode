@@ -1054,7 +1054,7 @@ const handleSettingsMessages = (message: ExtensionMessage, ctx: HandlerContext):
 				if (settings['promptImprove.timeoutMs'] !== undefined) {
 					// Stored in ms in extension settings; displayed as seconds in UI.
 					const ms = settings['promptImprove.timeoutMs'];
-					mappedSettings.promptImproveTimeoutMs =
+					mappedSettings.promptImproveTimeoutSeconds =
 						typeof ms === 'number' && Number.isFinite(ms) ? Math.max(1, Math.round(ms / 1000)) : 30;
 				}
 

@@ -227,7 +227,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 	const { setInput: setStoreInput, clearRevertedMessages, setImprovingPrompt } = useChatActions();
 	const isProcessing = useIsProcessing();
 	const { selectedModel, proxyModels, opencodeProviders } = useModelSelection();
-	const promptImproveTimeoutSeconds = useSettingsStore(state => state.promptImproveTimeoutMs);
+	const promptImproveTimeoutSeconds = useSettingsStore(state => state.promptImproveTimeoutSeconds);
 	const provider = useSettingsStore(state => state.provider);
 	const customCommands = useSettingsStore(state => state.commands.custom);
 	const { showSlashCommands, setShowSlashCommands, setSlashFilter } = useSlashCommandsState();
