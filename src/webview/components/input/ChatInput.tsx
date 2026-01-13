@@ -745,7 +745,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 											e.stopPropagation();
 											removeImage(img.id);
 										}}
-										className="absolute top-0 right-0 bg-(--alpha-60) hover:bg-(--alpha-80) rounded-none rounded-bl-sm w-3.5 h-3.5 flex items-center justify-center cursor-pointer text-vscode-foreground text-[10px] leading-none opacity-0 group-hover/img:opacity-100 transition-opacity duration-150"
+										className="absolute top-0.5 right-0.5 bg-(--surface-overlay) hover:bg-(--alpha-medium) rounded-[3px] w-4.5 h-4.5 flex items-center justify-center cursor-pointer text-vscode-foreground text-[11px] opacity-0 group-hover/img:opacity-100 transition-opacity duration-150"
 									>
 										×
 									</button>

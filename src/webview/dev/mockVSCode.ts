@@ -152,6 +152,20 @@ const SCENARIO_1_RESEARCHER: MockMessage[] = (() => {
 			delay: 100,
 		},
 		{
+			type: 'showRestoreOption',
+			data: {
+				id: 'checkpoint-1',
+				sha: 'abc123def456',
+				message: 'Checkpoint before System Modernization',
+				timestamp: new Date().toISOString(),
+				associatedMessageId: 'm1',
+				sessionId: mockActiveSessionId,
+				cliSessionId: 'cli-session-123',
+				isOpenCodeCheckpoint: true,
+			},
+			delay: 200,
+		},
+		{
 			type: 'imagePath',
 			data: { filePath: 'https://placehold.co/800x450/1e1e1e/3794ff?text=Architecture+Map+v2.0' },
 			delay: 400,
@@ -906,6 +920,20 @@ const mockVSCodeApi: VSCodeApi = {
 					delay: 100,
 				},
 				{
+					type: 'showRestoreOption',
+					data: {
+						id: createId('checkpoint'),
+						sha: createId('commit'),
+						message: 'Checkpoint before message',
+						timestamp: new Date().toISOString(),
+						associatedMessageId: userMessageId,
+						sessionId: mockActiveSessionId,
+						cliSessionId: 'cli-session-mock',
+						isOpenCodeCheckpoint: true,
+					},
+					delay: 200,
+				},
+				{
 					type: 'thinking',
 					data: {
 						content:
@@ -1308,6 +1336,85 @@ const mockVSCodeApi: VSCodeApi = {
 					}, 100);
 				}
 			}
+		} else if (msg.type === 'restoreCommit') {
+			// Handle restore commit message
+			const data = msg.data as
+				| string
+				| {
+						messageId: string;
+						sessionId: string;
+						cliSessionId?: string;
+						associatedMessageId?: string;
+				  };
+			console.log('[Mock VS Code] Restore commit requested:', data);
+
+			// Simulate restore operation
+			setTimeout(() => {
+				if (typeof data === 'object' && 'associatedMessageId' in data) {
+					// OpenCode checkpoint restore
+					// Delete messages after the user message
+					dispatchMockMessage('deleteMessagesAfter', {
+						messageId: data.associatedMessageId,
+					});
+
+					// Send restore success
+					dispatchMockMessage('restoreSuccess', {
+						message: 'Files restored. Click on your message to edit and resend.',
+						messageId: data.messageId,
+						canUnrevert: true,
+					});
+
+					// Notify UI that unrevert is available
+					dispatchMockMessage('unrevertAvailable', {
+						sessionId: data.sessionId,
+						cliSessionId: data.cliSessionId,
+					});
+
+					// Update restore commits list (remove the restored checkpoint)
+					dispatchMockMessage('updateRestoreCommits', []);
+				} else if (typeof data === 'string') {
+					// Git-based restore
+					dispatchMockMessage('restoreSuccess', {
+						message: `Restored to commit: ${data}`,
+						canUnrevert: false,
+					});
+					dispatchMockMessage('updateRestoreCommits', []);
+				}
+			}, 300);
+		} else if (msg.type === 'unrevert') {
+			// Handle unrevert message
+			const data = msg.data as { sessionId: string; cliSessionId?: string } | undefined;
+			console.log('[Mock VS Code] Unrevert requested:', data);
+
+			// Simulate unrevert operation
+			setTimeout(() => {
+				if (data?.sessionId) {
+					// Restore messages from snapshot (simulate)
+					const restoredMessages = [
+						{
+							type: 'assistant',
+							content: 'Previous response restored',
+							id: createId('assistant'),
+							timestamp: new Date().toISOString(),
+						},
+					];
+
+					dispatchMockMessage('messagesReloaded', {
+						messages: restoredMessages,
+					});
+
+					dispatchMockMessage('restoreSuccess', {
+						message: 'Previous state restored',
+						canUnrevert: false,
+					});
+
+					// Clear unrevert availability
+					dispatchMockMessage('unrevertAvailable', {
+						sessionId: data.sessionId,
+						cliSessionId: data.cliSessionId,
+					});
+				}
+			}, 300);
 		}
 	},
 	getState: () => mockState,

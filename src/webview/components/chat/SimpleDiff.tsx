@@ -28,6 +28,8 @@ interface DiffLine {
 	content: string;
 	oldLineNumber?: number;
 	newLineNumber?: number;
+	/** If present, render a separator before this line showing skipped unchanged lines */
+	separatorBefore?: number;
 }
 
 /**
@@ -171,19 +173,95 @@ function myersDiff(oldLines: string[], newLines: string[]): DiffLine[] {
 
 /**
  * Compute diff between two strings using Myers algorithm
+ * Normalizes line endings to ensure consistent comparison
  */
 function computeDiff(original: string, modified: string): DiffLine[] {
-	const oldLines = original ? original.split('\n') : [];
-	const newLines = modified ? modified.split('\n') : [];
+	// Normalize line endings: remove \r and trim trailing whitespace from each line
+	const normalize = (str: string): string[] =>
+		str ? str.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n') : [];
+
+	const oldLines = normalize(original);
+	const newLines = normalize(modified);
 	return myersDiff(oldLines, newLines);
 }
 
 /**
- * Calculate content height based on diff lines count
+ * Group diff lines into hunks with context (±1 line around changes)
+ * Returns only the lines that should be displayed, with separatorBefore markers
+ */
+function groupIntoHunks(diffLines: DiffLine[], contextLines = 1): DiffLine[] {
+	if (diffLines.length === 0) return [];
+
+	// Find indices of all changed lines
+	const changedIndices: number[] = [];
+	for (let i = 0; i < diffLines.length; i++) {
+		if (diffLines[i].type !== 'unchanged') {
+			changedIndices.push(i);
+		}
+	}
+
+	// If no changes, return empty
+	if (changedIndices.length === 0) {
+		return [];
+	}
+
+	// Build ranges that should be included (changed lines + context)
+	const includedRanges: Array<{ start: number; end: number }> = [];
+
+	for (const idx of changedIndices) {
+		const start = Math.max(0, idx - contextLines);
+		const end = Math.min(diffLines.length - 1, idx + contextLines);
+
+		// Merge with previous range if overlapping or adjacent
+		if (includedRanges.length > 0) {
+			const lastRange = includedRanges[includedRanges.length - 1];
+			if (start <= lastRange.end + 1) {
+				lastRange.end = Math.max(lastRange.end, end);
+				continue;
+			}
+		}
+
+		includedRanges.push({ start, end });
+	}
+
+	// Build the display lines with separatorBefore markers
+	const result: DiffLine[] = [];
+	let lastEnd = -1;
+
+	for (const range of includedRanges) {
+		for (let i = range.start; i <= range.end; i++) {
+			const line = { ...diffLines[i] };
+
+			// Add separator marker on first line of hunk if there's a gap
+			// Also add separator at the very beginning if first hunk doesn't start at line 0
+			if (i === range.start) {
+				if (lastEnd === -1 && range.start > 0) {
+					// First hunk doesn't start at beginning - show skipped lines
+					line.separatorBefore = range.start;
+				} else if (lastEnd >= 0 && range.start > lastEnd + 1) {
+					// Gap between hunks
+					line.separatorBefore = range.start - lastEnd - 1;
+				}
+			}
+
+			result.push(line);
+		}
+
+		lastEnd = range.end;
+	}
+
+	return result;
+}
+
+/**
+ * Calculate content height based on displayed lines count (hunks with context)
  */
 export function getDiffContentHeight(original: string, modified: string): number {
 	const diffLines = computeDiff(original, modified);
-	return diffLines.length * LINE_HEIGHT;
+	const displayLines = groupIntoHunks(diffLines, 1);
+	// Count separators (lines with separatorBefore) as additional height
+	const separatorCount = displayLines.filter(l => l.separatorBefore !== undefined).length;
+	return (displayLines.length + separatorCount) * LINE_HEIGHT;
 }
 
 /**
@@ -278,18 +356,28 @@ export const SimpleDiff: React.FC<SimpleDiffProps> = ({
 	showLineNumbers = false,
 }) => {
 	const diffLines = useMemo(() => computeDiff(original, modified), [original, modified]);
+	const displayLines = useMemo(() => groupIntoHunks(diffLines, 1), [diffLines]);
 
 	const maxHeightStyle = expanded ? undefined : `${maxHeight}px`;
 
-	// Find first and last non-empty line indices for rounded corners
-	const firstLineIndex = 0;
-	const lastLineIndex = diffLines.length - 1;
+	// Find first and last line for rounded corners
+	const firstLine = displayLines[0];
+	const lastLine = displayLines[displayLines.length - 1];
 
 	// Calculate max line number width for alignment
 	const maxLineNum = Math.max(
-		...diffLines.map(l => Math.max(l.oldLineNumber || 0, l.newLineNumber || 0)),
+		...displayLines.map(l => Math.max(l.oldLineNumber || 0, l.newLineNumber || 0)),
+		1,
 	);
 	const lineNumWidth = showLineNumbers ? `${String(maxLineNum).length * 8 + 8}px` : '0px';
+
+	if (displayLines.length === 0) {
+		return (
+			<div className="bg-(--tool-bg-header) text-vscode-descriptionForeground text-sm px-3 py-2 italic">
+				No changes
+			</div>
+		);
+	}
 
 	return (
 		<OverlayScrollbarsComponent
@@ -314,9 +402,9 @@ export const SimpleDiff: React.FC<SimpleDiffProps> = ({
 				<div
 					className={cn(
 						'absolute top-0 left-0 w-(--border-indicator) h-1.5 rounded-tr-(--gap-1) z-1',
-						diffLines[firstLineIndex]?.type === 'added'
+						firstLine?.type === 'added'
 							? 'bg-success'
-							: diffLines[firstLineIndex]?.type === 'removed'
+							: firstLine?.type === 'removed'
 								? 'bg-error'
 								: 'bg-transparent',
 					)}
@@ -325,60 +413,72 @@ export const SimpleDiff: React.FC<SimpleDiffProps> = ({
 				<div
 					className={cn(
 						'absolute bottom-0 left-0 w-(--border-indicator) h-1.5 rounded-br-(--gap-1) z-1',
-						diffLines[lastLineIndex]?.type === 'added'
+						lastLine?.type === 'added'
 							? 'bg-success'
-							: diffLines[lastLineIndex]?.type === 'removed'
+							: lastLine?.type === 'removed'
 								? 'bg-error'
 								: 'bg-transparent',
 					)}
 				/>
-				{diffLines.map((line, index) => (
-					<div
-						key={`${line.type}-${index}`}
-						className={cn(
-							'flex items-stretch min-h-(--line-height-diff) leading-(--line-height-diff) text-sm',
-							line.type === 'added'
-								? 'bg-success/12'
-								: line.type === 'removed'
-									? 'bg-error/12'
-									: '',
-						)}
-					>
-						{/* Color indicator */}
-						<div
-							className={cn(
-								'w-(--border-indicator) shrink-0',
-								line.type === 'added'
-									? 'bg-success'
-									: line.type === 'removed'
-										? 'bg-error'
-										: 'bg-transparent',
-							)}
-						/>
-
-						{/* Line numbers */}
-						{showLineNumbers && (
-							<div
-								className="shrink-0 text-right pr-2 text-vscode-descriptionForeground opacity-50 select-none"
-								style={{ width: lineNumWidth }}
-							>
-								{line.type === 'removed'
-									? line.oldLineNumber
-									: line.type === 'added'
-										? line.newLineNumber
-										: line.oldLineNumber}
+				{displayLines.map(line => (
+					<div key={`${line.type}-${line.oldLineNumber ?? ''}-${line.newLineNumber ?? ''}`}>
+						{/* Separator before this line if needed */}
+						{line.separatorBefore !== undefined && (
+							<div className="flex items-center min-h-(--line-height-diff) leading-(--line-height-diff) text-sm bg-(--tool-bg-header) border-y border-vscode-widget-border">
+								<div className="w-(--border-indicator) shrink-0 bg-vscode-widget-border h-full" />
+								<div className="px-3 text-vscode-descriptionForeground text-xs select-none">
+									··· {line.separatorBefore} unchanged line{line.separatorBefore !== 1 ? 's' : ''}{' '}
+									···
+								</div>
 							</div>
 						)}
-
-						{/* Content */}
-						<pre
+						{/* Actual diff line */}
+						<div
 							className={cn(
-								'm-0 px-2 whitespace-pre text-vscode-foreground flex-1',
-								line.type === 'removed' ? 'opacity-70' : 'opacity-100',
+								'flex items-stretch min-h-(--line-height-diff) leading-(--line-height-diff) text-sm',
+								line.type === 'added'
+									? 'bg-success/12'
+									: line.type === 'removed'
+										? 'bg-error/12'
+										: '',
 							)}
 						>
-							{line.content || ' '}
-						</pre>
+							{/* Color indicator */}
+							<div
+								className={cn(
+									'w-(--border-indicator) shrink-0',
+									line.type === 'added'
+										? 'bg-success'
+										: line.type === 'removed'
+											? 'bg-error'
+											: 'bg-transparent',
+								)}
+							/>
+
+							{/* Line numbers */}
+							{showLineNumbers && (
+								<div
+									className="shrink-0 text-right pr-2 text-vscode-descriptionForeground opacity-50 select-none"
+									style={{ width: lineNumWidth }}
+								>
+									{line.type === 'removed'
+										? line.oldLineNumber
+										: line.type === 'added'
+											? line.newLineNumber
+											: line.oldLineNumber}
+								</div>
+							)}
+
+							{/* Content */}
+							<pre
+								className={cn(
+									'm-0 px-2 whitespace-pre text-vscode-foreground flex-1',
+									line.type === 'removed' ? 'opacity-70' : 'opacity-100',
+								)}
+							>
+								{line.content || ' '}
+							</pre>
+						</div>
 					</div>
 				))}
 			</div>

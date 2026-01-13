@@ -1,8 +1,10 @@
 /**
  * @file ConfirmDialog - centered confirmation dialog component
- * @description Global confirmation dialog that appears centered in viewport.
+ * @description Global confirmation dialog that appears centered in viewport with proper
+ *              padding, centered text, and standard font sizes (text-base 13px).
  *              Used for destructive actions like restore, delete, etc.
  *              Controlled via uiStore for global access from any component.
+ *              Features scale-in animation and consistent design system tokens.
  */
 
 import type React from 'react';
@@ -49,7 +51,7 @@ export const ConfirmDialog: React.FC = () => {
 
 	return (
 		<div
-			className="fixed inset-0 z-1000 flex items-center justify-center bg-black/40"
+			className="fixed inset-0 z-1000 flex items-center justify-center bg-black/50"
 			onClick={handleCancel}
 			onKeyDown={e => e.key === 'Escape' && handleCancel()}
 			role="dialog"
@@ -58,26 +60,31 @@ export const ConfirmDialog: React.FC = () => {
 		>
 			<div
 				className={cn(
-					'flex flex-col gap-(--space-6) p-(--space-8)',
-					'bg-(--input-bg) border border-(--input-border) rounded-(--input-radius)',
-					'shadow-[0_2px_8px_rgba(0,0,0,0.3)]',
+					'flex flex-col gap-(--gap-4) p-(--gap-5)',
+					'bg-(--surface-overlay) border border-(--border-default) rounded-lg',
+					'shadow-[0_4px_16px_rgba(0,0,0,0.4)]',
+					'min-w-70 max-w-90',
+					'animate-scale-in',
 				)}
 				onClick={e => e.stopPropagation()}
 				onKeyDown={e => e.stopPropagation()}
 			>
-				<h2 id="confirm-dialog-title" className="text-xs font-medium text-vscode-foreground m-0">
+				<h2
+					id="confirm-dialog-title"
+					className="text-base font-semibold text-vscode-foreground m-0 text-center"
+				>
 					{confirmDialog.title}
 				</h2>
 
-				<p className="text-sm text-vscode-descriptionForeground m-0 leading-normal max-w-(--input-width-lg)">
+				<p className="text-base text-vscode-descriptionForeground m-0 leading-relaxed text-center">
 					{confirmDialog.message}
 				</p>
 
-				<div className="flex gap-(--space-4) justify-center">
-					<Button variant="primary" size="sm" onClick={handleConfirm} autoFocus>
+				<div className="flex gap-(--gap-4) justify-center pt-(--gap-2)">
+					<Button variant="primary" size="md" onClick={handleConfirm} autoFocus>
 						{confirmDialog.confirmLabel || 'Confirm'}
 					</Button>
-					<Button variant="ghost" size="sm" onClick={handleCancel}>
+					<Button variant="ghost" size="md" onClick={handleCancel}>
 						{confirmDialog.cancelLabel || 'Cancel'}
 					</Button>
 				</div>
