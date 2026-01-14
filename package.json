@@ -61,7 +61,7 @@
 		"@types/node": "20.x",
 		"@types/react": "^19.2.7",
 		"@types/react-dom": "^19.2.3",
-		"@types/vscode": "^1.107.0",
+		"@types/vscode": "^1.105.0",
 		"@typescript-eslint/eslint-plugin": "^8.52.0",
 		"@typescript-eslint/parser": "^8.52.0",
 		"@vitejs/plugin-react": "^5.1.2",
