@@ -190,6 +190,11 @@ export class SessionContext {
 		return this._subagentTokensInput;
 	}
 
+	/** Output tokens used specifically by subagents */
+	public get subagentTokensOutput(): number {
+		return this._subagentTokensOutput;
+	}
+
 	/** Last known context size of the main session (usage.input_tokens) */
 	public get mainContextSize(): number {
 		return this._lastMainContextSize;

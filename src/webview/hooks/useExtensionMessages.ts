@@ -39,12 +39,12 @@ interface HandlerContext {
 // =============================================================================
 
 /**
- * Check if message is for the active session
- * Messages without sessionId are treated as global (apply to active session)
+ * Check if message is for the active session.
+ * Session-scoped messages are expected to include sessionId.
  */
 const isMessageForActiveSession = (message: ExtensionMessage): boolean => {
 	if (!message.sessionId) {
-		return true;
+		return false;
 	}
 	const activeSessionId = useChatStore.getState().activeSessionId;
 	return message.sessionId === activeSessionId;
@@ -59,39 +59,45 @@ const handleSessionMessages = (message: ExtensionMessage, ctx: HandlerContext): 
 
 	switch (message.type) {
 		case 'ready':
-			chatActions.setLoading(false);
-			chatActions.setStatus('Ready');
-			chatActions.setProcessing(false);
-			chatActions.setStreamingToolId(null);
-			if (message.data) {
-				const messages = useChatStore.getState().messages;
-				const hasWelcome = messages.some(m => m.type === 'assistant' && m.content === message.data);
+			chatActions.setLoading(false, message.sessionId);
+			chatActions.setStatus('Ready', message.sessionId);
+			chatActions.setProcessing(false, message.sessionId);
+			chatActions.setStreamingToolId(null, message.sessionId);
+			if (message.data && message.sessionId) {
+				const targetMessages =
+					useChatStore.getState().sessionsById[message.sessionId]?.messages ?? [];
+				const hasWelcome = targetMessages.some(
+					m => m.type === 'assistant' && m.content === message.data,
+				);
 				if (!hasWelcome) {
-					chatActions.addMessage({
-						type: 'assistant',
-						content: message.data,
-						timestamp: new Date().toISOString(),
-					});
+					chatActions.addMessage(
+						{
+							type: 'assistant',
+							content: message.data,
+							timestamp: new Date().toISOString(),
+						},
+						message.sessionId,
+					);
 				}
 			}
 			return true;
 
 		case 'loading':
-			chatActions.setLoading(true);
+			chatActions.setLoading(true, message.sessionId);
 			if (message.data) {
-				chatActions.setStatus(message.data);
+				chatActions.setStatus(message.data, message.sessionId);
 			}
 			return true;
 
 		case 'clearLoading':
-			chatActions.setLoading(false);
-			chatActions.setStatus('Ready');
+			chatActions.setLoading(false, message.sessionId);
+			chatActions.setStatus('Ready', message.sessionId);
 			return true;
 
 		case 'setProcessing':
-			chatActions.setProcessing(message.data?.isProcessing ?? false);
+			chatActions.setProcessing(message.data?.isProcessing ?? false, message.sessionId);
 			if (!message.data?.isProcessing) {
-				chatActions.setStreamingToolId(null);
+				chatActions.setStreamingToolId(null, message.sessionId);
 			}
 			return true;
 
@@ -99,25 +105,31 @@ const handleSessionMessages = (message: ExtensionMessage, ctx: HandlerContext): 
 			// OpenCode SDK is auto-retrying after an error
 			if (message.data) {
 				const { attempt, message: retryMessage, nextRetryAt } = message.data;
-				chatActions.setAutoRetrying(true, {
-					attempt: attempt ?? 1,
-					message: retryMessage ?? 'Retrying request...',
-					nextRetryAt,
-				});
+				chatActions.setAutoRetrying(
+					true,
+					{
+						attempt: attempt ?? 1,
+						message: retryMessage ?? 'Retrying request...',
+						nextRetryAt,
+					},
+					message.sessionId,
+				);
 			}
 			return true;
 
 		case 'sessionIdle': {
 			// Session is idle - clear retry state and stop processing
-			chatActions.setAutoRetrying(false);
-			chatActions.setProcessing(false);
-			chatActions.setStreamingToolId(null);
+			chatActions.setAutoRetrying(false, undefined, message.sessionId);
+			chatActions.setProcessing(false, message.sessionId);
+			chatActions.setStreamingToolId(null, message.sessionId);
 
 			// If this is a child session of a running subtask, mark that specific subtask as completed.
 			if (message.data?.sessionId) {
 				const idleSessionId = message.data.sessionId;
 				const state = useChatStore.getState();
-				for (const session of state.sessions) {
+				for (const sessionId of state.sessionOrder) {
+					const session = state.sessionsById[sessionId];
+					if (!session) continue;
 					for (const msg of session.messages) {
 						if (msg.type !== 'subtask') {
 							continue;
@@ -159,7 +171,7 @@ const handleSessionMessages = (message: ExtensionMessage, ctx: HandlerContext): 
 				// parentID is CLI session ID, not UI session ID
 				// Use active session instead since events are routed to active session
 				const activeSessionId = state.activeSessionId;
-				const parentSession = state.sessions.find(s => s.id === activeSessionId);
+				const parentSession = activeSessionId ? state.sessionsById[activeSessionId] : undefined;
 
 				console.log(
 					`[useExtensionMessages] child-session-created: childSessionId=${childSessionId}, activeSessionId=${activeSessionId}`,
@@ -207,10 +219,10 @@ const handleSessionMessages = (message: ExtensionMessage, ctx: HandlerContext): 
 
 				// Then update processing/stats if provided
 				if (isProcessing !== undefined) {
-					chatActions.setProcessing(isProcessing);
+					chatActions.setProcessing(isProcessing, sessionId);
 				}
 				if (totalStats) {
-					chatActions.setTotalStats(totalStats);
+					chatActions.setTotalStats(totalStats, sessionId);
 				}
 			}
 			return true;
@@ -222,17 +234,17 @@ const handleSessionMessages = (message: ExtensionMessage, ctx: HandlerContext): 
 			return true;
 
 		case 'sessionCleared':
-			chatActions.clearMessages();
-			chatActions.setProcessing(false);
-			chatActions.setStreamingToolId(null);
+			chatActions.clearMessages(message.sessionId);
+			chatActions.setProcessing(false, message.sessionId);
+			chatActions.setStreamingToolId(null, message.sessionId);
 			return true;
 
 		case 'sessionProcessingComplete':
 			if (message.data) {
-				const { sessionId: _sessionId, stats } = message.data;
-				chatActions.setTotalStats(stats);
-				chatActions.setProcessing(false);
-				chatActions.setStreamingToolId(null);
+				const { sessionId, stats } = message.data;
+				chatActions.setTotalStats(stats, sessionId);
+				chatActions.setProcessing(false, sessionId);
+				chatActions.setStreamingToolId(null, sessionId);
 			}
 			return true;
 
@@ -291,7 +303,7 @@ const handleChatMessages = (message: ExtensionMessage, ctx: HandlerContext): boo
 							model: (data as UserInputData | undefined)?.model,
 							timestamp: new Date().toISOString(),
 						};
-			chatActions.addMessage(msgInput);
+			chatActions.addMessage(msgInput, message.sessionId);
 			return true;
 		}
 
@@ -321,13 +333,16 @@ const handleChatMessages = (message: ExtensionMessage, ctx: HandlerContext): boo
 			}
 
 			// Otherwise add to current session
-			chatActions.addMessage({
-				type: 'assistant',
-				content,
-				id: msg.id ?? msg.partId,
-				partId: msg.partId,
-				timestamp: new Date().toISOString(),
-			});
+			chatActions.addMessage(
+				{
+					type: 'assistant',
+					content,
+					id: msg.id ?? msg.partId,
+					partId: msg.partId,
+					timestamp: new Date().toISOString(),
+				},
+				message.sessionId,
+			);
 			return true;
 		}
 
@@ -338,12 +353,15 @@ const handleChatMessages = (message: ExtensionMessage, ctx: HandlerContext): boo
 				content?: string;
 			};
 			const msg = message as unknown as SystemNoticePayload;
-			chatActions.addMessage({
-				type: 'system_notice',
-				content: msg.content || 'Summarizing context',
-				id: msg.id,
-				timestamp: msg.timestamp ?? new Date().toISOString(),
-			});
+			chatActions.addMessage(
+				{
+					type: 'system_notice',
+					content: msg.content || 'Summarizing context',
+					id: msg.id,
+					timestamp: msg.timestamp ?? new Date().toISOString(),
+				},
+				message.sessionId,
+			);
 			return true;
 		}
 
@@ -363,20 +381,23 @@ const handleChatMessages = (message: ExtensionMessage, ctx: HandlerContext): boo
 			const msg = message as unknown as ThinkingPayload;
 			const content = msg.content ?? msg.data;
 
-			chatActions.addMessage({
-				type: 'thinking',
-				content: content || '',
-				// Prefer extension-provided id; fallback to partId for streaming identity.
-				id: msg.id ?? msg.partId,
-				partId: msg.partId,
-				durationMs: msg.durationMs,
-				reasoningTokens: msg.reasoningTokens,
-				isStreaming: msg.isStreaming,
-				isDelta: msg.isDelta,
-				startTime: msg.startTime,
-				timestamp: new Date().toISOString(),
-				hidden: !!msg.parentToolUseId,
-			});
+			chatActions.addMessage(
+				{
+					type: 'thinking',
+					content: content || '',
+					// Prefer extension-provided id; fallback to partId for streaming identity.
+					id: msg.id ?? msg.partId,
+					partId: msg.partId,
+					durationMs: msg.durationMs,
+					reasoningTokens: msg.reasoningTokens,
+					isStreaming: msg.isStreaming,
+					isDelta: msg.isDelta,
+					startTime: msg.startTime,
+					timestamp: new Date().toISOString(),
+					hidden: !!msg.parentToolUseId,
+				},
+				message.sessionId,
+			);
 
 			if (msg.parentToolUseId && msg.id) {
 				chatActions.addChildToSubtask(msg.parentToolUseId, msg.id);
@@ -415,14 +436,17 @@ const handleChatMessages = (message: ExtensionMessage, ctx: HandlerContext): boo
 					: undefined;
 			const content = topLevel.content ?? fromData?.content;
 
-			chatActions.addMessage({
-				type: 'error',
-				content: content || 'Unknown error',
-				id: topLevel.id ?? fromData?.id,
-				timestamp: topLevel.timestamp ?? fromData?.timestamp ?? new Date().toISOString(),
-			});
-			chatActions.setProcessing(false);
-			chatActions.setStreamingToolId(null);
+			chatActions.addMessage(
+				{
+					type: 'error',
+					content: content || 'Unknown error',
+					id: topLevel.id ?? fromData?.id,
+					timestamp: topLevel.timestamp ?? fromData?.timestamp ?? new Date().toISOString(),
+				},
+				message.sessionId,
+			);
+			chatActions.setProcessing(false, message.sessionId);
+			chatActions.setStreamingToolId(null, message.sessionId);
 			return true;
 		}
 
@@ -438,22 +462,25 @@ const handleChatMessages = (message: ExtensionMessage, ctx: HandlerContext): boo
 					? (message.data as InterruptedPayload)
 					: undefined;
 
-			chatActions.addMessage({
-				type: 'interrupted',
-				content: data?.content ?? 'Processing was interrupted',
-				reason: data?.reason,
-				id: data?.id,
-				timestamp: data?.timestamp ?? new Date().toISOString(),
-			});
-			chatActions.setProcessing(false);
-			chatActions.setStreamingToolId(null);
+			chatActions.addMessage(
+				{
+					type: 'interrupted',
+					content: data?.content ?? 'Processing was interrupted',
+					reason: data?.reason,
+					id: data?.id,
+					timestamp: data?.timestamp ?? new Date().toISOString(),
+				},
+				message.sessionId,
+			);
+			chatActions.setProcessing(false, message.sessionId);
+			chatActions.setStreamingToolId(null, message.sessionId);
 			return true;
 		}
 
 		case 'messagePartRemoved': {
 			const data = message.data as { messageId: string; partId: string } | undefined;
 			if (data?.partId) {
-				chatActions.removeMessageByPartId(data.partId);
+				chatActions.removeMessageByPartId(data.partId, message.sessionId);
 			}
 			return true;
 		}
@@ -514,20 +541,23 @@ const handleToolMessages = (message: ExtensionMessage, ctx: HandlerContext): boo
 			// Otherwise add to current session
 			const shouldHide = !!data.parentToolUseId;
 
-			chatActions.addMessage({
-				type: 'tool_use',
-				toolName: data.toolName,
-				toolUseId: data.toolUseId,
-				id: data.toolUseId,
-				toolInput: data.toolInput,
-				rawInput: data.rawInput,
-				filePath: data.filePath || undefined,
-				streamingOutput: data.streamingOutput,
-				isRunning: data.isRunning,
-				metadata: data.metadata,
-				timestamp: new Date().toISOString(),
-				hidden: shouldHide,
-			});
+			chatActions.addMessage(
+				{
+					type: 'tool_use',
+					toolName: data.toolName,
+					toolUseId: data.toolUseId,
+					id: data.toolUseId,
+					toolInput: data.toolInput,
+					rawInput: data.rawInput,
+					filePath: data.filePath || undefined,
+					streamingOutput: data.streamingOutput,
+					isRunning: data.isRunning,
+					metadata: data.metadata,
+					timestamp: new Date().toISOString(),
+					hidden: shouldHide,
+				},
+				message.sessionId,
+			);
 
 			// If it's a child tool call (subtask), link it to the parent
 			if (data.parentToolUseId) {
@@ -539,7 +569,7 @@ const handleToolMessages = (message: ExtensionMessage, ctx: HandlerContext): boo
 					data.isRunning ||
 					(typeof data.streamingOutput === 'string' && data.streamingOutput.length > 0)
 				) {
-					chatActions.setStreamingToolId(data.toolUseId);
+					chatActions.setStreamingToolId(data.toolUseId, message.sessionId);
 				}
 			}
 			return true;
@@ -585,30 +615,33 @@ const handleToolMessages = (message: ExtensionMessage, ctx: HandlerContext): boo
 					attachments: data.attachments,
 					metadata: data.metadata,
 				});
-				chatActions.setStreamingToolId(null);
+				chatActions.setStreamingToolId(null, data.childSessionId);
 				return true;
 			}
 
 			// Otherwise add to current session
 			const shouldHide = !!data.parentToolUseId;
 
-			chatActions.addMessage({
-				type: 'tool_result',
-				toolName: data.toolName,
-				toolUseId: data.toolUseId,
-				id: data.toolUseId ? `${data.toolUseId}:result` : undefined,
-				content: data.content,
-				isError: data.isError,
-				timestamp: new Date().toISOString(),
-				estimatedTokens:
-					data.estimatedTokens ?? (data.content ? Math.ceil(data.content.length / 4) : 0),
-				hidden: shouldHide,
-				title: data.title,
-				durationMs: data.durationMs,
-				attachments: data.attachments,
-				metadata: data.metadata,
-			});
-			chatActions.setStreamingToolId(null);
+			chatActions.addMessage(
+				{
+					type: 'tool_result',
+					toolName: data.toolName,
+					toolUseId: data.toolUseId,
+					id: data.toolUseId ? `${data.toolUseId}:result` : undefined,
+					content: data.content,
+					isError: data.isError,
+					timestamp: new Date().toISOString(),
+					estimatedTokens:
+						data.estimatedTokens ?? (data.content ? Math.ceil(data.content.length / 4) : 0),
+					hidden: shouldHide,
+					title: data.title,
+					durationMs: data.durationMs,
+					attachments: data.attachments,
+					metadata: data.metadata,
+				},
+				message.sessionId,
+			);
+			chatActions.setStreamingToolId(null, message.sessionId);
 
 			// If it's a child tool call (subtask), link it to the parent
 			if (data.parentToolUseId) {
@@ -645,27 +678,31 @@ const handleAccessMessages = (message: ExtensionMessage, ctx: HandlerContext): b
 				message.type === 'access_request' ? message : message.data
 			) as AccessRequestData;
 			const requestId = data.requestId || data.id || '';
-			chatActions.addMessage({
-				type: 'access_request',
-				requestId,
-				// Stable id ensures repeated events update instead of append.
-				id: requestId || undefined,
-				toolUseId: data.toolUseId,
-				tool: data.tool,
-				input: data.input,
-				pattern: data.pattern,
-				timestamp:
-					typeof data.timestamp === 'string'
-						? data.timestamp
-						: new Date(data.timestamp || Date.now()).toISOString(),
-			});
+			chatActions.addMessage(
+				{
+					type: 'access_request',
+					requestId,
+					// Stable id ensures repeated events update instead of append.
+					id: requestId || undefined,
+					toolUseId: data.toolUseId,
+					tool: data.tool,
+					input: data.input,
+					pattern: data.pattern,
+					timestamp:
+						typeof data.timestamp === 'string'
+							? data.timestamp
+							: new Date(data.timestamp || Date.now()).toISOString(),
+				},
+				message.sessionId,
+			);
 			return true;
 		}
 
 		case 'accessResponse':
 			if (message.data) {
 				const { id, approved } = message.data;
-				const messages = useChatStore.getState().messages;
+				const sid = message.sessionId || useChatStore.getState().activeSessionId;
+				const messages = sid ? (useChatStore.getState().sessionsById[sid]?.messages ?? []) : [];
 				const requestMsg = messages.find(
 					m =>
 						m.type === 'access_request' &&
@@ -673,10 +710,14 @@ const handleAccessMessages = (message: ExtensionMessage, ctx: HandlerContext): b
 				);
 
 				if (requestMsg?.id) {
-					chatActions.updateMessage(requestMsg.id, {
-						resolved: true,
-						approved,
-					});
+					chatActions.updateMessage(
+						requestMsg.id,
+						{
+							resolved: true,
+							approved,
+						},
+						message.sessionId,
+					);
 				}
 			}
 			return true;
@@ -705,13 +746,13 @@ const handleStatsMessages = (message: ExtensionMessage, ctx: HandlerContext): bo
 	switch (message.type) {
 		case 'updateTokens':
 			if (message.data) {
-				chatActions.setTokenStats(message.data);
+				chatActions.setTokenStats(message.data, message.sessionId);
 			}
 			return true;
 
 		case 'updateTotals':
 			if (message.data) {
-				chatActions.setTotalStats(message.data);
+				chatActions.setTotalStats(message.data, message.sessionId);
 			}
 			return true;
 
@@ -744,33 +785,23 @@ const handleRestoreMessages = (message: ExtensionMessage, ctx: HandlerContext): 
 
 		case 'restoreInputText':
 			if (message.data) {
-				chatActions.setInput(message.data);
+				chatActions.setInput(message.data, message.sessionId);
 			}
 			return true;
 
 		case 'messagesReloaded':
 			if (message.data) {
 				const { messages } = message.data as { messages: Message[] };
-				const targetSessionId = message.sessionId || useChatStore.getState().activeSessionId;
+				const targetSessionId = message.sessionId;
 
-				console.debug(
-					`[ExtensionMessages] Reloading ${messages.length} messages for session: ${targetSessionId}`,
-				);
-
-				useChatStore.setState(state => {
-					// 1. Update the session in the sessions list
-					const sessions = state.sessions.map(s =>
-						s.id === targetSessionId ? { ...s, messages, lastActive: Date.now() } : s,
+				if (targetSessionId) {
+					console.debug(
+						`[ExtensionMessages] Reloading ${messages.length} messages for session: ${targetSessionId}`,
 					);
-
-					// 2. If it's the active session, IMMEDIATELY update the active messages array
-					// This triggers the React re-render cycle with new messages
-					if (targetSessionId === state.activeSessionId) {
-						return { messages, sessions };
-					}
-
-					return { sessions };
-				});
+					chatActions.setSessionMessages(targetSessionId, messages);
+				} else {
+					console.warn('[ExtensionMessages] messagesReloaded ignored: missing sessionId');
+				}
 			}
 			return true;
 
@@ -809,34 +840,15 @@ const handleRestoreMessages = (message: ExtensionMessage, ctx: HandlerContext): 
 			// User message stays in place for inline editing
 			if (message.data) {
 				const { messageId } = message.data as { messageId: string };
-				const targetSessionId = message.sessionId || useChatStore.getState().activeSessionId;
+				const targetSessionId = message.sessionId;
 
-				if (messageId) {
+				if (messageId && targetSessionId) {
 					console.debug(
 						`[ExtensionMessages] Deleting messages after ${messageId} for session: ${targetSessionId}`,
 					);
-
-					useChatStore.setState(state => {
-						const idx = state.messages.findIndex(m => m.id === messageId);
-						if (idx === -1) {
-							return state;
-						}
-
-						// Keep messages up to and including the target message
-						const newMessages = state.messages.slice(0, idx + 1);
-
-						const sessions = state.sessions.map(s =>
-							s.id === targetSessionId
-								? { ...s, messages: newMessages, lastActive: Date.now() }
-								: s,
-						);
-
-						if (targetSessionId === state.activeSessionId) {
-							return { messages: newMessages, sessions };
-						}
-
-						return { sessions };
-					});
+					chatActions.deleteMessagesAfterMessageId(targetSessionId, messageId);
+				} else if (!targetSessionId) {
+					console.warn('[ExtensionMessages] deleteMessagesAfter ignored: missing sessionId');
 				}
 			}
 			return true;
@@ -1534,12 +1546,12 @@ const handleDataMessages = (message: ExtensionMessage, ctx: HandlerContext): boo
 
 		case 'allConversationsCleared':
 			useChatStore.setState({
-				sessions: [],
+				sessionsById: {},
+				sessionOrder: [],
 				activeSessionId: undefined,
-				messages: [],
-				isProcessing: false,
-				restoreCommits: [],
-				changedFiles: [],
+				editingMessageId: null,
+				isImprovingPrompt: false,
+				improvingPromptRequestId: null,
 			});
 			uiActions.setConversationList([]);
 			// Silent operation
@@ -1564,7 +1576,10 @@ const handleDataMessages = (message: ExtensionMessage, ctx: HandlerContext): boo
 				if (currentReqId === requestId) {
 					useChatStore
 						.getState()
-						.actions.appendInput(`\n\n---\n✨ Enchanted Query:\n${improvedText}`);
+						.actions.appendInput(
+							`\n\n---\n✨ Enchanted Query:\n${improvedText}`,
+							message.sessionId,
+						);
 					useChatStore.getState().actions.setImprovingPrompt(false, null);
 				}
 			}
@@ -1600,7 +1615,14 @@ const handleExtensionMessage = (message: ExtensionMessage): void => {
 	const uiActions = useUIStore.getState().actions;
 	const settingsActions = useSettingsStore.getState().actions;
 
-	// Filter session-specific messages
+	// Filter session-specific messages - allow processing state updates for background sessions
+	// If a session-scoped message lacks sessionId, ignore it to prevent cross-session leaks.
+	if (isSessionSpecificMessage(message) && !message.sessionId) {
+		console.warn(
+			`[useExtensionMessages] Ignored session-scoped message without sessionId: ${message.type}`,
+		);
+		return;
+	}
 	if (isSessionSpecificMessage(message) && !isMessageForActiveSession(message)) {
 		const allowBackgroundTypes = new Set([
 			'showRestoreOption',
@@ -1610,6 +1632,10 @@ const handleExtensionMessage = (message: ExtensionMessage): void => {
 			'fileChanged',
 			'sessionIdle', // Allow background sessions to report idle status (to complete subtasks)
 			'child-session-created',
+			'setProcessing', // Allow background sessions to update processing state
+			'sessionRetrying', // Allow background sessions to update retry status
+			'updateTotals', // Allow background sessions to update token stats
+			'messagePartRemoved', // Allow removing messages from background sessions
 		]);
 		if (!allowBackgroundTypes.has(message.type)) {
 			return;

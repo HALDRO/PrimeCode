@@ -1742,6 +1742,9 @@ export class StreamHandler {
 				cacheReadTokens: usage.cache_read_input_tokens || 0,
 				reasoningTokens: usage.reasoning_tokens || 0,
 				totalReasoningTokens: session?.totalReasoningTokens || 0,
+				// Subagent/child session token tracking
+				subagentTokensInput: session?.subagentTokensInput || 0,
+				subagentTokensOutput: session?.subagentTokensOutput || 0,
 			},
 			sessionId,
 		});

@@ -5,7 +5,13 @@
  */
 
 // Base stores (use sparingly - prefer selectors)
-export { type ChatState, type Message, type MessageInput, useChatStore } from './chatStore';
+export {
+	type ChatSession,
+	type ChatState,
+	type Message,
+	type MessageInput,
+	useChatStore,
+} from './chatStore';
 // Optimized selectors (preferred)
 export * from './selectors';
 export {

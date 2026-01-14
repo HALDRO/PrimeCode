@@ -12,14 +12,18 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow';
 import { CLI_COMMANDS, OPENCODE_COMMANDS } from '../../constants';
 import { cn } from '../../lib/cn';
-import { type CommitInfo, type Message, useChatActions, useChatStore } from '../../store/chatStore';
 import {
+	type ChangedFile,
+	type CommitInfo,
+	type Message,
 	useActiveSessionId,
+	useChatActions,
+	useChatStore,
 	useEditingMessageId,
 	useIsProcessing,
 	useRestoreCommits,
 	useUnrevertAvailable,
-} from '../../store/selectors';
+} from '../../store';
 import { useSettingsStore } from '../../store/settingsStore';
 import { useUIActions } from '../../store/uiStore';
 import { formatDuration, formatTime, formatTokens, getShortFileName } from '../../utils/format';
@@ -29,6 +33,10 @@ import { useSessionMessage, useVSCode } from '../../utils/vscode';
 import { ClockIcon, TimerIcon, TokensIcon, Undo2Icon } from '../icons';
 import { ChatInput } from '../input/ChatInput';
 import { Badge, type StatItem, StatsDisplay, Tooltip } from '../ui';
+
+// Stable empty array references to prevent infinite re-renders with useShallow
+const EMPTY_MESSAGES: Message[] = [];
+const EMPTY_CHANGED_FILES: ChangedFile[] = [];
 
 interface UserMessageProps {
 	message: Message & { type: 'user' };
@@ -375,7 +383,10 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(({ message }) 
 	// Derived state selector - calculates all primitive stats in one go using stable values
 	const stats = useChatStore(
 		useShallow(state => {
-			const { messages, changedFiles } = state;
+			const sid = state.activeSessionId;
+			const session = sid ? state.sessionsById[sid] : undefined;
+			const messages = session?.messages ?? EMPTY_MESSAGES;
+			const changedFiles = session?.changedFiles ?? EMPTY_CHANGED_FILES;
 			const msgIndex = messages.findIndex(m => m.id === message.id);
 
 			// 1. Check if last user message

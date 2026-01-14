@@ -1,5 +1,9 @@
 import { useMemo } from 'react';
-import { type Message, useChatStore } from '../store/chatStore';
+import { useShallow } from 'zustand/react/shallow';
+import { type ChatSession, type Message, useChatStore } from '../store/chatStore';
+
+// Stable empty array reference to prevent infinite re-renders
+const EMPTY_MESSAGES: Message[] = [];
 
 /**
  * Hook to retrieve all child messages for a given subtask.
@@ -8,12 +12,29 @@ import { type Message, useChatStore } from '../store/chatStore';
  * 2. OpenCode style (child messages in a separate child session)
  */
 export function useSubtaskChildren(subtaskId: string): Message[] {
-	// 1. Get the subtask message from current active messages
-	const message = useChatStore(state => state.messages.find(m => m.id === subtaskId));
+	// 1. Get the subtask message from current active session messages
+	const message = useChatStore(state => {
+		const sid = state.activeSessionId;
+		if (!sid) return undefined;
+		return state.sessionsById[sid]?.messages.find((m: Message) => m.id === subtaskId);
+	});
 
-	// 2. Access all sessions to find child session if needed
-	const sessions = useChatStore(state => state.sessions);
-	const allMessages = useChatStore(state => state.messages); // Current session messages
+	// 2. Access sessionsById and sessionOrder separately to avoid creating new arrays
+	const sessionsById = useChatStore(useShallow(state => state.sessionsById));
+	const sessionOrder = useChatStore(useShallow(state => state.sessionOrder));
+
+	// Derive sessions list in useMemo to maintain stable reference
+	const sessions = useMemo(
+		() => sessionOrder.map(id => sessionsById[id]).filter((s): s is ChatSession => !!s),
+		[sessionsById, sessionOrder],
+	);
+
+	// 3. Get current session messages with stable empty array fallback
+	const allMessages = useChatStore(state => {
+		const sid = state.activeSessionId;
+		if (!sid) return EMPTY_MESSAGES;
+		return state.sessionsById[sid]?.messages ?? EMPTY_MESSAGES;
+	});
 
 	const children = useMemo(() => {
 		if (!message || message.type !== 'subtask') {
@@ -25,7 +46,7 @@ export function useSubtaskChildren(subtaskId: string): Message[] {
 		// Case A: Claude Code (child messages are in the same session, linked by ID)
 		if (message.childMessages && message.childMessages.length > 0) {
 			const linked = message.childMessages
-				.map(id => allMessages.find(m => m.id === id))
+				.map((id: string) => allMessages.find(m => m.id === id))
 				.filter((m): m is Message => !!m);
 			childMsgs = [...childMsgs, ...linked];
 		}

@@ -8,7 +8,7 @@
 
 import type React from 'react';
 import { isToolMatch } from '../../constants';
-import { type Message, useChatActions } from '../../store/chatStore';
+import { type Message, useChatActions } from '../../store';
 import { useVSCode } from '../../utils/vscode';
 import { Button, GlowDot } from '../ui';
 

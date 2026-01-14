@@ -6,9 +6,15 @@
  * in chatStore, so no manual clearing is needed on session switch.
  */
 
-import React, { useCallback } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import { cn } from '../../lib/cn';
-import { useChatActions, useChatStore, useHistoryDropdownState, useUIActions } from '../../store';
+import {
+	type ChatSession,
+	useChatActions,
+	useChatStore,
+	useHistoryDropdownState,
+	useUIActions,
+} from '../../store';
 import { useVSCode } from '../../utils/vscode';
 import { CloseIcon, FileIcon, HistoryIcon, PlusIcon, SettingsIcon } from '../icons';
 import { Button } from '../ui';
@@ -20,7 +26,11 @@ export const Header: React.FC = React.memo(() => {
 	const { setActiveModal } = useUIActions();
 	const { postMessage } = useVSCode();
 	const { switchSession, closeSession } = useChatActions();
-	const { sessions, activeSessionId } = useChatStore();
+	const { sessionsById, sessionOrder, activeSessionId } = useChatStore();
+	const sessions = useMemo(
+		() => sessionOrder.map(id => sessionsById[id]).filter((s): s is ChatSession => !!s),
+		[sessionOrder, sessionsById],
+	);
 
 	const handleSwitchSession = useCallback(
 		(sessionId: string) => {

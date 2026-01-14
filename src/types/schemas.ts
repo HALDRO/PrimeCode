@@ -184,6 +184,9 @@ export const TokenStatsSchema = Type.Object({
 	cacheReadTokens: Type.Number(),
 	reasoningTokens: Type.Number(),
 	totalReasoningTokens: Type.Number(),
+	// Subagent/child session token tracking
+	subagentTokensInput: Type.Optional(Type.Number()),
+	subagentTokensOutput: Type.Optional(Type.Number()),
 });
 export type TokenStats = Static<typeof TokenStatsSchema>;
 
