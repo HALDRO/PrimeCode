@@ -161,6 +161,15 @@ export function activate(context: vscode.ExtensionContext) {
 	logger.show(true);
 }
 
-export function deactivate() {
+export async function deactivate(): Promise<void> {
 	logger.info('Extension is being deactivated');
+
+	// Dispose CLI services to stop OpenCode/Claude processes
+	try {
+		const { CLIServiceFactory } = await import('./services/CLIServiceFactory.js');
+		await CLIServiceFactory.dispose();
+		logger.info('CLI services disposed successfully');
+	} catch (error) {
+		logger.error('Failed to dispose CLI services:', error);
+	}
 }
