@@ -8,7 +8,7 @@
 
 import { OverlayScrollbarsComponent } from 'overlayscrollbars-react';
 import type React from 'react';
-import { useMemo } from 'react';
+import { Fragment, useMemo } from 'react';
 import { cn } from '../../lib/cn';
 
 const LINE_HEIGHT = 19;
@@ -233,13 +233,10 @@ function groupIntoHunks(diffLines: DiffLine[], contextLines = 1): DiffLine[] {
 			const line = { ...diffLines[i] };
 
 			// Add separator marker on first line of hunk if there's a gap
-			// Also add separator at the very beginning if first hunk doesn't start at line 0
+			// Skip separator for the very first hunk - no need to show "hidden lines" at the top
 			if (i === range.start) {
-				if (lastEnd === -1 && range.start > 0) {
-					// First hunk doesn't start at beginning - show skipped lines
-					line.separatorBefore = range.start;
-				} else if (lastEnd >= 0 && range.start > lastEnd + 1) {
-					// Gap between hunks
+				if (lastEnd >= 0 && range.start > lastEnd + 1) {
+					// Gap between hunks - show hidden lines count
 					line.separatorBefore = range.start - lastEnd - 1;
 				}
 			}
@@ -420,8 +417,16 @@ export const SimpleDiff: React.FC<SimpleDiffProps> = ({
 								: 'bg-transparent',
 					)}
 				/>
-				{displayLines.map(line => (
-					<div key={`${line.type}-${line.oldLineNumber ?? ''}-${line.newLineNumber ?? ''}`}>
+				{displayLines.map((line, idx) => (
+					<Fragment
+						key={`${idx}-${line.type}-${line.oldLineNumber ?? ''}-${line.newLineNumber ?? ''}`}
+					>
+						{/* Hidden lines separator - styled like reference screenshot */}
+						{line.separatorBefore !== undefined && line.separatorBefore > 0 && (
+							<div className="flex items-center h-(--line-height-diff) px-2 text-xs text-vscode-descriptionForeground select-none bg-(--tool-bg-header)">
+								<span className="opacity-70">— {line.separatorBefore} hidden lines —</span>
+							</div>
+						)}
 						{/* Actual diff line */}
 						<div
 							className={cn(
@@ -469,7 +474,7 @@ export const SimpleDiff: React.FC<SimpleDiffProps> = ({
 								{line.content || ' '}
 							</pre>
 						</div>
-					</div>
+					</Fragment>
 				))}
 			</div>
 		</OverlayScrollbarsComponent>
