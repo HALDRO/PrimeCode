@@ -516,9 +516,15 @@ export const SettingsPage: React.FC = () => {
 	const handleClose = () => setActiveModal(null);
 
 	return (
-		<div className="fixed inset-0 z-50 text-vscode-editor-foreground font-(family-name:--vscode-font-family) overflow-hidden flex flex-col bg-(--panel-header-bg)">
+		<div
+			className="fixed inset-0 z-50 text-vscode-editor-foreground font-(family-name:--vscode-font-family) overflow-hidden flex flex-col"
+			style={{ backgroundColor: 'var(--vscode-editor-background)' }}
+		>
 			{/* Top navigation (moved from left sidebar) */}
-			<div className="shrink-0 bg-(--panel-header-bg) px-1 pt-2 pb-1">
+			<div
+				className="shrink-0 px-1 pt-2 pb-1"
+				style={{ backgroundColor: 'var(--vscode-editor-background)' }}
+			>
 				<div ref={navContainerRef} className="relative">
 					{/* Hidden measurement nav (always full labels) */}
 					<nav
@@ -585,7 +591,7 @@ export const SettingsPage: React.FC = () => {
 			</ScrollContainer>
 
 			{/* CLI Status fixed at the bottom */}
-			<div className="shrink-0 pb-2 bg-(--panel-header-bg)">
+			<div className="shrink-0 pb-2" style={{ backgroundColor: 'var(--vscode-editor-background)' }}>
 				<div className="max-w-(--modal-width-md) mx-auto px-3">
 					{provider === 'claude' ? <ClaudeCLIStatus /> : <OpenCodeCLIStatus />}
 				</div>

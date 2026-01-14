@@ -189,9 +189,9 @@ const RestoreButton = React.memo<{
 			<button
 				type="button"
 				onClick={handleClick}
-				className="flex items-center justify-center w-5 h-5 rounded hover:bg-vscode-list-hoverBackground text-vscode-foreground opacity-70 hover:opacity-100 transition-all cursor-pointer"
+				className="flex items-center justify-center w-6 h-6 rounded hover:bg-vscode-list-hoverBackground text-vscode-foreground opacity-70 hover:opacity-100 transition-all cursor-pointer"
 			>
-				<Undo2Icon size={14} />
+				<Undo2Icon size={15} />
 			</button>
 		</Tooltip>
 	);
@@ -770,6 +770,44 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(({ message }) 
 	// Show restore only if unrevert is not available (they are mutually exclusive)
 	const showRestore = restoreCommit && !showUnrevert;
 
+	const [isSticky, setIsSticky] = useState(false);
+	const containerRef = useRef<HTMLDivElement>(null);
+
+	useEffect(() => {
+		const el = containerRef.current;
+		if (!el) return;
+
+		const scrollParent = el.closest('.os-viewport') || window;
+
+		const checkSticky = () => {
+			const rect = el.getBoundingClientRect();
+			let parentTop = 0;
+			let hasOverlap = false;
+
+			if (scrollParent instanceof Element) {
+				parentTop = scrollParent.getBoundingClientRect().top;
+				// If the scroll container is scrolled, the sticky element is overlapping content.
+				hasOverlap = (scrollParent as HTMLElement).scrollTop > 0;
+			} else {
+				hasOverlap = window.scrollY > 0;
+			}
+
+			const isAtStickyTop = Math.abs(rect.top - parentTop) <= 2;
+			setIsSticky(hasOverlap && isAtStickyTop);
+		};
+
+		scrollParent.addEventListener('scroll', checkSticky);
+		// Also check on resize as layout might change
+		window.addEventListener('resize', checkSticky);
+
+		checkSticky(); // Initial check
+
+		return () => {
+			scrollParent.removeEventListener('scroll', checkSticky);
+			window.removeEventListener('resize', checkSticky);
+		};
+	}, []);
+
 	if (isEditing) {
 		return (
 			<div ref={editContainerRef} className="w-full mb-(--message-gap) px-0">
@@ -792,8 +830,13 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(({ message }) 
 	}
 
 	return (
-		<div className="w-full mb-(--message-gap) px-0">
-			<div className="flex flex-col relative w-full bg-(--input-bg) border border-(--input-border) shadow-[0_2px_12px_rgba(0,0,0,0.4)] rounded-(--input-radius) overflow-hidden transition-all duration-150 ease-out">
+		<div className="w-full mb-(--message-gap) px-0" ref={containerRef}>
+			<div
+				className={cn(
+					'flex flex-col relative w-full bg-(--input-bg) border border-(--input-border) rounded-(--input-radius) overflow-hidden transition-all duration-150 ease-out',
+					isSticky ? 'shadow-[0_4px_12px_0px_rgba(0,0,0,0.15)]' : 'shadow-none',
+				)}
+			>
 				{/* Restore/Unrevert buttons in top-right corner - mutually exclusive */}
 				{(showRestore || showUnrevert) && (
 					<div className="absolute top-1 right-1.5 flex items-center gap-1 z-10">
@@ -817,7 +860,9 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(({ message }) 
 					{/* Message content with inline file badges at the beginning */}
 					<div
 						ref={contentRef}
-						className="text-vscode-font-size leading-tight wrap-break-word overflow-anywhere whitespace-pre-wrap overflow-hidden line-clamp-3 px-(--gap-3) py-(--gap-1-5)"
+						className={cn(
+							'text-vscode-font-size leading-tight wrap-break-word overflow-anywhere whitespace-pre-wrap overflow-hidden line-clamp-3 px-(--gap-3) py-(--gap-1-5)',
+						)}
 					>
 						{(attachedFiles.length > 0 ||
 							attachedSnippets.length > 0 ||
