@@ -2,7 +2,7 @@
 	"name": "primecode",
 	"displayName": "PrimeCode",
 	"description": "Universal AI CLI Interface - Unified chat for Claude Code, OpenCode and more",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"main": "./out/extension.js",
 	"scripts": {
 		"vscode:prepublish": "npm run build",
@@ -93,7 +93,7 @@
 	},
 	"license": "Apache-2.0",
 	"engines": {
-		"vscode": "^1.107.0"
+		"vscode": "^1.105.0"
 	},
 	"categories": [
 		"Other",

@@ -300,20 +300,27 @@ export const TodoCheckIcon: React.FC<IconProps> = ({ size = 14, style, className
 );
 
 /**
- * In-progress circle icon (half-filled) for active tasks
+ * In-progress sparkle icon for active tasks
  */
 export const TodoProgressIcon: React.FC<IconProps> = ({ size = 14, style, className }) => (
 	<svg
+		xmlns="http://www.w3.org/2000/svg"
 		width={size}
 		height={size}
-		viewBox="0 0 16 16"
+		viewBox="0 0 24 24"
 		fill="none"
 		aria-hidden="true"
 		style={style}
 		className={className}
 	>
-		<circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.5" />
-		<path d="M8 2a6 6 0 0 1 0 12" fill="currentColor" fillOpacity="0.4" />
+		<path
+			fill="none"
+			stroke="currentColor"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			strokeWidth="2"
+			d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"
+		/>
 	</svg>
 );
 

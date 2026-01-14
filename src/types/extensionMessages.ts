@@ -183,7 +183,7 @@ export type SubtaskExtensionMessage = BaseExtensionMessage<'subtask', never> & {
 	prompt: string;
 	description: string;
 	command?: string;
-	status: 'running' | 'completed' | 'error';
+	status: 'running' | 'completed' | 'error' | 'cancelled';
 	childMessages?: string[];
 	childSessionId?: string;
 	result?: string;

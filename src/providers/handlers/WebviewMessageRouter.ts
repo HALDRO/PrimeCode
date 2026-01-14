@@ -572,10 +572,6 @@ export class WebviewMessageRouter {
 	private _getRulesRoutes() {
 		return {
 			getRules: ({ handlers }: MessageContext) => void handlers.rulesHandler.getRules(),
-			importRulesFromClaude: ({ handlers }: MessageContext) =>
-				void handlers.rulesHandler.importRulesFromClaude(),
-			syncRulesToClaude: ({ handlers }: MessageContext) =>
-				void handlers.rulesHandler.syncRulesToClaude(),
 			createRule: ({ message, handlers }: MessageContext) => {
 				const msg = message as WebviewMessage & { name?: string; content?: string };
 				if (msg.name && msg.content) void handlers.rulesHandler.createRule(msg.name, msg.content);

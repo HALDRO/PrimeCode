@@ -142,9 +142,13 @@ const handleSessionMessages = (message: ExtensionMessage, ctx: HandlerContext): 
 		case 'sessionCreated':
 			if (message.data?.sessionId) {
 				const newSessionId = message.data.sessionId;
-				// Ensure the session exists in the store, then synchronously switch to it.
+				// Create session in store but don't auto-switch (parallel sessions support)
 				chatActions.handleSessionCreated(newSessionId);
-				chatActions.switchSession(newSessionId);
+				// Only switch if this is the first session (no active session yet)
+				const state = useChatStore.getState();
+				if (!state.activeSessionId) {
+					chatActions.switchSession(newSessionId);
+				}
 			}
 			return true;
 
@@ -909,6 +913,36 @@ const handleFileMessages = (message: ExtensionMessage, ctx: HandlerContext): boo
 // Settings & Configuration Handlers
 // =============================================================================
 
+const handleAgentsListUpdate = (
+	data: {
+		isLoading: boolean;
+		error?: string;
+		meta?: { operation?: string; message?: string };
+	},
+	settingsActions: HandlerContext['settingsActions'],
+) => {
+	if (data.meta?.operation && data.meta.message) {
+		settingsActions.setAgentsOps({
+			lastAction: data.meta.operation,
+			status: 'success',
+			message: data.meta.message,
+		});
+		setTimeout(() => {
+			settingsActions.setAgentsOps({ status: 'idle' });
+		}, 3500);
+	}
+	if (data.error) {
+		settingsActions.setAgentsOps({
+			lastAction: 'error',
+			status: 'error',
+			message: data.error,
+		});
+		setTimeout(() => {
+			settingsActions.setAgentsOps({ status: 'idle' });
+		}, 6000);
+	}
+};
+
 const handleSettingsMessages = (message: ExtensionMessage, ctx: HandlerContext): boolean => {
 	const { settingsActions, uiActions } = ctx;
 
@@ -922,16 +956,7 @@ const handleSettingsMessages = (message: ExtensionMessage, ctx: HandlerContext):
 					meta?: { operation?: string; message?: string };
 				};
 				settingsActions.setCommands({ custom, isLoading, error });
-				if (meta?.operation && meta.message) {
-					settingsActions.setAgentsOps({
-						lastAction: meta.operation,
-						status: 'success',
-						message: meta.message,
-					});
-					setTimeout(() => {
-						settingsActions.setAgentsOps({ status: 'idle' });
-					}, 3500);
-				}
+				handleAgentsListUpdate({ isLoading, error, meta }, settingsActions);
 			}
 			return true;
 
@@ -944,26 +969,7 @@ const handleSettingsMessages = (message: ExtensionMessage, ctx: HandlerContext):
 					meta?: { operation?: string; message?: string };
 				};
 				settingsActions.setSkills({ items: skills, isLoading, error });
-				if (meta?.operation && meta.message) {
-					settingsActions.setAgentsOps({
-						lastAction: meta.operation,
-						status: 'success',
-						message: meta.message,
-					});
-					setTimeout(() => {
-						settingsActions.setAgentsOps({ status: 'idle' });
-					}, 3500);
-				}
-				if (error) {
-					settingsActions.setAgentsOps({
-						lastAction: 'error',
-						status: 'error',
-						message: error,
-					});
-					setTimeout(() => {
-						settingsActions.setAgentsOps({ status: 'idle' });
-					}, 6000);
-				}
+				handleAgentsListUpdate({ isLoading, error, meta }, settingsActions);
 			}
 			return true;
 
@@ -976,26 +982,7 @@ const handleSettingsMessages = (message: ExtensionMessage, ctx: HandlerContext):
 					meta?: { operation?: string; message?: string };
 				};
 				settingsActions.setHooks({ items: hooks, isLoading, error });
-				if (meta?.operation && meta.message) {
-					settingsActions.setAgentsOps({
-						lastAction: meta.operation,
-						status: 'success',
-						message: meta.message,
-					});
-					setTimeout(() => {
-						settingsActions.setAgentsOps({ status: 'idle' });
-					}, 3500);
-				}
-				if (error) {
-					settingsActions.setAgentsOps({
-						lastAction: 'error',
-						status: 'error',
-						message: error,
-					});
-					setTimeout(() => {
-						settingsActions.setAgentsOps({ status: 'idle' });
-					}, 6000);
-				}
+				handleAgentsListUpdate({ isLoading, error, meta }, settingsActions);
 			}
 			return true;
 
@@ -1008,26 +995,7 @@ const handleSettingsMessages = (message: ExtensionMessage, ctx: HandlerContext):
 					meta?: { operation?: string; message?: string };
 				};
 				settingsActions.setSubagents({ items: subagents, isLoading, error });
-				if (meta?.operation && meta.message) {
-					settingsActions.setAgentsOps({
-						lastAction: meta.operation,
-						status: 'success',
-						message: meta.message,
-					});
-					setTimeout(() => {
-						settingsActions.setAgentsOps({ status: 'idle' });
-					}, 3500);
-				}
-				if (error) {
-					settingsActions.setAgentsOps({
-						lastAction: 'error',
-						status: 'error',
-						message: error,
-					});
-					setTimeout(() => {
-						settingsActions.setAgentsOps({ status: 'idle' });
-					}, 6000);
-				}
+				handleAgentsListUpdate({ isLoading, error, meta }, settingsActions);
 			}
 			return true;
 

@@ -2,12 +2,7 @@ import type React from 'react';
 import { cn } from '../../lib/cn';
 import type { SubtaskMessage } from '../../store/chatStore';
 import { formatDuration } from '../../utils/format';
-import {
-	AgentsIcon,
-	ExpandChevronIcon,
-	TodoCheckIcon,
-	TodoProgressIcon,
-} from '../icons/CustomIcons';
+import { ExpandChevronIcon, TodoProgressIcon } from '../icons/CustomIcons';
 
 interface SubtaskHeaderProps {
 	subtask: SubtaskMessage;
@@ -25,6 +20,7 @@ export const SubtaskHeader: React.FC<SubtaskHeaderProps> = ({
 	const isRunning = subtask.status === 'running';
 	const isCompleted = subtask.status === 'completed';
 	const isError = subtask.status === 'error';
+	const isCancelled = subtask.status === 'cancelled';
 
 	return (
 		<div
@@ -34,21 +30,17 @@ export const SubtaskHeader: React.FC<SubtaskHeaderProps> = ({
 				'bg-vscode-input-background hover:bg-vscode-toolbar-hoverBackground',
 			)}
 		>
-			<div
-				className={cn(
-					'flex items-center justify-center w-5 h-5 rounded-full shrink-0',
-					// Status icon colors
-					isRunning && 'text-vscode-button-background',
-					isCompleted && 'text-vscode-editorGutter-addedBackground',
-					isError && 'text-vscode-errorForeground',
-				)}
-			>
+			<div className={cn('flex items-center justify-center shrink-0')}>
 				{isRunning && (
-					<div className="animate-spin duration-3000">
+					<div className="animate-spin text-[#FFA500]">
 						<TodoProgressIcon size={14} />
 					</div>
 				)}
-				{isCompleted && <TodoCheckIcon size={14} />}
+				{(isCompleted || isCancelled) && (
+					<div className="text-vscode-editorGutter-addedBackground">
+						<TodoProgressIcon size={14} />
+					</div>
+				)}
 				{isError && (
 					<div className="text-vscode-errorForeground">
 						<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-label="Error">
@@ -61,8 +53,7 @@ export const SubtaskHeader: React.FC<SubtaskHeaderProps> = ({
 
 			<div className="flex-1 min-w-0 flex flex-col gap-0.5">
 				<div className="flex items-center gap-2">
-					<span className="text-xs font-medium px-1.5 py-0.5 rounded-sm bg-vscode-badge-background text-vscode-badge-foreground flex items-center gap-1">
-						<AgentsIcon size={10} />
+					<span className="text-xs font-medium px-1.5 py-0.5 rounded-sm bg-vscode-badge-background text-vscode-badge-foreground whitespace-nowrap">
 						{subtask.agent.toUpperCase()}
 					</span>
 					<span className="text-xs opacity-70 truncate">
