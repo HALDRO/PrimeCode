@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { ChatProvider } from './providers/ChatProvider';
 import { ChatWebviewProvider } from './providers/ChatWebviewProvider';
 import { ClipboardContextService } from './services/ClipboardContextService';
+import { OpenCodeServerManager } from './services/cli/opencode/OpenCodeServerManager';
 import { cleanupDiffCache, getDiffContent } from './utils/diffCache';
 import { logger } from './utils/logger';
 
@@ -56,6 +57,9 @@ export function activate(context: vscode.ExtensionContext) {
 		ctx: vscode.ExtensionContext,
 	): Promise<ChatProvider | undefined> {
 		try {
+			// Clean up orphaned OpenCode processes from previous sessions
+			await OpenCodeServerManager.cleanUpOrphans();
+
 			// Initialize clipboard context service for tracking copy events
 			const clipboardContextService = ClipboardContextService.getInstance();
 			ctx.subscriptions.push(clipboardContextService);

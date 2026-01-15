@@ -44,7 +44,7 @@ export class OpenCodeServerManager {
 
 		// Kill any orphaned opencode serve processes from previous extension instances
 		// This handles cases where debugger restart doesn't call deactivate()
-		await this._killOrphanedServers();
+		await OpenCodeServerManager.cleanUpOrphans();
 
 		const port = await this._findFreePort();
 		logger.info(`[OpenCodeServerManager] Using port: ${port}`);
@@ -110,12 +110,12 @@ export class OpenCodeServerManager {
 	 * Windows: uses wmic to find processes by command line pattern
 	 * Unix: uses pgrep to find processes by command pattern
 	 */
-	private async _killOrphanedServers(): Promise<void> {
+	public static async cleanUpOrphans(): Promise<void> {
 		try {
 			if (process.platform === 'win32') {
-				await this._killOrphanedServersWindows();
+				await OpenCodeServerManager._killOrphanedServersWindows();
 			} else {
-				await this._killOrphanedServersUnix();
+				await OpenCodeServerManager._killOrphanedServersUnix();
 			}
 		} catch (error) {
 			// Not critical - just log and continue
@@ -126,7 +126,7 @@ export class OpenCodeServerManager {
 	/**
 	 * Windows implementation: uses wmic to find and taskkill to terminate
 	 */
-	private async _killOrphanedServersWindows(): Promise<void> {
+	private static async _killOrphanedServersWindows(): Promise<void> {
 		// Use wmic to find opencode.exe processes with "serve" in command line
 		const result = cp.execSync(
 			"wmic process where \"name='opencode.exe' and commandline like '%serve%'\" get processid /format:csv",
@@ -134,7 +134,7 @@ export class OpenCodeServerManager {
 		);
 
 		// Parse PIDs from CSV output (format: Node,ProcessId)
-		const pids = this._parsePidsFromCsv(result);
+		const pids = OpenCodeServerManager._parsePidsFromCsv(result);
 
 		if (pids.length > 0) {
 			logger.info(
@@ -155,7 +155,7 @@ export class OpenCodeServerManager {
 	/**
 	 * Unix implementation: uses pgrep to find and kill to terminate
 	 */
-	private async _killOrphanedServersUnix(): Promise<void> {
+	private static async _killOrphanedServersUnix(): Promise<void> {
 		// Use pgrep to find opencode processes with "serve" argument
 		// -f = match against full command line
 		let result: string;
@@ -195,7 +195,7 @@ export class OpenCodeServerManager {
 	/**
 	 * Parse PIDs from wmic CSV output (format: Node,ProcessId)
 	 */
-	private _parsePidsFromCsv(csvOutput: string): number[] {
+	private static _parsePidsFromCsv(csvOutput: string): number[] {
 		const lines = csvOutput
 			.trim()
 			.split('\n')
