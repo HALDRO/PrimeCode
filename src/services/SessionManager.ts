@@ -477,21 +477,23 @@ export class SessionManager {
 	/**
 	 * Stop processing in a specific session
 	 */
-	public stopSession(sessionId: string): boolean {
+	public async stopSession(sessionId: string): Promise<boolean> {
 		const session = this._sessions.get(sessionId);
 		if (!session) return false;
-		return session.stopProcess();
+		return await session.stopProcess();
 	}
 
 	/**
 	 * Stop all processing sessions
 	 */
-	public stopAllSessions(): void {
+	public async stopAllSessions(): Promise<void> {
+		const promises = [];
 		for (const session of this._sessions.values()) {
 			if (session.isProcessing) {
-				session.stopProcess();
+				promises.push(session.stopProcess());
 			}
 		}
+		await Promise.all(promises);
 	}
 
 	// =========================================================================
