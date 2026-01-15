@@ -2,8 +2,8 @@
  * @file ToolGroup - collapsible group of tool messages
  * @description Groups multiple tool messages into a collapsible section when there are
  *              more than one tool call. Shows summary of tool types and counts. Uses CollapsibleSection
- *              for consistent expand/collapse behavior. Only renders tool_use messages -
- *              ToolResultMessage finds related tool_result internally.
+ *              for consistent expand/collapse behavior. Renders tool_use messages and passes
+ *              corresponding tool_result from local messages array to ToolResultMessage.
  *              Auto-expands when tools are running, auto-collapses when model starts
  *              doing something else (text, edit tools, bash, etc).
  */
@@ -12,7 +12,7 @@ import type React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FILE_EDIT_TOOLS, isMcpTool, isToolInList, isToolMatch } from '../../constants';
 import type { Message } from '../../store/chatStore';
-import { useMcpServers, useToolResults } from '../../store/selectors';
+import { useMcpServers } from '../../store/selectors';
 import { CollapsibleSection } from '../ui';
 import { ToolMessage } from './ToolMessage';
 import { ToolResultMessage } from './ToolResultMessage';
@@ -78,28 +78,37 @@ export const ToolGroup: React.FC<ToolGroupProps> = ({ messages, hasFollowingCont
 	const wasRunningRef = useRef(false);
 	const hadFollowingContentRef = useRef(false);
 
-	// Filter to only tool_use messages (ToolResultMessage finds results internally)
+	// Filter to only tool_use messages
 	const toolUseMessages = useMemo(
 		() =>
 			messages.filter(msg => msg.type === 'tool_use') as Extract<Message, { type: 'tool_use' }>[],
 		[messages],
 	);
 
+	// Build a map of toolUseId -> tool_result from local messages array
+	// This works for both active session and context sessions (subtasks)
+	const localToolResults = useMemo(() => {
+		const results: Record<string, Extract<Message, { type: 'tool_result' }> | undefined> = {};
+		for (const msg of messages) {
+			if (msg.type === 'tool_result' && msg.toolUseId) {
+				results[msg.toolUseId] = msg as Extract<Message, { type: 'tool_result' }>;
+			}
+		}
+		return results;
+	}, [messages]);
+
 	// Get tool IDs for checking completion status
 	const toolIds = useMemo(() => toolUseMessages.map(msg => msg.toolUseId), [toolUseMessages]);
 
-	// Get all tool results to check completion status
-	const toolResults = useToolResults(toolIds);
-
-	// Check if any tools are still running (no result yet)
+	// Check if any tools are still running (no result yet in local messages)
 	const hasRunningTools = useMemo(() => {
-		return toolIds.some(id => !toolResults[id]);
-	}, [toolIds, toolResults]);
+		return toolIds.some(id => !localToolResults[id]);
+	}, [toolIds, localToolResults]);
 
 	// Check if any tools have errors
 	const hasErrors = useMemo(() => {
-		return Object.values(toolResults).some(result => result?.isError);
-	}, [toolResults]);
+		return Object.values(localToolResults).some(result => result?.isError);
+	}, [localToolResults]);
 
 	// Auto-expand when tools start running
 	// Auto-collapse when model starts doing something else (text, edit, bash, etc)
@@ -127,8 +136,8 @@ export const ToolGroup: React.FC<ToolGroupProps> = ({ messages, hasFollowingCont
 	const summary = generateSummary(toolCounts);
 
 	// Count completed and errors for status display
-	const completedCount = Object.keys(toolResults).length;
-	const errorCount = Object.values(toolResults).filter(r => r?.isError).length;
+	const completedCount = Object.values(localToolResults).filter(Boolean).length;
+	const errorCount = Object.values(localToolResults).filter(r => r?.isError).length;
 
 	// Single tool - render without grouping
 	if (totalTools <= 1) {
@@ -148,7 +157,7 @@ export const ToolGroup: React.FC<ToolGroupProps> = ({ messages, hasFollowingCont
 						{shouldUseToolMessage(msg.toolName) ? (
 							<ToolMessage message={msg} />
 						) : (
-							<ToolResultMessage message={msg} />
+							<ToolResultMessage message={msg} toolResult={localToolResults[msg.toolUseId]} />
 						)}
 					</div>
 				))}
@@ -202,7 +211,11 @@ export const ToolGroup: React.FC<ToolGroupProps> = ({ messages, hasFollowingCont
 								<ToolMessage message={msg} defaultExpanded={false} />
 							)
 						) : (
-							<ToolResultMessage message={msg} defaultExpanded={false} />
+							<ToolResultMessage
+								message={msg}
+								defaultExpanded={false}
+								toolResult={localToolResults[msg.toolUseId]}
+							/>
 						)}
 					</div>
 				))}

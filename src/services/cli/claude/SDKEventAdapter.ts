@@ -304,6 +304,7 @@ function handleStreamEvent(message: SDKPartialAssistantMessage, sessionId: strin
 			event: message.event, // RawMessageStreamEvent
 			parentToolUseId: message.parent_tool_use_id || undefined,
 		},
+		contextId: message.parent_tool_use_id || undefined,
 	};
 }
 
@@ -317,6 +318,7 @@ function handleToolProgress(message: SDKToolProgressMessage, sessionId: string):
 			parentToolUseId: message.parent_tool_use_id || undefined,
 			elapsedTimeSeconds: message.elapsed_time_seconds,
 		},
+		contextId: message.parent_tool_use_id || undefined,
 	};
 }
 

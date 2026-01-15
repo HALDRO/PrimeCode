@@ -705,7 +705,7 @@ export class OpenCodeService implements ICLIService {
 		const maxReconnectAttempts = 3;
 
 		// Track child sessions (subtasks/subagents) to allow their events through
-		const childSessionIds = new Set<string>();
+		const contextIds = new Set<string>();
 
 		while (reconnectAttempts <= maxReconnectAttempts) {
 			try {
@@ -744,16 +744,16 @@ export class OpenCodeService implements ICLIService {
 								logger.info(
 									`[OpenCodeService] Child session created: ${newSessionId} (parent: ${sessionId})`,
 								);
-								childSessionIds.add(newSessionId);
+								contextIds.add(newSessionId);
 								// Don't filter this event - let it through
 							}
 						}
 
 						// Filter events: allow if matches parent session OR is from a tracked child session
 						const isParentSession = !evSessionID || evSessionID === sessionId;
-						const isChildSession = evSessionID ? childSessionIds.has(evSessionID) : false;
+						const isContextSession = evSessionID ? contextIds.has(evSessionID) : false;
 
-						if (!isParentSession && !isChildSession) {
+						if (!isParentSession && !isContextSession) {
 							continue;
 						}
 
@@ -762,8 +762,8 @@ export class OpenCodeService implements ICLIService {
 						const streamData = OpenCodeEventParser.transformEvent(typedEvent, sessionId);
 						if (streamData) {
 							// For child session events, mark them so UI knows they belong to a subtask
-							if (isChildSession && evSessionID) {
-								streamData.childSessionId = evSessionID;
+							if (isContextSession && evSessionID) {
+								streamData.contextId = evSessionID;
 							}
 							onData(streamData);
 						}

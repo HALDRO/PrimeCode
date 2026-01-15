@@ -335,8 +335,8 @@ export const ConversationMessageSchema = Type.Union([
 		partId: Type.Optional(Type.String()),
 		/** Hide from main flow when nested under subtasks */
 		hidden: Type.Optional(Type.Boolean()),
-		/** Child session ID for subtask messages */
-		childSessionId: Type.Optional(Type.String()),
+		/** Unified context ID (thread ID) */
+		contextId: Type.Optional(Type.String()),
 	}),
 	Type.Object({
 		id: Type.Optional(Type.String()),
@@ -374,8 +374,8 @@ export const ConversationMessageSchema = Type.Union([
 		hidden: Type.Optional(Type.Boolean()),
 		/** Tool metadata from SDK (OpenCode) */
 		metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-		/** Child session ID for subtask tool calls */
-		childSessionId: Type.Optional(Type.String()),
+		/** Unified context ID (thread ID) */
+		contextId: Type.Optional(Type.String()),
 	}),
 	Type.Object({
 		id: Type.Optional(Type.String()),
@@ -404,8 +404,8 @@ export const ConversationMessageSchema = Type.Union([
 		),
 		/** Tool metadata from SDK */
 		metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-		/** Child session ID for subtask tool results */
-		childSessionId: Type.Optional(Type.String()),
+		/** Unified context ID (thread ID) */
+		contextId: Type.Optional(Type.String()),
 	}),
 	Type.Object({
 		id: Type.Optional(Type.String()),
@@ -455,10 +455,11 @@ export const ConversationMessageSchema = Type.Union([
 			Type.Literal('error'),
 			Type.Literal('cancelled'),
 		]),
-		childMessages: Type.Optional(Type.Array(Type.String())),
-		childSessionId: Type.Optional(Type.String()),
+		contextId: Type.Optional(Type.String()),
 		result: Type.Optional(Type.String()),
 		messageID: Type.Optional(Type.String()),
+		/** Archived child messages when subtask completes */
+		transcript: Type.Optional(Type.Array(Type.Any())),
 		startTime: Type.Optional(Type.String()),
 		durationMs: Type.Optional(Type.Number()),
 	}),
@@ -486,8 +487,7 @@ export const SubtaskMessageSchema = Type.Object({
 		Type.Literal('error'),
 		Type.Literal('cancelled'),
 	]),
-	childMessages: Type.Optional(Type.Array(Type.String())),
-	childSessionId: Type.Optional(Type.String()),
+	contextId: Type.Optional(Type.String()),
 	result: Type.Optional(Type.String()),
 	messageID: Type.Optional(Type.String()),
 	transcript: Type.Optional(Type.Array(ConversationMessageSchema)),

@@ -152,10 +152,12 @@ interface ToolResultMessageProps {
 	message: Extract<Message, { type: 'tool_use' }>;
 	/** Whether to expand the result by default */
 	defaultExpanded?: boolean;
+	/** Optional tool result - if provided, skips global selector lookup (used for context sessions) */
+	toolResult?: Extract<Message, { type: 'tool_result' }>;
 }
 
 export const ToolResultMessage: React.FC<ToolResultMessageProps> = React.memo(
-	({ message, defaultExpanded }) => {
+	({ message, defaultExpanded, toolResult: providedToolResult }) => {
 		const { toolName, toolUseId, filePath, rawInput, streamingOutput } = message;
 
 		// Force collapse for Read tool and Bash to avoid wall of text
@@ -170,7 +172,9 @@ export const ToolResultMessage: React.FC<ToolResultMessageProps> = React.memo(
 		const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
 
 		// Optimized selectors - only rerender when specific message changes
-		const toolResult = useToolResultByToolId(toolUseId);
+		// Use provided toolResult if available (for context sessions), otherwise lookup from active session
+		const selectorToolResult = useToolResultByToolId(providedToolResult ? undefined : toolUseId);
+		const toolResult = providedToolResult ?? selectorToolResult;
 		const accessRequest = useAccessRequestByToolId(toolUseId);
 
 		// Extract result data (or defaults for running state)

@@ -671,15 +671,15 @@ function handleSessionCreated(props: Record<string, unknown>, sessionId: string)
 	logger.debug(`[OpenCodeEventParser] Session created: ${createdSession?.id}`);
 
 	if (createdSession.parentID) {
-		// This is a child session for a subtask
+		// This is a context session for a subtask - emit as stream_event with contextId
+		// The contextId will be used by OpenCodeService to track and tag subsequent events
 		return {
-			type: 'child-session-created',
+			type: 'stream_event',
+			subtype: 'context.created',
 			sessionId: createdSession.parentID, // Parent session
-			childSession: {
-				id: createdSession.id,
-				title: createdSession.title,
-				parentID: createdSession.parentID,
-			},
+			contextId: createdSession.id, // The new context ID
+			sessionTitle: createdSession.title,
+			message: { content: [{ type: 'text', text: 'Context session created' }] },
 		};
 	}
 

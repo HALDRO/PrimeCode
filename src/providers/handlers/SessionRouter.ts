@@ -46,29 +46,25 @@ export class SessionRouter {
 
 	/**
 	 * Emit a message event to a session.
-	 * Automatically resolves targetId from childSessionId or sessionId.
+	 * Automatically resolves targetId from contextId or sessionId.
 	 *
 	 * @param sessionId - Parent session ID (used for conversation storage)
 	 * @param message - Message data to emit
-	 * @param childSessionId - Optional child session ID (for subtask messages)
+	 * @param contextId - Optional context ID for subtask/subagent messages (routes to separate bucket)
 	 */
-	public emitMessage(
-		sessionId: string,
-		message: SessionMessageData,
-		childSessionId?: string,
-	): void {
+	public emitMessage(sessionId: string, message: SessionMessageData, contextId?: string): void {
 		if (!sessionId) {
 			logger.warn('[SessionRouter] emitMessage called without sessionId');
 			return;
 		}
 
-		const targetId = childSessionId || sessionId;
+		const targetId = contextId || sessionId;
 
 		const normalizedMessage: SessionMessageData = {
 			...message,
 			id: message.id || `msg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
 			timestamp: message.timestamp || new Date().toISOString(),
-			childSessionId: childSessionId || undefined,
+			contextId: contextId || undefined,
 		};
 
 		this._deps.postMessage({
@@ -125,7 +121,7 @@ export class SessionRouter {
 		sessionId: string,
 		status: SessionStatus,
 		retryInfo?: SessionStatusPayload['retryInfo'],
-		childSessionId?: string,
+		contextId?: string,
 		statusText?: string,
 		loadingMessage?: string,
 	): void {
@@ -134,10 +130,10 @@ export class SessionRouter {
 			return;
 		}
 
-		const targetId = childSessionId || sessionId;
+		const targetId = contextId || sessionId;
 
-		// Child sessions: only emit idle, don't propagate busy/retry/error to parent UI.
-		if (childSessionId && status !== 'idle') {
+		// Child sessions (contexts): only emit idle, don't propagate busy/retry/error to parent UI.
+		if (contextId && status !== 'idle') {
 			return;
 		}
 
@@ -155,7 +151,7 @@ export class SessionRouter {
 			timestamp: Date.now(),
 		});
 
-		if (!childSessionId) {
+		if (!contextId) {
 			const session = this._sessionManager.getSession(sessionId);
 			if (session) {
 				session.setProcessing(status === 'busy');
@@ -308,19 +304,6 @@ export class SessionRouter {
 
 	public emitSessionCleared(sessionId: string): void {
 		this.emitLifecycle('cleared', sessionId);
-	}
-
-	public emitChildSessionCreated(
-		parentSessionId: string,
-		childSession: { id: string; parentId?: string },
-	): void {
-		if (!parentSessionId) return;
-		this._deps.postMessage({
-			type: 'session_lifecycle',
-			action: 'created' as SessionLifecycleAction,
-			sessionId: childSession.id,
-			parentId: parentSessionId,
-		});
 	}
 
 	public emitSessionInfo(

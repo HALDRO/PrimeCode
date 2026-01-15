@@ -817,13 +817,17 @@ export class SessionContext {
 			);
 			if (existingIdx !== -1) {
 				// Update existing subtask message (e.g., status change from running to completed)
+				const existingMsg = this._conversationMessages[existingIdx] as {
+					contextId?: string;
+				};
+				const updateMsg = message as { contextId?: string };
+				// Preserve contextId if already linked
+				const contextId = existingMsg.contextId || updateMsg.contextId;
+
 				this._conversationMessages[existingIdx] = {
 					...this._conversationMessages[existingIdx],
 					...message,
-					// Preserve childSessionId if already linked
-					childSessionId:
-						(this._conversationMessages[existingIdx] as { childSessionId?: string })
-							.childSessionId || (message as { childSessionId?: string }).childSessionId,
+					contextId,
 					timestamp: new Date().toISOString(),
 				} as ConversationMessage;
 				this._debouncedSaveConversation();
@@ -900,83 +904,10 @@ export class SessionContext {
 
 		this._conversationMessages.push(newMessage);
 
-		// If message has childSessionId, link it to the corresponding subtask's childMessages
-		// This ensures the relationship is persisted and restored correctly
-		const childSessionId = (message as { childSessionId?: string }).childSessionId;
-		if (childSessionId && newMessage.id) {
-			this._linkMessageToSubtask(newMessage.id, childSessionId);
-		}
-
 		void this._debouncedSaveConversation();
 
 		// Notify SessionManager to persist state to globalState
 		this._callbacks.onStateChanged?.(this.uiSessionId);
-	}
-
-	/**
-	 * Link a message to a subtask by childSessionId.
-	 * Finds the subtask with matching childSessionId and adds the message ID to its childMessages array.
-	 */
-	private _linkMessageToSubtask(messageId: string, childSessionId: string): void {
-		const subtaskIdx = this._conversationMessages.findIndex(
-			m =>
-				m.type === 'subtask' &&
-				(m as { childSessionId?: string }).childSessionId === childSessionId,
-		);
-
-		if (subtaskIdx !== -1) {
-			const subtask = this._conversationMessages[subtaskIdx] as ConversationMessage & {
-				childMessages?: string[];
-			};
-
-			// Avoid duplicates
-			if (!subtask.childMessages?.includes(messageId)) {
-				this._conversationMessages[subtaskIdx] = {
-					...subtask,
-					childMessages: [...(subtask.childMessages || []), messageId],
-				} as ConversationMessage;
-			}
-		}
-	}
-
-	/**
-	 * Link a child session ID to the most recent running subtask without a childSessionId.
-	 * Called when child-session-created event is received.
-	 */
-	public linkChildSessionToSubtask(childSessionId: string): void {
-		// Find the most recent running subtask without a childSessionId
-		const subtaskIdx = (() => {
-			for (let i = this._conversationMessages.length - 1; i >= 0; i--) {
-				const m = this._conversationMessages[i] as {
-					type?: string;
-					status?: string;
-					childSessionId?: string;
-				};
-				if (m.type === 'subtask' && m.status === 'running' && !m.childSessionId) {
-					return i;
-				}
-			}
-			return -1;
-		})();
-
-		if (subtaskIdx !== -1) {
-			const subtask = this._conversationMessages[subtaskIdx];
-			this._conversationMessages[subtaskIdx] = {
-				...subtask,
-				childSessionId,
-			} as ConversationMessage;
-
-			logger.debug(
-				`[SessionContext] Linked childSessionId ${childSessionId} to subtask ${subtask.id}`,
-			);
-
-			void this._debouncedSaveConversation();
-			this._callbacks.onStateChanged?.(this.uiSessionId);
-		} else {
-			logger.warn(
-				`[SessionContext] No running subtask found to link childSessionId ${childSessionId}`,
-			);
-		}
 	}
 
 	/**
@@ -1260,8 +1191,7 @@ export class SessionContext {
 		try {
 			const data = await this._conversationService.loadConversation(this._conversationFilename);
 			if (data?.messages) {
-				// Mark all unresolved access_request messages as resolved
-				// They are stale after extension reload - user must re-trigger if needed
+				// Process messages: mark stale access_request as resolved, fix streaming state
 				this._conversationMessages = data.messages.map(msg => {
 					// Mark all unresolved access_request messages as resolved
 					if (msg.type === 'access_request' && !msg.resolved) {
@@ -1269,8 +1199,6 @@ export class SessionContext {
 					}
 					// Ensure no messages are marked as streaming after reload
 					if ('isStreaming' in msg && msg.isStreaming) {
-						// For thinking messages that were interrupted, we can't easily calculate duration
-						// without end time, so just mark as not streaming.
 						return { ...msg, isStreaming: false };
 					}
 					return msg;

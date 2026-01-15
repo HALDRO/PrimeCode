@@ -137,10 +137,8 @@ export interface ChatActions {
 
 	// Subtask actions (active session)
 	startSubtask: (subtask: SubtaskMessage) => void;
-	addChildToSubtask: (subtaskId: string, childMessageId: string) => void;
 	completeSubtask: (subtaskId: string, result?: string) => void;
 	errorSubtask: (subtaskId: string, error: string) => void;
-	linkChildSessionToSubtask: (childSessionId: string, subtaskId: string) => void;
 
 	// Active session revert marker
 	markRevertedFromMessageId: (id: string | null) => void;
@@ -329,8 +327,7 @@ export const useChatStore = create<ChatState>()(
 									status: msgData.status,
 									result: msgData.result,
 									messageID: msgData.messageID,
-									childSessionId: msgData.childSessionId,
-									childMessages: msgData.childMessages,
+									contextId: msgData.contextId,
 									startTime: msgData.startTime,
 									// Thinking fields
 									reasoningTokens: msgData.reasoningTokens,
@@ -1093,27 +1090,6 @@ export const useChatStore = create<ChatState>()(
 					});
 				},
 
-				addChildToSubtask: (subtaskId, childMessageId) => {
-					set(state => {
-						const sid = state.activeSessionId;
-						if (!sid) return state;
-						const session = state.sessionsById[sid];
-						if (!session) return state;
-						const idx = session.messages.findIndex(m => m.id === subtaskId);
-						if (idx === -1) return state;
-						const msg = session.messages[idx];
-						if (msg.type !== 'subtask') return state;
-						if (msg.childMessages?.includes(childMessageId)) return state;
-						const updated = {
-							...msg,
-							childMessages: [...(msg.childMessages || []), childMessageId],
-						};
-						const newMessages = [...session.messages];
-						newMessages[idx] = updated;
-						return updateSessionById(state, sid, s => ({ ...s, messages: newMessages }));
-					});
-				},
-
 				completeSubtask: (subtaskId, result) => {
 					set(state => {
 						const sid = state.activeSessionId;
@@ -1129,18 +1105,18 @@ export const useChatStore = create<ChatState>()(
 							...msg,
 							status: 'completed' as const,
 							result,
-							transcript: msg.childSessionId
-								? (state.sessionsById[msg.childSessionId]?.messages ?? [])
+							transcript: msg.contextId
+								? (state.sessionsById[msg.contextId]?.messages ?? [])
 								: (msg as unknown as { transcript?: Message[] }).transcript,
 							// Child session is archived into transcript; clear it to avoid keeping references.
-							childSessionId: undefined,
+							contextId: undefined,
 						};
 						const newMessages = [...session.messages];
 						newMessages[idx] = updated;
 
-						// Release child session memory after subtask completion.
-						// Keep minimal references (childMessages ids) in the subtask itself.
-						const nextState = msg.childSessionId ? removeSession(state, msg.childSessionId) : state;
+						// Release context session memory after subtask completion.
+						// Messages are archived into transcript field.
+						const nextState = msg.contextId ? removeSession(state, msg.contextId) : state;
 						return updateSessionById(nextState, sid, s => ({ ...s, messages: newMessages }));
 					});
 				},
@@ -1160,36 +1136,18 @@ export const useChatStore = create<ChatState>()(
 							...msg,
 							status: 'error' as const,
 							result: error,
-							transcript: msg.childSessionId
-								? (state.sessionsById[msg.childSessionId]?.messages ?? [])
+							transcript: msg.contextId
+								? (state.sessionsById[msg.contextId]?.messages ?? [])
 								: (msg as unknown as { transcript?: Message[] }).transcript,
 							// Child session is archived into transcript; clear it to avoid keeping references.
-							childSessionId: undefined,
+							contextId: undefined,
 						};
 						const newMessages = [...session.messages];
 						newMessages[idx] = updated;
 
-						// Release child session memory after subtask completion.
-						const nextState = msg.childSessionId ? removeSession(state, msg.childSessionId) : state;
+						// Release context session memory after subtask error.
+						const nextState = msg.contextId ? removeSession(state, msg.contextId) : state;
 						return updateSessionById(nextState, sid, s => ({ ...s, messages: newMessages }));
-					});
-				},
-
-				linkChildSessionToSubtask: (childSessionId, subtaskId) => {
-					set(state => {
-						const sid = state.activeSessionId;
-						if (!sid) return state;
-						const session = state.sessionsById[sid];
-						if (!session) return state;
-						const idx = session.messages.findIndex(m => m.id === subtaskId);
-						if (idx === -1) return state;
-						const msg = session.messages[idx];
-						if (msg.type !== 'subtask') return state;
-
-						const updated = { ...msg, childSessionId };
-						const newMessages = [...session.messages];
-						newMessages[idx] = updated;
-						return updateSessionById(state, sid, s => ({ ...s, messages: newMessages }));
 					});
 				},
 

@@ -47,9 +47,6 @@ interface ToolUseContent {
 // =============================================================================
 
 export class StreamHandler {
-	/** Track created subtasks to avoid duplicate 'running' messages. Maps toolUseId -> startTime */
-	private readonly _createdSubtasks = new Map<string, number>();
-
 	constructor(
 		private readonly _sessionManager: SessionManager,
 		private readonly _deps: StreamHandlerDeps,
@@ -74,7 +71,7 @@ export class StreamHandler {
 			hidden?: boolean;
 			[key: string]: unknown;
 		},
-		childSessionId?: string,
+		contextId?: string,
 	): void {
 		if (!sessionId) {
 			logger.warn('[StreamHandler] _emitMessage called without sessionId');
@@ -93,7 +90,7 @@ export class StreamHandler {
 				isDelta,
 				hidden,
 			},
-			childSessionId,
+			contextId,
 		);
 	}
 
@@ -104,13 +101,13 @@ export class StreamHandler {
 		sessionId: string | undefined,
 		status: 'idle' | 'busy' | 'error' | 'retrying',
 		retryInfo?: { attempt: number; message: string; nextRetryAt?: string },
-		childSessionId?: string,
+		contextId?: string,
 	): void {
 		if (!sessionId) {
 			logger.warn('[StreamHandler] _emitStatus called without sessionId');
 			return;
 		}
-		this._deps.router.emitStatus(sessionId, status, retryInfo, childSessionId);
+		this._deps.router.emitStatus(sessionId, status, retryInfo, contextId);
 	}
 
 	/**
@@ -206,20 +203,6 @@ export class StreamHandler {
 
 			case 'subtask':
 				this._handleSubtask(data, sessionId);
-				break;
-
-			case 'child-session-created':
-				if (data.childSession && sessionId) {
-					// Link childSessionId to the subtask in SessionContext for persistence
-					if (data.childSession.id) {
-						const session = this._sessionManager.getSession(sessionId);
-						if (session) {
-							session.linkChildSessionToSubtask(data.childSession.id);
-						}
-					}
-
-					this._deps.router.emitChildSessionCreated(sessionId, data.childSession);
-				}
 				break;
 
 			case 'session-idle':
@@ -490,9 +473,9 @@ export class StreamHandler {
 		if (!part) return;
 
 		// Log child session events for debugging
-		if (data.childSessionId) {
+		if (data.contextId) {
 			logger.debug(
-				`[StreamHandler] Part update from child session: type=${part.type}, childSessionId=${data.childSessionId}, partId=${part.id}`,
+				`[StreamHandler] Part update from child session: type=${part.type}, contextId=${data.contextId}, partId=${part.id}`,
 			);
 		}
 
@@ -521,7 +504,7 @@ export class StreamHandler {
 
 		const partId = part.id;
 		// Track if this event is from a child session (subtask/subagent)
-		const childSessionId = data.childSessionId;
+		const contextId = data.contextId;
 
 		// Debug: log only non-text parts to reduce spam (text updates come very frequently during streaming)
 		if (part.type !== 'text' || part.tool) {
@@ -569,23 +552,23 @@ export class StreamHandler {
 								content: thinkingContent.trim(),
 								partId: thinkingPartId,
 							},
-							childSessionId,
+							contextId,
 						);
 						session.lastPartContent.set(thinkingPartId, thinkingContent.trim());
 					}
 
 					if (cleanText) {
 						// Pass partId to enable proper streaming merge logic in SessionContext
-						// Include childSessionId if this is from a subtask/subagent
+						// Include contextId if this is from a subtask/subagent
 						this._emitMessage(
 							sessionId,
 							{
 								type: 'assistant',
 								content: cleanText,
 								partId,
-								hidden: !!childSessionId, // Hide from main flow if from child session
+								hidden: !!contextId, // Hide from main flow if from child session
 							},
-							childSessionId,
+							contextId,
 						);
 						session.lastPartContent.set(partId, cleanText);
 					}
@@ -594,7 +577,7 @@ export class StreamHandler {
 
 			case 'reasoning':
 			case 'thinking':
-				this._handlePartThinking(part, sessionId, session, childSessionId);
+				this._handlePartThinking(part, sessionId, session, contextId);
 				break;
 
 			case 'step-finish':
@@ -608,7 +591,7 @@ export class StreamHandler {
 			case 'tool':
 				if (part.tool) {
 					// Always call handler - it will check state internally
-					this._handleOpenCodeToolUse(part, sessionId, childSessionId);
+					this._handleOpenCodeToolUse(part, sessionId, contextId);
 				}
 				break;
 
@@ -622,7 +605,7 @@ export class StreamHandler {
 		part: NonNullable<CLIStreamData['part']>,
 		sessionId?: string,
 		session?: { lastPartContent: Map<string, string> },
-		childSessionId?: string,
+		contextId?: string,
 	): void {
 		if (!part.id || !session) return;
 
@@ -638,7 +621,7 @@ export class StreamHandler {
 			}
 
 			// Start thinking timer if not already started (only for main session)
-			if (fullSession && !childSessionId) {
+			if (fullSession && !contextId) {
 				fullSession.startThinkingTimer(part.id);
 			}
 
@@ -651,7 +634,7 @@ export class StreamHandler {
 			// Pass partId to enable proper streaming merge logic in SessionContext
 			// partId uniquely identifies this thinking block, allowing updates to the same block
 			// while creating new blocks when a different partId arrives
-			// Include childSessionId if this is from a subtask/subagent - webview will route to child session
+			// Include contextId if this is from a subtask/subagent - webview will route to child session
 			this._emitMessage(
 				sessionId,
 				{
@@ -662,7 +645,7 @@ export class StreamHandler {
 					startTime,
 					reasoningTokens,
 				},
-				childSessionId,
+				contextId,
 			);
 			session.lastPartContent.set(`thinking_${part.id}`, formattedThinking);
 		}
@@ -681,7 +664,7 @@ export class StreamHandler {
 			// Pass messageId to correctly track tokens per-message
 			// OpenCode sends different messages with independent cumulative counters
 			const messageId = data.fullMessage?.id;
-			const isChildSession = !!data.childSessionId;
+			const isChildSession = !!data.contextId;
 			this._updateTokenStats(data.message.usage, sessionId, messageId, isChildSession);
 
 			// Count API calls for OpenCode: each unique assistant message with tokens is an API call
@@ -748,9 +731,6 @@ export class StreamHandler {
 			}
 		}
 
-		// Clear subtask tracking to prevent memory leaks from abandoned subtasks
-		this._createdSubtasks.clear();
-
 		// Set status to idle (this also updates backend session state)
 		this._emitStatus(sessionId, 'idle');
 	}
@@ -787,7 +767,7 @@ export class StreamHandler {
 		if (!status?.type) return;
 
 		// Check if this is a child session event (subtask/subagent)
-		const isChildSessionEvent = !!data.childSessionId;
+		const isChildSessionEvent = !!data.contextId;
 
 		logger.debug(
 			`[StreamHandler] Session status: ${status.type}${status.attempt ? ` (attempt ${status.attempt})` : ''}, sessionId=${sessionId}, isChildSession=${isChildSessionEvent}`,
@@ -797,7 +777,7 @@ export class StreamHandler {
 		// Don't propagate busy/retry from child sessions to parent
 		if (isChildSessionEvent) {
 			if (status.type === 'idle') {
-				this._emitStatus(sessionId, 'idle', undefined, data.childSessionId);
+				this._emitStatus(sessionId, 'idle', undefined, data.contextId);
 			}
 			return;
 		}
@@ -1239,57 +1219,33 @@ export class StreamHandler {
 		const status = data.subtask.status || 'running';
 		const subtaskId = data.subtask.id || '';
 
-		// Track start time for duration calculation (same logic as _handleTaskTool for OpenCode)
 		if (status === 'running') {
-			// Skip if we already created this subtask
-			if (this._createdSubtasks.has(subtaskId)) {
-				return;
-			}
-
-			const startTime = Date.now();
-			this._createdSubtasks.set(subtaskId, startTime);
-
-			this._emitMessage(
-				sessionId,
-				{
-					type: 'subtask',
-					id: subtaskId,
-					timestamp: new Date().toISOString(),
-					agent: data.subtask.agent,
-					prompt: data.subtask.prompt,
-					description: data.subtask.description,
-					command: data.subtask.command,
-					status,
-					messageID: data.subtask.messageID,
-					startTime: new Date(startTime).toISOString(),
-				},
-				sessionId,
-			);
+			this._emitMessage(sessionId, {
+				type: 'subtask',
+				id: subtaskId,
+				timestamp: new Date().toISOString(),
+				agent: data.subtask.agent,
+				prompt: data.subtask.prompt,
+				description: data.subtask.description,
+				command: data.subtask.command,
+				status,
+				messageID: data.subtask.messageID,
+				// Link to context if available (Unified Context ID)
+				contextId: data.contextId,
+			});
 		} else if (status === 'completed' || status === 'error') {
-			// Calculate duration from tracked start time
-			const startTime = this._createdSubtasks.get(subtaskId);
-			const durationMs = startTime ? Date.now() - startTime : undefined;
-
-			// Clean up tracking
-			this._createdSubtasks.delete(subtaskId);
-
-			this._emitMessage(
-				sessionId,
-				{
-					type: 'subtask',
-					id: subtaskId,
-					timestamp: new Date().toISOString(),
-					agent: data.subtask.agent,
-					prompt: data.subtask.prompt,
-					description: data.subtask.description,
-					command: data.subtask.command,
-					status,
-					result: data.subtask.result,
-					messageID: data.subtask.messageID,
-					durationMs,
-				},
-				sessionId,
-			);
+			this._emitMessage(sessionId, {
+				type: 'subtask',
+				id: subtaskId,
+				timestamp: new Date().toISOString(),
+				agent: data.subtask.agent,
+				prompt: data.subtask.prompt,
+				description: data.subtask.description,
+				command: data.subtask.command,
+				status,
+				result: data.subtask.result,
+				messageID: data.subtask.messageID,
+			});
 		}
 	}
 
@@ -1324,14 +1280,6 @@ export class StreamHandler {
 
 		// Create subtask only on first pending/running event (avoid duplicates)
 		if (status === 'running' || status === 'pending') {
-			// Skip if we already created this subtask
-			if (this._createdSubtasks.has(toolUseId)) {
-				return;
-			}
-
-			const startTime = Date.now();
-			this._createdSubtasks.set(toolUseId, startTime);
-
 			logger.debug('[StreamHandler] Creating subtask from task tool:', {
 				toolUseId,
 				agent: input?.subagent_type,
@@ -1339,84 +1287,55 @@ export class StreamHandler {
 				status,
 			});
 
-			this._emitMessage(
-				sessionId,
-				{
-					type: 'subtask',
-					id: toolUseId,
-					timestamp: new Date().toISOString(),
-					agent: input?.subagent_type || 'subagent',
-					prompt: input?.prompt || '',
-					description: input?.description || 'Running subtask...',
-					command: input?.command,
-					status: 'running',
-					startTime: new Date(startTime).toISOString(),
-				},
-				sessionId,
-			);
+			this._emitMessage(sessionId, {
+				type: 'subtask',
+				id: toolUseId,
+				timestamp: new Date().toISOString(),
+				agent: input?.subagent_type || 'subagent',
+				prompt: input?.prompt || '',
+				description: input?.description || 'Running subtask...',
+				command: input?.command,
+				status: 'running',
+				// We don't have contextId yet for OpenCode task tool start, it comes later via child-session-created or result metadata
+			});
 		} else if (status === 'completed') {
-			// Calculate duration from tracked start time
-			const startTime = this._createdSubtasks.get(toolUseId);
-			const durationMs = startTime ? Date.now() - startTime : undefined;
-
-			// Clean up tracking
-			this._createdSubtasks.delete(toolUseId);
-
 			const result = state?.output || 'Task completed';
 			logger.debug('[StreamHandler] Completing subtask from task tool:', {
 				toolUseId,
-				durationMs,
 				result: typeof result === 'string' ? result.substring(0, 100) : 'non-string result',
 			});
 
-			this._emitMessage(
-				sessionId,
-				{
-					type: 'subtask',
-					id: toolUseId,
-					timestamp: new Date().toISOString(),
-					agent: input?.subagent_type || 'subagent',
-					prompt: input?.prompt || '',
-					description: input?.description || 'Task completed',
-					status: 'completed',
-					result: typeof result === 'string' ? result : JSON.stringify(result),
-					durationMs,
-				},
-				sessionId,
-			);
+			this._emitMessage(sessionId, {
+				type: 'subtask',
+				id: toolUseId,
+				timestamp: new Date().toISOString(),
+				agent: input?.subagent_type || 'subagent',
+				prompt: input?.prompt || '',
+				description: input?.description || 'Task completed',
+				status: 'completed',
+				result: typeof result === 'string' ? result : JSON.stringify(result),
+			});
 		} else if (status === 'error') {
-			// Calculate duration from tracked start time
-			const startTime = this._createdSubtasks.get(toolUseId);
-			const durationMs = startTime ? Date.now() - startTime : undefined;
-
-			// Clean up tracking
-			this._createdSubtasks.delete(toolUseId);
-
 			const errorMsg = state?.error || 'Task failed';
-			logger.debug('[StreamHandler] Task tool error:', { toolUseId, error: errorMsg, durationMs });
+			logger.debug('[StreamHandler] Task tool error:', { toolUseId, error: errorMsg });
 
-			this._emitMessage(
-				sessionId,
-				{
-					type: 'subtask',
-					id: toolUseId,
-					timestamp: new Date().toISOString(),
-					agent: input?.subagent_type || 'subagent',
-					prompt: input?.prompt || '',
-					description: input?.description || 'Task failed',
-					status: 'error',
-					result: errorMsg,
-					durationMs,
-				},
-				sessionId,
-			);
+			this._emitMessage(sessionId, {
+				type: 'subtask',
+				id: toolUseId,
+				timestamp: new Date().toISOString(),
+				agent: input?.subagent_type || 'subagent',
+				prompt: input?.prompt || '',
+				description: input?.description || 'Task failed',
+				status: 'error',
+				result: errorMsg,
+			});
 		}
 	}
 
 	private _handleOpenCodeToolUse(
 		part: NonNullable<CLIStreamData['part']>,
 		sessionId?: string,
-		childSessionId?: string,
+		contextId?: string,
 	): void {
 		const toolName = part.tool || 'Unknown';
 		const state = part.state;
@@ -1480,7 +1399,7 @@ export class StreamHandler {
 			if (state?.status === 'running' && toolNameLower === 'bash') {
 				logger.debug('[StreamHandler] Bash running state:', {
 					toolUseId,
-					childSessionId,
+					contextId,
 					hasMetadata: !!metadata,
 					metadataOutput: metadata?.output?.substring(0, 100),
 					stateOutput: state?.output?.substring(0, 100),
@@ -1500,9 +1419,9 @@ export class StreamHandler {
 					// Include streaming output for running tools (e.g., Bash)
 					streamingOutput: state?.status === 'running' ? streamingOutput : undefined,
 					isRunning: state?.status === 'running',
-					// Include childSessionId if this is from a subtask/subagent
-					childSessionId,
-					hidden: !!childSessionId, // Hide from main flow if from child session
+					// Include contextId if this is from a subtask/subagent
+					contextId,
+					hidden: !!contextId, // Hide from main flow if from child session
 				},
 				sessionId,
 			);
@@ -1544,7 +1463,7 @@ export class StreamHandler {
 					filePath,
 					sessionId,
 					newContent, // Pass content for token estimation
-					childSessionId,
+					contextId,
 				);
 			}
 		} else if (state?.status === 'error') {
@@ -1556,8 +1475,8 @@ export class StreamHandler {
 					isError: true,
 					toolUseId: part.callID || part.id || '',
 					toolName: toolNameDisplay,
-					childSessionId,
-					hidden: !!childSessionId,
+					contextId,
+					hidden: !!contextId,
 				},
 				sessionId,
 			);
@@ -1572,7 +1491,7 @@ export class StreamHandler {
 		filePath?: string,
 		sessionId?: string,
 		fileContent?: string,
-		childSessionId?: string,
+		contextId?: string,
 	): void {
 		const hiddenTools = ['read', 'write', 'edit', 'todowrite', 'multiedit', 'glob', 'grep'];
 		const isHidden = hiddenTools.includes(toolNameLower);
@@ -1630,9 +1549,9 @@ export class StreamHandler {
 				durationMs,
 				attachments: attachments?.length ? attachments : undefined,
 				metadata: state.metadata,
-				hidden: !!childSessionId,
+				hidden: !!contextId,
 			},
-			childSessionId,
+			contextId,
 		);
 	}
 

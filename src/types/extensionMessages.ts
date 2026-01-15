@@ -91,8 +91,8 @@ export interface SessionMessageData {
 	status?: 'running' | 'completed' | 'error' | 'cancelled';
 	result?: string;
 	messageID?: string;
-	childSessionId?: string;
-	childMessages?: string[];
+	/** Unified context ID (thread ID) for grouping messages */
+	contextId?: string;
 	startTime?: string;
 	reasoningTokens?: number;
 	requestId?: string;

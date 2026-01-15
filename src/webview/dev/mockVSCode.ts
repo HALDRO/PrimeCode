@@ -1265,7 +1265,7 @@ const mockVSCodeApi: VSCodeApi = {
 				userContent.toLowerCase().includes('сабагент')
 			) {
 				const subtaskId = createId('subtask');
-				const childSessionId = createId('child-session');
+				const contextId = createId('context');
 				const toolLsId = createId('t');
 				const toolLsResultId = `${toolLsId}:result`;
 				const toolReadId = createId('t');
@@ -1308,15 +1308,15 @@ const mockVSCodeApi: VSCodeApi = {
 						timestamp: Date.now(),
 						delay: 500,
 					},
-					// 1. Create child session for subtask
+					// 1. Create context session for subtask (lazy creation in store)
 					{
 						type: 'session_lifecycle',
 						action: 'created',
-						sessionId: childSessionId,
-						data: { isChildSession: true, parentSessionId: mockActiveSessionId },
+						sessionId: contextId,
+						data: { isContext: true, parentSessionId: mockActiveSessionId },
 						delay: 100,
 					},
-					// 2. Subtask Start (linked to child session)
+					// 2. Subtask Start (linked to context)
 					{
 						type: 'session_event',
 						targetId: mockActiveSessionId,
@@ -1330,17 +1330,17 @@ const mockVSCodeApi: VSCodeApi = {
 								prompt: 'Analyze src/components/UserProfile.tsx for refactoring opportunities.',
 								description: 'Analyzing component structure...',
 								status: 'running',
-								childSessionId: childSessionId,
+								contextId: contextId,
 								timestamp: new Date().toISOString(),
 							},
 						},
 						timestamp: Date.now(),
 						delay: 800,
 					},
-					// 3. Child session: Thinking 1
+					// 3. Context session: Thinking 1
 					{
 						type: 'session_event',
-						targetId: childSessionId,
+						targetId: contextId,
 						eventType: 'message',
 						payload: {
 							eventType: 'message',
@@ -1358,10 +1358,10 @@ const mockVSCodeApi: VSCodeApi = {
 						timestamp: Date.now(),
 						delay: 400,
 					},
-					// 4. Child session: Tool LS
+					// 4. Context session: Tool LS
 					{
 						type: 'session_event',
-						targetId: childSessionId,
+						targetId: contextId,
 						eventType: 'message',
 						payload: {
 							eventType: 'message',
@@ -1380,7 +1380,7 @@ const mockVSCodeApi: VSCodeApi = {
 					},
 					{
 						type: 'session_event',
-						targetId: childSessionId,
+						targetId: contextId,
 						eventType: 'message',
 						payload: {
 							eventType: 'message',
@@ -1399,10 +1399,10 @@ const mockVSCodeApi: VSCodeApi = {
 						timestamp: Date.now(),
 						delay: 800,
 					},
-					// 5. Child session: Thinking 2
+					// 5. Context session: Thinking 2
 					{
 						type: 'session_event',
-						targetId: childSessionId,
+						targetId: contextId,
 						eventType: 'message',
 						payload: {
 							eventType: 'message',
@@ -1421,10 +1421,10 @@ const mockVSCodeApi: VSCodeApi = {
 						timestamp: Date.now(),
 						delay: 600,
 					},
-					// 6. Child session: Tool Read
+					// 6. Context session: Tool Read
 					{
 						type: 'session_event',
-						targetId: childSessionId,
+						targetId: contextId,
 						eventType: 'message',
 						payload: {
 							eventType: 'message',
@@ -1443,7 +1443,7 @@ const mockVSCodeApi: VSCodeApi = {
 					},
 					{
 						type: 'session_event',
-						targetId: childSessionId,
+						targetId: contextId,
 						eventType: 'message',
 						payload: {
 							eventType: 'message',
@@ -1463,10 +1463,10 @@ const mockVSCodeApi: VSCodeApi = {
 						timestamp: Date.now(),
 						delay: 1000,
 					},
-					// 7. Child session: Thinking 3 (Final Analysis)
+					// 7. Context session: Thinking 3 (Final Analysis)
 					{
 						type: 'session_event',
-						targetId: childSessionId,
+						targetId: contextId,
 						eventType: 'message',
 						payload: {
 							eventType: 'message',
@@ -1500,7 +1500,7 @@ const mockVSCodeApi: VSCodeApi = {
 								status: 'completed',
 								result:
 									'Refactoring plan: Split UserProfile.tsx into Avatar, UserInfo, and Settings.',
-								childSessionId: childSessionId,
+								contextId: contextId,
 								timestamp: new Date().toISOString(),
 							},
 						},

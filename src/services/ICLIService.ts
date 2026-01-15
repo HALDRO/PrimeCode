@@ -284,15 +284,8 @@ export interface CLIStreamData {
 		result?: string;
 	};
 
-	// Child session data (when type === 'child-session-created')
-	childSession?: {
-		id: string;
-		title: string;
-		parentID: string;
-	};
-
-	// Child session ID marker - set when event originates from a child session (subtask/subagent)
-	childSessionId?: string;
+	/** Unified context ID (thread ID) for grouping messages. Used by both Claude and OpenCode. */
+	contextId?: string;
 }
 
 // =============================================================================
