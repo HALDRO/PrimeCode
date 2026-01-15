@@ -357,10 +357,14 @@ export const useChatStore = create<ChatState>()(
 								const newMessages = [...targetSession.messages];
 
 								if (existingIdx !== -1) {
-									// Merge with existing message
+									// Merge with existing message, filtering out undefined values
+									// to prevent overwriting existing fields with undefined
+									const filteredMessage = Object.fromEntries(
+										Object.entries(message).filter(([_, v]) => v !== undefined),
+									);
 									newMessages[existingIdx] = {
 										...newMessages[existingIdx],
-										...message,
+										...filteredMessage,
 										id: newMessages[existingIdx].id,
 									} as Message;
 								} else {

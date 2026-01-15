@@ -54,10 +54,10 @@ export const SubtaskHeader: React.FC<SubtaskHeaderProps> = ({
 			<div className="flex-1 min-w-0 flex flex-col gap-0.5">
 				<div className="flex items-center gap-2">
 					<span className="text-xs font-medium px-1.5 py-0.5 rounded-sm bg-vscode-badge-background text-vscode-badge-foreground whitespace-nowrap">
-						{subtask.agent.toUpperCase()}
+						{(subtask.agent || 'SUBAGENT').toUpperCase()}
 					</span>
 					<span className="text-xs opacity-70 truncate">
-						{isCompleted && subtask.result ? subtask.result : subtask.description}
+						{isCompleted && subtask.result ? subtask.result : subtask.description || 'Running...'}
 					</span>
 				</div>
 				{subtask.command && (

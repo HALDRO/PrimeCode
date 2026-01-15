@@ -4,6 +4,7 @@
  * token statistics, tool usage tracking, thinking/reasoning output, and error processing.
  * All events are routed through SessionRouter for unified handling.
  * Child session (subtask/subagent) events are isolated from parent session state.
+ * When context.created event arrives, links running subtask to child session via contextId.
  */
 
 import { CLIServiceFactory } from '../../services/CLIServiceFactory';
@@ -895,6 +896,58 @@ export class StreamHandler {
 			return;
 		}
 
+		// Handle context.created - child session created for subtask/subagent
+		// This links the running subtask to the new child session context
+		if (data.subtype === 'context.created' && data.contextId && sessionId) {
+			const session = this._sessionManager.getSession(sessionId);
+			const pendingToolUseId = session?.popPendingTaskTool();
+
+			logger.info(
+				`[StreamHandler] Context created: contextId=${data.contextId}, parentSession=${sessionId}, linkedToolUseId=${pendingToolUseId || 'none'}`,
+			);
+
+			// 1. Create session bucket in webview for child session messages
+			this._deps.router.emitSessionCreated(data.contextId, sessionId);
+
+			// 2. Link the subtask to this contextId by updating the subtask message
+			if (pendingToolUseId) {
+				this._emitMessage(sessionId, {
+					type: 'subtask',
+					id: pendingToolUseId,
+					contextId: data.contextId,
+					timestamp: new Date().toISOString(),
+				});
+			}
+
+			return;
+		}
+
+		// Handle context.created - child session created for subtask/subagent
+		// This links the running subtask to the new child session context
+		if (data.subtype === 'context.created' && data.contextId && sessionId) {
+			const session = this._sessionManager.getSession(sessionId);
+			const pendingToolUseId = session?.popPendingTaskTool();
+
+			logger.info(
+				`[StreamHandler] Context created: contextId=${data.contextId}, parentSession=${sessionId}, linkedToolUseId=${pendingToolUseId || 'none'}`,
+			);
+
+			// 1. Create session bucket in webview for child session messages
+			this._deps.router.emitSessionCreated(data.contextId, sessionId);
+
+			// 2. Link the subtask to this contextId by updating the subtask message
+			if (pendingToolUseId) {
+				this._emitMessage(sessionId, {
+					type: 'subtask',
+					id: pendingToolUseId,
+					contextId: data.contextId,
+					timestamp: new Date().toISOString(),
+				});
+			}
+
+			return;
+		}
+
 		const streamEvent = data.streamEvent;
 		if (!streamEvent?.event) {
 			logger.debug('[StreamHandler] stream_event received but no event data');
@@ -1287,6 +1340,10 @@ export class StreamHandler {
 		};
 
 		const status = state?.status;
+		const session = sessionId ? this._sessionManager.getSession(sessionId) : undefined;
+
+		// Check if this subtask was already created (to avoid duplicate emissions)
+		const isAlreadyTracked = session?.isTaskToolTracked(toolUseId) ?? false;
 
 		// Debug: log all task tool events to diagnose why subtasks aren't showing
 		logger.debug('[StreamHandler] _handleTaskTool called:', {
@@ -1296,16 +1353,23 @@ export class StreamHandler {
 			inputKeys: input ? Object.keys(input) : [],
 			agent: input?.subagent_type,
 			description: input?.description?.substring(0, 50),
+			isAlreadyTracked,
 		});
 
-		// Create subtask only on first pending/running event (avoid duplicates)
-		if (status === 'running' || status === 'pending') {
+		// Create subtask only on first pending event (avoid duplicates and contextId overwrites)
+		if (status === 'pending' && !isAlreadyTracked) {
 			logger.debug('[StreamHandler] Creating subtask from task tool:', {
 				toolUseId,
 				agent: input?.subagent_type,
 				description: input?.description,
 				status,
 			});
+
+			// Register this task tool as pending - waiting for child session context
+			// Only do this once on first 'pending' event
+			if (session) {
+				session.pushPendingTaskTool(toolUseId);
+			}
 
 			this._emitMessage(sessionId, {
 				type: 'subtask',
@@ -1316,7 +1380,31 @@ export class StreamHandler {
 				description: input?.description || 'Running subtask...',
 				command: input?.command,
 				status: 'running',
-				// We don't have contextId yet for OpenCode task tool start, it comes later via child-session-created or result metadata
+				// contextId will be set when child-session-created event arrives
+			});
+		} else if (status === 'running' && !isAlreadyTracked) {
+			// First 'running' event (no prior 'pending') - create subtask
+			logger.debug('[StreamHandler] Creating subtask from task tool (first running):', {
+				toolUseId,
+				agent: input?.subagent_type,
+				description: input?.description,
+				status,
+			});
+
+			if (session) {
+				session.pushPendingTaskTool(toolUseId);
+			}
+
+			this._emitMessage(sessionId, {
+				type: 'subtask',
+				id: toolUseId,
+				timestamp: new Date().toISOString(),
+				agent: input?.subagent_type || 'subagent',
+				prompt: input?.prompt || '',
+				description: input?.description || 'Running subtask...',
+				command: input?.command,
+				status: 'running',
+				// contextId will be set when child-session-created event arrives
 			});
 		} else if (status === 'completed') {
 			const result = state?.output || 'Task completed';
@@ -1443,7 +1531,7 @@ export class StreamHandler {
 					contextId,
 					hidden: !!contextId, // Hide from main flow if from child session
 				},
-				sessionId,
+				contextId, // Route to child session bucket if contextId is set
 			);
 
 			if (state?.status === 'completed') {
@@ -1498,7 +1586,7 @@ export class StreamHandler {
 					contextId,
 					hidden: !!contextId,
 				},
-				sessionId,
+				contextId, // Route to child session bucket if contextId is set
 			);
 		}
 	}

@@ -69,7 +69,7 @@ export class SessionRouter {
 			...message,
 			id: message.id || `msg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
 			timestamp: message.timestamp || new Date().toISOString(),
-			contextId: contextId || undefined,
+			contextId: contextId || message.contextId || undefined,
 		};
 
 		this._deps.postMessage({

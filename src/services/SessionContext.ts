@@ -117,6 +117,11 @@ export class SessionContext {
 	/** Track processed API calls to avoid double-counting requestCount (for OpenCode) */
 	private _processedApiCalls: Set<string> = new Set();
 
+	/** Track pending task tool IDs waiting for child session context */
+	private _pendingTaskToolIds: string[] = [];
+	/** Track all task tool IDs that have been created (to avoid duplicate subtask emissions) */
+	private _trackedTaskToolIds: Set<string> = new Set();
+
 	// Backup commits (per-session) - integrated from BackupService
 	private _commits: CommitInfo[] = [];
 	private _changedFiles: ChangedFile[] = [];
@@ -276,6 +281,39 @@ export class SessionContext {
 
 	public get processedApiCalls(): Set<string> {
 		return this._processedApiCalls;
+	}
+
+	/**
+	 * Register a task tool that is waiting for a child session context.
+	 * When context.created arrives, we pop the oldest pending tool to link it.
+	 * Also marks the tool as tracked to prevent duplicate subtask emissions.
+	 */
+	public pushPendingTaskTool(toolUseId: string): void {
+		this._pendingTaskToolIds.push(toolUseId);
+		this._trackedTaskToolIds.add(toolUseId);
+	}
+
+	/**
+	 * Get and remove the oldest pending task tool ID.
+	 * Returns undefined if no pending task tools.
+	 */
+	public popPendingTaskTool(): string | undefined {
+		return this._pendingTaskToolIds.shift();
+	}
+
+	/**
+	 * Check if there are pending task tools waiting for context.
+	 */
+	public hasPendingTaskTools(): boolean {
+		return this._pendingTaskToolIds.length > 0;
+	}
+
+	/**
+	 * Check if a task tool has already been tracked (subtask created).
+	 * Used to prevent duplicate subtask emissions on repeated running events.
+	 */
+	public isTaskToolTracked(toolUseId: string): boolean {
+		return this._trackedTaskToolIds.has(toolUseId);
 	}
 
 	public get lastPartContent(): Map<string, string> {
@@ -1280,6 +1318,8 @@ export class SessionContext {
 		this._processedApiCalls.clear();
 		this._lastPartContent.clear();
 		this._pendingAccess.clear();
+		this._pendingTaskToolIds = [];
+		this._trackedTaskToolIds.clear();
 	}
 
 	/**
@@ -1305,6 +1345,8 @@ export class SessionContext {
 		this._processedApiCalls.clear();
 		this._lastPartContent.clear();
 		this._pendingAccess.clear();
+		this._pendingTaskToolIds = [];
+		this._trackedTaskToolIds.clear();
 		this._commits = [];
 		this._conversationMessages = [];
 	}
