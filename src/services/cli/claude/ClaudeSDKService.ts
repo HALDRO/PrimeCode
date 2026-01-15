@@ -263,7 +263,7 @@ export class ClaudeSDKService implements ICLIService {
 		}
 	}
 
-	public stopProcess(_sessionId?: string): boolean {
+	public async stopProcess(_sessionId?: string): Promise<boolean> {
 		if (this._abortController) {
 			this._abortController.abort();
 			this._abortController = undefined;

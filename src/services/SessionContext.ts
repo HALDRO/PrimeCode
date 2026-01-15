@@ -586,10 +586,10 @@ export class SessionContext {
 	/**
 	 * Stop the running process
 	 */
-	public stopProcess(): boolean {
+	public async stopProcess(): Promise<boolean> {
 		if (!this._cliService) return false;
 
-		const stopped = this._cliService.stopProcess(this._cliSessionId || undefined);
+		const stopped = await this._cliService.stopProcess(this._cliSessionId || undefined);
 		if (stopped) {
 			this._isProcessing = false;
 		}
@@ -1330,7 +1330,7 @@ export class SessionContext {
 		await this._flushPendingSave();
 
 		// Stop any running process
-		this.stopProcess();
+		await this.stopProcess();
 
 		// Dispose only per-session CLI services. Shared services are disposed by CLIServiceFactory.
 		if (this._cliService && this._ownsCliService) {

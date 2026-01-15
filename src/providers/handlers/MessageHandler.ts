@@ -349,13 +349,13 @@ export class MessageHandler {
 		}
 	}
 
-	public stopProcess(sessionId?: string): void {
+	public async stopProcess(sessionId?: string): Promise<void> {
 		const session = sessionId
 			? this._sessionManager.getSession(sessionId)
 			: this._sessionManager.getActiveSession();
 		if (!session) return;
 
-		if (session.stopProcess()) {
+		if (await session.stopProcess()) {
 			// emitStatus handles both UI notification and backend state update
 			this._deps.router.emitStatus(session.uiSessionId, 'idle');
 

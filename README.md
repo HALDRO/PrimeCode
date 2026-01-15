@@ -30,6 +30,11 @@
 
 ---
 
+> [!CAUTION]
+> **Maintenance Notice:** I no longer can maintain or support this project as I have no time, no support and no resources required. If anyone wants to continue development, you are welcome to join as a contributor.
+
+---
+
 ## 💡 Why PrimeCode?
 
 **Problem:** AI CLI assistants (Claude Code, OpenCode, Gemini CLI...) are command-line tools. Working in the terminal is inconvenient: no proper UI, each CLI has its own configuration format, switching between them is painful.
@@ -48,8 +53,6 @@
 │      Claude Code    OpenCode    [Future CLI]        │
 └─────────────────────────────────────────────────────┘
 ```
-
-> ⏱️ **Note:** This project was built in **10 days**. Active support and development are not planned without community support or sponsorship. If you like PrimeCode and want to see it evolve — let us know!
 
 ---
 

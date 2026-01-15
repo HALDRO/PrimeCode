@@ -353,7 +353,7 @@ export interface ICLIService {
 	 * @description For providers that support parallel sessions (OpenCode), callers may
 	 * pass a sessionId to stop only that session's stream.
 	 */
-	stopProcess(sessionId?: string): boolean;
+	stopProcess(sessionId?: string): Promise<boolean>;
 	/**
 	 * Check if a process is running.
 	 * @description For providers that support parallel sessions (OpenCode), callers may

@@ -349,7 +349,7 @@ export class OpenCodeService implements ICLIService {
 		}
 	}
 
-	public stopProcess(sessionId?: string): boolean {
+	public async stopProcess(sessionId?: string): Promise<boolean> {
 		const sid = sessionId || this._currentSessionId;
 		if (!sid) return false;
 
@@ -360,9 +360,11 @@ export class OpenCodeService implements ICLIService {
 			this._abortControllers.delete(sid);
 
 			// Also abort the session on the server to stop generation
-			this.abortSession(sid).catch(error => {
+			try {
+				await this.abortSession(sid);
+			} catch (error) {
 				logger.warn('[OpenCodeService] Failed to abort session on server:', error);
-			});
+			}
 
 			return true;
 		}
