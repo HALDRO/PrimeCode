@@ -22,10 +22,23 @@ const DEFAULT_RETRIES = 2;
 /** Delay multiplier for retry backoff (ms * attempt) */
 const RETRY_DELAY_MS = 3000;
 
+// =============================================================================
+// Types
+// =============================================================================
+
+export interface OpenCodeHandlerDeps {
+	postMessage: (msg: unknown) => void;
+}
+
+// =============================================================================
+// OpenCodeHandler Class
+// =============================================================================
+
 export class OpenCodeHandler {
 	constructor(
 		private readonly _settingsService: SettingsService,
 		private readonly _sessionManager: SessionManager,
+		private readonly _deps: OpenCodeHandlerDeps,
 	) {}
 
 	// =========================================================================
@@ -91,19 +104,16 @@ export class OpenCodeHandler {
 	// Public Methods - Provider Loading
 	// =========================================================================
 
-	public async loadOpenCodeProviders(
-		postMessage: (msg: unknown) => void,
-		providerConfig: string,
-	): Promise<void> {
+	public async loadOpenCodeProviders(providerConfig: string): Promise<void> {
 		if (providerConfig !== 'opencode') {
-			postMessage({
+			this._deps.postMessage({
 				type: 'openCodeProviders',
 				data: { providers: [], config: { isLoading: false } },
 			});
 			return;
 		}
 
-		postMessage({
+		this._deps.postMessage({
 			type: 'openCodeProviders',
 			data: { providers: [], config: { isLoading: true } },
 		});
@@ -202,7 +212,7 @@ export class OpenCodeHandler {
 			const savedModel = this._settingsService.selectedModel;
 			const currentModel = savedModel && savedModel !== 'default' ? savedModel : configData?.model;
 
-			postMessage({
+			this._deps.postMessage({
 				type: 'openCodeProviders',
 				data: {
 					providers,
@@ -219,7 +229,7 @@ export class OpenCodeHandler {
 				`[OpenCodeHandler] Failed to load OpenCode providers: ${errorMessage}`,
 				errorStack ? { stack: errorStack } : undefined,
 			);
-			postMessage({
+			this._deps.postMessage({
 				type: 'openCodeProviders',
 				data: {
 					providers: [],
@@ -232,10 +242,10 @@ export class OpenCodeHandler {
 		}
 	}
 
-	public setOpenCodeModel(model: string, postMessage: (msg: unknown) => void): void {
+	public setOpenCodeModel(model: string): void {
 		logger.info(`[OpenCodeHandler] setOpenCodeModel called with: "${model}"`);
 		this._settingsService.setSelectedModel(model);
-		postMessage({
+		this._deps.postMessage({
 			type: 'openCodeModelSet',
 			data: { model },
 		});
@@ -245,10 +255,9 @@ export class OpenCodeHandler {
 	public async setOpenCodeProviderAuth(
 		providerId: string,
 		apiKey: string,
-		postMessage: (msg: unknown) => void,
 		providerConfig: string,
 	): Promise<void> {
-		postMessage({
+		this._deps.postMessage({
 			type: 'openCodeAuthResult',
 			data: { providerId, isLoading: true },
 		});
@@ -262,7 +271,7 @@ export class OpenCodeHandler {
 
 			const result = await service.setProviderAuth(providerId, apiKey);
 
-			postMessage({
+			this._deps.postMessage({
 				type: 'openCodeAuthResult',
 				data: {
 					providerId,
@@ -273,11 +282,11 @@ export class OpenCodeHandler {
 			});
 
 			if (result.success) {
-				void this.loadOpenCodeProviders(postMessage, providerConfig);
+				void this.loadOpenCodeProviders(providerConfig);
 			}
 		} catch (error) {
 			logger.error('[OpenCodeHandler] Error setting provider auth:', error);
-			postMessage({
+			this._deps.postMessage({
 				type: 'openCodeAuthResult',
 				data: {
 					providerId,
@@ -289,11 +298,7 @@ export class OpenCodeHandler {
 		}
 	}
 
-	public async disconnectOpenCodeProvider(
-		providerId: string,
-		postMessage: (msg: unknown) => void,
-		_providerConfig: string,
-	): Promise<void> {
+	public async disconnectOpenCodeProvider(providerId: string): Promise<void> {
 		try {
 			const service = await this._getReadyService();
 
@@ -304,26 +309,26 @@ export class OpenCodeHandler {
 			const result = await service.disconnectProvider(providerId);
 
 			if (result.success) {
-				postMessage({
+				this._deps.postMessage({
 					type: 'openCodeDisconnectResult',
 					data: { providerId, success: true },
 				});
 				// Send message to remove provider from UI immediately
 				// Don't reload from server - it may have stale cached data
-				postMessage({
+				this._deps.postMessage({
 					type: 'removeOpenCodeProvider',
 					data: { providerId },
 				});
 			} else {
 				logger.warn(`[OpenCodeHandler] Failed to disconnect provider: ${result.error}`);
-				postMessage({
+				this._deps.postMessage({
 					type: 'openCodeDisconnectResult',
 					data: { providerId, success: false, error: result.error },
 				});
 			}
 		} catch (error) {
 			logger.error('[OpenCodeHandler] Error disconnecting provider:', error);
-			postMessage({
+			this._deps.postMessage({
 				type: 'openCodeDisconnectResult',
 				data: {
 					providerId,
@@ -342,10 +347,9 @@ export class OpenCodeHandler {
 			apiKey: string;
 			models?: Array<{ id: string; name: string }>;
 		},
-		postMessage: (msg: unknown) => void,
 		providerConfig: string,
 	): Promise<void> {
-		postMessage({
+		this._deps.postMessage({
 			type: 'openCodeCustomProviderResult',
 			data: { providerId: config.id, isLoading: true },
 		});
@@ -359,7 +363,7 @@ export class OpenCodeHandler {
 
 			const result = await service.addCustomProvider(config);
 
-			postMessage({
+			this._deps.postMessage({
 				type: 'openCodeCustomProviderResult',
 				data: {
 					providerId: config.id,
@@ -370,11 +374,11 @@ export class OpenCodeHandler {
 			});
 
 			if (result.success) {
-				void this.loadOpenCodeProviders(postMessage, providerConfig);
+				void this.loadOpenCodeProviders(providerConfig);
 			}
 		} catch (error) {
 			logger.error('[OpenCodeHandler] Error adding custom provider:', error);
-			postMessage({
+			this._deps.postMessage({
 				type: 'openCodeCustomProviderResult',
 				data: {
 					providerId: config.id,
@@ -386,13 +390,10 @@ export class OpenCodeHandler {
 		}
 	}
 
-	public async loadAvailableProviders(
-		postMessage: (msg: unknown) => void,
-		providerConfig: string,
-	): Promise<void> {
+	public async loadAvailableProviders(providerConfig: string): Promise<void> {
 		// Only load available providers for OpenCode CLI
 		if (providerConfig !== 'opencode') {
-			postMessage({
+			this._deps.postMessage({
 				type: 'availableProviders',
 				data: { providers: [] },
 			});
@@ -407,7 +408,7 @@ export class OpenCodeHandler {
 			);
 
 			if (!service.getAvailableProviders) {
-				postMessage({
+				this._deps.postMessage({
 					type: 'availableProviders',
 					data: { providers: [] },
 				});
@@ -423,25 +424,22 @@ export class OpenCodeHandler {
 				`[OpenCodeHandler] loadAvailableProviders: got ${providers?.length ?? 0} providers`,
 			);
 
-			postMessage({
+			this._deps.postMessage({
 				type: 'availableProviders',
 				data: { providers: providers || [] },
 			});
 		} catch (error) {
 			logger.error('[OpenCodeHandler] Error loading available providers:', error);
-			postMessage({
+			this._deps.postMessage({
 				type: 'availableProviders',
 				data: { providers: [], error: error instanceof Error ? error.message : 'Unknown error' },
 			});
 		}
 	}
 
-	public async loadOpenCodeMcpStatus(
-		postMessage: (msg: unknown) => void,
-		providerConfig: string,
-	): Promise<void> {
+	public async loadOpenCodeMcpStatus(providerConfig: string): Promise<void> {
 		if (providerConfig !== 'opencode') {
-			postMessage({ type: 'opencodeMcpStatus', data: {} });
+			this._deps.postMessage({ type: 'opencodeMcpStatus', data: {} });
 			return;
 		}
 
@@ -454,30 +452,26 @@ export class OpenCodeHandler {
 			};
 
 			if (!opencodeService.getMcpStatus) {
-				postMessage({ type: 'opencodeMcpStatus', data: {} });
+				this._deps.postMessage({ type: 'opencodeMcpStatus', data: {} });
 				return;
 			}
 
 			const status = await opencodeService.getMcpStatus();
-			postMessage({ type: 'opencodeMcpStatus', data: status || {} });
+			this._deps.postMessage({ type: 'opencodeMcpStatus', data: status || {} });
 		} catch (error) {
 			logger.warn('[OpenCodeHandler] Failed to load OpenCode MCP status:', error);
-			postMessage({ type: 'opencodeMcpStatus', data: {} });
+			this._deps.postMessage({ type: 'opencodeMcpStatus', data: {} });
 		}
 	}
 
-	public async startMcpAuth(
-		name: string,
-		postMessage: (msg: unknown) => void,
-		providerConfig: string,
-	): Promise<void> {
+	public async startMcpAuth(name: string, providerConfig: string): Promise<void> {
 		if (providerConfig !== 'opencode') return;
 
 		try {
 			const service = await this._getReadyService();
 
 			if (!service.startMcpAuth) {
-				postMessage({
+				this._deps.postMessage({
 					type: 'opencodeMcpAuthError',
 					data: { name, error: 'MCP auth not supported by current OpenCode service' },
 				});
@@ -486,19 +480,19 @@ export class OpenCodeHandler {
 
 			const result = await service.startMcpAuth(name);
 			if (!result.success || !result.authorizationUrl) {
-				postMessage({
+				this._deps.postMessage({
 					type: 'opencodeMcpAuthError',
 					data: { name, error: result.error || 'Failed to start OAuth' },
 				});
 				return;
 			}
 
-			postMessage({
+			this._deps.postMessage({
 				type: 'opencodeMcpAuthStarted',
 				data: { name, authorizationUrl: result.authorizationUrl },
 			});
 		} catch (error) {
-			postMessage({
+			this._deps.postMessage({
 				type: 'opencodeMcpAuthError',
 				data: { name, error: error instanceof Error ? error.message : 'Unknown error' },
 			});

@@ -2,6 +2,7 @@
  * @file AccessHandler
  * @description Manages access requests and responses for both Claude CLI and OpenCode providers.
  * Handles pending access state, access request callbacks, and response routing to CLI services.
+ * Uses unified SessionRouter for all message dispatching.
  *
  * Architecture note: AccessHandler is responsible ONLY for access_request messages.
  * tool_use messages are created by StreamHandler. When permission is required BEFORE
@@ -15,14 +16,14 @@ import type { CLIStreamData } from '../../services/ICLIService';
 import type { SessionManager } from '../../services/SessionManager';
 import type { AccessRequest } from '../../types';
 import { logger } from '../../utils/logger';
+import type { SessionRouter } from './SessionRouter';
 
 // =============================================================================
 // Types
 // =============================================================================
 
 export interface AccessHandlerDeps {
-	postMessage: (msg: unknown) => void;
-	sendAndSaveMessage: (msg: { type: string; [key: string]: unknown }, sessionId?: string) => void;
+	router: SessionRouter;
 }
 
 interface PendingAccess {
@@ -104,17 +105,15 @@ export class AccessHandler {
 				uiSessionId: session?.uiSessionId,
 			});
 
-			this._deps.sendAndSaveMessage(
-				{
-					type: 'tool_use',
-					toolName,
-					toolUseId,
-					toolInput: access.title || '',
-					rawInput: access.metadata || {},
-					filePath: access.metadata?.file_path || access.metadata?.filePath,
-				},
-				session?.uiSessionId,
-			);
+			this._deps.router.emitMessage(session?.uiSessionId || '', {
+				id: toolUseId,
+				type: 'tool_use',
+				toolName,
+				toolUseId,
+				toolInput: access.title || '',
+				rawInput: access.metadata || {},
+				filePath: (access.metadata?.file_path || access.metadata?.filePath) as string | undefined,
+			});
 		}
 
 		// Always create access_request (it will be deduplicated by requestId if needed)
@@ -124,18 +123,16 @@ export class AccessHandler {
 			uiSessionId: session?.uiSessionId,
 		});
 
-		this._deps.sendAndSaveMessage(
-			{
-				type: 'access_request',
-				requestId: access.id,
-				toolUseId,
-				tool: toolName,
-				input: access.metadata,
-				pattern: Array.isArray(access.pattern) ? access.pattern.join(', ') : access.pattern,
-				timestamp: new Date(access.time.created).toISOString(),
-			},
-			session?.uiSessionId,
-		);
+		this._deps.router.emitMessage(session?.uiSessionId || '', {
+			id: access.id,
+			type: 'access_request',
+			requestId: access.id,
+			toolUseId,
+			tool: toolName,
+			input: access.metadata,
+			pattern: Array.isArray(access.pattern) ? access.pattern.join(', ') : access.pattern,
+			timestamp: new Date(access.time.created).toISOString(),
+		});
 	}
 
 	/**
@@ -159,18 +156,16 @@ export class AccessHandler {
 			pattern = this._accessService.getCommandPattern(request.input.command);
 		}
 
-		this._deps.sendAndSaveMessage(
-			{
-				type: 'access_request',
-				requestId: request.id,
-				toolUseId: request.toolUseId,
-				tool: request.tool,
-				input: request.input,
-				pattern,
-				timestamp: request.timestamp,
-			},
-			request.sessionId,
-		);
+		this._deps.router.emitMessage(request.sessionId || '', {
+			id: request.id,
+			type: 'access_request',
+			requestId: request.id,
+			toolUseId: request.toolUseId,
+			tool: request.tool,
+			input: request.input,
+			pattern,
+			timestamp: request.timestamp,
+		});
 	}
 
 	public handleAccessResponse(
@@ -202,11 +197,15 @@ export class AccessHandler {
 			this._accessService.resolveAccessRequest(id, approved);
 		}
 
-		// accessResponse is a UI-only message, use postMessage directly
-		this._deps.postMessage({
-			type: 'accessResponse',
-			data: { id, approved, alwaysAllow },
-		});
+		// accessResponse is a UI-only notification
+		// Find the session to emit to
+		const session = pendingAccess
+			? this._sessionManager.getSessionByCLISessionId(pendingAccess.sessionId)
+			: this._sessionManager.getActiveSession();
+
+		if (session) {
+			this._deps.router.emitAccessResponse(session.uiSessionId, id, approved, alwaysAllow);
+		}
 
 		if (alwaysAllow && approved && !CLIServiceFactory.isOpenCode()) {
 			// Retrieve request details from service before they are cleared

@@ -2,6 +2,7 @@
  * @file MessageHandler
  * @description Handles sending messages to CLI, building process options, and managing backups/checkpoints.
  *              Processes structured attachments (files, code snippets, images) and formats them for CLI.
+ *              Uses unified SessionRouter for all message dispatching.
  */
 
 import * as crypto from 'node:crypto';
@@ -19,6 +20,7 @@ import type { SettingsService } from '../../services/SettingsService';
 import type { MessageAttachments } from '../../types';
 import { logger } from '../../utils/logger';
 import type { ImageHandler } from './ImageHandler';
+import type { SessionRouter } from './SessionRouter';
 import type { StreamHandler } from './StreamHandler';
 
 // =============================================================================
@@ -26,8 +28,7 @@ import type { StreamHandler } from './StreamHandler';
 // =============================================================================
 
 export interface MessageHandlerDeps {
-	postMessage: (msg: unknown) => void;
-	sendAndSaveMessage: (msg: { type: string; [key: string]: unknown }, sessionId?: string) => void;
+	router: SessionRouter;
 }
 
 interface ProcessOptions {
@@ -84,10 +85,7 @@ export class MessageHandler {
 	): Promise<void> {
 		const resolvedUiSessionId = uiSessionId || this._sessionManager.activeSessionId;
 		if (!resolvedUiSessionId) {
-			this._deps.postMessage({
-				type: 'error',
-				data: { content: 'No active session. Please reload the webview.' },
-			});
+			this._deps.router.emitError('', 'No active session. Please reload the webview.');
 			return;
 		}
 
@@ -145,11 +143,7 @@ export class MessageHandler {
 		if (clearedMessageIds.length > 0) {
 			// Notify UI to remove these messages
 			for (const messageId of clearedMessageIds) {
-				this._deps.postMessage({
-					type: 'messagePartRemoved',
-					data: { messageId, partId: messageId },
-					sessionId: session.uiSessionId,
-				});
+				this._deps.router.emitMessagePartRemoved(session.uiSessionId, messageId, messageId);
 			}
 			logger.info(
 				`[MessageHandler] Cleared ${clearedMessageIds.length} error/interrupted messages before new message`,
@@ -164,28 +158,18 @@ export class MessageHandler {
 
 		// Clear unrevert state - user is sending a new message, unrevert no longer makes sense
 		session.clearMessagesSnapshot();
-		this._deps.postMessage({
-			type: 'unrevertAvailable',
-			data: { sessionId: session.uiSessionId, available: false },
-			sessionId: session.uiSessionId,
-		});
+		this._deps.router.emitUnrevertAvailable(session.uiSessionId, false);
 
 		const messageId = crypto.randomUUID();
 
-		this._deps.sendAndSaveMessage(
-			{
-				id: messageId,
-				type: 'user',
-				content: message,
-				model: this._settingsService.selectedModel,
-				attachments: attachments,
-			},
-			session.uiSessionId,
-		);
-		this._deps.postMessage({
-			type: 'setProcessing',
-			data: { isProcessing: true, sessionId: session.uiSessionId },
+		this._deps.router.emitMessage(session.uiSessionId, {
+			id: messageId,
+			type: 'user',
+			content: message,
+			model: this._settingsService.selectedModel,
+			metadata: attachments ? { attachments } : undefined,
 		});
+		this._deps.router.emitStatus(session.uiSessionId, 'busy');
 
 		session.setDraftMessage('');
 
@@ -194,11 +178,7 @@ export class MessageHandler {
 		}
 
 		const providerName = isOpenCode ? 'OpenCode' : 'Claude';
-		this._deps.postMessage({
-			type: 'loading',
-			data: `${providerName} is working...`,
-			sessionId: session.uiSessionId,
-		});
+		this._deps.router.emitLoading(session.uiSessionId, true, `${providerName} is working...`);
 
 		try {
 			// Ensure we have the correct service type based on configuration
@@ -327,10 +307,7 @@ export class MessageHandler {
 
 				// Persist the checkpoint in the session
 				session.addCommit(checkpointInfo);
-				this._deps.sendAndSaveMessage(
-					{ type: 'showRestoreOption', data: checkpointInfo },
-					session.uiSessionId,
-				);
+				this._deps.router.emitRestoreOption(session.uiSessionId, checkpointInfo);
 			} else {
 				// First message: create a git-based checkpoint.
 				// This does not revert OpenCode's internal conversation, but it restores workspace files
@@ -338,10 +315,7 @@ export class MessageHandler {
 				try {
 					const commitInfo = await session.createBackupCommit(message, messageId);
 					if (commitInfo) {
-						this._deps.sendAndSaveMessage(
-							{ type: 'showRestoreOption', data: commitInfo },
-							session.uiSessionId,
-						);
+						this._deps.router.emitRestoreOption(session.uiSessionId, commitInfo);
 					}
 				} catch (e) {
 					const gitError =
@@ -361,10 +335,7 @@ export class MessageHandler {
 		try {
 			const commitInfo = await session.createBackupCommit(message, messageId);
 			if (commitInfo) {
-				this._deps.sendAndSaveMessage(
-					{ type: 'showRestoreOption', data: commitInfo },
-					session.uiSessionId,
-				);
+				this._deps.router.emitRestoreOption(session.uiSessionId, commitInfo);
 			}
 		} catch (e) {
 			const gitError =
@@ -385,26 +356,17 @@ export class MessageHandler {
 		if (!session) return;
 
 		if (session.stopProcess()) {
-			session.setProcessing(false);
-			this._deps.postMessage({
-				type: 'setProcessing',
-				data: { isProcessing: false, sessionId: session.uiSessionId },
-			});
-			this._deps.postMessage({ type: 'clearLoading', sessionId: session.uiSessionId });
+			// emitStatus handles both UI notification and backend state update
+			this._deps.router.emitStatus(session.uiSessionId, 'idle');
 
 			const interruptedId = crypto.randomUUID();
-			this._deps.sendAndSaveMessage(
-				{
-					type: 'interrupted',
-					data: {
-						id: interruptedId,
-						timestamp: new Date().toISOString(),
-						content: 'Processing was stopped by user',
-						reason: 'user_stopped',
-					},
-				},
-				session.uiSessionId,
-			);
+			this._deps.router.emitMessage(session.uiSessionId, {
+				id: interruptedId,
+				type: 'interrupted',
+				content: 'Processing was stopped by user',
+				reason: 'user_stopped',
+				timestamp: new Date().toISOString(),
+			});
 		}
 	}
 
@@ -455,6 +417,8 @@ export class MessageHandler {
 			logger.info(
 				`[MessageHandler] Dismissed error message ${messageId} from session ${uiSessionId}`,
 			);
+			// Notify UI to remove the message
+			this._deps.router.emitMessagePartRemoved(uiSessionId, messageId, messageId);
 		} else {
 			logger.warn(`[MessageHandler] Message ${messageId} not found in session ${uiSessionId}`);
 		}

@@ -1,8 +1,8 @@
 /**
  * @file Extension Message Types
  * @description Typed message definitions for communication between extension and webview.
- * Provides discriminated unions for type-safe message handling on both sides.
- * Replaces loose `{ type: string; data: unknown }` patterns with strict typing.
+ * Uses unified session_event protocol for all session-specific messages.
+ * Global messages (settings, workspace info, etc.) use direct postMessage.
  */
 
 import type {
@@ -30,74 +30,251 @@ interface BaseExtensionMessage<T extends string, D = undefined> {
 }
 
 // =============================================================================
-// Session Messages
+// Unified Session Event Protocol
 // =============================================================================
 
-export type SessionCreatedMessage = BaseExtensionMessage<'sessionCreated', { sessionId: string }>;
-export type SessionClosedMessage = BaseExtensionMessage<'sessionClosed', { sessionId: string }>;
-export type SessionClearedMessage = BaseExtensionMessage<'sessionCleared'>;
-export type SessionSwitchedMessage = BaseExtensionMessage<
-	'sessionSwitched',
-	{
-		sessionId: string;
-		isProcessing?: boolean;
-		totalStats?: TotalStats;
-	}
->;
-export type SessionProcessingCompleteMessage = BaseExtensionMessage<
-	'sessionProcessingComplete',
-	{
-		sessionId: string;
-		code: number | null;
-		stats: TotalStats;
-	}
->;
+export type SessionEventType =
+	| 'message'
+	| 'status'
+	| 'stats'
+	| 'complete'
+	| 'restore'
+	| 'file'
+	| 'access'
+	| 'messages_reload'
+	| 'delete_messages_after'
+	| 'message_removed'
+	| 'session_info'
+	| 'auth'
+	| 'terminal';
+
+export type SessionStatus = 'idle' | 'busy' | 'error' | 'retrying';
+
+export type SessionMessageType =
+	| 'user'
+	| 'assistant'
+	| 'thinking'
+	| 'tool_use'
+	| 'tool_result'
+	| 'error'
+	| 'subtask'
+	| 'access_request'
+	| 'system_notice'
+	| 'interrupted';
+
+export interface SessionMessageData {
+	id: string;
+	type: SessionMessageType;
+	content?: string;
+	partId?: string;
+	isStreaming?: boolean;
+	isDelta?: boolean;
+	hidden?: boolean;
+	timestamp?: string;
+	toolName?: string;
+	toolUseId?: string;
+	toolInput?: string;
+	rawInput?: Record<string, unknown>;
+	filePath?: string;
+	isError?: boolean;
+	isRunning?: boolean;
+	streamingOutput?: string;
+	estimatedTokens?: number;
+	title?: string;
+	durationMs?: number;
+	attachments?: Array<{ id: string; mime: string; filename?: string; url?: string }>;
+	metadata?: Record<string, unknown>;
+	agent?: string;
+	prompt?: string;
+	description?: string;
+	command?: string;
+	status?: 'running' | 'completed' | 'error' | 'cancelled';
+	result?: string;
+	messageID?: string;
+	childSessionId?: string;
+	childMessages?: string[];
+	startTime?: string;
+	reasoningTokens?: number;
+	requestId?: string;
+	tool?: string;
+	input?: Record<string, unknown>;
+	pattern?: string;
+	resolved?: boolean;
+	approved?: boolean;
+	reason?: string;
+	model?: string;
+}
+
+export interface SessionMessagePayload {
+	eventType: 'message';
+	message: SessionMessageData;
+}
+
+export interface SessionStatusPayload {
+	eventType: 'status';
+	status: SessionStatus;
+	/** Optional human-readable UI status text (e.g., "Ready", "Claude is working...") */
+	statusText?: string;
+	/** Optional loading message shown while busy */
+	loadingMessage?: string;
+	retryInfo?: {
+		attempt: number;
+		message: string;
+		nextRetryAt?: string;
+	};
+}
+
+export interface SessionStatsPayload {
+	eventType: 'stats';
+	tokenStats?: Partial<TokenStats>;
+	totalStats?: Partial<TotalStats>;
+}
+
+export interface SessionCompletePayload {
+	eventType: 'complete';
+	partId: string;
+	toolUseId?: string;
+	/** When true, indicates the message/part should be removed from UI */
+	removed?: boolean;
+	/** ID of the message to remove (used with removed: true) */
+	messageId?: string;
+}
+
+export interface SessionRestorePayload {
+	eventType: 'restore';
+	action:
+		| 'add_commit'
+		| 'clear_commits'
+		| 'set_commits'
+		| 'success'
+		| 'error'
+		| 'progress'
+		| 'unrevert_available'
+		| 'restore_input';
+	commit?: CommitInfo;
+	commits?: CommitInfo[];
+	message?: string;
+	canUnrevert?: boolean;
+	available?: boolean;
+	text?: string;
+}
+
+export interface SessionFilePayload {
+	eventType: 'file';
+	action: 'changed' | 'undone' | 'all_undone';
+	filePath?: string;
+	fileName?: string;
+	linesAdded?: number;
+	linesRemoved?: number;
+	toolUseId?: string;
+}
+
+export interface SessionAccessPayload {
+	eventType: 'access';
+	action: 'response';
+	requestId: string;
+	approved: boolean;
+	alwaysAllow?: boolean;
+}
+
+export interface SessionMessagesReloadPayload {
+	eventType: 'messages_reload';
+	messages: SessionMessageData[];
+}
+
+export interface SessionDeleteMessagesAfterPayload {
+	eventType: 'delete_messages_after';
+	messageId: string;
+}
+
+export interface SessionMessageRemovedPayload {
+	eventType: 'message_removed';
+	messageId: string;
+	partId?: string;
+}
 
 export interface SessionInfoData {
 	sessionId: string;
 	tools: string[];
 	mcpServers: string[];
 }
-export type SessionInfoMessage = BaseExtensionMessage<'sessionInfo', SessionInfoData>;
+
+export interface SessionInfoPayload {
+	eventType: 'session_info';
+	data: SessionInfoData;
+}
+
+export interface SessionAuthPayload {
+	eventType: 'auth';
+	action: 'login_required';
+}
+
+export interface SessionTerminalPayload {
+	eventType: 'terminal';
+	action: 'opened';
+	content?: string;
+}
+
+export type SessionEventPayload =
+	| SessionMessagePayload
+	| SessionStatusPayload
+	| SessionStatsPayload
+	| SessionCompletePayload
+	| SessionRestorePayload
+	| SessionFilePayload
+	| SessionAccessPayload
+	| SessionMessagesReloadPayload
+	| SessionDeleteMessagesAfterPayload
+	| SessionMessageRemovedPayload
+	| SessionInfoPayload
+	| SessionAuthPayload
+	| SessionTerminalPayload;
+
+export interface SessionEventMessage {
+	type: 'session_event';
+	targetId: string;
+	eventType: SessionEventType;
+	payload: SessionEventPayload;
+	timestamp: number;
+	sessionId?: string;
+}
+
+export type SessionLifecycleAction = 'created' | 'closed' | 'switched' | 'cleared';
+
+export interface SessionLifecycleMessage {
+	type: 'session_lifecycle';
+	action: SessionLifecycleAction;
+	sessionId: string;
+	parentId?: string;
+	data?: {
+		isProcessing?: boolean;
+		totalStats?: TotalStats;
+		messages?: unknown[];
+	};
+}
 
 // =============================================================================
-// Processing State Messages
+// Helper Type Guards
 // =============================================================================
 
-export type SetProcessingMessage = BaseExtensionMessage<
-	'setProcessing',
-	{ isProcessing: boolean; sessionId?: string }
->;
-export type ReadyMessage = BaseExtensionMessage<'ready', string>;
-export type LoadingMessage = BaseExtensionMessage<'loading', string>;
-export type ClearLoadingMessage = BaseExtensionMessage<'clearLoading'>;
-export type InterruptedMessage = BaseExtensionMessage<
-	'interrupted',
-	{ id?: string; timestamp?: string; content: string; reason?: string }
->;
-export type ErrorMessage = BaseExtensionMessage<
-	'error',
-	{ id?: string; timestamp?: string; content: string }
->;
-export type SessionRetryingMessage = BaseExtensionMessage<
-	'sessionRetrying',
-	{ sessionId: string; attempt: number; message: string; nextRetryAt?: string }
->;
-export type SessionIdleMessage = BaseExtensionMessage<'sessionIdle', { sessionId: string }>;
+export function isSessionEventMessage(message: unknown): message is SessionEventMessage {
+	return (
+		typeof message === 'object' &&
+		message !== null &&
+		(message as { type?: string }).type === 'session_event'
+	);
+}
+
+export function isSessionLifecycleMessage(message: unknown): message is SessionLifecycleMessage {
+	return (
+		typeof message === 'object' &&
+		message !== null &&
+		(message as { type?: string }).type === 'session_lifecycle'
+	);
+}
 
 // =============================================================================
-// Content Messages
-// =============================================================================
-
-export type UserInputMessage = BaseExtensionMessage<
-	'userInput',
-	string | { text: string; messageId: string; model?: string }
->;
-export type OutputMessage = BaseExtensionMessage<'output', string>;
-export type ThinkingMessage = BaseExtensionMessage<'thinking', string>;
-
-// =============================================================================
-// Tool Messages
+// Tool Data Interfaces (used by SessionMessageData)
 // =============================================================================
 
 export interface ToolUseData {
@@ -106,9 +283,7 @@ export interface ToolUseData {
 	toolInput?: string;
 	rawInput?: Record<string, unknown>;
 	filePath?: string;
-	/** Streaming output for running tools (e.g., Bash intermediate output) */
 	streamingOutput?: string;
-	/** Whether the tool is currently running */
 	isRunning?: boolean;
 	parentToolUseId?: string;
 }
@@ -121,86 +296,19 @@ export interface ToolResultData {
 	parentToolUseId?: string;
 	hidden?: boolean;
 	estimatedTokens?: number;
-	/** Human-readable title from SDK (e.g., "Reading file.ts") */
 	title?: string;
-	/** Tool execution time in milliseconds */
 	durationMs?: number;
-	/** Attached files (e.g., screenshots, generated images) */
 	attachments?: Array<{
 		id: string;
 		mime: string;
 		filename?: string;
 		url?: string;
 	}>;
-	/** Tool metadata from SDK */
 	metadata?: Record<string, unknown>;
 }
 
-export type ToolUseMessage = BaseExtensionMessage<'toolUse', ToolUseData>;
-export type ToolResultMessage = BaseExtensionMessage<'toolResult', ToolResultData>;
-
-// Unified message types (new format)
-export type UnifiedUserMessage = BaseExtensionMessage<'user', never> & {
-	content: string;
-	model?: string;
-	id?: string;
-};
-export type UnifiedAssistantMessage = BaseExtensionMessage<'assistant', never> & {
-	content: string;
-	id?: string;
-	partId: string;
-};
-export type UnifiedThinkingMessage = BaseExtensionMessage<'thinking', never> & {
-	content: string;
-	id?: string;
-	partId: string;
-};
-export type UnifiedToolUseMessage = BaseExtensionMessage<'tool_use', never> & ToolUseData;
-export type UnifiedToolResultMessage = BaseExtensionMessage<'tool_result', never> & ToolResultData;
-export type UnifiedAccessRequestMessage = BaseExtensionMessage<'access_request', never> & {
-	requestId: string;
-	tool: string;
-	input: Record<string, unknown>;
-	pattern?: string;
-	timestamp?: string;
-	toolUseId?: string;
-};
-
-export type SystemNoticeMessage = BaseExtensionMessage<'system_notice', never> & {
-	id?: string;
-	timestamp?: string;
-	content?: string;
-};
-
 // =============================================================================
-// Subtask Messages
-// =============================================================================
-
-export type SubtaskExtensionMessage = BaseExtensionMessage<'subtask', never> & {
-	id: string;
-	timestamp: string;
-	agent: string;
-	prompt: string;
-	description: string;
-	command?: string;
-	status: 'running' | 'completed' | 'error' | 'cancelled';
-	childMessages?: string[];
-	childSessionId?: string;
-	result?: string;
-	messageID?: string;
-};
-
-export type ChildSessionCreatedMessage = BaseExtensionMessage<
-	'child-session-created',
-	{
-		id: string;
-		title: string;
-		parentID: string;
-	}
->;
-
-// =============================================================================
-// Access Messages
+// Access Messages (global)
 // =============================================================================
 
 export interface AccessRequestData {
@@ -218,12 +326,10 @@ export interface AccessResponseData {
 	alwaysAllow?: boolean;
 }
 
-export type AccessRequestMessage = BaseExtensionMessage<'accessRequest', AccessRequestData>;
-export type AccessResponseMessage = BaseExtensionMessage<'accessResponse', AccessResponseData>;
 export type AccessDataMessage = BaseExtensionMessage<'accessData', Access>;
 
 // =============================================================================
-// Rule Messages
+// Rule Messages (global)
 // =============================================================================
 
 export type Rule = import('./schemas').Rule;
@@ -233,18 +339,9 @@ export type RuleListMessage = BaseExtensionMessage<
 	{ rules: Rule[]; meta?: { operation?: string; message?: string } }
 >;
 export type RuleUpdatedMessage = BaseExtensionMessage<'ruleUpdated', { rule: Rule }>;
-export type CreateRuleMessage = BaseExtensionMessage<
-	'createRule',
-	{ name: string; content: string }
->;
-export type ToggleRuleMessage = BaseExtensionMessage<
-	'toggleRule',
-	{ path: string; enabled: boolean; source?: 'claude' | 'opencode' }
->;
-export type DeleteRuleMessage = BaseExtensionMessage<'deleteRule', { path: string }>;
 
 // =============================================================================
-// Permissions Messages
+// Permissions Messages (global)
 // =============================================================================
 
 export type PermissionPolicyValue = 'ask' | 'allow' | 'deny';
@@ -259,68 +356,21 @@ export type PermissionsUpdatedMessage = BaseExtensionMessage<
 	{ policies: PermissionPolicies }
 >;
 
-export type UpdateTokensMessage = BaseExtensionMessage<'updateTokens', Partial<TokenStats>>;
-export type UpdateTotalsMessage = BaseExtensionMessage<'updateTotals', Partial<TotalStats>>;
-
 // =============================================================================
-// Restore Messages
+// File Messages (global)
 // =============================================================================
 
-export type ShowRestoreOptionMessage = BaseExtensionMessage<'showRestoreOption', CommitInfo>;
-export type RestoreSuccessMessage = BaseExtensionMessage<
-	'restoreSuccess',
-	{ message: string; commitSha?: string; messageId?: string; canUnrevert?: boolean }
->;
-export type RestoreErrorMessage = BaseExtensionMessage<'restoreError', string>;
-export type RestoreProgressMessage = BaseExtensionMessage<'restoreProgress', string>;
-export type DeleteMessagesAfterMessage = BaseExtensionMessage<
-	'deleteMessagesAfter',
-	{ messageId: string }
->;
-export type ClearRestoreCommitsMessage = BaseExtensionMessage<'clearRestoreCommits'>;
-export type UpdateRestoreCommitsMessage = BaseExtensionMessage<
-	'updateRestoreCommits',
-	CommitInfo[]
->;
-export type RestoreInputTextMessage = BaseExtensionMessage<'restoreInputText', string>;
-export type MessagesReloadedMessage = BaseExtensionMessage<
-	'messagesReloaded',
-	{ messages: unknown[] }
->;
-export type UnrevertAvailableMessage = BaseExtensionMessage<
-	'unrevertAvailable',
-	{ sessionId: string; cliSessionId?: string; available?: boolean }
->;
-
-// =============================================================================
-// File Messages
-// =============================================================================
-
-export interface FileChangedData {
-	filePath: string;
-	changeType: 'created' | 'modified' | 'deleted';
-	linesAdded?: number;
-	linesRemoved?: number;
-	toolUseId?: string;
-}
-
-export type FileChangedMessage = BaseExtensionMessage<'fileChanged', FileChangedData>;
-export type FileChangeUndoneMessage = BaseExtensionMessage<
-	'fileChangeUndone',
-	{ filePath: string }
->;
-export type AllChangesUndoneMessage = BaseExtensionMessage<'allChangesUndone'>;
 export type WorkspaceFilesMessage = BaseExtensionMessage<'workspaceFiles', WorkspaceFile[]>;
 
 // =============================================================================
-// Image Messages
+// Image Messages (global)
 // =============================================================================
 
 export type ImagePathMessage = BaseExtensionMessage<'imagePath', { filePath: string }>;
 export type ImageDataMessage = BaseExtensionMessage<'imageData', unknown>;
 
 // =============================================================================
-// Workspace Messages
+// Workspace Messages (global)
 // =============================================================================
 
 export interface WorkspaceInfoData {
@@ -330,12 +380,10 @@ export interface WorkspaceInfoData {
 export type WorkspaceInfoMessage = BaseExtensionMessage<'workspaceInfo', WorkspaceInfoData>;
 
 // =============================================================================
-// Model & Settings Messages
+// Model & Settings Messages (global)
 // =============================================================================
 
 export type ModelSelectedMessage = BaseExtensionMessage<'modelSelected'> & { model: string };
-export type LoginRequiredMessage = BaseExtensionMessage<'loginRequired'>;
-export type TerminalOpenedMessage = BaseExtensionMessage<'terminalOpened', string>;
 export type SettingsDataMessage = BaseExtensionMessage<'settingsData', Record<string, unknown>>;
 export type PlatformInfoMessage = BaseExtensionMessage<'platformInfo', PlatformInfo>;
 export type ConfigChangedMessage = BaseExtensionMessage<'configChanged', string>;
@@ -376,7 +424,7 @@ export type AnthropicKeyClearedMessage = BaseExtensionMessage<
 >;
 
 // =============================================================================
-// Clipboard Messages
+// Clipboard Messages (global)
 // =============================================================================
 
 export type ClipboardTextMessage = BaseExtensionMessage<'clipboardText', string>;
@@ -394,7 +442,7 @@ export type ClipboardContextNotFoundMessage = BaseExtensionMessage<
 };
 
 // =============================================================================
-// OpenCode Messages
+// OpenCode Messages (global)
 // =============================================================================
 
 export type OpenCodeStatusMessage = BaseExtensionMessage<
@@ -430,7 +478,6 @@ export type AvailableProvidersMessage = BaseExtensionMessage<
 	{ providers: { id: string; name: string }[] }
 >;
 
-// Proxy Provider Messages (for OpenCode CLI integration)
 export type ProxyProviderSavingMessage = BaseExtensionMessage<
 	'proxyProviderSaving',
 	{ isLoading: boolean }
@@ -442,7 +489,7 @@ export type ProxyProviderSavedMessage = BaseExtensionMessage<
 export type ReloadOpenCodeProvidersMessage = BaseExtensionMessage<'reloadOpenCodeProviders'>;
 
 // =============================================================================
-// OpenCode MCP Status Messages
+// OpenCode MCP Status Messages (global)
 // =============================================================================
 
 export type OpenCodeMcpStatus =
@@ -486,7 +533,7 @@ export type McpStatusMessage = BaseExtensionMessage<
 >;
 
 // =============================================================================
-// MCP Marketplace
+// MCP Marketplace (global)
 // =============================================================================
 
 export type McpMarketplaceCatalogMessage = BaseExtensionMessage<
@@ -512,7 +559,7 @@ export type McpInstalledMetadataMessage = BaseExtensionMessage<
 >;
 
 // =============================================================================
-// Agents Config Messages
+// Agents Config Messages (global)
 // =============================================================================
 
 export type AgentsConfigStatusMessage = BaseExtensionMessage<
@@ -532,127 +579,33 @@ export type McpImportResultMessage = BaseExtensionMessage<
 	{ success: boolean; sources?: string[]; backups?: string[]; error?: string; message?: string }
 >;
 
+// =============================================================================
+// Diagnostics & History Messages (global)
+// =============================================================================
+
 export type CliDiagnosticsMessage = BaseExtensionMessage<'cliDiagnostics', unknown>;
 export type ConversationListMessage = BaseExtensionMessage<'conversationList', unknown>;
 export type AllConversationsClearedMessage = BaseExtensionMessage<'allConversationsCleared'>;
 
 // =============================================================================
-// Union of All Extension Messages
+// Prompt Improver Messages (global)
 // =============================================================================
 
-export type ExtensionMessage =
-	| SessionCreatedMessage
-	| SessionClosedMessage
-	| SessionClearedMessage
-	| SessionSwitchedMessage
-	| SessionProcessingCompleteMessage
-	| SessionInfoMessage
-	| SetProcessingMessage
-	| ReadyMessage
-	| LoadingMessage
-	| ClearLoadingMessage
-	| ErrorMessage
-	| InterruptedMessage
-	| SessionRetryingMessage
-	| SessionIdleMessage
-	| UserInputMessage
-	| OutputMessage
-	| UnifiedThinkingMessage
-	| ThinkingMessage
-	| ToolUseMessage
-	| ToolResultMessage
-	| AccessRequestMessage
-	| AccessResponseMessage
-	| AccessDataMessage
-	// Unified message types (new format)
-	| UnifiedUserMessage
-	| UnifiedAssistantMessage
-	| UnifiedToolUseMessage
-	| UnifiedToolResultMessage
-	| UnifiedAccessRequestMessage
-	// System notice message
-	| SystemNoticeMessage
-	// Subtask messages
-	| SubtaskExtensionMessage
-	| ChildSessionCreatedMessage
-	| RuleListMessage
-	| RuleUpdatedMessage
-	| PermissionsUpdatedMessage
-	| UpdateTokensMessage
-	| UpdateTotalsMessage
-	| ShowRestoreOptionMessage
-	| RestoreSuccessMessage
-	| RestoreErrorMessage
-	| RestoreProgressMessage
-	| DeleteMessagesAfterMessage
-	| ClearRestoreCommitsMessage
-	| UpdateRestoreCommitsMessage
-	| RestoreInputTextMessage
-	| MessagesReloadedMessage
-	| UnrevertAvailableMessage
-	| FileChangedMessage
-	| FileChangeUndoneMessage
-	| AllChangesUndoneMessage
-	| WorkspaceFilesMessage
-	| ImagePathMessage
-	| ImageDataMessage
-	| WorkspaceInfoMessage
-	| ModelSelectedMessage
-	| LoginRequiredMessage
-	| TerminalOpenedMessage
-	| SettingsDataMessage
-	| PlatformInfoMessage
-	| ProxyModelsMessage
-	| AnthropicModelsMessage
-	| AnthropicKeyStatusMessage
-	| AnthropicKeySavedMessage
-	| AnthropicKeyClearedMessage
-	| ConfigChangedMessage
-	| ClipboardTextMessage
-	| ClipboardContextMessage
-	| ClipboardContextNotFoundMessage
-	| OpenCodeStatusMessage
-	| OpenCodeProvidersMessage
-	| OpenCodeModelSetMessage
-	| OpenCodeAuthResultMessage
-	| OpenCodeCustomProviderResultMessage
-	| OpenCodeDisconnectResultMessage
-	| RemoveOpenCodeProviderMessage
-	| AvailableProvidersMessage
-	| ProxyProviderSavingMessage
-	| ProxyProviderSavedMessage
-	| ReloadOpenCodeProvidersMessage
-	| OpenCodeMcpStatusMessage
-	| OpenCodeMcpAuthStartedMessage
-	| OpenCodeMcpAuthErrorMessage
-	| McpMarketplaceCatalogMessage
-	| McpMarketplaceInstallResultMessage
-	| McpInstalledMetadataMessage
-	| McpServersMessage
-	| McpServerSavedMessage
-	| McpServerDeletedMessage
-	| McpServerErrorMessage
-	| McpStatusMessage
-	| AgentsConfigStatusMessage
-	| AgentsSyncResultMessage
-	| McpImportResultMessage
-	| CommandsListMessage
-	| SkillsListMessage
-	| HooksListMessage
-	| SubagentsListMessage
-	| CliDiagnosticsMessage
-	| ConversationListMessage
-	| AllConversationsClearedMessage
-	| DiscoveryStatusMessage
-	| McpConfigReloadedMessage
-	| ProjectUpdatedMessage
-	| MessagePartRemovedMessage
-	| ImprovePromptResultMessage
-	| ImprovePromptErrorMessage
-	| ImprovePromptCancelledMessage;
+export type ImprovePromptResultMessage = BaseExtensionMessage<
+	'improvePromptResult',
+	{ requestId: string; improvedText: string }
+>;
+export type ImprovePromptErrorMessage = BaseExtensionMessage<
+	'improvePromptError',
+	{ requestId: string; error: string }
+>;
+export type ImprovePromptCancelledMessage = BaseExtensionMessage<
+	'improvePromptCancelled',
+	{ requestId: string }
+>;
 
 // =============================================================================
-// Commands Messages
+// Commands, Skills, Hooks, Subagents Messages (global)
 // =============================================================================
 
 export type ParsedCommand = import('./schemas').ParsedCommand;
@@ -666,10 +619,6 @@ export type CommandsListMessage = BaseExtensionMessage<
 		meta?: { operation?: string; message?: string };
 	}
 >;
-
-// =============================================================================
-// Skills & Hooks Messages
-// =============================================================================
 
 export type SkillsListMessage = BaseExtensionMessage<
 	'skillsList',
@@ -702,7 +651,7 @@ export type SubagentsListMessage = BaseExtensionMessage<
 >;
 
 // =============================================================================
-// Discovery Messages
+// Discovery & Project Messages (global)
 // =============================================================================
 
 export type DiscoveryStatusMessage = BaseExtensionMessage<
@@ -710,83 +659,92 @@ export type DiscoveryStatusMessage = BaseExtensionMessage<
 	import('./schemas').DiscoveryStatus
 >;
 
-// =============================================================================
-// MCP Config Hot-Reload Messages
-// =============================================================================
-
 export type McpConfigReloadedMessage = BaseExtensionMessage<
 	'mcpConfigReloaded',
 	{ source: 'file-watcher' | 'manual'; timestamp: number }
 >;
-
-// =============================================================================
-// OpenCode Project & Message Events
-// =============================================================================
 
 export type ProjectUpdatedMessage = BaseExtensionMessage<
 	'projectUpdated',
 	import('./schemas').ProjectUpdated
 >;
 
-export type MessagePartRemovedMessage = BaseExtensionMessage<
-	'messagePartRemoved',
-	import('./schemas').MessagePartRemoved
->;
-
 // =============================================================================
-// Prompt Improver Messages
+// Union of All Extension Messages
 // =============================================================================
 
-export type ImprovePromptResultMessage = BaseExtensionMessage<
-	'improvePromptResult',
-	{ requestId: string; improvedText: string }
->;
-export type ImprovePromptErrorMessage = BaseExtensionMessage<
-	'improvePromptError',
-	{ requestId: string; error: string }
->;
-export type ImprovePromptCancelledMessage = BaseExtensionMessage<
-	'improvePromptCancelled',
-	{ requestId: string }
->;
-
-// =============================================================================
-// Helper Type Guards
-// =============================================================================
-
-export function isSessionSpecificMessage(message: { type: string; sessionId?: string }): boolean {
-	const sessionSpecificTypes = new Set([
-		'ready',
-		'loading',
-		'clearLoading',
-		'output',
-		'user',
-		'assistant',
-		'thinking',
-		'error',
-		'interrupted',
-		'sessionRetrying',
-		'sessionIdle',
-		'toolUse',
-		'toolResult',
-		'tool_use',
-		'tool_result',
-		'accessRequest',
-		'accessResponse',
-		'access_request',
-		'subtask',
-		'child-session-created',
-		'updateTokens',
-		'updateTotals',
-		'showRestoreOption',
-		'setProcessing',
-		'fileChanged',
-		'sessionProcessingComplete',
-		'userInput',
-		'messagesReloaded',
-		'sessionInfo',
-		'loginRequired',
-		'terminalOpened',
-	]);
-	return sessionSpecificTypes.has(message.type);
-}
+export type ExtensionMessage =
+	// Session events (unified protocol)
+	| SessionEventMessage
+	| SessionLifecycleMessage
+	// Access messages
+	| AccessDataMessage
+	// Rules & permissions
+	| RuleListMessage
+	| RuleUpdatedMessage
+	| PermissionsUpdatedMessage
+	// Files
+	| WorkspaceFilesMessage
+	| ImagePathMessage
+	| ImageDataMessage
+	| WorkspaceInfoMessage
+	// Model & settings
+	| ModelSelectedMessage
+	| SettingsDataMessage
+	| PlatformInfoMessage
+	| ProxyModelsMessage
+	| AnthropicModelsMessage
+	| AnthropicKeyStatusMessage
+	| AnthropicKeySavedMessage
+	| AnthropicKeyClearedMessage
+	| ConfigChangedMessage
+	// Clipboard
+	| ClipboardTextMessage
+	| ClipboardContextMessage
+	| ClipboardContextNotFoundMessage
+	// OpenCode
+	| OpenCodeStatusMessage
+	| OpenCodeProvidersMessage
+	| OpenCodeModelSetMessage
+	| OpenCodeAuthResultMessage
+	| OpenCodeCustomProviderResultMessage
+	| OpenCodeDisconnectResultMessage
+	| RemoveOpenCodeProviderMessage
+	| AvailableProvidersMessage
+	| ProxyProviderSavingMessage
+	| ProxyProviderSavedMessage
+	| ReloadOpenCodeProvidersMessage
+	// OpenCode MCP
+	| OpenCodeMcpStatusMessage
+	| OpenCodeMcpAuthStartedMessage
+	| OpenCodeMcpAuthErrorMessage
+	// MCP
+	| McpMarketplaceCatalogMessage
+	| McpMarketplaceInstallResultMessage
+	| McpInstalledMetadataMessage
+	| McpServersMessage
+	| McpServerSavedMessage
+	| McpServerDeletedMessage
+	| McpServerErrorMessage
+	| McpStatusMessage
+	// Agents config
+	| AgentsConfigStatusMessage
+	| AgentsSyncResultMessage
+	| McpImportResultMessage
+	// Commands, skills, hooks, subagents
+	| CommandsListMessage
+	| SkillsListMessage
+	| HooksListMessage
+	| SubagentsListMessage
+	// Diagnostics & history
+	| CliDiagnosticsMessage
+	| ConversationListMessage
+	| AllConversationsClearedMessage
+	// Discovery & project
+	| DiscoveryStatusMessage
+	| McpConfigReloadedMessage
+	| ProjectUpdatedMessage
+	// Prompt improver
+	| ImprovePromptResultMessage
+	| ImprovePromptErrorMessage
+	| ImprovePromptCancelledMessage;

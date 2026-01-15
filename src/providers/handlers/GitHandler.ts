@@ -1,21 +1,23 @@
 /**
  * @file GitHandler
  * @description Handles Git operations: diff viewing, undo changes, and copying patches.
- * Uses Dependency Injection pattern for postMessage to maintain consistency with other handlers.
+ * Uses SessionRouter for session-specific file change notifications.
  */
 
 import * as vscode from 'vscode';
 import { ErrorCode, errorService, GitError } from '../../services/ErrorService';
 import type { FileService } from '../../services/FileService';
+import type { SessionManager } from '../../services/SessionManager';
 import { cacheDiffContent } from '../../utils/diffCache';
 import { logger } from '../../utils/logger';
+import type { SessionRouter } from './SessionRouter';
 
 // =============================================================================
 // Types
 // =============================================================================
 
 export interface GitHandlerDeps {
-	postMessage: (msg: unknown) => void;
+	router: SessionRouter;
 }
 
 interface GitChange {
@@ -29,6 +31,7 @@ interface GitChange {
 export class GitHandler {
 	constructor(
 		private readonly _fileService: FileService,
+		private readonly _sessionManager: SessionManager,
 		private readonly _deps: GitHandlerDeps,
 	) {}
 
@@ -92,6 +95,8 @@ export class GitHandler {
 	}
 
 	public async undoFileChanges(filePath: string): Promise<void> {
+		const sessionId = this._sessionManager.activeSessionId || '';
+
 		try {
 			const absolutePath = this._fileService.resolveFilePath(filePath);
 			const uri = vscode.Uri.file(absolutePath);
@@ -100,7 +105,7 @@ export class GitHandler {
 			if (!gitExtension) {
 				logger.info(`[GitHandler] Git extension not found, trying to delete file: ${absolutePath}`);
 				await vscode.workspace.fs.delete(uri, { useTrash: true });
-				this._deps.postMessage({ type: 'fileChangeUndone', data: { filePath } });
+				this._deps.router.emitFileUndone(sessionId, filePath);
 				return;
 			}
 
@@ -110,7 +115,7 @@ export class GitHandler {
 			if (!api || api.repositories.length === 0) {
 				logger.info(`[GitHandler] No Git repository found, trying to delete file: ${absolutePath}`);
 				await vscode.workspace.fs.delete(uri, { useTrash: true });
-				this._deps.postMessage({ type: 'fileChangeUndone', data: { filePath } });
+				this._deps.router.emitFileUndone(sessionId, filePath);
 				return;
 			}
 
@@ -119,7 +124,7 @@ export class GitHandler {
 
 			if (!fileExists) {
 				logger.info(`[GitHandler] File does not exist: ${absolutePath}`);
-				this._deps.postMessage({ type: 'fileChangeUndone', data: { filePath } });
+				this._deps.router.emitFileUndone(sessionId, filePath);
 				return;
 			}
 
@@ -151,7 +156,7 @@ export class GitHandler {
 				}
 			}
 
-			this._deps.postMessage({ type: 'fileChangeUndone', data: { filePath } });
+			this._deps.router.emitFileUndone(sessionId, filePath);
 		} catch (error) {
 			const gitError = new GitError(
 				error instanceof Error ? error.message : String(error),
@@ -159,11 +164,13 @@ export class GitHandler {
 				{ filePath },
 			);
 			errorService.handle(gitError, 'GitHandler.undoFileChanges');
-			this._deps.postMessage({ type: 'error', data: { content: gitError.userMessage } });
+			this._deps.router.emitError(sessionId, gitError.userMessage);
 		}
 	}
 
 	public async undoAllChanges(): Promise<void> {
+		const sessionId = this._sessionManager.activeSessionId || '';
+
 		try {
 			const gitExtension = vscode.extensions.getExtension('vscode.git');
 			if (!gitExtension) {
@@ -206,14 +213,14 @@ export class GitHandler {
 				}
 			}
 
-			this._deps.postMessage({ type: 'allChangesUndone' });
+			this._deps.router.emitAllFilesUndone(sessionId);
 		} catch (error) {
 			const gitError = new GitError(
 				error instanceof Error ? error.message : String(error),
 				ErrorCode.GIT_OPERATION_FAILED,
 			);
 			errorService.handle(gitError, 'GitHandler.undoAllChanges');
-			this._deps.postMessage({ type: 'error', data: { content: gitError.userMessage } });
+			this._deps.router.emitError(sessionId, gitError.userMessage);
 		}
 	}
 

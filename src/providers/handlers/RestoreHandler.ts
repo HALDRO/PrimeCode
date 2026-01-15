@@ -5,6 +5,7 @@
  * for inline editing, only assistant responses after user message are removed from UI.
  * For OpenCode: uses native session.revert() with unrevert support.
  * For Claude CLI: uses git-based restore without unrevert support.
+ * All events routed through SessionRouter for unified handling.
  */
 
 import { CLIServiceFactory } from '../../services/CLIServiceFactory';
@@ -14,14 +15,14 @@ import {
 	convertOpenCodeMessagesToStorage,
 	type OpenCodeMessage,
 } from '../../utils/openCodeAdapter';
+import type { SessionRouter } from './SessionRouter';
 
 // =============================================================================
 // Types
 // =============================================================================
 
 export interface RestoreHandlerDeps {
-	postMessage: (msg: unknown) => void;
-	sendAndSaveMessage: (msg: { type: string; [key: string]: unknown }, sessionId?: string) => void;
+	router: SessionRouter;
 }
 
 // =============================================================================
@@ -66,8 +67,8 @@ export class RestoreHandler {
 						}
 					}
 
-					this._deps.postMessage({ type: 'sessionCleared', sessionId: session.uiSessionId });
-					this._deps.postMessage({ type: 'clearRestoreCommits', sessionId: session.uiSessionId });
+					this._deps.router.emitSessionCleared(session.uiSessionId);
+					this._deps.router.emitRestoreCommits(session.uiSessionId, []);
 				} catch (e) {
 					logger.error(
 						'[RestoreHandler] Failed to fully reset session after first-checkpoint restore:',
@@ -90,32 +91,18 @@ export class RestoreHandler {
 				session.truncateCommitsBeforeUserMessage(commit.associatedMessageId);
 
 				// Tell UI to delete messages after the user message (keep user message for editing)
-				this._deps.postMessage({
-					type: 'deleteMessagesAfter',
-					data: { messageId: commit.associatedMessageId },
-					sessionId: session.uiSessionId,
-				});
+				this._deps.router.emitDeleteMessagesAfter(session.uiSessionId, commit.associatedMessageId);
 			}
 
-			// restoreSuccess is a UI-only message
-			this._deps.postMessage({
-				type: 'restoreSuccess',
-				data: {
-					message: 'Files restored. Click on your message to edit and resend.',
-					commitSha,
-					canUnrevert: false, // Git-based restore doesn't support unrevert
-				},
-				sessionId: session.uiSessionId,
+			this._deps.router.emitRestoreSuccess(session.uiSessionId, {
+				message: 'Files restored. Click on your message to edit and resend.',
+				commitHash: commitSha,
 			});
 
 			// Send updated commits list
-			this._deps.postMessage({
-				type: 'updateRestoreCommits',
-				data: session.commits,
-				sessionId: session.uiSessionId,
-			});
+			this._deps.router.emitRestoreCommits(session.uiSessionId, session.commits);
 		} else {
-			this._deps.postMessage({ type: 'restoreError', data: result.message });
+			this._deps.router.emitRestoreError(session.uiSessionId, result.message || 'Restore failed');
 		}
 	}
 
@@ -142,7 +129,7 @@ export class RestoreHandler {
 	): Promise<void> {
 		const session = this._sessionManager.getSession(sessionId);
 		if (!session) {
-			this._deps.postMessage({ type: 'restoreError', data: 'Session not found', sessionId });
+			this._deps.router.emitRestoreError(sessionId, 'Session not found');
 			return;
 		}
 
@@ -157,30 +144,21 @@ export class RestoreHandler {
 		logger.info(`[RestoreHandler] Checkpoint: associatedMessageId=${effectiveAssociatedMessageId}`);
 
 		if (!session.cliService) {
-			this._deps.postMessage({
-				type: 'restoreError',
-				data: 'CLI service not available for this session',
-				sessionId,
-			});
+			this._deps.router.emitRestoreError(sessionId, 'CLI service not available for this session');
 			return;
 		}
 
 		const cliService = session.cliService;
 
 		if (!cliService.revertToMessage) {
-			this._deps.postMessage({
-				type: 'restoreError',
-				data: 'Native revert not supported for this provider',
+			this._deps.router.emitRestoreError(
 				sessionId,
-			});
+				'Native revert not supported for this provider',
+			);
 			return;
 		}
 
-		this._deps.postMessage({
-			type: 'restoreProgress',
-			data: 'Reverting to checkpoint...',
-			sessionId,
-		});
+		this._deps.router.emitRestoreProgress(sessionId, 'Reverting to checkpoint...');
 
 		try {
 			const effectiveCliSessionId = cliSessionId || session.cliSessionId || sessionId;
@@ -220,48 +198,28 @@ export class RestoreHandler {
 				}
 
 				// Tell UI to delete messages after the user message (keep user message for editing)
-				// This is different from messagesReloaded - we're telling UI to remove specific messages
-				this._deps.postMessage({
-					type: 'deleteMessagesAfter',
-					data: { messageId: effectiveAssociatedMessageId },
-					sessionId,
-				});
+				if (effectiveAssociatedMessageId) {
+					this._deps.router.emitDeleteMessagesAfter(sessionId, effectiveAssociatedMessageId);
+				}
 
-				// restoreSuccess is a UI-only message
-				this._deps.postMessage({
-					type: 'restoreSuccess',
-					data: {
-						message: 'Files restored. Click on your message to edit and resend.',
-						messageId,
-						canUnrevert: true,
-					},
-					sessionId,
+				this._deps.router.emitRestoreSuccess(sessionId, {
+					message: 'Files restored. Click on your message to edit and resend.',
+					commitHash: messageId,
+					associatedMessageId: effectiveAssociatedMessageId,
 				});
 
 				// Notify UI that unrevert is available
-				this._deps.postMessage({
-					type: 'unrevertAvailable',
-					data: { sessionId, cliSessionId: effectiveCliSessionId },
-					sessionId,
-				});
+				this._deps.router.emitUnrevertAvailable(sessionId, true);
 
 				// Send updated commits list
-				this._deps.postMessage({
-					type: 'updateRestoreCommits',
-					data: session.commits,
-					sessionId,
-				});
+				this._deps.router.emitRestoreCommits(sessionId, session.commits);
 			} else {
-				this._deps.postMessage({
-					type: 'restoreError',
-					data: result.error || 'Failed to revert session',
-					sessionId,
-				});
+				this._deps.router.emitRestoreError(sessionId, result.error || 'Failed to revert session');
 			}
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 			logger.error('[RestoreHandler] Revert error:', error);
-			this._deps.postMessage({ type: 'restoreError', data: errorMessage, sessionId });
+			this._deps.router.emitRestoreError(sessionId, errorMessage);
 		}
 	}
 
@@ -272,16 +230,12 @@ export class RestoreHandler {
 	public async unrevert(sessionId: string, cliSessionId?: string): Promise<void> {
 		const session = this._sessionManager.getSession(sessionId);
 		if (!session) {
-			this._deps.postMessage({ type: 'restoreError', data: 'Session not found', sessionId });
+			this._deps.router.emitRestoreError(sessionId, 'Session not found');
 			return;
 		}
 
 		if (!session.cliService) {
-			this._deps.postMessage({
-				type: 'restoreError',
-				data: 'CLI service not available for this session',
-				sessionId,
-			});
+			this._deps.router.emitRestoreError(sessionId, 'CLI service not available for this session');
 			return;
 		}
 
@@ -289,19 +243,11 @@ export class RestoreHandler {
 
 		// Check if unrevert is supported
 		if (!cliService.unrevertSession) {
-			this._deps.postMessage({
-				type: 'restoreError',
-				data: 'Unrevert not supported for this provider',
-				sessionId,
-			});
+			this._deps.router.emitRestoreError(sessionId, 'Unrevert not supported for this provider');
 			return;
 		}
 
-		this._deps.postMessage({
-			type: 'restoreProgress',
-			data: 'Undoing revert...',
-			sessionId,
-		});
+		this._deps.router.emitRestoreProgress(sessionId, 'Undoing revert...');
 
 		try {
 			const effectiveCliSessionId = cliSessionId || session.cliSessionId || sessionId;
@@ -326,11 +272,7 @@ export class RestoreHandler {
 						`[RestoreHandler] Restored ${restoredMessages.length} messages from snapshot after unrevert`,
 					);
 
-					this._deps.postMessage({
-						type: 'messagesReloaded',
-						data: { messages: restoredMessages },
-						sessionId,
-					});
+					this._deps.router.emitMessagesReload(sessionId, restoredMessages);
 				} else {
 					// Fallback: if no snapshot, get messages from OpenCode SDK
 					// Note: This may cause ID mismatch issues with commits
@@ -339,64 +281,30 @@ export class RestoreHandler {
 					const messages = convertOpenCodeMessagesToStorage(rawMessages as OpenCodeMessage[]);
 
 					if (messages.length > 0) {
-						// Filter out duplicates in messages from SDK
-						const uniqueMessages = messages.filter(
-							(msg, index, self) =>
-								index ===
-								self.findIndex(m => {
-									const isSameId = m.id === msg.id && m.type === msg.type;
-									// For types with content, compare content. For others, assume ID/type is enough.
-									if ('content' in m && 'content' in msg) {
-										return isSameId && m.content === msg.content;
-									}
-									return isSameId;
-								}),
-						);
-
-						session.replaceConversationMessages(uniqueMessages);
-						this._deps.postMessage({
-							type: 'messagesReloaded',
-							data: { messages: uniqueMessages },
-							sessionId,
-						});
+						// SessionContext.replaceConversationMessages handles deduplication internally
+						session.replaceConversationMessages(messages);
+						this._deps.router.emitMessagesReload(sessionId, messages);
 					}
 				}
 
-				// restoreSuccess is a UI-only message
-				this._deps.postMessage({
-					type: 'restoreSuccess',
-					data: {
-						message: 'Unrevert successful. Files and messages restored.',
-					},
-					sessionId,
+				this._deps.router.emitRestoreSuccess(sessionId, {
+					message: 'Unrevert successful. Files and messages restored.',
 				});
 
 				// Notify UI that unrevert is no longer available
-				this._deps.postMessage({
-					type: 'unrevertAvailable',
-					data: { sessionId, available: false },
-					sessionId,
-				});
+				this._deps.router.emitUnrevertAvailable(sessionId, false);
 
 				// Send updated commits list to restore the restore buttons
-				this._deps.postMessage({
-					type: 'updateRestoreCommits',
-					data: session.commits,
-					sessionId,
-				});
+				this._deps.router.emitRestoreCommits(sessionId, session.commits);
 
 				logger.info(`[RestoreHandler] Sent ${session.commits.length} commits after unrevert`);
 			} else {
-				this._deps.postMessage({
-					type: 'restoreError',
-					data: result.error || 'Failed to unrevert session',
-					sessionId,
-				});
+				this._deps.router.emitRestoreError(sessionId, result.error || 'Failed to unrevert session');
 			}
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 			logger.error('[RestoreHandler] Unrevert error:', error);
-			this._deps.postMessage({ type: 'restoreError', data: errorMessage, sessionId });
+			this._deps.router.emitRestoreError(sessionId, errorMessage);
 		}
 	}
 }

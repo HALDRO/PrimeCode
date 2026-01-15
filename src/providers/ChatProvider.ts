@@ -6,7 +6,6 @@
  *              Also coordinates MCP config hot-reload and per-session services.
  */
 
-import { randomUUID } from 'node:crypto';
 import * as vscode from 'vscode';
 import { AccessService } from '../services/AccessService';
 import { CLIServiceFactory } from '../services/CLIServiceFactory';
@@ -20,7 +19,7 @@ import { McpMarketplaceService } from '../services/mcp/McpMarketplaceService';
 import { McpMetadataService } from '../services/mcp/McpMetadataService';
 import { SessionManager, type SessionManagerEvents } from '../services/SessionManager';
 import { SettingsService } from '../services/SettingsService';
-import type { CommitInfo, ConversationMessage, WebviewMessage } from '../types';
+import type { CommitInfo, WebviewMessage } from '../types';
 import { logger } from '../utils/logger';
 import { getHtml } from '../utils/webviewHtml';
 import {
@@ -50,6 +49,8 @@ import {
 	type RulesHandlerDeps,
 	SessionHandler,
 	type SessionHandlerDeps,
+	SessionRouter,
+	type SessionRouterDeps,
 	SettingsHandler,
 	type SettingsHandlerDeps,
 	SkillsHandler,
@@ -107,6 +108,9 @@ export class ChatProvider {
 	private readonly _promptImproverHandler: PromptImproverHandler;
 	private readonly _messageRouter: WebviewMessageRouter;
 
+	// Unified Session Router
+	private readonly _sessionRouter: SessionRouter;
+
 	constructor(
 		private readonly _extensionUri: vscode.Uri,
 		readonly _context: vscode.ExtensionContext,
@@ -137,11 +141,14 @@ export class ChatProvider {
 		// Initialize SessionManager
 		this._sessionManager = this._createSessionManager(_context);
 
+		// Initialize SessionRouter (unified event routing)
+		this._sessionRouter = this._createSessionRouter();
+
 		// Initialize handlers
 		this._gitHandler = this._createGitHandler();
 		this._imageHandler = this._createImageHandler();
 		this._diagnosticsHandler = this._createDiagnosticsHandler();
-		this._openCodeHandler = new OpenCodeHandler(this._settingsService, this._sessionManager);
+		this._openCodeHandler = this._createOpenCodeHandler();
 		this._historyHandler = this._createHistoryHandler();
 		this._sessionHandler = this._createSessionHandler();
 		this._settingsHandler = this._createSettingsHandler();
@@ -279,8 +286,8 @@ export class ChatProvider {
 	}
 
 	private _createGitHandler(): GitHandler {
-		const deps: GitHandlerDeps = { postMessage: msg => this._postMessage(msg) };
-		return new GitHandler(this._fileService, deps);
+		const deps: GitHandlerDeps = { router: this._sessionRouter };
+		return new GitHandler(this._fileService, this._sessionManager, deps);
 	}
 
 	private _createImageHandler(): ImageHandler {
@@ -295,16 +302,16 @@ export class ChatProvider {
 
 	private _createHistoryHandler(): HistoryHandler {
 		const deps: HistoryHandlerDeps = {
+			router: this._sessionRouter,
 			postMessage: msg => this._postMessage(msg),
 			sendReadyMessage: () => this._sendReadyMessage(),
-			handleSwitchSession: sid => this._handleSwitchSession(sid),
 		};
 		return new HistoryHandler(this._globalConversationService, this._sessionManager, deps);
 	}
 
 	private _createSessionHandler(): SessionHandler {
 		const deps: SessionHandlerDeps = {
-			postMessage: msg => this._postMessage(msg),
+			router: this._sessionRouter,
 			sendReadyMessage: () => this._sendReadyMessage(),
 			loadConversationHistory: filename => this._historyHandler.loadConversationHistory(filename),
 			getLatestConversation: async () => {
@@ -335,16 +342,14 @@ export class ChatProvider {
 
 	private _createRestoreHandler(): RestoreHandler {
 		const deps: RestoreHandlerDeps = {
-			postMessage: msg => this._postMessage(msg),
-			sendAndSaveMessage: (msg, sid) => this._sendAndSaveMessage(msg, sid),
+			router: this._sessionRouter,
 		};
 		return new RestoreHandler(this._sessionManager, deps);
 	}
 
 	private _createAccessHandler(): AccessHandler {
 		const deps: AccessHandlerDeps = {
-			postMessage: msg => this._postMessage(msg),
-			sendAndSaveMessage: (msg, sid) => this._sendAndSaveMessage(msg, sid),
+			router: this._sessionRouter,
 		};
 		return new AccessHandler(this._sessionManager, this._accessService, deps);
 	}
@@ -387,17 +392,28 @@ export class ChatProvider {
 	}
 
 	private _createPromptImproverHandler(): PromptImproverHandler {
-		return new PromptImproverHandler();
+		return new PromptImproverHandler({ postMessage: msg => this._postMessage(msg) });
+	}
+
+	private _createOpenCodeHandler(): OpenCodeHandler {
+		return new OpenCodeHandler(this._settingsService, this._sessionManager, {
+			postMessage: msg => this._postMessage(msg),
+		});
+	}
+
+	private _createSessionRouter(): SessionRouter {
+		const deps: SessionRouterDeps = {
+			postMessage: msg => this._postMessage(msg),
+		};
+		return new SessionRouter(this._sessionManager, deps);
 	}
 
 	private _createStreamHandler(): StreamHandler {
 		const deps: StreamHandlerDeps = {
-			postMessage: msg => this._postMessage(msg),
-			sendAndSaveMessage: (msg, sid) => this._sendAndSaveMessage(msg, sid),
+			router: this._sessionRouter,
 			createBackup: (msg, mid, sid) => this._messageHandler.createBackup(msg, mid, sid),
 			handleOpenCodeAccess: data => this._accessHandler.handleOpenCodeAccess(data),
 			handleLoginRequired: sid => this._handleLoginRequired(sid),
-			// Coordinate with AccessHandler to prevent duplicate tool_use messages
 			hasToolUseBeenCreated: toolUseId => this._accessHandler.hasToolUseBeenCreated(toolUseId),
 			markToolUseCreated: toolUseId => this._accessHandler.markToolUseCreated(toolUseId),
 		};
@@ -406,8 +422,7 @@ export class ChatProvider {
 
 	private _createMessageHandler(): MessageHandler {
 		const deps: MessageHandlerDeps = {
-			postMessage: msg => this._postMessage(msg),
-			sendAndSaveMessage: (msg, sid) => this._sendAndSaveMessage(msg, sid),
+			router: this._sessionRouter,
 		};
 		return new MessageHandler(
 			this._sessionManager,
@@ -441,7 +456,7 @@ export class ChatProvider {
 			promptImproverHandler: this._promptImproverHandler,
 		};
 		const deps: WebviewMessageRouterDeps = {
-			postMessage: msg => this._postMessage(msg),
+			router: this._sessionRouter,
 			sendReadyMessage: () => this._sendReadyMessage(),
 			handleSwitchSession: sid => this._handleSwitchSession(sid),
 			sendWorkspaceFiles: term => this._sendWorkspaceFilesRipgrep(term),
@@ -459,12 +474,12 @@ export class ChatProvider {
 
 	private _onSessionCreated(sessionId: string): void {
 		logger.info(`[ChatProvider] Session created: ${sessionId}`);
-		this._postMessage({ type: 'sessionCreated', data: { sessionId } });
+		this._sessionRouter.emitSessionCreated(sessionId);
 	}
 
 	private _onSessionClosed(sessionId: string): void {
 		logger.info(`[ChatProvider] Session closed: ${sessionId}`);
-		this._postMessage({ type: 'sessionClosed', data: { sessionId } });
+		this._sessionRouter.emitSessionClosed(sessionId);
 	}
 
 	private _onSessionData(sessionId: string, data: CLIStreamData): void {
@@ -476,28 +491,25 @@ export class ChatProvider {
 
 		const session = this._sessionManager.getSession(sessionId);
 		if (session) {
-			this._postMessage({
-				type: 'sessionProcessingComplete',
-				data: { sessionId, code, stats: session.getStats() },
-			});
+			this._sessionRouter.emitTotalStats(sessionId, session.getStats());
 		}
 
 		if (errorOutput && code !== 0) {
-			this._postMessage({ type: 'error', data: { content: errorOutput }, sessionId });
+			this._sessionRouter.emitError(sessionId, errorOutput);
 		}
 
-		this._postMessage({ type: 'setProcessing', data: { isProcessing: false, sessionId } });
+		this._sessionRouter.emitStatus(sessionId, 'idle');
 	}
 
 	private _onSessionError(sessionId: string, error: Error): void {
 		logger.error(`[ChatProvider] Session ${sessionId} error:`, error);
-		this._postMessage({ type: 'error', data: { content: error.message }, sessionId });
-		this._postMessage({ type: 'setProcessing', data: { isProcessing: false, sessionId } });
+		this._sessionRouter.emitError(sessionId, error.message);
+		this._sessionRouter.emitStatus(sessionId, 'idle');
 	}
 
 	private _onCommitCreated(sessionId: string, commit: CommitInfo): void {
 		logger.info(`[ChatProvider] Commit created for session ${sessionId}: ${commit.sha}`);
-		this._postMessage({ type: 'showRestoreOption', data: commit, sessionId });
+		this._sessionRouter.emitRestoreOption(sessionId, commit);
 	}
 
 	// =========================================================================
@@ -578,88 +590,44 @@ export class ChatProvider {
 		const isProcessing = session.isProcessing;
 
 		// Notify UI about session creation (idempotent on UI side)
-		this._postMessage({ type: 'sessionCreated', data: { sessionId } });
+		this._sessionRouter.emitSessionCreated(sessionId);
 
-		// Explicitly switch to this session to ensure UI is in sync
-		this._postMessage({
-			type: 'sessionSwitched',
-			data: {
-				sessionId,
-				isProcessing,
-				totalStats: {
-					totalCost: session.totalCost,
-					totalTokensInput: session.totalTokensInput,
-					totalTokensOutput: session.totalTokensOutput,
-					totalDuration: session.totalDuration,
-					requestCount: session.requestCount,
-				},
-			},
-		});
-
-		// Replay local conversation history (authoritative source after persistence improvements)
-		if (session.conversationMessages.length > 0) {
-			logger.info(
-				`[ChatProvider] Sending ${session.conversationMessages.length} messages from local history`,
-			);
-
-			// Deduplicate messages before sending to UI to prevent React key conflicts
-			const uniqueMessages = session.conversationMessages.filter(
-				(msg, index, self) =>
-					index ===
-					self.findIndex(m => {
-						// Use specific type guard logic or cast to avoid TS errors with 'content' property on disjoint union
-						const isSameId = m.id === msg.id && m.type === msg.type;
-
-						// For types with content, compare content. For others, assume ID/type is enough.
-						if ('content' in m && 'content' in msg) {
-							return isSameId && m.content === msg.content;
-						}
-
-						return isSameId;
-					}),
-			);
-
-			this._postMessage({
-				type: 'messagesReloaded',
-				data: { messages: uniqueMessages },
-				sessionId,
-			});
-		}
-
-		// Send stats
-		this._postMessage({
-			type: 'updateTotals',
-			data: {
-				totalCost: session.totalCost,
-				totalTokensInput: session.totalTokensInput,
-				totalTokensOutput: session.totalTokensOutput,
-				totalReasoningTokens: session.totalReasoningTokens,
-				totalDuration: session.totalDuration,
-				requestCount: session.requestCount,
-			},
-			sessionId,
+		// Switch to this session to ensure UI is in sync
+		this._sessionRouter.emitSessionSwitched(sessionId, {
+			isProcessing,
+			totalStats: session.getStats(),
+			messages: session.conversationMessages.length > 0 ? session.conversationMessages : undefined,
 		});
 
 		// Restore commits/checkpoints for restore functionality
 		if (session.commits.length > 0) {
-			for (const commit of session.commits) {
-				this._postMessage({ type: 'showRestoreOption', data: commit, sessionId });
-			}
+			this._sessionRouter.emitRestoreCommits(sessionId, session.commits);
 		}
 
 		// Restore changed files for the floating panel
 		if (session.changedFiles.length > 0) {
 			for (const file of session.changedFiles) {
-				this._postMessage({ type: 'fileChanged', data: file, sessionId });
+				this._sessionRouter.emitFileChanged(sessionId, {
+					filePath: file.filePath,
+					fileName: file.fileName,
+					linesAdded: file.linesAdded,
+					linesRemoved: file.linesRemoved,
+					toolUseId: file.toolUseId,
+				});
 			}
 		}
 
-		this._postMessage({
-			type: 'ready',
-			data: isProcessing
+		// Ready/initial status is now delivered via session_event status.
+		this._sessionRouter.emitStatus(
+			sessionId,
+			isProcessing ? 'busy' : 'idle',
+			undefined,
+			undefined,
+			'Ready',
+			isProcessing
 				? `${providerName} is working...`
 				: `Ready to chat with ${providerName}! Type your message below.`,
-		});
+		);
 
 		if (workspaceName) {
 			this._postMessage({ type: 'workspaceInfo', data: { name: workspaceName } });
@@ -671,88 +639,10 @@ export class ChatProvider {
 		this._settingsHandler.loadProxyModels();
 
 		if (session.draftMessage) {
-			this._postMessage({ type: 'restoreInputText', data: session.draftMessage });
+			this._sessionRouter.emitRestoreInput(sessionId, session.draftMessage);
 		}
 	}
 
-	private _sendAndSaveMessage(
-		message: { type: string; [key: string]: unknown },
-		sessionId?: string,
-	): void {
-		const targetSessionId = sessionId || this._sessionManager.activeSessionId;
-		if (!targetSessionId) {
-			this._postMessage(message);
-			return;
-		}
-
-		// Normalize message shape on extension side.
-		const normalizedMessage = this._normalizeMessage(message);
-
-		// Persist/merge into authoritative session history first.
-		const conversationMessageTypes = new Set([
-			'user',
-			'assistant',
-			'thinking',
-			'tool_use',
-			'tool_result',
-			'error',
-			'interrupted',
-			'access_request',
-			'subtask',
-			'system_notice',
-		]);
-
-		const session = this._sessionManager.getSession(targetSessionId);
-		if (session && conversationMessageTypes.has(normalizedMessage.type)) {
-			session.addConversationMessage(
-				normalizedMessage as Partial<ConversationMessage> & { type: string },
-			);
-		}
-
-		// Emit clean, session-normalized message.
-		this._postMessage({ ...normalizedMessage, sessionId: targetSessionId });
-	}
-
-	private _normalizeMessage(message: { type: string; [key: string]: unknown }): {
-		type: string;
-		[key: string]: unknown;
-	} {
-		// Normalize streaming identity for assistant/thinking: use partId as stable id.
-		// This prevents UI from appending a new message for every incremental update.
-		if (message.type === 'assistant' || message.type === 'thinking') {
-			const partId = (message as { partId?: unknown }).partId;
-			if (typeof partId !== 'string' || partId.length === 0) {
-				// Without partId we cannot merge streaming updates, but we also must not crash.
-				return message;
-			}
-
-			const existingId = (message as { id?: unknown }).id;
-			if (existingId === undefined) {
-				return { ...message, id: partId };
-			}
-			if (existingId !== partId) {
-				logger.warn(
-					`[ChatProvider] Streaming message id mismatch type=${message.type}; expected id=partId=${partId}`,
-				);
-				return { ...message, id: partId };
-			}
-			return message;
-		}
-
-		// Ensure error/interrupted/system_notice messages have a stable id for dismiss/clear semantics.
-		if (
-			message.type === 'error' ||
-			message.type === 'interrupted' ||
-			message.type === 'system_notice'
-		) {
-			const existingId = (message as { id?: unknown }).id;
-			if (typeof existingId !== 'string' || existingId.length === 0) {
-				return { ...message, id: randomUUID() };
-			}
-		}
-
-		return message;
-	}
 	private async _handleSwitchSession(uiSessionId: string): Promise<void> {
 		await this._sessionHandler.handleSwitchSession(uiSessionId);
 	}
@@ -801,18 +691,19 @@ export class ChatProvider {
 			session.setProcessing(false);
 		}
 
-		this._postMessage({ type: 'setProcessing', data: { isProcessing: false, sessionId } });
-		this._postMessage({ type: 'loginRequired', sessionId });
+		this._sessionRouter.emitStatus(sessionId || '', 'idle');
+
+		if (sessionId) {
+			this._sessionRouter.emitAuthRequired(sessionId);
+		}
 
 		const terminal = vscode.window.createTerminal('Claude Login');
 		terminal.sendText('claude');
 		terminal.show();
-		// Login message sent to chat via postMessage, no toast needed
-		this._postMessage({
-			type: 'terminalOpened',
-			data: 'Please login to Claude in the terminal.',
-			sessionId,
-		});
+
+		if (sessionId) {
+			this._sessionRouter.emitTerminalOpened(sessionId, 'Please login to Claude in the terminal.');
+		}
 	}
 
 	private _getHtmlForWebview(webview: vscode.Webview): string {

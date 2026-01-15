@@ -2,6 +2,8 @@
  * @file StreamHandler
  * @description Processes CLI stream data from Claude/OpenCode providers. Handles message parsing,
  * token statistics, tool usage tracking, thinking/reasoning output, and error processing.
+ * All events are routed through SessionRouter for unified handling.
+ * Child session (subtask/subagent) events are isolated from parent session state.
  */
 
 import { CLIServiceFactory } from '../../services/CLIServiceFactory';
@@ -10,20 +12,18 @@ import type { CLIStreamData } from '../../services/ICLIService';
 import type { SessionManager } from '../../services/SessionManager';
 import type { TokenUsageAPI } from '../../types';
 import { logger } from '../../utils/logger';
+import type { SessionRouter } from './SessionRouter';
 
 // =============================================================================
 // Types
 // =============================================================================
 
 export interface StreamHandlerDeps {
-	postMessage: (msg: unknown) => void;
-	sendAndSaveMessage: (msg: { type: string; [key: string]: unknown }, sessionId?: string) => void;
+	router: SessionRouter;
 	createBackup: (message: string, messageId?: string, sessionId?: string) => Promise<void>;
 	handleOpenCodeAccess: (data: CLIStreamData) => void;
 	handleLoginRequired: (sessionId?: string) => void;
-	/** Check if a tool_use has already been created (by AccessHandler for permission) */
 	hasToolUseBeenCreated?: (toolUseId: string) => boolean;
-	/** Mark a tool_use as created (so AccessHandler doesn't duplicate it) */
 	markToolUseCreated?: (toolUseId: string) => void;
 }
 
@@ -54,6 +54,89 @@ export class StreamHandler {
 		private readonly _sessionManager: SessionManager,
 		private readonly _deps: StreamHandlerDeps,
 	) {}
+
+	// =========================================================================
+	// Unified Routing Helpers
+	// =========================================================================
+
+	/**
+	 * Emit a message to a session via the unified router.
+	 */
+	private _emitMessage(
+		sessionId: string | undefined,
+		message: {
+			type: string;
+			content?: string;
+			partId?: string;
+			id?: string;
+			isStreaming?: boolean;
+			isDelta?: boolean;
+			hidden?: boolean;
+			[key: string]: unknown;
+		},
+		childSessionId?: string,
+	): void {
+		if (!sessionId) {
+			logger.warn('[StreamHandler] _emitMessage called without sessionId');
+			return;
+		}
+		const { type, content, partId, id, isStreaming, isDelta, hidden, ...rest } = message;
+		this._deps.router.emitMessage(
+			sessionId,
+			{
+				...rest,
+				id: id || partId || `msg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+				type: type as import('../../types/extensionMessages').SessionMessageType,
+				content,
+				partId,
+				isStreaming,
+				isDelta,
+				hidden,
+			},
+			childSessionId,
+		);
+	}
+
+	/**
+	 * Emit status change via the unified router.
+	 */
+	private _emitStatus(
+		sessionId: string | undefined,
+		status: 'idle' | 'busy' | 'error' | 'retrying',
+		retryInfo?: { attempt: number; message: string; nextRetryAt?: string },
+		childSessionId?: string,
+	): void {
+		if (!sessionId) {
+			logger.warn('[StreamHandler] _emitStatus called without sessionId');
+			return;
+		}
+		this._deps.router.emitStatus(sessionId, status, retryInfo, childSessionId);
+	}
+
+	/**
+	 * Emit stats update via the unified router.
+	 */
+	private _emitStats(
+		sessionId: string | undefined,
+		stats: {
+			tokenStats?: Partial<import('../../types').TokenStats>;
+			totalStats?: Partial<import('../../types').TotalStats>;
+		},
+	): void {
+		if (!sessionId) {
+			logger.warn('[StreamHandler] _emitStats called without sessionId');
+			return;
+		}
+		this._deps.router.emitStats(sessionId, stats);
+	}
+
+	/**
+	 * Emit streaming complete event.
+	 */
+	private _emitComplete(sessionId: string | undefined, partId: string, toolUseId?: string): void {
+		if (!sessionId) return;
+		this._deps.router.emitComplete(sessionId, partId, toolUseId);
+	}
 
 	public processStreamData(data: CLIStreamData, sessionId?: string): void {
 		// Only log non-streaming events to reduce spam
@@ -126,20 +209,16 @@ export class StreamHandler {
 				break;
 
 			case 'child-session-created':
-				if (data.childSession) {
+				if (data.childSession && sessionId) {
 					// Link childSessionId to the subtask in SessionContext for persistence
-					if (sessionId && data.childSession.id) {
+					if (data.childSession.id) {
 						const session = this._sessionManager.getSession(sessionId);
 						if (session) {
 							session.linkChildSessionToSubtask(data.childSession.id);
 						}
 					}
 
-					this._deps.postMessage({
-						type: 'child-session-created',
-						data: data.childSession,
-						sessionId,
-					});
+					this._deps.router.emitChildSessionCreated(sessionId, data.childSession);
 				}
 				break;
 
@@ -153,24 +232,14 @@ export class StreamHandler {
 	}
 
 	public handleProcessError(error: Error, sessionId?: string): void {
-		this._deps.postMessage({ type: 'clearLoading', sessionId });
-
-		const session = sessionId ? this._sessionManager.getSession(sessionId) : undefined;
-		if (session) {
-			session.setProcessing(false);
-		}
-
-		this._deps.postMessage({ type: 'setProcessing', data: { isProcessing: false, sessionId } });
+		this._emitStatus(sessionId, 'idle');
 
 		if (CLIServiceFactory.isOpenCode()) {
 			const errorMessage = error.message || 'An error occurred. Please try again.';
-			this._deps.sendAndSaveMessage(
-				{
-					type: 'error',
-					data: { content: errorMessage },
-				},
-				sessionId,
-			);
+			this._emitMessage(sessionId, {
+				type: 'error',
+				content: errorMessage,
+			});
 			return;
 		}
 
@@ -181,10 +250,7 @@ export class StreamHandler {
 			return;
 		}
 
-		this._deps.sendAndSaveMessage(
-			{ type: 'error', data: { content: processError.userMessage } },
-			sessionId,
-		);
+		this._emitMessage(sessionId, { type: 'error', content: processError.userMessage });
 	}
 
 	// =========================================================================
@@ -204,17 +270,13 @@ export class StreamHandler {
 			}
 		}
 
-		this._deps.sendAndSaveMessage(
-			{
-				type: 'sessionInfo',
-				data: {
-					sessionId: data.sessionId,
-					tools: data.tools || [],
-					mcpServers: data.mcpServers || [],
-				},
-			},
-			sessionId,
-		);
+		if (!sessionId) return;
+
+		this._deps.router.emitSessionInfo(sessionId, {
+			sessionId: data.sessionId || '',
+			tools: data.tools || [],
+			mcpServers: data.mcpServers || [],
+		});
 	}
 
 	private _handleAssistantMessage(data: CLIStreamData, sessionId?: string): void {
@@ -252,24 +314,18 @@ export class StreamHandler {
 				);
 				// Generate fallback ID for proxy models that don't provide content.id
 				const partId = content.id || `text-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-				this._deps.sendAndSaveMessage(
-					{ type: 'assistant', content: content.text.trim(), partId },
-					sessionId,
-				);
+				this._emitMessage(sessionId, { type: 'assistant', content: content.text.trim(), partId });
 			} else if (content.type === 'thinking' && content.thinking?.trim()) {
 				// Generate fallback ID for proxy models that don't provide content.id/cot_id
 				const stableId =
 					content.id ||
 					content.cot_id ||
 					`thinking-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-				this._deps.sendAndSaveMessage(
-					{
-						type: 'thinking',
-						content: content.thinking.trim(),
-						partId: stableId,
-					},
-					sessionId,
-				);
+				this._emitMessage(sessionId, {
+					type: 'thinking',
+					content: content.thinking.trim(),
+					partId: stableId,
+				});
 			} else if (content.type === 'tool_use' && content.name && content.id) {
 				this._handleToolUse(
 					{
@@ -308,25 +364,16 @@ export class StreamHandler {
 						? JSON.stringify(content.content, null, 2)
 						: String(content.content || 'Tool executed successfully');
 
-				this._deps.sendAndSaveMessage(
-					{
-						type: 'tool_result',
-						content: textContent,
-						isError: content.is_error || false,
-						toolUseId: content.tool_use_id,
-						toolName: toolName || 'unknown',
-					},
-					uiSessionId,
-				);
-
-				// Send streamingComplete to mark the tool as finished in UI
-				// The partId should match the tool_use id so UI can find and update it
-				// Use UI sessionId, not CLI sessionId from data
-				this._deps.postMessage({
-					type: 'streamingComplete',
-					data: { partId: content.tool_use_id, toolUseId: content.tool_use_id },
-					sessionId: uiSessionId,
+				this._emitMessage(uiSessionId, {
+					type: 'tool_result',
+					content: textContent,
+					isError: content.is_error || false,
+					toolUseId: content.tool_use_id,
+					toolName: toolName || 'unknown',
 				});
+
+				// Send streaming complete to mark the tool as finished in UI
+				this._emitComplete(uiSessionId, content.tool_use_id, content.tool_use_id);
 			}
 		}
 	}
@@ -362,7 +409,6 @@ export class StreamHandler {
 		if (sessionId) {
 			const session = this._sessionManager.getSession(sessionId);
 			if (session) {
-				session.setProcessing(false);
 				if (data.sessionId) session.setCLISessionId(data.sessionId);
 
 				// Update token stats from result if available (Claude CLI sends final usage here)
@@ -378,28 +424,22 @@ export class StreamHandler {
 					);
 				}
 
-				this._deps.postMessage({
-					type: 'updateTotals',
-					data: {
+				// Emit total stats update
+				this._emitStats(sessionId, {
+					totalStats: {
 						totalCost: session.totalCost,
 						totalTokensInput: session.totalTokensInput,
 						totalTokensOutput: session.totalTokensOutput,
 						totalReasoningTokens: session.totalReasoningTokens,
 						totalDuration: session.totalDuration,
 						requestCount: session.requestCount,
-						currentCost: data.totalCostUsd,
-						currentDuration: data.durationMs,
-						currentTurns: data.numTurns,
 					},
-					sessionId,
 				});
 			}
 		}
 
-		this._deps.postMessage({
-			type: 'setProcessing',
-			data: { isProcessing: false, sessionId },
-		});
+		// Set status to idle (this also updates backend session state)
+		this._emitStatus(sessionId, 'idle');
 	}
 
 	private _handleResultError(data: CLIStreamData, sessionId?: string): void {
@@ -409,7 +449,6 @@ export class StreamHandler {
 		if (sessionId) {
 			const session = this._sessionManager.getSession(sessionId);
 			if (session) {
-				session.setProcessing(false);
 				if (data.sessionId) session.setCLISessionId(data.sessionId);
 
 				// Update token stats from result if available (even on error, tokens may have been used)
@@ -419,38 +458,31 @@ export class StreamHandler {
 
 				if (data.totalCostUsd) {
 					session.updateStats(data.totalCostUsd, data.durationApiMs ?? data.durationMs);
-					this._deps.postMessage({
-						type: 'updateTotals',
-						data: {
+					this._emitStats(sessionId, {
+						totalStats: {
 							totalCost: session.totalCost,
 							totalTokensInput: session.totalTokensInput,
 							totalTokensOutput: session.totalTokensOutput,
 							totalReasoningTokens: session.totalReasoningTokens,
 							totalDuration: session.totalDuration,
 							requestCount: session.requestCount,
-							currentCost: data.totalCostUsd,
-							currentDuration: data.durationApiMs ?? data.durationMs,
-							currentTurns: data.numTurns,
 						},
-						sessionId,
 					});
 				}
 			}
 		}
 
-		this._deps.postMessage({
-			type: 'setProcessing',
-			data: { isProcessing: false, sessionId },
-		});
+		// Set status to idle (this also updates backend session state)
+		this._emitStatus(sessionId, 'idle');
 
 		const errorMessage =
 			data.result || 'An error occurred during execution. The API may have returned an error.';
-		this._deps.sendAndSaveMessage({ type: 'error', data: { content: errorMessage } }, sessionId);
+		this._emitMessage(sessionId, { type: 'error', content: errorMessage });
 	}
 
 	private _handleError(data: CLIStreamData, sessionId?: string): void {
 		const errorMessage = data.result || JSON.stringify(data);
-		this._deps.sendAndSaveMessage({ type: 'error', data: { content: errorMessage } }, sessionId);
+		this._emitMessage(sessionId, { type: 'error', content: errorMessage });
 	}
 
 	private _handlePartUpdate(data: CLIStreamData, sessionId?: string): void {
@@ -530,13 +562,14 @@ export class StreamHandler {
 
 					if (thinkingContent) {
 						const thinkingPartId = `${partId}-thinking`;
-						this._deps.sendAndSaveMessage(
+						this._emitMessage(
+							sessionId,
 							{
 								type: 'thinking',
 								content: thinkingContent.trim(),
 								partId: thinkingPartId,
 							},
-							sessionId,
+							childSessionId,
 						);
 						session.lastPartContent.set(thinkingPartId, thinkingContent.trim());
 					}
@@ -544,15 +577,15 @@ export class StreamHandler {
 					if (cleanText) {
 						// Pass partId to enable proper streaming merge logic in SessionContext
 						// Include childSessionId if this is from a subtask/subagent
-						this._deps.sendAndSaveMessage(
+						this._emitMessage(
+							sessionId,
 							{
 								type: 'assistant',
 								content: cleanText,
 								partId,
-								childSessionId,
 								hidden: !!childSessionId, // Hide from main flow if from child session
 							},
-							sessionId,
+							childSessionId,
 						);
 						session.lastPartContent.set(partId, cleanText);
 					}
@@ -561,7 +594,7 @@ export class StreamHandler {
 
 			case 'reasoning':
 			case 'thinking':
-				this._handlePartThinking(part, sessionId, session);
+				this._handlePartThinking(part, sessionId, session, childSessionId);
 				break;
 
 			case 'step-finish':
@@ -589,6 +622,7 @@ export class StreamHandler {
 		part: NonNullable<CLIStreamData['part']>,
 		sessionId?: string,
 		session?: { lastPartContent: Map<string, string> },
+		childSessionId?: string,
 	): void {
 		if (!part.id || !session) return;
 
@@ -603,8 +637,8 @@ export class StreamHandler {
 				formattedThinking = `**${part.cot_id}**\n\n${formattedThinking}`;
 			}
 
-			// Start thinking timer if not already started
-			if (fullSession) {
+			// Start thinking timer if not already started (only for main session)
+			if (fullSession && !childSessionId) {
 				fullSession.startThinkingTimer(part.id);
 			}
 
@@ -617,7 +651,9 @@ export class StreamHandler {
 			// Pass partId to enable proper streaming merge logic in SessionContext
 			// partId uniquely identifies this thinking block, allowing updates to the same block
 			// while creating new blocks when a different partId arrives
-			this._deps.sendAndSaveMessage(
+			// Include childSessionId if this is from a subtask/subagent - webview will route to child session
+			this._emitMessage(
+				sessionId,
 				{
 					type: 'thinking',
 					content: formattedThinking,
@@ -626,7 +662,7 @@ export class StreamHandler {
 					startTime,
 					reasoningTokens,
 				},
-				sessionId,
+				childSessionId,
 			);
 			session.lastPartContent.set(`thinking_${part.id}`, formattedThinking);
 		}
@@ -692,21 +728,15 @@ export class StreamHandler {
 
 	/**
 	 * Handle session-idle event (OpenCode).
-	 * Send updateTotals with final stats and notify UI.
-	 * Also stops processing to ensure timers are stopped on errors/cancellations.
+	 * Send stats update and notify UI.
 	 */
-	private _handleSessionIdle(data: CLIStreamData, sessionId?: string): void {
+	private _handleSessionIdle(_data: CLIStreamData, sessionId?: string): void {
 		if (sessionId) {
 			const session = this._sessionManager.getSession(sessionId);
 			if (session) {
-				// Stop processing - session is idle (error, cancel, completion, etc.)
-				session.setProcessing(false);
-				session.setAutoRetrying(false);
-
 				// Send final stats to UI
-				this._deps.postMessage({
-					type: 'updateTotals',
-					data: {
+				this._emitStats(sessionId, {
+					totalStats: {
 						totalCost: session.totalCost,
 						totalTokensInput: session.totalTokensInput,
 						totalTokensOutput: session.totalTokensOutput,
@@ -714,32 +744,21 @@ export class StreamHandler {
 						totalDuration: session.totalDuration,
 						requestCount: session.requestCount,
 					},
-					sessionId,
 				});
 			}
 		}
 
 		// Clear subtask tracking to prevent memory leaks from abandoned subtasks
-		// (e.g., user cancel, session end, network error)
 		this._createdSubtasks.clear();
 
-		this._deps.postMessage({
-			type: 'sessionIdle',
-			data: { sessionId: data.sessionId || sessionId },
-			sessionId,
-		});
-
-		// Notify UI to stop processing (ensures timers stop on error/cancel/reload)
-		this._deps.postMessage({
-			type: 'setProcessing',
-			data: { isProcessing: false, sessionId },
-		});
+		// Set status to idle (this also updates backend session state)
+		this._emitStatus(sessionId, 'idle');
 	}
 
 	/**
 	 * Handle session.status events from OpenCode (idle, busy, retry).
 	 * When status is 'retry', OpenCode SDK is automatically retrying the request.
-	 * We notify the UI so it can show retry progress instead of manual Resume button.
+	 * Child session status events are routed to child session, not parent.
 	 */
 	private _handleSessionStatusEvent(data: CLIStreamData, sessionId?: string): void {
 		// First try to use the direct sessionStatus field (new approach)
@@ -767,59 +786,37 @@ export class StreamHandler {
 
 		if (!status?.type) return;
 
-		const session = sessionId ? this._sessionManager.getSession(sessionId) : undefined;
+		// Check if this is a child session event (subtask/subagent)
+		const isChildSessionEvent = !!data.childSessionId;
 
 		logger.debug(
-			`[StreamHandler] Session status: ${status.type}${status.attempt ? ` (attempt ${status.attempt})` : ''}, sessionId=${sessionId}`,
+			`[StreamHandler] Session status: ${status.type}${status.attempt ? ` (attempt ${status.attempt})` : ''}, sessionId=${sessionId}, isChildSession=${isChildSessionEvent}`,
 		);
+
+		// For child session events, only emit idle status to complete subtasks
+		// Don't propagate busy/retry from child sessions to parent
+		if (isChildSessionEvent) {
+			if (status.type === 'idle') {
+				this._emitStatus(sessionId, 'idle', undefined, data.childSessionId);
+			}
+			return;
+		}
 
 		switch (status.type) {
 			case 'retry':
-				// OpenCode is auto-retrying - notify UI to show retry status
-				this._deps.postMessage({
-					type: 'sessionRetrying',
-					data: {
-						sessionId: data.sessionId || sessionId,
-						attempt: status.attempt || 1,
-						message: status.message || 'Retrying request...',
-						nextRetryAt: status.next ? new Date(status.next).toISOString() : undefined,
-					},
-					sessionId,
+				this._emitStatus(sessionId, 'retrying', {
+					attempt: status.attempt || 1,
+					message: status.message || 'Retrying request...',
+					nextRetryAt: status.next ? new Date(status.next).toISOString() : undefined,
 				});
-
-				// Mark session as auto-retrying so UI doesn't show manual Resume button
-				if (session) {
-					session.setAutoRetrying(true);
-				}
 				break;
 
 			case 'idle':
-				// Session is idle - clear retry state
-				if (session) {
-					session.setAutoRetrying(false);
-					session.setProcessing(false);
-				}
-				this._deps.postMessage({
-					type: 'sessionIdle',
-					data: { sessionId: data.sessionId || sessionId },
-					sessionId,
-				});
-				this._deps.postMessage({
-					type: 'setProcessing',
-					data: { isProcessing: false, sessionId },
-				});
+				this._emitStatus(sessionId, 'idle');
 				break;
 
 			case 'busy':
-				// Session is busy processing
-				if (session) {
-					session.setAutoRetrying(false);
-					session.setProcessing(true);
-				}
-				this._deps.postMessage({
-					type: 'setProcessing',
-					data: { isProcessing: true, sessionId },
-				});
+				this._emitStatus(sessionId, 'busy');
 				break;
 
 			default:
@@ -841,13 +838,10 @@ export class StreamHandler {
 			: '';
 		logger.info(`[StreamHandler] Context compacted${metadataPreview}`);
 
-		this._deps.sendAndSaveMessage(
-			{
-				type: 'system_notice',
-				content: 'Context summarized',
-			},
-			targetSessionId,
-		);
+		this._emitMessage(targetSessionId, {
+			type: 'system_notice',
+			content: 'Context summarized',
+		});
 	}
 
 	/**
@@ -874,14 +868,10 @@ export class StreamHandler {
 
 		// Handle OpenCode-specific notification events via subtype
 		if (data.subtype === 'project.updated') {
-			if (data.message?.content?.[0]?.text) {
+			if (data.message?.content?.[0]?.text && sessionId) {
 				try {
 					const project = JSON.parse(data.message.content[0].text);
-					this._deps.postMessage({
-						type: 'projectUpdated',
-						data: { project },
-						sessionId,
-					});
+					this._deps.router.emitProjectUpdated(sessionId, project);
 				} catch (e) {
 					logger.error('[StreamHandler] Failed to parse project.updated data', e);
 				}
@@ -890,14 +880,14 @@ export class StreamHandler {
 		}
 
 		if (data.subtype === 'message.part.removed') {
-			if (data.message?.content?.[0]?.text) {
+			if (data.message?.content?.[0]?.text && sessionId) {
 				try {
 					const partData = JSON.parse(data.message.content[0].text);
-					this._deps.postMessage({
-						type: 'messagePartRemoved',
-						data: partData,
+					this._deps.router.emitMessagePartRemoved(
 						sessionId,
-					});
+						partData.messageId || '',
+						partData.partId || '',
+					);
 				} catch (e) {
 					logger.error('[StreamHandler] Failed to parse message.part.removed data', e);
 				}
@@ -947,10 +937,12 @@ export class StreamHandler {
 					// Use the same partId as subsequent deltas so the UI updates a single message.
 					const streamIndex = event.index ?? 0;
 					const partId = block.id || `stream-text-${responseKey}-${messageKey}-${streamIndex}-text`;
-					this._deps.sendAndSaveMessage(
-						{ type: 'assistant', content: '', partId, isStreaming: true },
-						sessionId,
-					);
+					this._emitMessage(sessionId, {
+						type: 'assistant',
+						content: '',
+						partId,
+						isStreaming: true,
+					});
 				} else if (block?.type === 'thinking') {
 					const partId = block.id || `stream-thinking-${responseKey}-${messageKey}`;
 					// Start thinking timer and get startTime for frontend
@@ -958,10 +950,13 @@ export class StreamHandler {
 						session.startThinkingTimer(partId);
 					}
 					const startTime = session?.getThinkingStartTime(partId);
-					this._deps.sendAndSaveMessage(
-						{ type: 'thinking', content: '', partId, isStreaming: true, startTime },
-						sessionId,
-					);
+					this._emitMessage(sessionId, {
+						type: 'thinking',
+						content: '',
+						partId,
+						isStreaming: true,
+						startTime,
+					});
 				} else if (block?.type === 'tool_use') {
 					// Initialize tool use streaming
 					const partId = block.id || `stream-tool-${responseKey}`;
@@ -1025,15 +1020,12 @@ export class StreamHandler {
 						const next = prev + content;
 						session.lastPartContent.set(partId, next);
 
-						this._deps.sendAndSaveMessage(
-							{
-								type: 'assistant',
-								content: next,
-								partId,
-								isStreaming: true,
-							},
-							sessionId,
-						);
+						this._emitMessage(sessionId, {
+							type: 'assistant',
+							content: next,
+							partId,
+							isStreaming: true,
+						});
 					};
 
 					const emitThinking = (content: string) => {
@@ -1052,16 +1044,13 @@ export class StreamHandler {
 						session.lastPartContent.set(partId, next);
 
 						const startTime = session.getThinkingStartTime(partId);
-						this._deps.sendAndSaveMessage(
-							{
-								type: 'thinking',
-								content: next,
-								partId,
-								isStreaming: true,
-								startTime,
-							},
-							sessionId,
-						);
+						this._emitMessage(sessionId, {
+							type: 'thinking',
+							content: next,
+							partId,
+							isStreaming: true,
+							startTime,
+						});
 					};
 
 					while (cursor < text.length) {
@@ -1092,16 +1081,13 @@ export class StreamHandler {
 							if (thinkingPartId) {
 								const durationMs = session.stopThinkingTimer(thinkingPartId);
 								const finalContent = session.lastPartContent.get(thinkingPartId) || '';
-								this._deps.sendAndSaveMessage(
-									{
-										type: 'thinking',
-										content: finalContent,
-										partId: thinkingPartId,
-										isStreaming: false,
-										durationMs,
-									},
-									sessionId,
-								);
+								this._emitMessage(sessionId, {
+									type: 'thinking',
+									content: finalContent,
+									partId: thinkingPartId,
+									isStreaming: false,
+									durationMs,
+								});
 							}
 							session.setStreamingThinking(false);
 							session.clearActiveStreamPart(streamIndex);
@@ -1146,17 +1132,14 @@ export class StreamHandler {
 						session.startThinkingTimer(partId);
 					}
 					const startTime = session?.getThinkingStartTime(partId);
-					this._deps.sendAndSaveMessage(
-						{
-							type: 'thinking',
-							content: delta.thinking,
-							partId,
-							isStreaming: true,
-							isDelta: true,
-							startTime,
-						},
-						sessionId,
-					);
+					this._emitMessage(sessionId, {
+						type: 'thinking',
+						content: delta.thinking,
+						partId,
+						isStreaming: true,
+						isDelta: true,
+						startTime,
+					});
 				} else if (delta?.type === 'input_json_delta' && delta.partial_json) {
 					// Intentionally ignore tool input deltas for now.
 					// We currently render tool input only once we have the final tool_use payload.
@@ -1175,16 +1158,13 @@ export class StreamHandler {
 						const durationMs = session.stopThinkingTimer(thinkingPartId);
 						const finalContent = session.lastPartContent.get(thinkingPartId) || '';
 						if (finalContent) {
-							this._deps.sendAndSaveMessage(
-								{
-									type: 'thinking',
-									content: finalContent,
-									partId: thinkingPartId,
-									isStreaming: false,
-									durationMs,
-								},
-								sessionId,
-							);
+							this._emitMessage(sessionId, {
+								type: 'thinking',
+								content: finalContent,
+								partId: thinkingPartId,
+								isStreaming: false,
+								durationMs,
+							});
 						}
 					}
 					session.clearStreamBuffer(streamIndex);
@@ -1195,11 +1175,7 @@ export class StreamHandler {
 					session.clearThinkingTimers();
 				}
 				const partId = `stream-${responseKey}-${streamIndex}`;
-				this._deps.postMessage({
-					type: 'streamingComplete',
-					data: { partId },
-					sessionId,
-				});
+				this._emitComplete(sessionId, partId);
 				break;
 			}
 
@@ -1216,16 +1192,10 @@ export class StreamHandler {
 				logger.error(`[StreamHandler] SSE error event: ${errorMessage}`);
 
 				// Send error to UI
-				this._deps.sendAndSaveMessage(
-					{ type: 'error', data: { content: errorMessage } },
-					sessionId,
-				);
+				this._emitMessage(sessionId, { type: 'error', content: errorMessage });
 
 				// Stop processing
-				this._deps.postMessage({
-					type: 'setProcessing',
-					data: { isProcessing: false, sessionId },
-				});
+				this._emitStatus(sessionId, 'idle');
 				break;
 			}
 
@@ -1255,14 +1225,11 @@ export class StreamHandler {
 						'[StreamHandler] thinking event is missing cot_id/message.id; cannot provide stable streaming identity',
 					);
 				}
-				this._deps.sendAndSaveMessage(
-					{
-						type: 'thinking',
-						content: formattedThinking,
-						partId: stableId,
-					},
-					sessionId,
-				);
+				this._emitMessage(sessionId, {
+					type: 'thinking',
+					content: formattedThinking,
+					partId: stableId,
+				});
 			}
 		}
 	}
@@ -1282,7 +1249,8 @@ export class StreamHandler {
 			const startTime = Date.now();
 			this._createdSubtasks.set(subtaskId, startTime);
 
-			this._deps.sendAndSaveMessage(
+			this._emitMessage(
+				sessionId,
 				{
 					type: 'subtask',
 					id: subtaskId,
@@ -1305,7 +1273,8 @@ export class StreamHandler {
 			// Clean up tracking
 			this._createdSubtasks.delete(subtaskId);
 
-			this._deps.sendAndSaveMessage(
+			this._emitMessage(
+				sessionId,
 				{
 					type: 'subtask',
 					id: subtaskId,
@@ -1370,7 +1339,8 @@ export class StreamHandler {
 				status,
 			});
 
-			this._deps.sendAndSaveMessage(
+			this._emitMessage(
+				sessionId,
 				{
 					type: 'subtask',
 					id: toolUseId,
@@ -1399,7 +1369,8 @@ export class StreamHandler {
 				result: typeof result === 'string' ? result.substring(0, 100) : 'non-string result',
 			});
 
-			this._deps.sendAndSaveMessage(
+			this._emitMessage(
+				sessionId,
 				{
 					type: 'subtask',
 					id: toolUseId,
@@ -1424,7 +1395,8 @@ export class StreamHandler {
 			const errorMsg = state?.error || 'Task failed';
 			logger.debug('[StreamHandler] Task tool error:', { toolUseId, error: errorMsg, durationMs });
 
-			this._deps.sendAndSaveMessage(
+			this._emitMessage(
+				sessionId,
 				{
 					type: 'subtask',
 					id: toolUseId,
@@ -1516,7 +1488,8 @@ export class StreamHandler {
 				});
 			}
 
-			this._deps.sendAndSaveMessage(
+			this._emitMessage(
+				sessionId,
 				{
 					type: 'tool_use',
 					toolName: toolNameDisplay,
@@ -1552,17 +1525,15 @@ export class StreamHandler {
 						}
 					}
 
-					this._deps.postMessage({
-						type: 'fileChanged',
-						data: {
+					if (sessionId) {
+						this._deps.router.emitFileChanged(sessionId, {
 							filePath,
-							changeType: toolNameLower === 'write' ? 'created' : 'modified',
+							fileName: filePath.split(/[/\\]/).pop() || filePath,
 							linesAdded,
 							linesRemoved,
 							toolUseId: part.callID || part.id || '',
-						},
-						sessionId,
-					});
+						});
+					}
 				}
 
 				this._handleOpenCodeToolCompletion(
@@ -1577,7 +1548,8 @@ export class StreamHandler {
 				);
 			}
 		} else if (state?.status === 'error') {
-			this._deps.sendAndSaveMessage(
+			this._emitMessage(
+				sessionId,
 				{
 					type: 'tool_result',
 					content: state.error || 'Tool execution failed',
@@ -1644,7 +1616,8 @@ export class StreamHandler {
 			url: att.url,
 		}));
 
-		this._deps.sendAndSaveMessage(
+		this._emitMessage(
+			sessionId,
 			{
 				type: 'tool_result',
 				content: displayOutput,
@@ -1657,11 +1630,9 @@ export class StreamHandler {
 				durationMs,
 				attachments: attachments?.length ? attachments : undefined,
 				metadata: state.metadata,
-				// Include childSessionId if this is from a subtask/subagent
-				childSessionId,
 				hidden: !!childSessionId,
 			},
-			sessionId,
+			childSessionId,
 		);
 	}
 
@@ -1680,16 +1651,13 @@ export class StreamHandler {
 			const finalContent = session.lastPartContent.get(`thinking_${partId}`) || '';
 
 			if (finalContent) {
-				this._deps.sendAndSaveMessage(
-					{
-						type: 'thinking',
-						content: finalContent,
-						partId,
-						isStreaming: false,
-						durationMs,
-					},
-					sessionId,
-				);
+				this._emitMessage(sessionId, {
+					type: 'thinking',
+					content: finalContent,
+					partId,
+					isStreaming: false,
+					durationMs,
+				});
 			}
 		}
 	}
@@ -1725,29 +1693,29 @@ export class StreamHandler {
 			session.updateTokenUsage(usage, messageId, isChildSession);
 		}
 
-		// Use postMessage instead of sendAndSaveMessage - token stats should not be saved to conversation history
-		this._deps.postMessage({
-			type: 'updateTokens',
-			data: {
-				totalTokensInput: session?.totalTokensInput || 0,
-				totalTokensOutput: session?.totalTokensOutput || 0,
-				// For main session: usage.input_tokens IS the current context size.
-				// For subagent: usage.input_tokens is subagent context (ignore for main UI context meter).
-				// Use stored mainContextSize to keep UI stable during subagent execution.
-				currentInputTokens: isChildSession
-					? session?.mainContextSize || 0
-					: usage.input_tokens || 0,
-				currentOutputTokens: usage.output_tokens || 0,
-				cacheCreationTokens: usage.cache_creation_input_tokens || 0,
-				cacheReadTokens: usage.cache_read_input_tokens || 0,
-				reasoningTokens: usage.reasoning_tokens || 0,
-				totalReasoningTokens: session?.totalReasoningTokens || 0,
-				// Subagent/child session token tracking
-				subagentTokensInput: session?.subagentTokensInput || 0,
-				subagentTokensOutput: session?.subagentTokensOutput || 0,
-			},
-			sessionId,
-		});
+		// Emit token stats via unified router
+		if (sessionId) {
+			this._emitStats(sessionId, {
+				tokenStats: {
+					totalTokensInput: session?.totalTokensInput || 0,
+					totalTokensOutput: session?.totalTokensOutput || 0,
+					// For main session: usage.input_tokens IS the current context size.
+					// For subagent: usage.input_tokens is subagent context (ignore for main UI context meter).
+					// Use stored mainContextSize to keep UI stable during subagent execution.
+					currentInputTokens: isChildSession
+						? session?.mainContextSize || 0
+						: usage.input_tokens || 0,
+					currentOutputTokens: usage.output_tokens || 0,
+					cacheCreationTokens: usage.cache_creation_input_tokens || 0,
+					cacheReadTokens: usage.cache_read_input_tokens || 0,
+					reasoningTokens: usage.reasoning_tokens || 0,
+					totalReasoningTokens: session?.totalReasoningTokens || 0,
+					// Subagent/child session token tracking
+					subagentTokensInput: session?.subagentTokensInput || 0,
+					subagentTokensOutput: session?.subagentTokensOutput || 0,
+				},
+			});
+		}
 	}
 
 	private _handleToolUse(content: ToolUseContent, sessionId?: string): void {
@@ -1768,18 +1736,15 @@ export class StreamHandler {
 				.join('\n');
 		}
 
-		this._deps.sendAndSaveMessage(
-			{
-				type: 'tool_use',
-				toolName: content.name,
-				toolUseId: content.id,
-				toolInput,
-				rawInput: content.input as Record<string, unknown>,
-				filePath: content.input?.file_path || undefined,
-				parentToolUseId: content.parentToolUseId,
-			},
-			sessionId,
-		);
+		this._emitMessage(sessionId, {
+			type: 'tool_use',
+			toolName: content.name,
+			toolUseId: content.id,
+			toolInput,
+			rawInput: content.input as Record<string, unknown>,
+			filePath: content.input?.file_path || undefined,
+			parentToolUseId: content.parentToolUseId,
+		});
 	}
 
 	private _getLastToolUse() {

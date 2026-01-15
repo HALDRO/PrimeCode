@@ -1,7 +1,9 @@
 /**
  * @file GenerationStatus - animated status indicator during model generation
  * @description Premium visual indicator showing current model activity status.
- *              Displays animated dots, pulsing glow effects, and status text.
+ *              Normalizes incoming status text (removes trailing dots/ellipsis) and
+ *              renders animated typing dots to avoid duplicate static punctuation.
+ *              Displays pulsing glow effects and status text.
  *              Only visible during active processing. Uses CSS animations for
  *              smooth, performant visual feedback without layout shifts.
  */
@@ -15,17 +17,17 @@ import { useChatStatus, useIsProcessing, useMessages, useStreamingToolId } from 
  * Animated typing dots indicator
  */
 const TypingDots: React.FC = () => (
-	<span className="inline-flex items-center gap-0.5 ml-1">
+	<span className="inline-flex items-center gap-1 ml-2">
 		<span
-			className="w-0.75 h-0.75 rounded-full bg-current animate-bounce"
+			className="w-1 h-1 rounded-full bg-current animate-bounce"
 			style={{ animationDelay: '0ms', animationDuration: '600ms' }}
 		/>
 		<span
-			className="w-0.75 h-0.75 rounded-full bg-current animate-bounce"
+			className="w-1 h-1 rounded-full bg-current animate-bounce"
 			style={{ animationDelay: '150ms', animationDuration: '600ms' }}
 		/>
 		<span
-			className="w-0.75 h-0.75 rounded-full bg-current animate-bounce"
+			className="w-1 h-1 rounded-full bg-current animate-bounce"
 			style={{ animationDelay: '300ms', animationDuration: '600ms' }}
 		/>
 	</span>
@@ -68,11 +70,14 @@ const StatusIcon: React.FC<{ isThinking: boolean }> = ({ isThinking }) => {
 const formatStatus = (status: string): string => {
 	if (!status || status === 'Ready') return '';
 
-	// Capitalize first letter and clean up
 	const cleaned = status.trim();
 	if (!cleaned) return '';
 
-	return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+	// Remove trailing dot punctuation. We render animated dots separately.
+	const withoutTrailingDots = cleaned.replace(/[.\u2026]+\s*$/, '').trim();
+	if (!withoutTrailingDots) return '';
+
+	return withoutTrailingDots.charAt(0).toUpperCase() + withoutTrailingDots.slice(1);
 };
 
 /**
@@ -151,7 +156,7 @@ export const GenerationStatus: React.FC = () => {
 				<span
 					className={cn(
 						'text-xs font-medium',
-						isThinking ? 'text-[var(--color-thinking)]' : 'text-vscode-foreground opacity-60',
+						isThinking ? 'text-(--color-thinking)' : 'text-vscode-foreground opacity-60',
 					)}
 				>
 					{showStatus}

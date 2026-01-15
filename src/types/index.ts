@@ -6,18 +6,35 @@
  */
 
 // Extension message types for typed communication
-export {
-	type AccessRequestData,
-	type AccessResponseData,
-	type ExtensionMessage,
-	type FileChangedData,
-	type FileChangedMessage,
-	isSessionSpecificMessage,
-	type Rule,
-	type SetProcessingMessage,
-	type SubtaskExtensionMessage,
-	type ToolResultData,
-	type ToolUseData,
+export type {
+	AccessRequestData,
+	AccessResponseData,
+	ExtensionMessage,
+	Rule,
+	// Unified Session Event Protocol
+	SessionAccessPayload,
+	SessionAuthPayload,
+	SessionCompletePayload,
+	SessionDeleteMessagesAfterPayload,
+	SessionEventMessage,
+	SessionEventPayload,
+	SessionEventType,
+	SessionFilePayload,
+	SessionInfoData,
+	SessionLifecycleAction,
+	SessionLifecycleMessage,
+	SessionMessageData,
+	SessionMessagePayload,
+	SessionMessageRemovedPayload,
+	SessionMessagesReloadPayload,
+	SessionMessageType,
+	SessionRestorePayload,
+	SessionStatsPayload,
+	SessionStatus,
+	SessionStatusPayload,
+	SessionTerminalPayload,
+	ToolResultData,
+	ToolUseData,
 } from './extensionMessages';
 // Re-export all types and schemas from the unified schema file
 export {

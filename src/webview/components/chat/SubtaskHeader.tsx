@@ -1,6 +1,6 @@
 import type React from 'react';
+import type { SubtaskMessage } from '../../../types';
 import { cn } from '../../lib/cn';
-import type { SubtaskMessage } from '../../store/chatStore';
 import { formatDuration } from '../../utils/format';
 import { ExpandChevronIcon, TodoProgressIcon } from '../icons/CustomIcons';
 

@@ -1,17 +1,32 @@
+/**
+ * @file PromptImproverHandler
+ * @description Handles prompt improvement requests from webview.
+ *              Uses PromptImproverService for AI-powered prompt enhancement.
+ */
+
 import { PromptImproverService } from '../../services/PromptImproverService';
 import type { WebviewMessage } from '../../types';
+
+// =============================================================================
+// Types
+// =============================================================================
+
+export interface PromptImproverHandlerDeps {
+	postMessage: (msg: unknown) => void;
+}
+
+// =============================================================================
+// PromptImproverHandler Class
+// =============================================================================
 
 export class PromptImproverHandler {
 	private readonly _service: PromptImproverService;
 
-	constructor() {
+	constructor(private readonly _deps: PromptImproverHandlerDeps) {
 		this._service = new PromptImproverService();
 	}
 
-	public async improvePrompt(
-		message: WebviewMessage,
-		postMessage: (msg: unknown) => void,
-	): Promise<void> {
+	public async improvePrompt(message: WebviewMessage): Promise<void> {
 		const { text, requestId, model, timeoutMs } = message;
 
 		if (!text || !requestId) {
@@ -26,13 +41,13 @@ export class PromptImproverHandler {
 				timeoutMs,
 			},
 			result => {
-				postMessage({
+				this._deps.postMessage({
 					type: 'improvePromptResult',
 					data: result,
 				});
 			},
 			(reqId, error) => {
-				postMessage({
+				this._deps.postMessage({
 					type: 'improvePromptError',
 					data: { requestId: reqId, error },
 				});
@@ -40,14 +55,11 @@ export class PromptImproverHandler {
 		);
 	}
 
-	public async cancelImprovement(
-		message: WebviewMessage,
-		postMessage: (msg: unknown) => void,
-	): Promise<void> {
+	public async cancelImprovement(message: WebviewMessage): Promise<void> {
 		if (message.requestId) {
 			await this._service.cancelImprovement(message.requestId);
 			// Notify webview that cancellation was processed
-			postMessage({
+			this._deps.postMessage({
 				type: 'improvePromptCancelled',
 				data: { requestId: message.requestId },
 			});

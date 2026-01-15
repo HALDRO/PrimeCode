@@ -6,15 +6,14 @@
  */
 
 import { useEffect } from 'react';
-import {
-	type Access,
-	type ExtensionMessage,
-	isSessionSpecificMessage,
-	type ParsedCommand,
-	type SubtaskExtensionMessage,
-	type WorkspaceFile,
+import type {
+	Access,
+	ExtensionMessage,
+	ParsedCommand,
+	SessionEventMessage,
+	SessionLifecycleMessage,
+	WorkspaceFile,
 } from '../../types';
-import { FILE_EDIT_TOOLS, isToolInList } from '../constants';
 import { type Message, useChatStore } from '../store/chatStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { useUIStore } from '../store/uiStore';
@@ -35,233 +34,92 @@ interface HandlerContext {
 }
 
 // =============================================================================
-// Helper Functions
+// Unified Session Event Handler (new architecture)
 // =============================================================================
 
 /**
- * Check if message is for the active session.
- * Session-scoped messages are expected to include sessionId.
+ * Handle unified session events from the new SessionRouter.
+ * Routes events directly to chatStore.dispatch() for simplified processing.
  */
-const isMessageForActiveSession = (message: ExtensionMessage): boolean => {
-	if (!message.sessionId) {
-		return false;
+const handleUnifiedSessionEvent = (message: SessionEventMessage, ctx: HandlerContext): boolean => {
+	const { chatActions, uiActions } = ctx;
+
+	// Handle sessionInfo as a UI-only event.
+	if (message.eventType === 'session_info') {
+		const info = (
+			message.payload as {
+				eventType: 'session_info';
+				data: { sessionId: string; tools: string[]; mcpServers: string[] };
+			}
+		).data;
+		uiActions.setSessionInfo({
+			sessionId: info.sessionId,
+			tools: info.tools || [],
+			mcpServers: info.mcpServers || [],
+		});
+		return true;
 	}
-	const activeSessionId = useChatStore.getState().activeSessionId;
-	return message.sessionId === activeSessionId;
+
+	// Dispatch all other session events to the unified store handler.
+	chatActions.dispatch(message.targetId, message.eventType, message.payload);
+	return true;
+};
+
+/**
+ * Handle session lifecycle events (created, closed, switched, cleared).
+ */
+const handleSessionLifecycleEvent = (
+	message: SessionLifecycleMessage,
+	ctx: HandlerContext,
+): boolean => {
+	const { chatActions } = ctx;
+
+	switch (message.action) {
+		case 'created':
+			chatActions.handleSessionCreated(message.sessionId);
+			return true;
+
+		case 'closed':
+			chatActions.closeSession(message.sessionId);
+			return true;
+
+		case 'switched':
+			chatActions.switchSession(message.sessionId);
+			// If data includes messages, set them
+			if (message.data?.messages) {
+				chatActions.setSessionMessages(message.sessionId, message.data.messages as Message[]);
+			}
+			// If data includes processing state, set it
+			if (message.data?.isProcessing !== undefined) {
+				chatActions.setProcessing(message.data.isProcessing, message.sessionId);
+			}
+			// If data includes totalStats, set them
+			if (message.data?.totalStats) {
+				chatActions.setTotalStats(message.data.totalStats, message.sessionId);
+			}
+			return true;
+
+		case 'cleared':
+			chatActions.clearMessages(message.sessionId);
+			return true;
+
+		default:
+			console.warn(`[useExtensionMessages] Unknown lifecycle action: ${message.action}`);
+			return false;
+	}
 };
 
 // =============================================================================
-// Session & Lifecycle Handlers
+// Session & Lifecycle Handlers (only non-unified events)
 // =============================================================================
 
 const handleSessionMessages = (message: ExtensionMessage, ctx: HandlerContext): boolean => {
-	const { chatActions, uiActions } = ctx;
+	const { uiActions } = ctx;
 
 	switch (message.type) {
-		case 'ready':
-			chatActions.setLoading(false, message.sessionId);
-			chatActions.setStatus('Ready', message.sessionId);
-			chatActions.setProcessing(false, message.sessionId);
-			chatActions.setStreamingToolId(null, message.sessionId);
-			if (message.data && message.sessionId) {
-				const targetMessages =
-					useChatStore.getState().sessionsById[message.sessionId]?.messages ?? [];
-				const hasWelcome = targetMessages.some(
-					m => m.type === 'assistant' && m.content === message.data,
-				);
-				if (!hasWelcome) {
-					chatActions.addMessage(
-						{
-							type: 'assistant',
-							content: message.data,
-							timestamp: new Date().toISOString(),
-						},
-						message.sessionId,
-					);
-				}
-			}
-			return true;
-
-		case 'loading':
-			chatActions.setLoading(true, message.sessionId);
-			if (message.data) {
-				chatActions.setStatus(message.data, message.sessionId);
-			}
-			return true;
-
-		case 'clearLoading':
-			chatActions.setLoading(false, message.sessionId);
-			chatActions.setStatus('Ready', message.sessionId);
-			return true;
-
-		case 'setProcessing':
-			chatActions.setProcessing(message.data?.isProcessing ?? false, message.sessionId);
-			if (!message.data?.isProcessing) {
-				chatActions.setStreamingToolId(null, message.sessionId);
-			}
-			return true;
-
-		case 'sessionRetrying':
-			// OpenCode SDK is auto-retrying after an error
-			if (message.data) {
-				const { attempt, message: retryMessage, nextRetryAt } = message.data;
-				chatActions.setAutoRetrying(
-					true,
-					{
-						attempt: attempt ?? 1,
-						message: retryMessage ?? 'Retrying request...',
-						nextRetryAt,
-					},
-					message.sessionId,
-				);
-			}
-			return true;
-
-		case 'sessionIdle': {
-			// Session is idle - clear retry state and stop processing
-			chatActions.setAutoRetrying(false, undefined, message.sessionId);
-			chatActions.setProcessing(false, message.sessionId);
-			chatActions.setStreamingToolId(null, message.sessionId);
-
-			// If this is a child session of a running subtask, mark that specific subtask as completed.
-			if (message.data?.sessionId) {
-				const idleSessionId = message.data.sessionId;
-				const state = useChatStore.getState();
-				for (const sessionId of state.sessionOrder) {
-					const session = state.sessionsById[sessionId];
-					if (!session) continue;
-					for (const msg of session.messages) {
-						if (msg.type !== 'subtask') {
-							continue;
-						}
-						if (msg.childSessionId !== idleSessionId) {
-							continue;
-						}
-						if (msg.status !== 'running') {
-							continue;
-						}
-
-						if (!msg.id) {
-							continue;
-						}
-						chatActions.completeSubtask(msg.id);
-					}
-				}
-			}
-			return true;
-		}
-
-		case 'sessionCreated':
-			if (message.data?.sessionId) {
-				const newSessionId = message.data.sessionId;
-				// Create session in store but don't auto-switch (parallel sessions support)
-				chatActions.handleSessionCreated(newSessionId);
-				// Only switch if this is the first session (no active session yet)
-				const state = useChatStore.getState();
-				if (!state.activeSessionId) {
-					chatActions.switchSession(newSessionId);
-				}
-			}
-			return true;
-
-		case 'child-session-created': {
-			if (message.data) {
-				const { id: childSessionId } = message.data;
-				const state = useChatStore.getState();
-				// parentID is CLI session ID, not UI session ID
-				// Use active session instead since events are routed to active session
-				const activeSessionId = state.activeSessionId;
-				const parentSession = activeSessionId ? state.sessionsById[activeSessionId] : undefined;
-
-				console.log(
-					`[useExtensionMessages] child-session-created: childSessionId=${childSessionId}, activeSessionId=${activeSessionId}`,
-				);
-
-				if (parentSession) {
-					// OpenCode can create multiple child sessions concurrently (multi-subtasks).
-					// We link deterministically by picking the oldest running subtask without a childSessionId.
-					const candidateSubtasks = parentSession.messages
-						.filter(
-							(m): m is Message & { type: 'subtask'; status: string; childSessionId?: string } =>
-								m.type === 'subtask' &&
-								(m as { status?: string }).status === 'running' &&
-								(!(m as { childSessionId?: string }).childSessionId ||
-									(m as { childSessionId?: string }).childSessionId?.length === 0),
-						)
-						.sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
-
-					console.log(
-						`[useExtensionMessages] Found ${candidateSubtasks.length} candidate subtasks:`,
-						candidateSubtasks.map(s => ({ id: s.id, status: s.status })),
-					);
-
-					const subtaskToLink = candidateSubtasks[0];
-					if (subtaskToLink?.id) {
-						console.log(
-							`[useExtensionMessages] Linking childSessionId ${childSessionId} to subtask ${subtaskToLink.id}`,
-						);
-						chatActions.linkChildSessionToSubtask(childSessionId, subtaskToLink.id);
-					}
-				} else {
-					console.warn(
-						`[useExtensionMessages] No parent session found for activeSessionId=${activeSessionId}`,
-					);
-				}
-			}
-			return true;
-		}
-
-		case 'sessionSwitched':
-			if (message.data) {
-				const { sessionId, isProcessing, totalStats } = message.data;
-				// First switch session (this updates activeSessionId and loads empty/stale messages)
-				chatActions.switchSession(sessionId);
-
-				// Then update processing/stats if provided
-				if (isProcessing !== undefined) {
-					chatActions.setProcessing(isProcessing, sessionId);
-				}
-				if (totalStats) {
-					chatActions.setTotalStats(totalStats, sessionId);
-				}
-			}
-			return true;
-
-		case 'sessionClosed':
-			if (message.data?.sessionId) {
-				chatActions.closeSession(message.data.sessionId);
-			}
-			return true;
-
-		case 'sessionCleared':
-			chatActions.clearMessages(message.sessionId);
-			chatActions.setProcessing(false, message.sessionId);
-			chatActions.setStreamingToolId(null, message.sessionId);
-			return true;
-
-		case 'sessionProcessingComplete':
-			if (message.data) {
-				const { sessionId, stats } = message.data;
-				chatActions.setTotalStats(stats, sessionId);
-				chatActions.setProcessing(false, sessionId);
-				chatActions.setStreamingToolId(null, sessionId);
-			}
-			return true;
-
 		case 'workspaceInfo':
 			if (message.data?.name) {
 				uiActions.setWorkspaceName(message.data.name);
-			}
-			return true;
-
-		case 'sessionInfo':
-			if (message.data) {
-				const { sessionId, tools, mcpServers } = message.data;
-				uiActions.setSessionInfo({
-					sessionId,
-					tools: tools || [],
-					mcpServers: mcpServers || [],
-				});
 			}
 			return true;
 
@@ -270,7 +128,6 @@ const handleSessionMessages = (message: ExtensionMessage, ctx: HandlerContext): 
 				const { name } = message.data.project;
 				if (name) {
 					uiActions.setWorkspaceName(name);
-					// Silent operation
 				}
 			}
 			return true;
@@ -281,448 +138,33 @@ const handleSessionMessages = (message: ExtensionMessage, ctx: HandlerContext): 
 };
 
 // =============================================================================
-// Chat Message Handlers
+// Chat Message Handlers (all handled by session_event now)
 // =============================================================================
 
-const handleChatMessages = (message: ExtensionMessage, ctx: HandlerContext): boolean => {
-	const { chatActions } = ctx;
-
-	switch (message.type) {
-		case 'userInput':
-		case 'user': {
-			const data = message.data;
-			type UserInputData = { text?: string; messageId?: string; model?: string };
-			const msgInput =
-				message.type === 'user'
-					? (message as unknown as Message)
-					: {
-							type: 'user' as const,
-							content:
-								(typeof data === 'string' ? data : (data as UserInputData | undefined)?.text) || '',
-							id: (data as UserInputData | undefined)?.messageId,
-							model: (data as UserInputData | undefined)?.model,
-							timestamp: new Date().toISOString(),
-						};
-			chatActions.addMessage(msgInput, message.sessionId);
-			return true;
-		}
-
-		case 'output':
-		case 'assistant': {
-			const msg = message as unknown as {
-				content?: string;
-				data?: string;
-				id?: string;
-				partId?: string;
-				childSessionId?: string;
-				hidden?: boolean;
-			};
-			const content =
-				message.type === 'assistant' ? (msg.content ?? '') : (msg.data as string) || '';
-
-			// If from child session, add to child session instead of main
-			if (msg.childSessionId) {
-				chatActions.addMessageToSession(msg.childSessionId, {
-					type: 'assistant',
-					content,
-					id: msg.id ?? msg.partId,
-					partId: msg.partId,
-					timestamp: new Date().toISOString(),
-				});
-				return true;
-			}
-
-			// Otherwise add to current session
-			chatActions.addMessage(
-				{
-					type: 'assistant',
-					content,
-					id: msg.id ?? msg.partId,
-					partId: msg.partId,
-					timestamp: new Date().toISOString(),
-				},
-				message.sessionId,
-			);
-			return true;
-		}
-
-		case 'system_notice': {
-			type SystemNoticePayload = {
-				id?: string;
-				timestamp?: string;
-				content?: string;
-			};
-			const msg = message as unknown as SystemNoticePayload;
-			chatActions.addMessage(
-				{
-					type: 'system_notice',
-					content: msg.content || 'Summarizing context',
-					id: msg.id,
-					timestamp: msg.timestamp ?? new Date().toISOString(),
-				},
-				message.sessionId,
-			);
-			return true;
-		}
-
-		case 'thinking': {
-			type ThinkingPayload = {
-				id?: string;
-				partId?: string;
-				content?: string;
-				data?: string;
-				durationMs?: number;
-				reasoningTokens?: number;
-				isStreaming?: boolean;
-				isDelta?: boolean;
-				startTime?: number;
-				parentToolUseId?: string;
-			};
-			const msg = message as unknown as ThinkingPayload;
-			const content = msg.content ?? msg.data;
-
-			chatActions.addMessage(
-				{
-					type: 'thinking',
-					content: content || '',
-					// Prefer extension-provided id; fallback to partId for streaming identity.
-					id: msg.id ?? msg.partId,
-					partId: msg.partId,
-					durationMs: msg.durationMs,
-					reasoningTokens: msg.reasoningTokens,
-					isStreaming: msg.isStreaming,
-					isDelta: msg.isDelta,
-					startTime: msg.startTime,
-					timestamp: new Date().toISOString(),
-					hidden: !!msg.parentToolUseId,
-				},
-				message.sessionId,
-			);
-
-			if (msg.parentToolUseId && msg.id) {
-				chatActions.addChildToSubtask(msg.parentToolUseId, msg.id);
-			}
-			return true;
-		}
-
-		case 'subtask': {
-			const subtask = message as SubtaskExtensionMessage;
-			if (subtask.status === 'completed') {
-				chatActions.completeSubtask(subtask.id, subtask.result);
-			} else if (subtask.status === 'error') {
-				chatActions.errorSubtask(subtask.id, subtask.result || 'Unknown error');
-			} else {
-				chatActions.startSubtask({
-					type: 'subtask',
-					id: subtask.id,
-					timestamp: subtask.timestamp || new Date().toISOString(),
-					agent: subtask.agent,
-					prompt: subtask.prompt,
-					description: subtask.description,
-					command: subtask.command,
-					status: subtask.status,
-					messageID: subtask.messageID,
-				});
-			}
-			return true;
-		}
-
-		case 'error': {
-			type ErrorPayload = { id?: string; timestamp?: string; content?: string };
-			const topLevel = message as unknown as ErrorPayload;
-			const fromData =
-				message.data && typeof message.data === 'object'
-					? (message.data as ErrorPayload)
-					: undefined;
-			const content = topLevel.content ?? fromData?.content;
-
-			chatActions.addMessage(
-				{
-					type: 'error',
-					content: content || 'Unknown error',
-					id: topLevel.id ?? fromData?.id,
-					timestamp: topLevel.timestamp ?? fromData?.timestamp ?? new Date().toISOString(),
-				},
-				message.sessionId,
-			);
-			chatActions.setProcessing(false, message.sessionId);
-			chatActions.setStreamingToolId(null, message.sessionId);
-			return true;
-		}
-
-		case 'interrupted': {
-			type InterruptedPayload = {
-				id?: string;
-				timestamp?: string;
-				content?: string;
-				reason?: string;
-			};
-			const data =
-				message.data && typeof message.data === 'object'
-					? (message.data as InterruptedPayload)
-					: undefined;
-
-			chatActions.addMessage(
-				{
-					type: 'interrupted',
-					content: data?.content ?? 'Processing was interrupted',
-					reason: data?.reason,
-					id: data?.id,
-					timestamp: data?.timestamp ?? new Date().toISOString(),
-				},
-				message.sessionId,
-			);
-			chatActions.setProcessing(false, message.sessionId);
-			chatActions.setStreamingToolId(null, message.sessionId);
-			return true;
-		}
-
-		case 'messagePartRemoved': {
-			const data = message.data as { messageId: string; partId: string } | undefined;
-			if (data?.partId) {
-				chatActions.removeMessageByPartId(data.partId, message.sessionId);
-			}
-			return true;
-		}
-
-		default:
-			return false;
-	}
+const handleChatMessages = (_message: ExtensionMessage, _ctx: HandlerContext): boolean => {
+	// All chat messages are now handled via session_event
+	return false;
 };
 
 // =============================================================================
-// Tool Handlers
+// Tool Handlers (all handled by session_event now)
 // =============================================================================
 
-const handleToolMessages = (message: ExtensionMessage, ctx: HandlerContext): boolean => {
-	const { chatActions } = ctx;
-
-	switch (message.type) {
-		case 'toolUse':
-		case 'tool_use': {
-			type ToolUseData = {
-				toolName: string;
-				toolUseId: string;
-				toolInput?: string;
-				rawInput?: Record<string, unknown>;
-				filePath?: string;
-				streamingOutput?: string;
-				isRunning?: boolean;
-				metadata?: Record<string, unknown>;
-				parentToolUseId?: string;
-				childSessionId?: string;
-				hidden?: boolean;
-			};
-			const data = (message.type === 'tool_use' ? message : message.data) as ToolUseData;
-
-			if (!data?.toolName) {
-				console.warn('[useExtensionMessages] tool_use message missing toolName:', message);
-				return true;
-			}
-
-			// If from child session, add to child session instead of main
-			if (data.childSessionId) {
-				chatActions.addMessageToSession(data.childSessionId, {
-					type: 'tool_use',
-					toolName: data.toolName,
-					toolUseId: data.toolUseId,
-					id: data.toolUseId,
-					toolInput: data.toolInput,
-					rawInput: data.rawInput,
-					filePath: data.filePath || undefined,
-					streamingOutput: data.streamingOutput,
-					isRunning: data.isRunning,
-					metadata: data.metadata,
-					timestamp: new Date().toISOString(),
-				});
-				return true;
-			}
-
-			// Otherwise add to current session
-			const shouldHide = !!data.parentToolUseId;
-
-			chatActions.addMessage(
-				{
-					type: 'tool_use',
-					toolName: data.toolName,
-					toolUseId: data.toolUseId,
-					id: data.toolUseId,
-					toolInput: data.toolInput,
-					rawInput: data.rawInput,
-					filePath: data.filePath || undefined,
-					streamingOutput: data.streamingOutput,
-					isRunning: data.isRunning,
-					metadata: data.metadata,
-					timestamp: new Date().toISOString(),
-					hidden: shouldHide,
-				},
-				message.sessionId,
-			);
-
-			// If it's a child tool call (subtask), link it to the parent
-			if (data.parentToolUseId) {
-				chatActions.addChildToSubtask(data.parentToolUseId, data.toolUseId);
-			}
-
-			if (isToolInList(data.toolName, FILE_EDIT_TOOLS) || data.toolName === 'TodoWrite') {
-				if (
-					data.isRunning ||
-					(typeof data.streamingOutput === 'string' && data.streamingOutput.length > 0)
-				) {
-					chatActions.setStreamingToolId(data.toolUseId, message.sessionId);
-				}
-			}
-			return true;
-		}
-
-		case 'toolResult':
-		case 'tool_result': {
-			type ToolResultData = {
-				toolName: string;
-				toolUseId: string;
-				content: string;
-				isError: boolean;
-				estimatedTokens?: number;
-				hidden?: boolean;
-				title?: string;
-				durationMs?: number;
-				attachments?: Array<{
-					id: string;
-					mime: string;
-					filename?: string;
-					url: string;
-				}>;
-				metadata?: Record<string, unknown>;
-				parentToolUseId?: string;
-				childSessionId?: string;
-			};
-			const data = (message.type === 'tool_result' ? message : message.data) as ToolResultData;
-
-			// If from child session, add to child session instead of main
-			if (data.childSessionId) {
-				chatActions.addMessageToSession(data.childSessionId, {
-					type: 'tool_result',
-					toolName: data.toolName,
-					toolUseId: data.toolUseId,
-					id: data.toolUseId ? `${data.toolUseId}:result` : undefined,
-					content: data.content,
-					isError: data.isError,
-					timestamp: new Date().toISOString(),
-					estimatedTokens:
-						data.estimatedTokens ?? (data.content ? Math.ceil(data.content.length / 4) : 0),
-					title: data.title,
-					durationMs: data.durationMs,
-					attachments: data.attachments,
-					metadata: data.metadata,
-				});
-				chatActions.setStreamingToolId(null, data.childSessionId);
-				return true;
-			}
-
-			// Otherwise add to current session
-			const shouldHide = !!data.parentToolUseId;
-
-			chatActions.addMessage(
-				{
-					type: 'tool_result',
-					toolName: data.toolName,
-					toolUseId: data.toolUseId,
-					id: data.toolUseId ? `${data.toolUseId}:result` : undefined,
-					content: data.content,
-					isError: data.isError,
-					timestamp: new Date().toISOString(),
-					estimatedTokens:
-						data.estimatedTokens ?? (data.content ? Math.ceil(data.content.length / 4) : 0),
-					hidden: shouldHide,
-					title: data.title,
-					durationMs: data.durationMs,
-					attachments: data.attachments,
-					metadata: data.metadata,
-				},
-				message.sessionId,
-			);
-			chatActions.setStreamingToolId(null, message.sessionId);
-
-			// If it's a child tool call (subtask), link it to the parent
-			if (data.parentToolUseId) {
-				chatActions.addChildToSubtask(data.parentToolUseId, data.toolUseId);
-			}
-			return true;
-		}
-
-		default:
-			return false;
-	}
+const handleToolMessages = (_message: ExtensionMessage, _ctx: HandlerContext): boolean => {
+	// All tool messages are now handled via session_event
+	return false;
 };
 
 // =============================================================================
-// Access Handlers
+// Access Handlers (only global accessData - session-specific handled by session_event)
 // =============================================================================
 
 const handleAccessMessages = (message: ExtensionMessage, ctx: HandlerContext): boolean => {
-	const { chatActions, settingsActions } = ctx;
+	const { settingsActions } = ctx;
 
 	switch (message.type) {
-		case 'accessRequest':
-		case 'access_request': {
-			type AccessRequestData = {
-				requestId?: string;
-				id?: string;
-				tool: string;
-				input: Record<string, unknown>;
-				pattern?: string;
-				timestamp?: number;
-				toolUseId?: string;
-			};
-			const data = (
-				message.type === 'access_request' ? message : message.data
-			) as AccessRequestData;
-			const requestId = data.requestId || data.id || '';
-			chatActions.addMessage(
-				{
-					type: 'access_request',
-					requestId,
-					// Stable id ensures repeated events update instead of append.
-					id: requestId || undefined,
-					toolUseId: data.toolUseId,
-					tool: data.tool,
-					input: data.input,
-					pattern: data.pattern,
-					timestamp:
-						typeof data.timestamp === 'string'
-							? data.timestamp
-							: new Date(data.timestamp || Date.now()).toISOString(),
-				},
-				message.sessionId,
-			);
-			return true;
-		}
-
-		case 'accessResponse':
-			if (message.data) {
-				const { id, approved } = message.data;
-				const sid = message.sessionId || useChatStore.getState().activeSessionId;
-				const messages = sid ? (useChatStore.getState().sessionsById[sid]?.messages ?? []) : [];
-				const requestMsg = messages.find(
-					m =>
-						m.type === 'access_request' &&
-						(m as Extract<Message, { type: 'access_request' }>).requestId === id,
-				);
-
-				if (requestMsg?.id) {
-					chatActions.updateMessage(
-						requestMsg.id,
-						{
-							resolved: true,
-							approved,
-						},
-						message.sessionId,
-					);
-				}
-			}
-			return true;
-
 		case 'accessData':
+			// Global access settings (not session-specific)
 			if (message.data) {
 				const access = Array.isArray(message.data)
 					? (message.data as Access[])
@@ -737,173 +179,36 @@ const handleAccessMessages = (message: ExtensionMessage, ctx: HandlerContext): b
 };
 
 // =============================================================================
-// Stats & Tokens Handlers
+// Stats & Tokens Handlers (all handled by session_event now)
 // =============================================================================
 
-const handleStatsMessages = (message: ExtensionMessage, ctx: HandlerContext): boolean => {
-	const { chatActions } = ctx;
-
-	switch (message.type) {
-		case 'updateTokens':
-			if (message.data) {
-				chatActions.setTokenStats(message.data, message.sessionId);
-			}
-			return true;
-
-		case 'updateTotals':
-			if (message.data) {
-				chatActions.setTotalStats(message.data, message.sessionId);
-			}
-			return true;
-
-		default:
-			return false;
-	}
+const handleStatsMessages = (_message: ExtensionMessage, _ctx: HandlerContext): boolean => {
+	// All stats messages are now handled via session_event
+	return false;
 };
 
 // =============================================================================
-// Restore & Revert Handlers
+// Restore & Revert Handlers (all handled by session_event now)
 // =============================================================================
 
-const handleRestoreMessages = (message: ExtensionMessage, ctx: HandlerContext): boolean => {
-	const { chatActions } = ctx;
-
-	switch (message.type) {
-		case 'showRestoreOption':
-			if (message.data) {
-				chatActions.addRestoreCommit(message.data, message.sessionId);
-			}
-			return true;
-
-		case 'clearRestoreCommits':
-			chatActions.clearRestoreCommits(message.sessionId);
-			return true;
-
-		case 'updateRestoreCommits':
-			chatActions.setRestoreCommits(message.data ?? [], message.sessionId);
-			return true;
-
-		case 'restoreInputText':
-			if (message.data) {
-				chatActions.setInput(message.data, message.sessionId);
-			}
-			return true;
-
-		case 'messagesReloaded':
-			if (message.data) {
-				const { messages } = message.data as { messages: Message[] };
-				const targetSessionId = message.sessionId;
-
-				if (targetSessionId) {
-					console.debug(
-						`[ExtensionMessages] Reloading ${messages.length} messages for session: ${targetSessionId}`,
-					);
-					chatActions.setSessionMessages(targetSessionId, messages);
-				} else {
-					console.warn('[ExtensionMessages] messagesReloaded ignored: missing sessionId');
-				}
-			}
-			return true;
-
-		case 'restoreSuccess':
-			if (message.data) {
-				const { canUnrevert } = message.data as {
-					message: string;
-					canUnrevert?: boolean;
-				};
-				// Silent operation
-				if (canUnrevert !== undefined) {
-					chatActions.setUnrevertAvailable(canUnrevert, message.sessionId);
-				}
-			}
-			return true;
-
-		case 'unrevertAvailable':
-			if (message.data) {
-				const { available } = message.data as { available?: boolean; sessionId?: string };
-				chatActions.setUnrevertAvailable(available !== false, message.sessionId);
-				if (available === false && isMessageForActiveSession(message)) {
-					chatActions.markRevertedFromMessageId(null);
-				}
-			}
-			return true;
-
-		case 'restoreError':
-			return true;
-
-		case 'restoreProgress':
-			// Silent operation
-			return true;
-
-		case 'deleteMessagesAfter':
-			// Cursor-style restore: delete messages after the specified message ID
-			// User message stays in place for inline editing
-			if (message.data) {
-				const { messageId } = message.data as { messageId: string };
-				const targetSessionId = message.sessionId;
-
-				if (messageId && targetSessionId) {
-					console.debug(
-						`[ExtensionMessages] Deleting messages after ${messageId} for session: ${targetSessionId}`,
-					);
-					chatActions.deleteMessagesAfterMessageId(targetSessionId, messageId);
-				} else if (!targetSessionId) {
-					console.warn('[ExtensionMessages] deleteMessagesAfter ignored: missing sessionId');
-				}
-			}
-			return true;
-
-		default:
-			return false;
-	}
+const handleRestoreMessages = (_message: ExtensionMessage, _ctx: HandlerContext): boolean => {
+	// All restore messages are now handled via session_event
+	return false;
 };
 
 // =============================================================================
-// File Handlers
+// File Handlers (only global - session-specific handled by session_event)
 // =============================================================================
 
 const handleFileMessages = (message: ExtensionMessage, ctx: HandlerContext): boolean => {
-	const { chatActions, uiActions } = ctx;
+	const { uiActions } = ctx;
 
 	switch (message.type) {
 		case 'workspaceFiles':
+			// Global workspace files list (not session-specific)
 			if (Array.isArray(message.data)) {
 				uiActions.setWorkspaceFiles(message.data as WorkspaceFile[]);
 			}
-			return true;
-
-		case 'fileChanged':
-			if (message.data) {
-				const {
-					filePath,
-					changeType: _changeType,
-					linesAdded = 0,
-					linesRemoved = 0,
-					toolUseId = '',
-				} = message.data;
-				const fileName = filePath.split(/[/\\]/).pop() || filePath;
-				chatActions.addChangedFile({
-					filePath,
-					fileName,
-					linesAdded,
-					linesRemoved,
-					toolUseId,
-					timestamp: Date.now(),
-				});
-				// Silent operation
-			}
-			return true;
-
-		case 'fileChangeUndone':
-			if (message.data?.filePath) {
-				chatActions.removeChangedFile(message.data.filePath);
-				// Silent operation
-			}
-			return true;
-
-		case 'allChangesUndone':
-			chatActions.clearChangedFiles();
-			// Silent operation
 			return true;
 
 		case 'imagePath':
@@ -1557,14 +862,6 @@ const handleDataMessages = (message: ExtensionMessage, ctx: HandlerContext): boo
 			// Silent operation
 			return true;
 
-		case 'loginRequired':
-			// Silent operation
-			return true;
-
-		case 'terminalOpened':
-			// Silent operation
-			return true;
-
 		case 'improvePromptResult':
 			if (message.data) {
 				const { improvedText, requestId } = message.data as {
@@ -1615,34 +912,24 @@ const handleExtensionMessage = (message: ExtensionMessage): void => {
 	const uiActions = useUIStore.getState().actions;
 	const settingsActions = useSettingsStore.getState().actions;
 
-	// Filter session-specific messages - allow processing state updates for background sessions
-	// If a session-scoped message lacks sessionId, ignore it to prevent cross-session leaks.
-	if (isSessionSpecificMessage(message) && !message.sessionId) {
-		console.warn(
-			`[useExtensionMessages] Ignored session-scoped message without sessionId: ${message.type}`,
-		);
+	const ctx: HandlerContext = { chatActions, uiActions, settingsActions };
+
+	// ==========================================================================
+	// Handle unified session events first
+	// ==========================================================================
+	if (message.type === 'session_event') {
+		handleUnifiedSessionEvent(message as SessionEventMessage, ctx);
 		return;
 	}
-	if (isSessionSpecificMessage(message) && !isMessageForActiveSession(message)) {
-		const allowBackgroundTypes = new Set([
-			'showRestoreOption',
-			'clearRestoreCommits',
-			'updateRestoreCommits',
-			'messagesReloaded',
-			'fileChanged',
-			'sessionIdle', // Allow background sessions to report idle status (to complete subtasks)
-			'child-session-created',
-			'setProcessing', // Allow background sessions to update processing state
-			'sessionRetrying', // Allow background sessions to update retry status
-			'updateTotals', // Allow background sessions to update token stats
-			'messagePartRemoved', // Allow removing messages from background sessions
-		]);
-		if (!allowBackgroundTypes.has(message.type)) {
-			return;
-		}
+
+	if (message.type === 'session_lifecycle') {
+		handleSessionLifecycleEvent(message as SessionLifecycleMessage, ctx);
+		return;
 	}
 
-	const ctx: HandlerContext = { chatActions, uiActions, settingsActions };
+	// ==========================================================================
+	// Global message handling (non-session-specific messages)
+	// ==========================================================================
 
 	// Try each handler category in order
 	if (handleSessionMessages(message, ctx)) {

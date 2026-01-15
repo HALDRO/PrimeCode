@@ -317,18 +317,38 @@ export class SettingsHandler {
 
 	public openModelTerminal(): void {
 		this._settingsService.openModelTerminal(this._deps.getCLISessionId());
-		this._deps.postMessage({
-			type: 'terminalOpened',
-			data: 'Check terminal to update model configuration.',
-		});
+		const activeSessionId = this._deps.getSessionManager().activeSessionId;
+		if (activeSessionId) {
+			this._deps.postMessage({
+				type: 'session_event',
+				targetId: activeSessionId,
+				eventType: 'terminal',
+				payload: {
+					eventType: 'terminal',
+					action: 'opened',
+					content: 'Check terminal to update model configuration.',
+				},
+				timestamp: Date.now(),
+			});
+		}
 	}
 
 	public executeSlashCommand(command: string): void {
 		this._settingsService.executeSlashCommand(command, this._deps.getCLISessionId());
-		this._deps.postMessage({
-			type: 'terminalOpened',
-			data: `Executing /${command}. Check terminal.`,
-		});
+		const activeSessionId = this._deps.getSessionManager().activeSessionId;
+		if (activeSessionId) {
+			this._deps.postMessage({
+				type: 'session_event',
+				targetId: activeSessionId,
+				eventType: 'terminal',
+				payload: {
+					eventType: 'terminal',
+					action: 'opened',
+					content: `Executing /${command}. Check terminal.`,
+				},
+				timestamp: Date.now(),
+			});
+		}
 	}
 
 	public async sendAccess(): Promise<void> {

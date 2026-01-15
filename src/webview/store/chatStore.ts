@@ -4,6 +4,7 @@
  * Stores all per-chat UI state (messages, input, status, streaming/tool state, stats) in `sessionsById`.
  * Uses `sessionOrder` to preserve tab ordering without O(n) lookups.
  * This design prevents cross-session leaks and enables fully parallel independent sessions.
+ * Supports unified session event protocol for simplified message routing.
  */
 
 import { create } from 'zustand';
@@ -11,6 +12,18 @@ import { persist } from 'zustand/middleware';
 import type {
 	CommitInfo,
 	ConversationMessage,
+	SessionAccessPayload,
+	SessionDeleteMessagesAfterPayload,
+	SessionEventPayload,
+	SessionEventType,
+	SessionFilePayload,
+	SessionMessagePayload,
+	SessionMessageRemovedPayload,
+	SessionMessagesReloadPayload,
+	SessionRestorePayload,
+	SessionStatsPayload,
+	SessionStatusPayload,
+	SessionTerminalPayload,
 	SubtaskMessage,
 	TokenStats,
 	TotalStats,
@@ -54,8 +67,6 @@ export interface ChatSession {
 	revertedFromMessageId: string | null;
 	tokenStats: TokenStats;
 	totalStats: TotalStats;
-	isChildSession?: boolean;
-	parentSessionId?: string;
 }
 
 export interface ChatState {
@@ -70,10 +81,22 @@ export interface ChatState {
 }
 
 export interface ChatActions {
+	// ==========================================================================
+	// Unified Session Event Dispatch (new architecture)
+	// ==========================================================================
+
+	/**
+	 * Unified event dispatcher for session events from the extension.
+	 * Routes events to the correct session based on targetId.
+	 * Auto-creates child sessions if they don't exist.
+	 */
+	dispatch: (targetId: string, eventType: SessionEventType, payload: SessionEventPayload) => void;
+
+	// ==========================================================================
 	// Session-aware message actions
+	// ==========================================================================
+
 	addMessage: (msg: MessageInput, sessionId?: string) => void;
-	addMessageToSession: (sessionId: string, msg: MessageInput, parentSessionId?: string) => void;
-	removeChildSession: (sessionId: string) => void;
 	clearMessages: (sessionId?: string) => void;
 	updateMessage: (id: string, updates: Partial<Message>, sessionId?: string) => void;
 	deleteMessagesFromId: (id: string, sessionId?: string) => void;
@@ -232,12 +255,7 @@ function removeSession(state: ChatState, sessionId: string): ChatState {
 function filterPersistedSessions(
 	sessionsById: Record<string, ChatSession>,
 ): Record<string, ChatSession> {
-	const next: Record<string, ChatSession> = {};
-	for (const [id, session] of Object.entries(sessionsById)) {
-		if (session.isChildSession) continue;
-		next[id] = session;
-	}
-	return next;
+	return sessionsById;
 }
 
 // =============================================================================
@@ -255,6 +273,393 @@ export const useChatStore = create<ChatState>()(
 			improvingPromptRequestId: null,
 
 			actions: {
+				// ==========================================================================
+				// Unified Session Event Dispatch (new architecture)
+				// ==========================================================================
+
+				dispatch: (targetId, eventType, payload) => {
+					set(state => {
+						// Get or create target session
+						let targetSession = state.sessionsById[targetId];
+						let newState = state;
+
+						// Auto-create session if it doesn't exist.
+						// Do NOT infer child/parent by activeSessionId: that heuristic breaks
+						// for background sessions and during initialization races.
+						if (!targetSession) {
+							const newSession: ChatSession = {
+								...createEmptySession(targetId),
+							};
+							newState = upsertSession(state, newSession, { ensureOrder: true });
+							targetSession = newState.sessionsById[targetId];
+						}
+
+						switch (eventType) {
+							case 'message': {
+								const msgPayload = payload as SessionMessagePayload;
+								const msgData = msgPayload.message;
+
+								// Build message from payload
+								const message: Message = {
+									id: msgData.id || `msg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+									type: msgData.type,
+									content: msgData.content,
+									timestamp: msgData.timestamp || new Date().toISOString(),
+									partId: msgData.partId,
+									isStreaming: msgData.isStreaming,
+									isDelta: msgData.isDelta,
+									hidden: msgData.hidden,
+									// Tool fields
+									toolName: msgData.toolName,
+									toolUseId: msgData.toolUseId,
+									toolInput: msgData.toolInput,
+									rawInput: msgData.rawInput,
+									filePath: msgData.filePath,
+									isError: msgData.isError,
+									isRunning: msgData.isRunning,
+									streamingOutput: msgData.streamingOutput,
+									estimatedTokens: msgData.estimatedTokens,
+									title: msgData.title,
+									durationMs: msgData.durationMs,
+									// Subtask fields
+									agent: msgData.agent,
+									prompt: msgData.prompt,
+									description: msgData.description,
+									command: msgData.command,
+									status: msgData.status,
+									result: msgData.result,
+									messageID: msgData.messageID,
+									childSessionId: msgData.childSessionId,
+									childMessages: msgData.childMessages,
+									startTime: msgData.startTime,
+									// Thinking fields
+									reasoningTokens: msgData.reasoningTokens,
+									// Access request fields
+									requestId: msgData.requestId,
+									tool: msgData.tool,
+									input: msgData.input,
+									pattern: msgData.pattern,
+									resolved: msgData.resolved,
+									approved: msgData.approved,
+									// Error fields
+									reason: msgData.reason,
+									// Model info
+									model: msgData.model,
+									// Attachments
+									attachments: msgData.attachments,
+									metadata: msgData.metadata,
+								} as Message;
+
+								// Merge or append message
+								// Use type assertion for partId since it's not in all message types
+								const msgPartId = (message as { partId?: string }).partId;
+								const existingIdx = targetSession.messages.findIndex(m => {
+									const mPartId = (m as { partId?: string }).partId;
+									return m.id === message.id || (msgPartId && mPartId === msgPartId);
+								});
+								const newMessages = [...targetSession.messages];
+
+								if (existingIdx !== -1) {
+									// Merge with existing message
+									newMessages[existingIdx] = {
+										...newMessages[existingIdx],
+										...message,
+										id: newMessages[existingIdx].id,
+									} as Message;
+								} else {
+									newMessages.push(message);
+								}
+
+								return updateSessionById(newState, targetId, s => ({
+									...s,
+									messages: newMessages,
+									lastActive: Date.now(),
+								}));
+							}
+
+							case 'status': {
+								const statusPayload = payload as SessionStatusPayload;
+								return updateSessionById(newState, targetId, s => {
+									const nextStatus =
+										statusPayload.status === 'retrying'
+											? statusPayload.retryInfo?.message || s.status
+											: statusPayload.statusText || s.status;
+									return {
+										...s,
+										isProcessing: statusPayload.status === 'busy',
+										isAutoRetrying: statusPayload.status === 'retrying',
+										retryInfo: statusPayload.retryInfo || null,
+										status: nextStatus,
+										isLoading: Boolean(statusPayload.loadingMessage),
+										lastActive: Date.now(),
+									};
+								});
+							}
+
+							case 'stats': {
+								const statsPayload = payload as SessionStatsPayload;
+								return updateSessionById(newState, targetId, s => ({
+									...s,
+									tokenStats: statsPayload.tokenStats
+										? { ...s.tokenStats, ...statsPayload.tokenStats }
+										: s.tokenStats,
+									totalStats: statsPayload.totalStats
+										? { ...s.totalStats, ...statsPayload.totalStats }
+										: s.totalStats,
+									lastActive: Date.now(),
+								}));
+							}
+
+							case 'complete': {
+								// Mark streaming as complete for a part
+								// Find message by partId and mark as not streaming
+								const completePartId = (payload as { partId?: string }).partId;
+								return updateSessionById(newState, targetId, s => ({
+									...s,
+									messages: s.messages.map(m => {
+										const mPartId = (m as { partId?: string }).partId;
+										return mPartId === completePartId ? { ...m, isStreaming: false } : m;
+									}),
+									lastActive: Date.now(),
+								}));
+							}
+
+							case 'restore': {
+								const restorePayload = payload as SessionRestorePayload;
+								switch (restorePayload.action) {
+									case 'add_commit':
+										if (restorePayload.commit) {
+											const existingCommits = targetSession.restoreCommits || [];
+											const commitToAdd = restorePayload.commit;
+											const alreadyExists = existingCommits.some(c => c.sha === commitToAdd.sha);
+											if (!alreadyExists) {
+												return updateSessionById(newState, targetId, s => ({
+													...s,
+													restoreCommits: [...existingCommits, commitToAdd],
+													lastActive: Date.now(),
+												}));
+											}
+										}
+										return newState;
+
+									case 'set_commits':
+										return updateSessionById(newState, targetId, s => ({
+											...s,
+											restoreCommits: restorePayload.commits || [],
+											lastActive: Date.now(),
+										}));
+
+									case 'clear_commits':
+										return updateSessionById(newState, targetId, s => ({
+											...s,
+											restoreCommits: [],
+											lastActive: Date.now(),
+										}));
+
+									case 'unrevert_available':
+										return updateSessionById(newState, targetId, s => ({
+											...s,
+											unrevertAvailable: restorePayload.available ?? false,
+											lastActive: Date.now(),
+										}));
+
+									case 'restore_input':
+										return updateSessionById(newState, targetId, s => ({
+											...s,
+											input: restorePayload.text || '',
+											lastActive: Date.now(),
+										}));
+
+									case 'success':
+										// Update unrevert availability if provided
+										if (restorePayload.canUnrevert !== undefined) {
+											return updateSessionById(newState, targetId, s => ({
+												...s,
+												unrevertAvailable: restorePayload.canUnrevert ?? false,
+												lastActive: Date.now(),
+											}));
+										}
+										return newState;
+
+									case 'error':
+									case 'progress':
+										// These are informational, no state change needed
+										return newState;
+
+									default:
+										return newState;
+								}
+							}
+
+							case 'file': {
+								const filePayload = payload as SessionFilePayload;
+								switch (filePayload.action) {
+									case 'changed':
+										if (filePayload.filePath) {
+											const fileName =
+												filePayload.fileName ||
+												filePayload.filePath.split(/[/\\]/).pop() ||
+												filePayload.filePath;
+											const newFile = {
+												filePath: filePayload.filePath,
+												fileName,
+												linesAdded: filePayload.linesAdded || 0,
+												linesRemoved: filePayload.linesRemoved || 0,
+												toolUseId: filePayload.toolUseId || '',
+												timestamp: Date.now(),
+											};
+											const existingFiles = targetSession.changedFiles || [];
+											const existingIdx = existingFiles.findIndex(
+												f => f.filePath === filePayload.filePath,
+											);
+											const newFiles =
+												existingIdx !== -1
+													? existingFiles.map((f, i) => (i === existingIdx ? newFile : f))
+													: [...existingFiles, newFile];
+											return updateSessionById(newState, targetId, s => ({
+												...s,
+												changedFiles: newFiles,
+												lastActive: Date.now(),
+											}));
+										}
+										return newState;
+
+									case 'undone':
+										if (filePayload.filePath) {
+											return updateSessionById(newState, targetId, s => ({
+												...s,
+												changedFiles: (s.changedFiles || []).filter(
+													f => f.filePath !== filePayload.filePath,
+												),
+												lastActive: Date.now(),
+											}));
+										}
+										return newState;
+
+									case 'all_undone':
+										return updateSessionById(newState, targetId, s => ({
+											...s,
+											changedFiles: [],
+											lastActive: Date.now(),
+										}));
+
+									default:
+										return newState;
+								}
+							}
+
+							case 'access': {
+								const accessPayload = payload as SessionAccessPayload;
+								if (accessPayload.action === 'response') {
+									// Find and update the access_request message
+									const updatedMessages = targetSession.messages.map(m => {
+										if (
+											m.type === 'access_request' &&
+											(m as { requestId?: string }).requestId === accessPayload.requestId
+										) {
+											return {
+												...m,
+												resolved: true,
+												approved: accessPayload.approved,
+											};
+										}
+										return m;
+									});
+									return updateSessionById(newState, targetId, s => ({
+										...s,
+										messages: updatedMessages,
+										lastActive: Date.now(),
+									}));
+								}
+								return newState;
+							}
+
+							case 'messages_reload': {
+								const reloadPayload = payload as SessionMessagesReloadPayload;
+								const messages = (reloadPayload.messages || []).map(
+									(m: { id?: string; timestamp?: string }) => ({
+										...m,
+										id: m.id || `msg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+										timestamp: m.timestamp || new Date().toISOString(),
+									}),
+								) as Message[];
+								return updateSessionById(newState, targetId, s => ({
+									...s,
+									messages,
+									lastActive: Date.now(),
+								}));
+							}
+
+							case 'delete_messages_after': {
+								const deletePayload = payload as SessionDeleteMessagesAfterPayload;
+								const messageId = deletePayload.messageId;
+								if (!messageId) return newState;
+
+								const idx = targetSession.messages.findIndex(m => m.id === messageId);
+								if (idx === -1) return newState;
+
+								// Keep messages up to and including the target message
+								const newMessages = targetSession.messages.slice(0, idx + 1);
+								return updateSessionById(newState, targetId, s => ({
+									...s,
+									messages: newMessages,
+									revertedFromMessageId: messageId,
+									lastActive: Date.now(),
+								}));
+							}
+
+							case 'message_removed': {
+								const removedPayload = payload as SessionMessageRemovedPayload;
+								if (removedPayload.partId || removedPayload.messageId) {
+									const newMessages = targetSession.messages.filter(m => {
+										const mPartId = (m as { partId?: string }).partId;
+										return mPartId !== removedPayload.partId && m.id !== removedPayload.messageId;
+									});
+									return updateSessionById(newState, targetId, s => ({
+										...s,
+										messages: newMessages,
+										lastActive: Date.now(),
+									}));
+								}
+								return newState;
+							}
+
+							case 'terminal': {
+								const terminalPayload = payload as SessionTerminalPayload;
+								if (terminalPayload.action === 'opened' && terminalPayload.content) {
+									const message: Message = {
+										id: `sys-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+										type: 'system_notice',
+										content: terminalPayload.content,
+										timestamp: new Date().toISOString(),
+									};
+									const newMessages = [...targetSession.messages, message];
+									return updateSessionById(newState, targetId, s => ({
+										...s,
+										messages: newMessages,
+										lastActive: Date.now(),
+									}));
+								}
+								return newState;
+							}
+
+							case 'auth':
+							case 'session_info':
+								// These events are informational and don't require state changes
+								// They may be handled by other listeners (e.g., useExtensionMessages)
+								return newState;
+
+							default:
+								console.warn(`[chatStore] Unknown event type: ${eventType}`);
+								return newState;
+						}
+					});
+				},
+
+				// ==========================================================================
+				// Direct actions (used by dispatch and external callers)
+				// ==========================================================================
+
 				addMessage: (msgInput, sessionId) => {
 					set(state => {
 						const targetSessionId = resolveTargetSessionId(state, sessionId);
@@ -296,37 +701,6 @@ export const useChatStore = create<ChatState>()(
 							lastActive: Date.now(),
 						}));
 					});
-				},
-
-				addMessageToSession: (sessionId, msg, parentSessionId) => {
-					set(state => {
-						const message = {
-							id: `msg-${Date.now()}-${Math.random()}`,
-							timestamp: new Date().toISOString(),
-							...msg,
-						} as Message;
-
-						const existing = state.sessionsById[sessionId];
-						if (!existing) {
-							const newSession: ChatSession = {
-								...createEmptySession(sessionId),
-								messages: [message],
-								isChildSession: true,
-								parentSessionId: parentSessionId || state.activeSessionId,
-							};
-							return upsertSession(state, newSession);
-						}
-
-						return updateSessionById(state, sessionId, s => ({
-							...s,
-							messages: [...s.messages, message],
-							lastActive: Date.now(),
-						}));
-					});
-				},
-
-				removeChildSession: sessionId => {
-					set(state => removeSession(state, sessionId));
 				},
 
 				setProcessing: (isProcessing, sessionId) => {
@@ -751,10 +1125,21 @@ export const useChatStore = create<ChatState>()(
 						const msg = session.messages[idx];
 						if (msg.type !== 'subtask') return state;
 
-						const updated = { ...msg, status: 'completed' as const, result };
+						const updated = {
+							...msg,
+							status: 'completed' as const,
+							result,
+							transcript: msg.childSessionId
+								? (state.sessionsById[msg.childSessionId]?.messages ?? [])
+								: (msg as unknown as { transcript?: Message[] }).transcript,
+							// Child session is archived into transcript; clear it to avoid keeping references.
+							childSessionId: undefined,
+						};
 						const newMessages = [...session.messages];
 						newMessages[idx] = updated;
 
+						// Release child session memory after subtask completion.
+						// Keep minimal references (childMessages ids) in the subtask itself.
 						const nextState = msg.childSessionId ? removeSession(state, msg.childSessionId) : state;
 						return updateSessionById(nextState, sid, s => ({ ...s, messages: newMessages }));
 					});
@@ -771,10 +1156,20 @@ export const useChatStore = create<ChatState>()(
 						const msg = session.messages[idx];
 						if (msg.type !== 'subtask') return state;
 
-						const updated = { ...msg, status: 'error' as const, result: error };
+						const updated = {
+							...msg,
+							status: 'error' as const,
+							result: error,
+							transcript: msg.childSessionId
+								? (state.sessionsById[msg.childSessionId]?.messages ?? [])
+								: (msg as unknown as { transcript?: Message[] }).transcript,
+							// Child session is archived into transcript; clear it to avoid keeping references.
+							childSessionId: undefined,
+						};
 						const newMessages = [...session.messages];
 						newMessages[idx] = updated;
 
+						// Release child session memory after subtask completion.
 						const nextState = msg.childSessionId ? removeSession(state, msg.childSessionId) : state;
 						return updateSessionById(nextState, sid, s => ({ ...s, messages: newMessages }));
 					});
@@ -847,8 +1242,9 @@ export const useChatStore = create<ChatState>()(
 				sessionOrder: state.sessionOrder,
 				sessionsById: filterPersistedSessions(state.sessionsById),
 			}),
-			version: 9,
+			version: 11,
 			migrate: (persistedState, version) => {
+				// Version 11: Remove child-session heuristics and persist all sessions.
 				if (version < 9) {
 					return {
 						sessionsById: {},

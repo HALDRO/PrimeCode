@@ -26,6 +26,7 @@ import type { PromptImproverHandler } from './PromptImproverHandler';
 import type { RestoreHandler } from './RestoreHandler';
 import type { RulesHandler } from './RulesHandler';
 import type { SessionHandler } from './SessionHandler';
+import type { SessionRouter } from './SessionRouter';
 import type { SettingsHandler } from './SettingsHandler';
 import type { SkillsHandler } from './SkillsHandler';
 import type { SubagentsHandler } from './SubagentsHandler';
@@ -35,7 +36,7 @@ import type { SubagentsHandler } from './SubagentsHandler';
 // =============================================================================
 
 export interface WebviewMessageRouterDeps {
-	postMessage: (msg: unknown) => void;
+	router: SessionRouter;
 	sendReadyMessage: () => Promise<void>;
 	handleSwitchSession: (sessionId: string) => Promise<void>;
 	sendWorkspaceFiles: (searchTerm?: string) => Promise<void>;
@@ -69,7 +70,6 @@ interface MessageContext {
 	message: WebviewMessage;
 	handlers: WebviewMessageRouterHandlers;
 	deps: WebviewMessageRouterDeps;
-	postMessage: (msg: unknown) => void;
 }
 
 // =============================================================================
@@ -106,7 +106,6 @@ export class WebviewMessageRouter {
 			message,
 			handlers: this._handlers,
 			deps: this._deps,
-			postMessage: this._deps.postMessage,
 		};
 
 		// Map message types to handler categories
@@ -168,10 +167,9 @@ export class WebviewMessageRouter {
 				if (hasContent) {
 					const uiSessionId = message.sessionId;
 					if (!uiSessionId) {
-						this._deps.postMessage({
-							type: 'error',
-							data: { content: 'Missing sessionId for sendMessage. Please reload the webview.' },
-						});
+						this._deps.router.emitGlobalError(
+							'Missing sessionId for sendMessage. Please reload the webview.',
+						);
 						return;
 					}
 					void handlers.messageHandler.sendMessageToSession(
@@ -190,18 +188,11 @@ export class WebviewMessageRouter {
 					void handlers.messageHandler.resumeAfterError(uiSessionId);
 				}
 			},
-			dismissError: ({ message, postMessage }: MessageContext) => {
+			dismissError: ({ message, handlers }: MessageContext) => {
 				const { messageId, sessionId } = message;
 				if (messageId && sessionId) {
-					// Remove from backend session history
-					this._handlers.messageHandler.dismissErrorMessage(sessionId, messageId);
-
-					// Send message to webview to remove the error from UI
-					postMessage({
-						type: 'messagePartRemoved',
-						data: { messageId, partId: messageId },
-						sessionId,
-					});
+					// Remove from backend session history and notify UI via SessionRouter
+					handlers.messageHandler.dismissErrorMessage(sessionId, messageId);
 				}
 			},
 		};
@@ -209,8 +200,7 @@ export class WebviewMessageRouter {
 
 	private _getSessionRoutes() {
 		return {
-			newSession: ({ handlers, postMessage }: MessageContext) =>
-				handlers.sessionHandler.newSession(postMessage),
+			newSession: ({ handlers }: MessageContext) => handlers.sessionHandler.newSession(),
 			createSession: ({ handlers }: MessageContext) =>
 				handlers.sessionHandler.handleCreateSession(),
 			switchSession: ({ message, handlers }: MessageContext) => {
@@ -471,34 +461,33 @@ export class WebviewMessageRouter {
 
 	private _getOpenCodeRoutes() {
 		return {
-			loadOpenCodeProviders: ({ handlers, postMessage }: MessageContext) => {
-				void handlers.openCodeHandler.loadOpenCodeProviders(postMessage, getGlobalProvider());
+			loadOpenCodeProviders: ({ handlers }: MessageContext) => {
+				void handlers.openCodeHandler.loadOpenCodeProviders(getGlobalProvider());
 			},
-			loadAvailableProviders: ({ handlers, postMessage }: MessageContext) => {
-				void handlers.openCodeHandler.loadAvailableProviders(postMessage, getGlobalProvider());
+			loadAvailableProviders: ({ handlers }: MessageContext) => {
+				void handlers.openCodeHandler.loadAvailableProviders(getGlobalProvider());
 			},
-			reloadAllProviders: ({ handlers, postMessage }: MessageContext) => {
+			reloadAllProviders: ({ handlers }: MessageContext) => {
 				const provider = getGlobalProvider();
-				void handlers.openCodeHandler.loadOpenCodeProviders(postMessage, provider);
-				void handlers.openCodeHandler.loadAvailableProviders(postMessage, provider);
+				void handlers.openCodeHandler.loadOpenCodeProviders(provider);
+				void handlers.openCodeHandler.loadAvailableProviders(provider);
 			},
-			setOpenCodeModel: ({ message, handlers, postMessage }: MessageContext) => {
+			setOpenCodeModel: ({ message, handlers }: MessageContext) => {
 				if (message.model) {
-					handlers.openCodeHandler.setOpenCodeModel(message.model as string, postMessage);
+					handlers.openCodeHandler.setOpenCodeModel(message.model as string);
 				}
 			},
-			setOpenCodeProviderAuth: ({ message, handlers, postMessage }: MessageContext) => {
+			setOpenCodeProviderAuth: ({ message, handlers }: MessageContext) => {
 				const { providerId, apiKey } = message as { providerId?: string; apiKey?: string };
 				if (providerId && apiKey) {
 					void handlers.openCodeHandler.setOpenCodeProviderAuth(
 						providerId,
 						apiKey,
-						postMessage,
 						getGlobalProvider(),
 					);
 				}
 			},
-			addOpenCodeCustomProvider: ({ message, handlers, postMessage }: MessageContext) => {
+			addOpenCodeCustomProvider: ({ message, handlers }: MessageContext) => {
 				const config = message.config as {
 					id: string;
 					name: string;
@@ -507,21 +496,13 @@ export class WebviewMessageRouter {
 					models?: Array<{ id: string; name: string }>;
 				};
 				if (config) {
-					void handlers.openCodeHandler.addOpenCodeCustomProvider(
-						config,
-						postMessage,
-						getGlobalProvider(),
-					);
+					void handlers.openCodeHandler.addOpenCodeCustomProvider(config, getGlobalProvider());
 				}
 			},
-			disconnectOpenCodeProvider: ({ message, handlers, postMessage }: MessageContext) => {
+			disconnectOpenCodeProvider: ({ message, handlers }: MessageContext) => {
 				const { providerId } = message as { providerId?: string };
 				if (providerId) {
-					void handlers.openCodeHandler.disconnectOpenCodeProvider(
-						providerId,
-						postMessage,
-						getGlobalProvider(),
-					);
+					void handlers.openCodeHandler.disconnectOpenCodeProvider(providerId);
 				}
 			},
 		};
@@ -529,13 +510,13 @@ export class WebviewMessageRouter {
 
 	private _getOpenCodeMcpRoutes() {
 		return {
-			loadOpenCodeMcpStatus: ({ handlers, postMessage }: MessageContext) => {
-				void handlers.openCodeHandler.loadOpenCodeMcpStatus(postMessage, getGlobalProvider());
+			loadOpenCodeMcpStatus: ({ handlers }: MessageContext) => {
+				void handlers.openCodeHandler.loadOpenCodeMcpStatus(getGlobalProvider());
 			},
-			startOpenCodeMcpAuth: ({ message, handlers, postMessage }: MessageContext) => {
+			startOpenCodeMcpAuth: ({ message, handlers }: MessageContext) => {
 				const name = (message.data as { name?: string } | undefined)?.name;
 				if (!name) return;
-				void handlers.openCodeHandler.startMcpAuth(name, postMessage, getGlobalProvider());
+				void handlers.openCodeHandler.startMcpAuth(name, getGlobalProvider());
 			},
 		};
 	}
@@ -657,10 +638,10 @@ export class WebviewMessageRouter {
 
 	private _getPromptImproverRoutes() {
 		return {
-			improvePromptRequest: ({ message, handlers, postMessage }: MessageContext) =>
-				void handlers.promptImproverHandler.improvePrompt(message, postMessage),
-			cancelImprovePrompt: ({ message, handlers, postMessage }: MessageContext) =>
-				void handlers.promptImproverHandler.cancelImprovement(message, postMessage),
+			improvePromptRequest: ({ message, handlers }: MessageContext) =>
+				void handlers.promptImproverHandler.improvePrompt(message),
+			cancelImprovePrompt: ({ message, handlers }: MessageContext) =>
+				void handlers.promptImproverHandler.cancelImprovement(message),
 		};
 	}
 }

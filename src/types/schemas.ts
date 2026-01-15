@@ -490,7 +490,7 @@ export const SubtaskMessageSchema = Type.Object({
 	childSessionId: Type.Optional(Type.String()),
 	result: Type.Optional(Type.String()),
 	messageID: Type.Optional(Type.String()),
-	/** ISO timestamp when subtask started */
+	transcript: Type.Optional(Type.Array(ConversationMessageSchema)),
 	startTime: Type.Optional(Type.String()),
 	/** Duration in milliseconds (set when completed/error) */
 	durationMs: Type.Optional(Type.Number()),

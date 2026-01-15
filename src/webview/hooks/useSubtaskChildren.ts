@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { type ChatSession, type Message, useChatStore } from '../store/chatStore';
+import { type Message, useChatStore } from '../store/chatStore';
 
 // Stable empty array reference to prevent infinite re-renders
 const EMPTY_MESSAGES: Message[] = [];
@@ -10,6 +10,9 @@ const EMPTY_MESSAGES: Message[] = [];
  * Handles both:
  * 1. Claude Code style (child messages in same session, linked by ID)
  * 2. OpenCode style (child messages in a separate child session)
+ *
+ * With unified session architecture, child sessions are stored flat in sessionsById
+ * and can be accessed directly by childSessionId.
  */
 export function useSubtaskChildren(subtaskId: string): Message[] {
 	// 1. Get the subtask message from current active session messages
@@ -19,15 +22,8 @@ export function useSubtaskChildren(subtaskId: string): Message[] {
 		return state.sessionsById[sid]?.messages.find((m: Message) => m.id === subtaskId);
 	});
 
-	// 2. Access sessionsById and sessionOrder separately to avoid creating new arrays
+	// 2. Get sessionsById for direct child session lookup
 	const sessionsById = useChatStore(useShallow(state => state.sessionsById));
-	const sessionOrder = useChatStore(useShallow(state => state.sessionOrder));
-
-	// Derive sessions list in useMemo to maintain stable reference
-	const sessions = useMemo(
-		() => sessionOrder.map(id => sessionsById[id]).filter((s): s is ChatSession => !!s),
-		[sessionsById, sessionOrder],
-	);
 
 	// 3. Get current session messages with stable empty array fallback
 	const allMessages = useChatStore(state => {
@@ -38,7 +34,7 @@ export function useSubtaskChildren(subtaskId: string): Message[] {
 
 	const children = useMemo(() => {
 		if (!message || message.type !== 'subtask') {
-			return [];
+			return EMPTY_MESSAGES;
 		}
 
 		let childMsgs: Message[] = [];
@@ -51,11 +47,17 @@ export function useSubtaskChildren(subtaskId: string): Message[] {
 			childMsgs = [...childMsgs, ...linked];
 		}
 
-		// Case B: OpenCode (child messages are in a separate session)
+		// Case B: OpenCode (child messages are in a separate child session)
+		// If the child session was cleaned up, use the persisted transcript on the subtask.
 		if (message.childSessionId) {
-			const childSession = sessions.find(s => s.id === message.childSessionId);
+			const childSession = sessionsById[message.childSessionId];
 			if (childSession?.messages) {
 				childMsgs = [...childMsgs, ...childSession.messages];
+			} else if (Array.isArray((message as unknown as { transcript?: Message[] }).transcript)) {
+				childMsgs = [
+					...childMsgs,
+					...(((message as unknown as { transcript?: Message[] }).transcript as Message[]) || []),
+				];
 			}
 		}
 
@@ -70,7 +72,7 @@ export function useSubtaskChildren(subtaskId: string): Message[] {
 			}
 			return true;
 		});
-	}, [message, allMessages, sessions]);
+	}, [message, allMessages, sessionsById]);
 
 	return children;
 }

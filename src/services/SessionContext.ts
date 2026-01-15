@@ -1236,7 +1236,9 @@ export class SessionContext {
 		this._totalReasoningTokens = snapshot.totalReasoningTokens || 0;
 		this._totalDuration = snapshot.totalDuration;
 		this._requestCount = snapshot.requestCount;
-		this._isProcessing = snapshot.isProcessing;
+		// Always reset isProcessing to false on restore - after extension restart,
+		// no generation is actually running, so any "processing" state is stale
+		this._isProcessing = false;
 		this._commits = [...snapshot.commits];
 		this._changedFiles = [...(snapshot.changedFiles || [])];
 		this._conversationFilename = snapshot.conversationFilename;

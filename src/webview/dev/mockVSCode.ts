@@ -2,6 +2,7 @@
  * @file Mock VS Code API for browser development
  * @description Provides a professional, comprehensive scenario-based mock implementation.
  *              Demonstrates all UI capabilities: complex markdown, diffs, MCP, bash, and stats.
+ *              Uses unified session_event / session_lifecycle protocol for consistency with production.
  */
 
 import type { VSCodeApi } from '../../types';
@@ -13,10 +14,21 @@ declare global {
 	}
 }
 
+/**
+ * Mock message type - all messages use unified session_event protocol
+ */
 interface MockMessage {
-	type: string;
-	data?: unknown;
+	type: 'session_event' | 'session_lifecycle';
 	delay?: number;
+	// session_event fields
+	targetId?: string;
+	eventType?: string;
+	payload?: unknown;
+	timestamp?: number;
+	// session_lifecycle fields
+	action?: 'created' | 'closed' | 'switched' | 'cleared';
+	sessionId?: string;
+	data?: Record<string, unknown>;
 }
 
 let mockState: Record<string, unknown> = {};
@@ -29,27 +41,67 @@ function createId(prefix: string): string {
 	return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-/** Dispatch a mock message to webview in the format it expects */
-export function dispatchMockMessage(type: string, data?: unknown): void {
-	// The extension handler (useExtensionMessages.ts) expects some types to be flat
-	// and others to be nested in 'data'.
-	const flatTypes = [
-		'user',
-		'assistant',
-		'thinking',
-		'tool_use',
-		'tool_result',
-		'access_request',
-		'error',
-		'subtask',
-		'system_notice',
-	];
+// =============================================================================
+// Unified Session Event Helpers
+// =============================================================================
 
-	if (flatTypes.includes(type) && typeof data === 'object' && data !== null) {
-		window.postMessage({ type, ...(data as object) }, '*');
-	} else {
-		window.postMessage({ type, data }, '*');
-	}
+/** Dispatch a session_event message */
+function dispatchSessionEvent(
+	targetId: string,
+	eventType: string,
+	payload: Record<string, unknown>,
+): void {
+	window.postMessage(
+		{
+			type: 'session_event',
+			targetId,
+			eventType,
+			payload: { eventType, ...payload },
+			timestamp: Date.now(),
+		},
+		'*',
+	);
+}
+
+/** Dispatch a session_lifecycle message */
+function dispatchSessionLifecycle(
+	action: 'created' | 'closed' | 'switched' | 'cleared',
+	sessionId: string,
+	data?: Record<string, unknown>,
+): void {
+	window.postMessage(
+		{
+			type: 'session_lifecycle',
+			action,
+			sessionId,
+			data,
+		},
+		'*',
+	);
+}
+
+/** Dispatch a message event to a session */
+function dispatchMessage(targetId: string, message: Record<string, unknown>): void {
+	dispatchSessionEvent(targetId, 'message', { message });
+}
+
+/** Dispatch a status event to a session */
+function dispatchStatus(
+	targetId: string,
+	status: 'idle' | 'busy' | 'error' | 'retrying',
+	statusText?: string,
+): void {
+	dispatchSessionEvent(targetId, 'status', { status, statusText });
+}
+
+/** Dispatch a restore event to a session */
+function dispatchRestore(targetId: string, action: string, data?: Record<string, unknown>): void {
+	dispatchSessionEvent(targetId, 'restore', { action, ...data });
+}
+
+/** Dispatch a global (non-session) message to webview */
+function dispatchGlobalMessage(type: string, data?: unknown): void {
+	window.postMessage({ type, data }, '*');
 }
 
 /** Clear all active mock timers */
@@ -67,12 +119,12 @@ async function runScenario(messages: MockMessage[], clearSession = false): Promi
 	isScenarioRunning = true;
 
 	if (clearSession) {
-		dispatchMockMessage('sessionCleared');
+		dispatchSessionLifecycle('cleared', mockActiveSessionId);
 		await new Promise(r => setTimeout(r, 100));
 	}
 
 	// Set processing state so the UI shows the Stop button
-	dispatchMockMessage('setProcessing', { isProcessing: true });
+	dispatchStatus(mockActiveSessionId, 'busy', 'Processing...');
 	await new Promise(r => setTimeout(r, 100));
 
 	for (const msg of messages) {
@@ -83,14 +135,35 @@ async function runScenario(messages: MockMessage[], clearSession = false): Promi
 
 		await new Promise(resolve => {
 			const timer = setTimeout(() => {
-				dispatchMockMessage(msg.type, msg.data);
+				if (msg.type === 'session_event' && msg.targetId && msg.eventType && msg.payload) {
+					window.postMessage(
+						{
+							type: 'session_event',
+							targetId: msg.targetId,
+							eventType: msg.eventType,
+							payload: msg.payload,
+							timestamp: msg.timestamp || Date.now(),
+						},
+						'*',
+					);
+				} else if (msg.type === 'session_lifecycle' && msg.action && msg.sessionId) {
+					window.postMessage(
+						{
+							type: 'session_lifecycle',
+							action: msg.action,
+							sessionId: msg.sessionId,
+							data: msg.data,
+						},
+						'*',
+					);
+				}
 				resolve(null);
 			}, msg.delay || 600);
 			activeTimers.push(timer);
 		});
 	}
 
-	dispatchMockMessage('setProcessing', { isProcessing: false });
+	dispatchStatus(mockActiveSessionId, 'idle', 'Ready');
 	isScenarioRunning = false;
 }
 
@@ -141,250 +214,462 @@ const SCENARIO_1_RESEARCHER: MockMessage[] = (() => {
 	].join('\n');
 
 	return [
+		// User message
 		{
-			type: 'user',
-			data: {
-				content:
-					'# Task: System Modernization\nI need to analyze the project architecture. Please:\n1. Check `@package.json` for vulnerabilities.\n2. Update `@src/App.tsx` to handle global state.\n3. Run full test suite.',
-				id: 'm1',
-				timestamp: new Date().toISOString(),
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: 'm1',
+					type: 'user',
+					content:
+						'# Task: System Modernization\nI need to analyze the project architecture. Please:\n1. Check `@package.json` for vulnerabilities.\n2. Update `@src/App.tsx` to handle global state.\n3. Run full test suite.',
+					timestamp: new Date().toISOString(),
+				},
 			},
+			timestamp: Date.now(),
 			delay: 100,
 		},
+		// Checkpoint
 		{
-			type: 'showRestoreOption',
-			data: {
-				id: 'checkpoint-1',
-				sha: 'abc123def456',
-				message: 'Checkpoint before System Modernization',
-				timestamp: new Date().toISOString(),
-				associatedMessageId: 'm1',
-				sessionId: mockActiveSessionId,
-				cliSessionId: 'cli-session-123',
-				isOpenCodeCheckpoint: true,
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'restore',
+			payload: {
+				eventType: 'restore',
+				action: 'add_commit',
+				commit: {
+					id: 'checkpoint-1',
+					sha: 'abc123def456',
+					message: 'Checkpoint before System Modernization',
+					timestamp: new Date().toISOString(),
+					associatedMessageId: 'm1',
+					sessionId: mockActiveSessionId,
+					cliSessionId: 'cli-session-123',
+					isOpenCodeCheckpoint: true,
+				},
 			},
+			timestamp: Date.now(),
 			delay: 200,
 		},
+		// Thinking
 		{
-			type: 'imagePath',
-			data: { filePath: 'https://placehold.co/800x450/1e1e1e/3794ff?text=Architecture+Map+v2.0' },
-			delay: 400,
-		},
-		{
-			type: 'thinking',
-			data: {
-				content:
-					'Scanning workspace and building dependency graph...\n\nAnalyzing project structure to understand the codebase architecture. Looking for:\n- Entry points and main components\n- Utility functions and shared modules\n- Test coverage and configuration\n- Build and deployment setup',
-				partId: thinkingId1,
-				durationMs: 2340,
-				reasoningTokens: 156,
-				isStreaming: false,
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: thinkingId1,
+					type: 'thinking',
+					content:
+						'Scanning workspace and building dependency graph...\n\nAnalyzing project structure to understand the codebase architecture. Looking for:\n- Entry points and main components\n- Utility functions and shared modules\n- Test coverage and configuration\n- Build and deployment setup',
+					partId: thinkingId1,
+					durationMs: 2340,
+					reasoningTokens: 156,
+					isStreaming: false,
+					timestamp: new Date().toISOString(),
+				},
 			},
+			timestamp: Date.now(),
 			delay: 800,
 		},
+		// TodoWrite tool_use
 		{
-			type: 'tool_use',
-			data: {
-				toolName: 'TodoWrite',
-				toolUseId: 'todo-demo-create',
-				rawInput: {
-					merge: false,
-					todos: [
-						{ content: 'Analysis', status: 'in_progress' },
-						{ content: 'Refactor', status: 'pending' },
-						{ content: 'Testing', status: 'pending' },
-					],
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('tool'),
+					type: 'tool_use',
+					toolName: 'TodoWrite',
+					toolUseId: 'todo-demo-create',
+					rawInput: {
+						merge: false,
+						todos: [
+							{ content: 'Analysis', status: 'in_progress' },
+							{ content: 'Refactor', status: 'pending' },
+							{ content: 'Testing', status: 'pending' },
+						],
+					},
+					isRunning: true,
+					timestamp: new Date().toISOString(),
 				},
-				isRunning: true,
 			},
+			timestamp: Date.now(),
 			delay: 400,
 		},
+		// TodoWrite tool_result
 		{
-			type: 'tool_result',
-			data: {
-				toolName: 'TodoWrite',
-				toolUseId: 'todo-demo-create',
-				content: 'Created todos',
-				isError: false,
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('result'),
+					type: 'tool_result',
+					toolName: 'TodoWrite',
+					toolUseId: 'todo-demo-create',
+					content: 'Created todos',
+					isError: false,
+					timestamp: new Date().toISOString(),
+				},
 			},
+			timestamp: Date.now(),
 			delay: 200,
 		},
+		// LS tool_use
 		{
-			type: 'tool_use',
-			data: { toolName: 'LS', toolUseId: 't1', filePath: 'src/', rawInput: { path: 'src/' } },
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('tool'),
+					type: 'tool_use',
+					toolName: 'LS',
+					toolUseId: 't1',
+					filePath: 'src/',
+					rawInput: { path: 'src/' },
+					timestamp: new Date().toISOString(),
+				},
+			},
+			timestamp: Date.now(),
 			delay: 400,
 		},
+		// LS tool_result
 		{
-			type: 'tool_result',
-			data: {
-				toolName: 'LS',
-				toolUseId: 't1',
-				content: 'components/\nutils/\nApp.tsx\nconfig.json\nstyles.css',
-				isError: false,
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('result'),
+					type: 'tool_result',
+					toolName: 'LS',
+					toolUseId: 't1',
+					content: 'components/\nutils/\nApp.tsx\nconfig.json\nstyles.css',
+					isError: false,
+					timestamp: new Date().toISOString(),
+				},
 			},
+			timestamp: Date.now(),
 			delay: 300,
 		},
+		// File changed event
 		{
-			type: 'fileChanged',
-			data: {
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'file',
+			payload: {
+				eventType: 'file',
+				action: 'changed',
 				filePath: 'src/App.tsx',
-				changeType: 'modified',
+				fileName: 'App.tsx',
 				linesAdded: 3,
 				linesRemoved: 2,
 				toolUseId: editAppId,
 			},
+			timestamp: Date.now(),
 			delay: 100,
 		},
+		// Edit tool_use
 		{
-			type: 'tool_use',
-			data: {
-				toolName: 'Edit',
-				toolUseId: editAppId,
-				filePath: 'src/App.tsx',
-				rawInput: {
-					file_path: 'src/App.tsx',
-					old_string: 'const [count, setCount] = useState(0);\nreturn <button>{count}</button>;',
-					new_string:
-						'const [count, setCount] = useState(0);\nconst increment = () => setCount(c => c + 1);\nreturn <button onClick={increment}>{count}</button>;',
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('tool'),
+					type: 'tool_use',
+					toolName: 'Edit',
+					toolUseId: editAppId,
+					filePath: 'src/App.tsx',
+					rawInput: {
+						file_path: 'src/App.tsx',
+						old_string: 'const [count, setCount] = useState(0);\nreturn <button>{count}</button>;',
+						new_string:
+							'const [count, setCount] = useState(0);\nconst increment = () => setCount(c => c + 1);\nreturn <button onClick={increment}>{count}</button>;',
+					},
+					timestamp: new Date().toISOString(),
 				},
 			},
+			timestamp: Date.now(),
 			delay: 800,
 		},
+		// Edit access_request
 		{
-			type: 'access_request',
-			data: {
-				requestId: 'acc-edit-1',
-				toolUseId: editAppId,
-				tool: 'Edit',
-				input: {
-					file_path: 'src/App.tsx',
-					old_string: 'const [count, setCount] = useState(0);\nreturn <button>{count}</button>;',
-					new_string:
-						'const [count, setCount] = useState(0);\nconst increment = () => setCount(c => c + 1);\nreturn <button onClick={increment}>{count}</button>;',
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('access'),
+					type: 'access_request',
+					requestId: 'acc-edit-1',
+					toolUseId: editAppId,
+					tool: 'Edit',
+					input: {
+						file_path: 'src/App.tsx',
+						old_string: 'const [count, setCount] = useState(0);\nreturn <button>{count}</button>;',
+						new_string:
+							'const [count, setCount] = useState(0);\nconst increment = () => setCount(c => c + 1);\nreturn <button onClick={increment}>{count}</button>;',
+					},
+					timestamp: new Date().toISOString(),
 				},
-				timestamp: Date.now(),
 			},
+			timestamp: Date.now(),
 			delay: 200,
 		},
+		// Edit tool_result
 		{
-			type: 'tool_result',
-			data: { toolName: 'Edit', toolUseId: editAppId, content: 'Updated App.tsx', isError: false },
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('result'),
+					type: 'tool_result',
+					toolName: 'Edit',
+					toolUseId: editAppId,
+					content: 'Updated App.tsx',
+					isError: false,
+					timestamp: new Date().toISOString(),
+				},
+			},
+			timestamp: Date.now(),
 			delay: 1000,
 		},
+		// MCP tool_use
 		{
-			type: 'tool_use',
-			data: {
-				toolName: 'mcp__google__search',
-				toolUseId: googleSearchId,
-				rawInput: { query: 'React 19' },
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('tool'),
+					type: 'tool_use',
+					toolName: 'mcp__google__search',
+					toolUseId: googleSearchId,
+					rawInput: { query: 'React 19' },
+					timestamp: new Date().toISOString(),
+				},
 			},
+			timestamp: Date.now(),
 			delay: 800,
 		},
+		// MCP access_request
 		{
-			type: 'access_request',
-			data: {
-				requestId: 'acc-mcp-1',
-				toolUseId: googleSearchId,
-				tool: 'mcp__google__search',
-				input: { query: 'React 19' },
-				timestamp: Date.now(),
-			},
-			delay: 200,
-		},
-		{
-			type: 'tool_result',
-			data: {
-				toolName: 'mcp__google__search',
-				toolUseId: googleSearchId,
-				content: '{"status": "ok", "results": [{"title": "React 19 RC"}]}',
-				isError: false,
-			},
-			delay: 1000,
-		},
-		{
-			type: 'tool_use',
-			data: { toolName: 'Bash', toolUseId: 't5', rawInput: { command: 'npm test' } },
-			delay: 400,
-		},
-		{
-			type: 'access_request',
-			data: {
-				requestId: 'acc-1',
-				toolUseId: 't5',
-				tool: 'Bash',
-				input: { command: 'npm test' },
-				timestamp: Date.now(),
-			},
-			delay: 200,
-		},
-		{
-			type: 'tool_result',
-			data: {
-				toolName: 'Bash',
-				toolUseId: 't5',
-				content: 'PASS src/App.test.tsx\nPASS src/utils/logger.test.ts',
-				isError: false,
-			},
-			delay: 1000,
-		},
-		{
-			type: 'tool_use',
-			data: {
-				toolName: 'TodoWrite',
-				toolUseId: 'todo-demo-complete',
-				rawInput: {
-					merge: true,
-					todos: [
-						{ content: 'Analysis', status: 'completed' },
-						{ content: 'Refactor', status: 'completed' },
-						{ content: 'Testing', status: 'completed' },
-					],
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('access'),
+					type: 'access_request',
+					requestId: 'acc-mcp-1',
+					toolUseId: googleSearchId,
+					tool: 'mcp__google__search',
+					input: { query: 'React 19' },
+					timestamp: new Date().toISOString(),
 				},
-				isRunning: false,
 			},
-			delay: 400,
-		},
-		{
-			type: 'tool_result',
-			data: {
-				toolName: 'TodoWrite',
-				toolUseId: 'todo-demo-complete',
-				content: 'All todos completed',
-				isError: false,
-			},
+			timestamp: Date.now(),
 			delay: 200,
 		},
+		// MCP tool_result
 		{
-			type: 'assistant',
-			data: {
-				content: assistantContent,
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('result'),
+					type: 'tool_result',
+					toolName: 'mcp__google__search',
+					toolUseId: googleSearchId,
+					content: '{"status": "ok", "results": [{"title": "React 19 RC"}]}',
+					isError: false,
+					timestamp: new Date().toISOString(),
+				},
 			},
+			timestamp: Date.now(),
 			delay: 1000,
 		},
+		// Bash tool_use
 		{
-			type: 'updateTokens',
-			data: {
-				totalTokensInput: 128000,
-				totalTokensOutput: 12000,
-				currentInputTokens: 128000,
-				currentOutputTokens: 12000,
-				cacheCreationTokens: 40000,
-				cacheReadTokens: 78000,
-				reasoningTokens: 156,
-				totalReasoningTokens: 156,
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('tool'),
+					type: 'tool_use',
+					toolName: 'Bash',
+					toolUseId: 't5',
+					rawInput: { command: 'npm test' },
+					timestamp: new Date().toISOString(),
+				},
 			},
+			timestamp: Date.now(),
+			delay: 400,
+		},
+		// Bash access_request
+		{
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('access'),
+					type: 'access_request',
+					requestId: 'acc-1',
+					toolUseId: 't5',
+					tool: 'Bash',
+					input: { command: 'npm test' },
+					timestamp: new Date().toISOString(),
+				},
+			},
+			timestamp: Date.now(),
 			delay: 200,
 		},
+		// Bash tool_result
 		{
-			type: 'updateTotals',
-			data: {
-				totalCost: 0.158,
-				totalTokensInput: 128000,
-				totalTokensOutput: 12000,
-				totalReasoningTokens: 156,
-				requestCount: 24,
-				totalDuration: 45000,
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('result'),
+					type: 'tool_result',
+					toolName: 'Bash',
+					toolUseId: 't5',
+					content: 'PASS src/App.test.tsx\nPASS src/utils/logger.test.ts',
+					isError: false,
+					timestamp: new Date().toISOString(),
+				},
 			},
+			timestamp: Date.now(),
+			delay: 1000,
+		},
+		// TodoWrite update tool_use
+		{
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('tool'),
+					type: 'tool_use',
+					toolName: 'TodoWrite',
+					toolUseId: 'todo-demo-complete',
+					rawInput: {
+						merge: true,
+						todos: [
+							{ content: 'Analysis', status: 'completed' },
+							{ content: 'Refactor', status: 'completed' },
+							{ content: 'Testing', status: 'completed' },
+						],
+					},
+					isRunning: false,
+					timestamp: new Date().toISOString(),
+				},
+			},
+			timestamp: Date.now(),
+			delay: 400,
+		},
+		// TodoWrite update tool_result
+		{
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('result'),
+					type: 'tool_result',
+					toolName: 'TodoWrite',
+					toolUseId: 'todo-demo-complete',
+					content: 'All todos completed',
+					isError: false,
+					timestamp: new Date().toISOString(),
+				},
+			},
+			timestamp: Date.now(),
+			delay: 200,
+		},
+		// Assistant response
+		{
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('assistant'),
+					type: 'assistant',
+					content: assistantContent,
+					timestamp: new Date().toISOString(),
+				},
+			},
+			timestamp: Date.now(),
+			delay: 1000,
+		},
+		// Token stats
+		{
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'stats',
+			payload: {
+				eventType: 'stats',
+				tokenStats: {
+					totalTokensInput: 128000,
+					totalTokensOutput: 12000,
+					currentInputTokens: 128000,
+					currentOutputTokens: 12000,
+					cacheCreationTokens: 40000,
+					cacheReadTokens: 78000,
+					reasoningTokens: 156,
+					totalReasoningTokens: 156,
+				},
+			},
+			timestamp: Date.now(),
+			delay: 200,
+		},
+		// Total stats
+		{
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'stats',
+			payload: {
+				eventType: 'stats',
+				totalStats: {
+					totalCost: 0.158,
+					totalTokensInput: 128000,
+					totalTokensOutput: 12000,
+					totalReasoningTokens: 156,
+					requestCount: 24,
+					totalDuration: 45000,
+				},
+			},
+			timestamp: Date.now(),
 			delay: 100,
 		},
 	];
@@ -430,26 +715,53 @@ const mockVSCodeApi: VSCodeApi = {
 
 					const commandScenario: MockMessage[] = [
 						{
-							type: 'user',
-							data: {
-								content: userContent,
-								id: userMessageId,
-								timestamp: new Date().toISOString(),
+							type: 'session_event',
+							targetId: mockActiveSessionId,
+							eventType: 'message',
+							payload: {
+								eventType: 'message',
+								message: {
+									id: userMessageId,
+									type: 'user',
+									content: userContent,
+									timestamp: new Date().toISOString(),
+								},
 							},
+							timestamp: Date.now(),
 							delay: 100,
 						},
 						{
-							type: 'system_notice',
-							data: { content: noticeText, id: createId('notice') },
+							type: 'session_event',
+							targetId: mockActiveSessionId,
+							eventType: 'message',
+							payload: {
+								eventType: 'message',
+								message: {
+									id: createId('notice'),
+									type: 'system_notice',
+									content: noticeText,
+									timestamp: new Date().toISOString(),
+								},
+							},
+							timestamp: Date.now(),
 							delay: 450,
 						},
 						{
-							type: 'assistant',
-							data: {
-								content: isCompact
-									? 'Context summary complete. Continue with your next request — the conversation context is now condensed for a larger effective window.'
-									: `Executed /${commandName}${args ? ` ${args}` : ''}.`,
+							type: 'session_event',
+							targetId: mockActiveSessionId,
+							eventType: 'message',
+							payload: {
+								eventType: 'message',
+								message: {
+									id: createId('assistant'),
+									type: 'assistant',
+									content: isCompact
+										? 'Context summary complete. Continue with your next request — the conversation context is now condensed for a larger effective window.'
+										: `Executed /${commandName}${args ? ` ${args}` : ''}.`,
+									timestamp: new Date().toISOString(),
+								},
 							},
+							timestamp: Date.now(),
 							delay: 600,
 						},
 					];
@@ -474,109 +786,192 @@ const mockVSCodeApi: VSCodeApi = {
 
 				const todoScenario: MockMessage[] = [
 					{
-						type: 'user',
-						data: { content: userContent, id: userMessageId, timestamp: new Date().toISOString() },
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: userMessageId,
+								type: 'user',
+								content: userContent,
+								timestamp: new Date().toISOString(),
+							},
+						},
+						timestamp: Date.now(),
 						delay: 100,
 					},
 					{
-						type: 'thinking',
-						data: {
-							content:
-								'Planning tasks and creating initial TODO list...\n\nI will create a short set of steps, then update their statuses as work progresses.',
-							partId: thinkingPartId,
-							durationMs: 900,
-							reasoningTokens: 42,
-							isStreaming: false,
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: thinkingPartId,
+								type: 'thinking',
+								content:
+									'Planning tasks and creating initial TODO list...\n\nI will create a short set of steps, then update their statuses as work progresses.',
+								partId: thinkingPartId,
+								durationMs: 900,
+								reasoningTokens: 42,
+								isStreaming: false,
+								timestamp: new Date().toISOString(),
+							},
 						},
+						timestamp: Date.now(),
 						delay: 500,
 					},
 					// Create (running) -> should auto-expand
 					{
-						type: 'tool_use',
-						data: {
-							toolName: 'TodoWrite',
-							toolUseId: todoCreateUseId,
-							rawInput: {
-								merge: false,
-								todos: [
-									{ id: 'todo-1', content: 'Analysis Logger Refactor', status: 'in_progress' },
-									{ id: 'todo-2', content: 'Finalize', status: 'pending' },
-								],
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: todoCreateUseId,
+								type: 'tool_use',
+								toolName: 'TodoWrite',
+								toolUseId: todoCreateUseId,
+								rawInput: {
+									merge: false,
+									todos: [
+										{ id: 'todo-1', content: 'Analysis Logger Refactor', status: 'in_progress' },
+										{ id: 'todo-2', content: 'Finalize', status: 'pending' },
+									],
+								},
+								isRunning: true,
+								timestamp: new Date().toISOString(),
 							},
-							isRunning: true,
 						},
+						timestamp: Date.now(),
 						delay: 700,
 					},
 					{
-						type: 'tool_result',
-						data: {
-							toolName: 'TodoWrite',
-							toolUseId: todoCreateUseId,
-							content: 'Created 2 todos',
-							isError: false,
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: `${todoCreateUseId}:result`,
+								type: 'tool_result',
+								toolName: 'TodoWrite',
+								toolUseId: todoCreateUseId,
+								content: 'Created 2 todos',
+								isError: false,
+								timestamp: new Date().toISOString(),
+							},
 						},
+						timestamp: Date.now(),
 						delay: 200,
 					},
 					// Update (not running) -> should stay compact by default
 					{
-						type: 'tool_use',
-						data: {
-							toolName: 'TodoWrite',
-							toolUseId: todoUpdateUseId,
-							rawInput: {
-								merge: true,
-								todos: [
-									{ id: 'todo-1', content: 'Analysis Logger Refactor', status: 'completed' },
-									{ id: 'todo-2', content: 'Finalize', status: 'in_progress' },
-								],
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: todoUpdateUseId,
+								type: 'tool_use',
+								toolName: 'TodoWrite',
+								toolUseId: todoUpdateUseId,
+								rawInput: {
+									merge: true,
+									todos: [
+										{ id: 'todo-1', content: 'Analysis Logger Refactor', status: 'completed' },
+										{ id: 'todo-2', content: 'Finalize', status: 'in_progress' },
+									],
+								},
+								isRunning: false,
+								timestamp: new Date().toISOString(),
 							},
-							isRunning: false,
 						},
+						timestamp: Date.now(),
 						delay: 900,
 					},
 					{
-						type: 'tool_result',
-						data: {
-							toolName: 'TodoWrite',
-							toolUseId: todoUpdateUseId,
-							content: 'Updated todo statuses',
-							isError: false,
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: `${todoUpdateUseId}:result`,
+								type: 'tool_result',
+								toolName: 'TodoWrite',
+								toolUseId: todoUpdateUseId,
+								content: 'Updated todo statuses',
+								isError: false,
+								timestamp: new Date().toISOString(),
+							},
 						},
+						timestamp: Date.now(),
 						delay: 200,
 					},
 					// Complete (not running) -> compact header shows final progress
 					{
-						type: 'tool_use',
-						data: {
-							toolName: 'TodoWrite',
-							toolUseId: todoCompleteUseId,
-							rawInput: {
-								merge: true,
-								todos: [
-									{ id: 'todo-1', content: 'Analysis Logger Refactor', status: 'completed' },
-									{ id: 'todo-2', content: 'Finalize', status: 'completed' },
-								],
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: todoCompleteUseId,
+								type: 'tool_use',
+								toolName: 'TodoWrite',
+								toolUseId: todoCompleteUseId,
+								rawInput: {
+									merge: true,
+									todos: [
+										{ id: 'todo-1', content: 'Analysis Logger Refactor', status: 'completed' },
+										{ id: 'todo-2', content: 'Finalize', status: 'completed' },
+									],
+								},
+								isRunning: false,
+								timestamp: new Date().toISOString(),
 							},
-							isRunning: false,
 						},
+						timestamp: Date.now(),
 						delay: 900,
 					},
 					{
-						type: 'tool_result',
-						data: {
-							toolName: 'TodoWrite',
-							toolUseId: todoCompleteUseId,
-							content: 'All todos completed',
-							isError: false,
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: `${todoCompleteUseId}:result`,
+								type: 'tool_result',
+								toolName: 'TodoWrite',
+								toolUseId: todoCompleteUseId,
+								content: 'All todos completed',
+								isError: false,
+								timestamp: new Date().toISOString(),
+							},
 						},
+						timestamp: Date.now(),
 						delay: 200,
 					},
 					{
-						type: 'assistant',
-						data: {
-							content:
-								'✅ Todo demo complete. Notice: initial create auto-expands; subsequent updates stay compact unless you manually expand.',
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: createId('assistant'),
+								type: 'assistant',
+								content:
+									'✅ Todo demo complete. Notice: initial create auto-expands; subsequent updates stay compact unless you manually expand.',
+								timestamp: new Date().toISOString(),
+							},
 						},
+						timestamp: Date.now(),
 						delay: 500,
 					},
 				];
@@ -588,15 +983,26 @@ const mockVSCodeApi: VSCodeApi = {
 			// Demo: Handle specific commands for testing
 			if (userContent.includes('new chat')) {
 				const newSessionId = createId('session');
-				dispatchMockMessage('sessionCreated', { sessionId: newSessionId });
+				dispatchSessionLifecycle('created', newSessionId);
 
 				// Start a mini-scenario in the new chat
 				setTimeout(() => {
 					runScenario(
 						[
 							{
-								type: 'assistant',
-								data: { content: 'Hello! This is a new chat session. How can I help you?' },
+								type: 'session_event',
+								targetId: newSessionId,
+								eventType: 'message',
+								payload: {
+									eventType: 'message',
+									message: {
+										id: createId('assistant'),
+										type: 'assistant',
+										content: 'Hello! This is a new chat session. How can I help you?',
+										timestamp: new Date().toISOString(),
+									},
+								},
+								timestamp: Date.now(),
 								delay: 500,
 							},
 						],
@@ -608,61 +1014,118 @@ const mockVSCodeApi: VSCodeApi = {
 
 			if (userContent.includes('change file')) {
 				const editId = createId('edit');
+				const thinkingId = createId('thinking');
 				const dynamicScenario: MockMessage[] = [
 					{
-						type: 'user',
-						data: { content: userContent, id: userMessageId, timestamp: new Date().toISOString() },
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: userMessageId,
+								type: 'user',
+								content: userContent,
+								timestamp: new Date().toISOString(),
+							},
+						},
+						timestamp: Date.now(),
 						delay: 100,
 					},
 					{
-						type: 'thinking',
-						data: {
-							content:
-								'Modifying file to demonstrate changes...\n\nPreparing to update the demo file with new content to showcase the file change tracking feature.',
-							partId: createId('thinking'),
-							durationMs: 1100,
-							reasoningTokens: 48,
-							isStreaming: false,
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: thinkingId,
+								type: 'thinking',
+								content:
+									'Modifying file to demonstrate changes...\n\nPreparing to update the demo file with new content to showcase the file change tracking feature.',
+								partId: thinkingId,
+								durationMs: 1100,
+								reasoningTokens: 48,
+								isStreaming: false,
+								timestamp: new Date().toISOString(),
+							},
 						},
+						timestamp: Date.now(),
 						delay: 600,
 					},
 					{
-						type: 'tool_use',
-						data: {
-							toolName: 'Edit',
-							toolUseId: editId,
-							filePath: 'src/demo.ts',
-							rawInput: { file_path: 'src/demo.ts', old_string: '', new_string: '// Demo change' },
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: editId,
+								type: 'tool_use',
+								toolName: 'Edit',
+								toolUseId: editId,
+								filePath: 'src/demo.ts',
+								rawInput: {
+									file_path: 'src/demo.ts',
+									old_string: '',
+									new_string: '// Demo change',
+								},
+								timestamp: new Date().toISOString(),
+							},
 						},
+						timestamp: Date.now(),
 						delay: 800,
 					},
 					{
-						type: 'tool_result',
-						data: {
-							toolName: 'Edit',
-							toolUseId: editId,
-							content: 'Applied changes',
-							isError: false,
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: `${editId}:result`,
+								type: 'tool_result',
+								toolName: 'Edit',
+								toolUseId: editId,
+								content: 'Applied changes',
+								isError: false,
+								timestamp: new Date().toISOString(),
+							},
 						},
+						timestamp: Date.now(),
 						delay: 200,
 					},
 					{
-						type: 'fileChanged',
-						data: {
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'file',
+						payload: {
+							eventType: 'file',
+							action: 'changed',
 							filePath: 'src/demo.ts',
-							changeType: 'modified',
+							fileName: 'demo.ts',
 							linesAdded: 5,
 							linesRemoved: 1,
 							toolUseId: editId,
 						},
+						timestamp: Date.now(),
 						delay: 100,
 					},
 					{
-						type: 'assistant',
-						data: {
-							content:
-								'I have modified `src/demo.ts`. You should see the changes in the Changed Files panel.',
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: createId('assistant'),
+								type: 'assistant',
+								content:
+									'I have modified `src/demo.ts`. You should see the changes in the Changed Files panel.',
+								timestamp: new Date().toISOString(),
+							},
 						},
+						timestamp: Date.now(),
 						delay: 500,
 					},
 				];
@@ -675,39 +1138,77 @@ const mockVSCodeApi: VSCodeApi = {
 				userContent.toLowerCase().includes('error') ||
 				userContent.toLowerCase().includes('ошибк')
 			) {
+				const thinkingId = createId('thinking');
+				const toolId = createId('t');
 				const errorScenario: MockMessage[] = [
 					{
-						type: 'user',
-						data: { content: userContent, id: userMessageId, timestamp: new Date().toISOString() },
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: userMessageId,
+								type: 'user',
+								content: userContent,
+								timestamp: new Date().toISOString(),
+							},
+						},
+						timestamp: Date.now(),
 						delay: 100,
 					},
 					{
-						type: 'thinking',
-						data: {
-							content: 'Processing request...\n\nAttempting to execute the requested operation.',
-							partId: createId('thinking'),
-							durationMs: 800,
-							reasoningTokens: 24,
-							isStreaming: false,
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: thinkingId,
+								type: 'thinking',
+								content: 'Processing request...\n\nAttempting to execute the requested operation.',
+								partId: thinkingId,
+								durationMs: 800,
+								reasoningTokens: 24,
+								isStreaming: false,
+								timestamp: new Date().toISOString(),
+							},
 						},
+						timestamp: Date.now(),
 						delay: 500,
 					},
 					{
-						type: 'tool_use',
-						data: {
-							toolName: 'Bash',
-							toolUseId: createId('t'),
-							rawInput: { command: 'npm run build' },
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: toolId,
+								type: 'tool_use',
+								toolName: 'Bash',
+								toolUseId: toolId,
+								rawInput: { command: 'npm run build' },
+								timestamp: new Date().toISOString(),
+							},
 						},
+						timestamp: Date.now(),
 						delay: 400,
 					},
 					{
-						type: 'error',
-						data: {
-							content: `API Error: Rate limit exceeded\n\nYou have exceeded the maximum number of requests per minute.\nPlease wait 30 seconds before retrying.\n\nRequest ID: req_abc123xyz\nTimestamp: ${new Date().toISOString()}`,
-							id: createId('error'),
-							timestamp: new Date().toISOString(),
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: createId('error'),
+								type: 'error',
+								content: `API Error: Rate limit exceeded\n\nYou have exceeded the maximum number of requests per minute.\nPlease wait 30 seconds before retrying.\n\nRequest ID: req_abc123xyz\nTimestamp: ${new Date().toISOString()}`,
+								timestamp: new Date().toISOString(),
+							},
 						},
+						timestamp: Date.now(),
 						delay: 800,
 					},
 				];
@@ -719,17 +1220,35 @@ const mockVSCodeApi: VSCodeApi = {
 			if (userContent.toLowerCase().includes('simple error')) {
 				const simpleErrorScenario: MockMessage[] = [
 					{
-						type: 'user',
-						data: { content: userContent, id: userMessageId, timestamp: new Date().toISOString() },
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: userMessageId,
+								type: 'user',
+								content: userContent,
+								timestamp: new Date().toISOString(),
+							},
+						},
+						timestamp: Date.now(),
 						delay: 100,
 					},
 					{
-						type: 'error',
-						data: {
-							content: 'Connection timeout: Unable to reach the API server.',
-							id: createId('error'),
-							timestamp: new Date().toISOString(),
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: createId('error'),
+								type: 'error',
+								content: 'Connection timeout: Unable to reach the API server.',
+								timestamp: new Date().toISOString(),
+							},
 						},
+						timestamp: Date.now(),
 						delay: 400,
 					},
 				];
@@ -746,161 +1265,264 @@ const mockVSCodeApi: VSCodeApi = {
 				userContent.toLowerCase().includes('сабагент')
 			) {
 				const subtaskId = createId('subtask');
+				const childSessionId = createId('child-session');
 				const toolLsId = createId('t');
+				const toolLsResultId = `${toolLsId}:result`;
 				const toolReadId = createId('t');
+				const toolReadResultId = `${toolReadId}:result`;
 				const thinkingId1 = createId('thinking');
 				const thinkingId2 = createId('thinking');
 				const thinkingId3 = createId('thinking');
 
 				const subagentScenario: MockMessage[] = [
 					{
-						type: 'user',
-						data: {
-							content: userContent,
-							id: userMessageId,
-							timestamp: new Date().toISOString(),
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: userMessageId,
+								type: 'user',
+								content: userContent,
+								timestamp: new Date().toISOString(),
+							},
 						},
+						timestamp: Date.now(),
 						delay: 100,
 					},
 					{
-						type: 'assistant',
-						data: {
-							content:
-								'I will delegate this complex refactoring task to our **Frontend Architect** sub-agent for a detailed analysis.',
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: createId('assistant'),
+								type: 'assistant',
+								content:
+									'I will delegate this complex refactoring task to our **Frontend Architect** sub-agent for a detailed analysis.',
+								timestamp: new Date().toISOString(),
+							},
 						},
+						timestamp: Date.now(),
 						delay: 500,
 					},
-					// 1. Subtask Start
+					// 1. Create child session for subtask
 					{
-						type: 'subtask',
-						data: {
-							id: subtaskId,
-							type: 'subtask',
-							agent: 'frontend-architect',
-							prompt: 'Analyze src/components/UserProfile.tsx for refactoring opportunities.',
-							description: 'Analyzing component structure...',
-							status: 'running',
-							timestamp: new Date().toISOString(),
+						type: 'session_lifecycle',
+						action: 'created',
+						sessionId: childSessionId,
+						data: { isChildSession: true, parentSessionId: mockActiveSessionId },
+						delay: 100,
+					},
+					// 2. Subtask Start (linked to child session)
+					{
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: subtaskId,
+								type: 'subtask',
+								agent: 'frontend-architect',
+								prompt: 'Analyze src/components/UserProfile.tsx for refactoring opportunities.',
+								description: 'Analyzing component structure...',
+								status: 'running',
+								childSessionId: childSessionId,
+								timestamp: new Date().toISOString(),
+							},
 						},
+						timestamp: Date.now(),
 						delay: 800,
 					},
-					// 2. Subtask Thinking 1
+					// 3. Child session: Thinking 1
 					{
-						type: 'thinking',
-						data: {
-							content:
-								'I need to explore the file structure first to understand dependencies and context.',
-							partId: thinkingId1,
-							id: thinkingId1,
-							durationMs: 800,
-							isStreaming: false,
-							parentToolUseId: subtaskId,
+						type: 'session_event',
+						targetId: childSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: thinkingId1,
+								type: 'thinking',
+								content:
+									'I need to explore the file structure first to understand dependencies and context.',
+								partId: thinkingId1,
+								durationMs: 800,
+								isStreaming: false,
+								timestamp: new Date().toISOString(),
+							},
 						},
+						timestamp: Date.now(),
 						delay: 400,
 					},
-					// 3. Subtask Tool: LS
+					// 4. Child session: Tool LS
 					{
-						type: 'tool_use',
-						data: {
-							toolName: 'LS',
-							toolUseId: toolLsId,
-							filePath: 'src/components',
-							rawInput: { path: 'src/components' },
-							parentToolUseId: subtaskId,
+						type: 'session_event',
+						targetId: childSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: toolLsId,
+								type: 'tool_use',
+								toolName: 'LS',
+								toolUseId: toolLsId,
+								filePath: 'src/components',
+								rawInput: { path: 'src/components' },
+								timestamp: new Date().toISOString(),
+							},
 						},
+						timestamp: Date.now(),
 						delay: 600,
 					},
 					{
-						type: 'tool_result',
-						data: {
-							toolName: 'LS',
-							toolUseId: toolLsId,
-							content: 'UserProfile.tsx\nHeader.tsx\nFooter.tsx\nButton.tsx',
-							isError: false,
-							parentToolUseId: subtaskId,
-							estimatedTokens: 45, // Added tokens
-							durationMs: 800, // Added duration
+						type: 'session_event',
+						targetId: childSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: toolLsResultId,
+								type: 'tool_result',
+								toolName: 'LS',
+								toolUseId: toolLsId,
+								content: 'UserProfile.tsx\nHeader.tsx\nFooter.tsx\nButton.tsx',
+								isError: false,
+								estimatedTokens: 45,
+								durationMs: 800,
+								timestamp: new Date().toISOString(),
+							},
 						},
+						timestamp: Date.now(),
 						delay: 800,
 					},
-					// 4. Subtask Thinking 2
+					// 5. Child session: Thinking 2
 					{
-						type: 'thinking',
-						data: {
-							content:
-								'Okay, I see UserProfile.tsx. Now I need to examine its content to identify monolithic patterns.',
-							partId: thinkingId2,
-							id: thinkingId2,
-							durationMs: 1200,
-							reasoningTokens: 120, // Added tokens
-							isStreaming: false,
-							parentToolUseId: subtaskId,
+						type: 'session_event',
+						targetId: childSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: thinkingId2,
+								type: 'thinking',
+								content:
+									'Okay, I see UserProfile.tsx. Now I need to examine its content to identify monolithic patterns.',
+								partId: thinkingId2,
+								durationMs: 1200,
+								reasoningTokens: 120,
+								isStreaming: false,
+								timestamp: new Date().toISOString(),
+							},
 						},
+						timestamp: Date.now(),
 						delay: 600,
 					},
-					// 5. Subtask Tool: Read
+					// 6. Child session: Tool Read
 					{
-						type: 'tool_use',
-						data: {
-							toolName: 'Read',
-							toolUseId: toolReadId,
-							filePath: 'src/components/UserProfile.tsx',
-							rawInput: { path: 'src/components/UserProfile.tsx' },
-							parentToolUseId: subtaskId,
+						type: 'session_event',
+						targetId: childSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: toolReadId,
+								type: 'tool_use',
+								toolName: 'Read',
+								toolUseId: toolReadId,
+								filePath: 'src/components/UserProfile.tsx',
+								rawInput: { path: 'src/components/UserProfile.tsx' },
+								timestamp: new Date().toISOString(),
+							},
 						},
+						timestamp: Date.now(),
 						delay: 800,
 					},
 					{
-						type: 'tool_result',
-						data: {
-							toolName: 'Read',
-							toolUseId: toolReadId,
-							content:
-								'export const UserProfile = () => {\n  // ... 500 lines of code ...\n  return (\n    <div>\n      <Avatar />\n      <UserInfo />\n      <Settings />\n    </div>\n  );\n};',
-							isError: false,
-							parentToolUseId: subtaskId,
-							estimatedTokens: 850, // Added tokens
-							durationMs: 1000, // Added duration
+						type: 'session_event',
+						targetId: childSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: toolReadResultId,
+								type: 'tool_result',
+								toolName: 'Read',
+								toolUseId: toolReadId,
+								content:
+									'export const UserProfile = () => {\n  // ... 500 lines of code ...\n  return (\n    <div>\n      <Avatar />\n      <UserInfo />\n      <Settings />\n    </div>\n  );\n};',
+								isError: false,
+								estimatedTokens: 850,
+								durationMs: 1000,
+								timestamp: new Date().toISOString(),
+							},
 						},
+						timestamp: Date.now(),
 						delay: 1000,
 					},
-					// 6. Subtask Thinking 3 (Final Analysis)
+					// 7. Child session: Thinking 3 (Final Analysis)
 					{
-						type: 'thinking',
-						data: {
-							content:
-								'The component is indeed too large (500+ lines). It mixes presentation and logic. I recommend splitting it into `Avatar`, `UserInfo`, and `Settings` components.',
-							partId: thinkingId3,
-							id: thinkingId3,
-							durationMs: 1500,
-							isStreaming: false,
-							parentToolUseId: subtaskId,
+						type: 'session_event',
+						targetId: childSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: thinkingId3,
+								type: 'thinking',
+								content:
+									'The component is indeed too large (500+ lines). It mixes presentation and logic. I recommend splitting it into `Avatar`, `UserInfo`, and `Settings` components.',
+								partId: thinkingId3,
+								durationMs: 1500,
+								isStreaming: false,
+								timestamp: new Date().toISOString(),
+							},
 						},
+						timestamp: Date.now(),
 						delay: 800,
 					},
-					// 7. Subtask Completion
+					// 8. Subtask Completion (in parent session)
 					{
-						type: 'subtask',
-						data: {
-							id: subtaskId,
-							type: 'subtask',
-							agent: 'frontend-architect',
-							prompt: 'Analyze src/components/UserProfile.tsx for refactoring opportunities.',
-							description: 'Analysis complete: 3 sub-components identified',
-							status: 'completed',
-							result:
-								'Refactoring plan: Split UserProfile.tsx into Avatar, UserInfo, and Settings.',
-							timestamp: new Date().toISOString(),
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: subtaskId,
+								type: 'subtask',
+								agent: 'frontend-architect',
+								prompt: 'Analyze src/components/UserProfile.tsx for refactoring opportunities.',
+								description: 'Analysis complete: 3 sub-components identified',
+								status: 'completed',
+								result:
+									'Refactoring plan: Split UserProfile.tsx into Avatar, UserInfo, and Settings.',
+								childSessionId: childSessionId,
+								timestamp: new Date().toISOString(),
+							},
 						},
+						timestamp: Date.now(),
 						delay: 1000,
 					},
-					// 8. Main Assistant Final Response
+					// 9. Main Assistant Final Response
 					{
-						type: 'assistant',
-						data: {
-							content:
-								'The **Frontend Architect** has analyzed `UserProfile.tsx`. It recommends splitting the file into three smaller components:\n\n1.  `Avatar`\n2.  `UserInfo`\n3.  `Settings`\n\nShall I proceed with creating these files?',
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'message',
+						payload: {
+							eventType: 'message',
+							message: {
+								id: createId('assistant'),
+								type: 'assistant',
+								content:
+									'The **Frontend Architect** has analyzed `UserProfile.tsx`. It recommends splitting the file into three smaller components:\n\n1.  `Avatar`\n2.  `UserInfo`\n3.  `Settings`\n\nShall I proceed with creating these files?',
+								timestamp: new Date().toISOString(),
+							},
 						},
+						timestamp: Date.now(),
 						delay: 600,
 					},
 				];
@@ -911,63 +1533,101 @@ const mockVSCodeApi: VSCodeApi = {
 			// Create dynamic scenario with user's actual message
 			const dynamicScenario: MockMessage[] = [
 				{
-					type: 'user',
-					data: {
-						content: userContent,
-						id: userMessageId,
-						timestamp: new Date().toISOString(),
+					type: 'session_event',
+					targetId: mockActiveSessionId,
+					eventType: 'message',
+					payload: {
+						eventType: 'message',
+						message: {
+							id: userMessageId,
+							type: 'user',
+							content: userContent,
+							timestamp: new Date().toISOString(),
+						},
 					},
+					timestamp: Date.now(),
 					delay: 100,
 				},
 				{
-					type: 'showRestoreOption',
-					data: {
-						id: createId('checkpoint'),
-						sha: createId('commit'),
-						message: 'Checkpoint before message',
-						timestamp: new Date().toISOString(),
-						associatedMessageId: userMessageId,
-						sessionId: mockActiveSessionId,
-						cliSessionId: 'cli-session-mock',
-						isOpenCodeCheckpoint: true,
+					type: 'session_event',
+					targetId: mockActiveSessionId,
+					eventType: 'restore',
+					payload: {
+						eventType: 'restore',
+						action: 'add_commit',
+						commit: {
+							id: createId('checkpoint'),
+							sha: createId('commit'),
+							message: 'Checkpoint before message',
+							timestamp: new Date().toISOString(),
+							associatedMessageId: userMessageId,
+							sessionId: mockActiveSessionId,
+							cliSessionId: 'cli-session-mock',
+							isOpenCodeCheckpoint: true,
+						},
 					},
+					timestamp: Date.now(),
 					delay: 200,
 				},
 				{
-					type: 'thinking',
-					data: {
-						content:
-							'Processing your request...\n\nAnalyzing the input and determining the best approach to provide a helpful response.',
-						partId: createId('thinking'),
-						durationMs: 1500,
-						reasoningTokens: 52,
-						isStreaming: false,
+					type: 'session_event',
+					targetId: mockActiveSessionId,
+					eventType: 'message',
+					payload: {
+						eventType: 'message',
+						message: {
+							id: createId('thinking'),
+							type: 'thinking',
+							content:
+								'Processing your request...\n\nAnalyzing the input and determining the best approach to provide a helpful response.',
+							partId: createId('thinking'),
+							durationMs: 1500,
+							reasoningTokens: 52,
+							isStreaming: false,
+							timestamp: new Date().toISOString(),
+						},
 					},
+					timestamp: Date.now(),
 					delay: 600,
 				},
 				{
-					type: 'assistant',
-					data: {
-						content: `I've received your message and processed it. Here's my response:\n\n${
-							userContent.length > 50
-								? 'Based on your detailed request, I have analyzed the requirements and prepared a comprehensive solution.'
-								: 'What would you like me to help you with next?'
-						}`,
+					type: 'session_event',
+					targetId: mockActiveSessionId,
+					eventType: 'message',
+					payload: {
+						eventType: 'message',
+						message: {
+							id: createId('assistant'),
+							type: 'assistant',
+							content: `I've received your message and processed it. Here's my response:\n\n${
+								userContent.length > 50
+									? 'Based on your detailed request, I have analyzed the requirements and prepared a comprehensive solution.'
+									: 'What would you like me to help you with next?'
+							}`,
+							timestamp: new Date().toISOString(),
+						},
 					},
+					timestamp: Date.now(),
 					delay: 800,
 				},
 				{
-					type: 'updateTokens',
-					data: {
-						totalTokensInput: 500,
-						totalTokensOutput: 150,
-						currentInputTokens: 500,
-						currentOutputTokens: 150,
-						cacheCreationTokens: 0,
-						cacheReadTokens: 0,
-						reasoningTokens: 52,
-						totalReasoningTokens: 52,
+					type: 'session_event',
+					targetId: mockActiveSessionId,
+					eventType: 'stats',
+					payload: {
+						eventType: 'stats',
+						tokenStats: {
+							totalTokensInput: 500,
+							totalTokensOutput: 150,
+							currentInputTokens: 500,
+							currentOutputTokens: 150,
+							cacheCreationTokens: 0,
+							cacheReadTokens: 0,
+							reasoningTokens: 52,
+							totalReasoningTokens: 52,
+						},
 					},
+					timestamp: Date.now(),
 					delay: 100,
 				},
 			];
@@ -976,15 +1636,14 @@ const mockVSCodeApi: VSCodeApi = {
 		} else if (msg.type === 'stopRequest') {
 			isScenarioRunning = false;
 			clearAllMockTimers();
-			dispatchMockMessage('setProcessing', { isProcessing: false });
+			dispatchStatus(mockActiveSessionId, 'idle', 'Stopped');
 			// Send interrupted message so user can resume
-			dispatchMockMessage('interrupted', {
-				data: {
-					content: 'Processing was stopped by user',
-					reason: 'user_stopped',
-					id: createId('interrupted'),
-					timestamp: new Date().toISOString(),
-				},
+			dispatchMessage(mockActiveSessionId, {
+				type: 'interrupted',
+				content: 'Processing was stopped by user',
+				reason: 'user_stopped',
+				id: createId('interrupted'),
+				timestamp: new Date().toISOString(),
 			});
 			console.log('[Mock VS Code] STOPPED - sent interrupted message');
 		} else if (msg.type === 'resumeAfterError') {
@@ -992,34 +1651,61 @@ const mockVSCodeApi: VSCodeApi = {
 			const { sessionId } = msg as { sessionId?: string };
 			console.log('[Mock VS Code] Resume after error for session:', sessionId);
 
+			const resumeUserId = createId('user');
+			const resumeThinkingId = createId('thinking');
 			const resumeScenario: MockMessage[] = [
 				{
-					type: 'user',
-					data: {
-						content: 'Continue from where you left off.',
-						id: createId('user'),
-						timestamp: new Date().toISOString(),
+					type: 'session_event',
+					targetId: sessionId || mockActiveSessionId,
+					eventType: 'message',
+					payload: {
+						eventType: 'message',
+						message: {
+							id: resumeUserId,
+							type: 'user',
+							content: 'Continue from where you left off.',
+							timestamp: new Date().toISOString(),
+						},
 					},
+					timestamp: Date.now(),
 					delay: 100,
 				},
 				{
-					type: 'thinking',
-					data: {
-						content:
-							'Resuming from previous state...\n\nAnalyzing context and continuing execution.',
-						partId: createId('thinking'),
-						durationMs: 1200,
-						reasoningTokens: 35,
-						isStreaming: false,
+					type: 'session_event',
+					targetId: sessionId || mockActiveSessionId,
+					eventType: 'message',
+					payload: {
+						eventType: 'message',
+						message: {
+							id: resumeThinkingId,
+							type: 'thinking',
+							content:
+								'Resuming from previous state...\n\nAnalyzing context and continuing execution.',
+							partId: resumeThinkingId,
+							durationMs: 1200,
+							reasoningTokens: 35,
+							isStreaming: false,
+							timestamp: new Date().toISOString(),
+						},
 					},
+					timestamp: Date.now(),
 					delay: 600,
 				},
 				{
-					type: 'assistant',
-					data: {
-						content:
-							'I have resumed execution. The previous error has been handled and I am continuing with the task.\n\nWhat would you like me to do next?',
+					type: 'session_event',
+					targetId: sessionId || mockActiveSessionId,
+					eventType: 'message',
+					payload: {
+						eventType: 'message',
+						message: {
+							id: createId('assistant'),
+							type: 'assistant',
+							content:
+								'I have resumed execution. The previous error has been handled and I am continuing with the task.\n\nWhat would you like me to do next?',
+							timestamp: new Date().toISOString(),
+						},
 					},
+					timestamp: Date.now(),
 					delay: 800,
 				},
 			];
@@ -1030,9 +1716,10 @@ const mockVSCodeApi: VSCodeApi = {
 			console.log('[Mock VS Code] Dismiss error:', messageId, 'session:', sessionId);
 
 			if (messageId) {
-				dispatchMockMessage('messagePartRemoved', {
-					messageId,
+				dispatchSessionEvent(sessionId || mockActiveSessionId, 'complete', {
 					partId: messageId,
+					removed: true,
+					messageId,
 				});
 			}
 		} else if (msg.type === 'accessResponse') {
@@ -1043,8 +1730,9 @@ const mockVSCodeApi: VSCodeApi = {
 				alwaysAllow?: boolean;
 			};
 			if (id && approved !== undefined) {
-				dispatchMockMessage('accessResponse', {
-					id,
+				dispatchSessionEvent(mockActiveSessionId, 'access', {
+					action: 'response',
+					requestId: id,
 					approved,
 					alwaysAllow,
 				});
@@ -1054,14 +1742,16 @@ const mockVSCodeApi: VSCodeApi = {
 			console.log('[Mock VS Code] Creating session:', newSessionId);
 			// Simulate a slight delay to mimic backend processing
 			setTimeout(() => {
-				dispatchMockMessage('sessionCreated', { sessionId: newSessionId });
+				dispatchSessionLifecycle('created', newSessionId);
 			}, 100);
 		} else if (msg.type === 'switchSession') {
 			const { sessionId } = msg as unknown as { sessionId: string };
 			console.log('[Mock VS Code] Switched to session:', sessionId);
+			dispatchSessionLifecycle('switched', sessionId);
 		} else if (msg.type === 'closeSession') {
 			const { sessionId } = msg as unknown as { sessionId: string };
 			console.log('[Mock VS Code] Closed session:', sessionId);
+			dispatchSessionLifecycle('closed', sessionId);
 		} else if (msg.type === 'webviewDidLaunch') {
 			if (isLaunched) {
 				console.log('[Mock VS Code] Already launched, skipping duplicate init');
@@ -1071,19 +1761,37 @@ const mockVSCodeApi: VSCodeApi = {
 
 			setTimeout(() => {
 				// 1. First create the session in the store
-				dispatchMockMessage('sessionCreated', { sessionId: mockActiveSessionId });
+				dispatchSessionLifecycle('created', mockActiveSessionId);
 
-				// 2. Then set ready state and session info
-				dispatchMockMessage('ready', 'Ready');
-				dispatchMockMessage('sessionInfo', {
-					sessionId: mockActiveSessionId,
-					model: 'anthropic/claude-opus-4-5',
-					tools: ['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'LS', 'TodoWrite'],
-					startTime: Date.now(),
+				// 2. Then switch to it with initial state
+				dispatchSessionLifecycle('switched', mockActiveSessionId, {
+					isProcessing: false,
+					totalStats: {
+						totalCost: 0,
+						totalTokensInput: 0,
+						totalTokensOutput: 0,
+						totalReasoningTokens: 0,
+						requestCount: 0,
+						totalDuration: 0,
+					},
 				});
-				dispatchMockMessage('openCodeModelSet', { model: 'anthropic/claude-opus-4-5' });
-				dispatchMockMessage('workspaceInfo', { name: 'primecode' });
-				dispatchMockMessage('workspaceFiles', [
+
+				// 3. Set ready status
+				dispatchStatus(mockActiveSessionId, 'idle', 'Ready');
+
+				// 4. Send session info via session_event
+				dispatchSessionEvent(mockActiveSessionId, 'session_info', {
+					data: {
+						sessionId: mockActiveSessionId,
+						tools: ['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'LS', 'TodoWrite'],
+						mcpServers: [],
+					},
+				});
+
+				// 5. Global messages (non-session-scoped)
+				dispatchGlobalMessage('openCodeModelSet', { model: 'anthropic/claude-opus-4-5' });
+				dispatchGlobalMessage('workspaceInfo', { name: 'primecode' });
+				dispatchGlobalMessage('workspaceFiles', [
 					{ path: 'src/App.tsx', name: 'App.tsx', fsPath: 'C:\\src\\App.tsx' },
 					{ path: 'src/utils/logger.ts', name: 'logger.ts', fsPath: 'C:\\src\\utils\\logger.ts' },
 					{ path: 'package.json', name: 'package.json', fsPath: 'C:\\package.json' },
@@ -1091,7 +1799,7 @@ const mockVSCodeApi: VSCodeApi = {
 				runScenario(SCENARIO_1_RESEARCHER, true);
 			}, 300);
 		} else if (msg.type === 'getSettings') {
-			dispatchMockMessage('settingsData', {
+			dispatchGlobalMessage('settingsData', {
 				provider: 'opencode', // Use opencode to show all provider features
 				'primeCode.baseUrl': 'http://localhost:11434',
 				'primeCode.apiKey': '',
@@ -1100,9 +1808,9 @@ const mockVSCodeApi: VSCodeApi = {
 				'opencode.enabledModels': ['anthropic/claude-opus-4-5', 'google/gemini-2.0-flash'],
 				'providers.disabled': [],
 			});
-			dispatchMockMessage('platformInfo', { platform: 'win32', isWindows: true });
+			dispatchGlobalMessage('platformInfo', { platform: 'win32', isWindows: true });
 		} else if (msg.type === 'checkDiscoveryStatus') {
-			dispatchMockMessage('discoveryStatus', {
+			dispatchGlobalMessage('discoveryStatus', {
 				rules: {
 					hasAgentsMd: true,
 					hasClaudeMd: true,
@@ -1132,7 +1840,7 @@ const mockVSCodeApi: VSCodeApi = {
 				hooks: [{ name: 'SessionStart.ts', path: '.claude/hooks/SessionStart.ts', type: 'claude' }],
 			});
 		} else if (msg.type === 'getRules') {
-			dispatchMockMessage('ruleList', {
+			dispatchGlobalMessage('ruleList', {
 				rules: [
 					{
 						name: 'base.md',
@@ -1155,7 +1863,7 @@ const mockVSCodeApi: VSCodeApi = {
 				],
 			});
 		} else if (msg.type === 'importRulesFromClaude') {
-			dispatchMockMessage('tool_result', {
+			dispatchGlobalMessage('tool_result', {
 				toolName: 'Import Rules',
 				toolUseId: createId('t'),
 				content: 'Imported legacy rules into .agents/rules/',
@@ -1163,7 +1871,7 @@ const mockVSCodeApi: VSCodeApi = {
 			});
 			mockVSCodeApi.postMessage({ type: 'getRules' });
 		} else if (msg.type === 'syncRulesToClaude') {
-			dispatchMockMessage('tool_result', {
+			dispatchGlobalMessage('tool_result', {
 				toolName: 'Sync Rules',
 				toolUseId: createId('t'),
 				content: 'Synced .agents/rules/ to .claude/rules/',
@@ -1172,7 +1880,7 @@ const mockVSCodeApi: VSCodeApi = {
 		} else if (msg.type === 'toggleRule') {
 			const { path: rulePath, enabled } = msg as { path?: string; enabled?: boolean };
 			if (rulePath && enabled !== undefined) {
-				dispatchMockMessage('ruleUpdated', {
+				dispatchGlobalMessage('ruleUpdated', {
 					rule: {
 						name: rulePath.split('/').pop() ?? rulePath,
 						path: rulePath,
@@ -1185,7 +1893,7 @@ const mockVSCodeApi: VSCodeApi = {
 			}
 		} else if (msg.type === 'createRule') {
 			const { name } = msg as { name?: string };
-			dispatchMockMessage('ruleUpdated', {
+			dispatchGlobalMessage('ruleUpdated', {
 				rule: {
 					name: name ?? 'new-rule.md',
 					path: `.claude/rules/${name ?? 'new-rule.md'}`,
@@ -1195,7 +1903,7 @@ const mockVSCodeApi: VSCodeApi = {
 			});
 			mockVSCodeApi.postMessage({ type: 'getRules' });
 		} else if (msg.type === 'getPermissions') {
-			dispatchMockMessage('permissionsUpdated', {
+			dispatchGlobalMessage('permissionsUpdated', {
 				policies: { edit: 'allow', terminal: 'allow', network: 'allow' },
 			});
 		} else if (msg.type === 'setPermissions') {
@@ -1203,7 +1911,7 @@ const mockVSCodeApi: VSCodeApi = {
 				policies?: { edit: string; terminal: string; network: string };
 			};
 			if (policies) {
-				dispatchMockMessage('permissionsUpdated', { policies });
+				dispatchGlobalMessage('permissionsUpdated', { policies });
 			}
 		} else if (msg.type === 'createClaudeShim') {
 			// Simulate shim creation affecting discovery
@@ -1214,7 +1922,7 @@ const mockVSCodeApi: VSCodeApi = {
 			mockVSCodeApi.postMessage({ type: 'loadAvailableProviders' });
 		} else if (msg.type === 'loadOpenCodeProviders') {
 			// Mock connected OpenCode providers
-			dispatchMockMessage('openCodeProviders', {
+			dispatchGlobalMessage('openCodeProviders', {
 				providers: [
 					{
 						id: 'anthropic',
@@ -1265,7 +1973,7 @@ const mockVSCodeApi: VSCodeApi = {
 			});
 		} else if (msg.type === 'loadAvailableProviders') {
 			// Mock available providers (not yet connected)
-			dispatchMockMessage('availableProviders', {
+			dispatchGlobalMessage('availableProviders', {
 				providers: [
 					{ id: 'openai', name: 'OpenAI', env: ['OPENAI_API_KEY'] },
 					{ id: 'openrouter', name: 'OpenRouter', env: ['OPENROUTER_API_KEY'] },
@@ -1288,7 +1996,7 @@ const mockVSCodeApi: VSCodeApi = {
 		} else if (msg.type === 'loadProxyModels') {
 			// Mock proxy models fetch
 			setTimeout(() => {
-				dispatchMockMessage('proxyModels', {
+				dispatchGlobalMessage('proxyModels', {
 					models: [
 						{ id: 'gpt-4o', name: 'GPT-4o', contextLength: 228000 },
 						{ id: 'gpt-4o-mini', name: 'GPT-4o Mini', contextLength: 228000 },
@@ -1299,19 +2007,19 @@ const mockVSCodeApi: VSCodeApi = {
 				});
 			}, 500);
 		} else if (msg.type === 'checkOpenCodeStatus') {
-			dispatchMockMessage('openCodeStatus', {
+			dispatchGlobalMessage('openCodeStatus', {
 				installed: true,
 				version: '0.1.0',
 			});
 		} else if (msg.type === 'getAccess') {
-			dispatchMockMessage('accessData', []);
+			dispatchGlobalMessage('accessData', []);
 		} else if (msg.type === 'getCommands') {
-			dispatchMockMessage('commandsList', { custom: [], isLoading: false });
+			dispatchGlobalMessage('commandsList', { custom: [], isLoading: false });
 		} else if (msg.type === 'setOpenCodeProviderAuth') {
 			// Mock provider auth
 			const { providerId } = msg as { providerId?: string };
 			setTimeout(() => {
-				dispatchMockMessage('openCodeAuthResult', {
+				dispatchGlobalMessage('openCodeAuthResult', {
 					providerId,
 					isLoading: false,
 					success: true,
@@ -1326,7 +2034,7 @@ const mockVSCodeApi: VSCodeApi = {
 			// Echo back updated settings
 			const settings = (msg as { settings?: Record<string, unknown> }).settings || {};
 			if (settings.provider) {
-				dispatchMockMessage('settingsData', {
+				dispatchGlobalMessage('settingsData', {
 					provider: settings.provider,
 				});
 				// Reload providers when provider changes
@@ -1350,35 +2058,35 @@ const mockVSCodeApi: VSCodeApi = {
 
 			// Simulate restore operation
 			setTimeout(() => {
+				const targetSessionId = typeof data === 'object' ? data.sessionId : mockActiveSessionId;
+
 				if (typeof data === 'object' && 'associatedMessageId' in data) {
 					// OpenCode checkpoint restore
 					// Delete messages after the user message
-					dispatchMockMessage('deleteMessagesAfter', {
+					dispatchSessionEvent(targetSessionId, 'delete_messages_after', {
 						messageId: data.associatedMessageId,
 					});
 
 					// Send restore success
-					dispatchMockMessage('restoreSuccess', {
+					dispatchRestore(targetSessionId, 'success', {
 						message: 'Files restored. Click on your message to edit and resend.',
-						messageId: data.messageId,
 						canUnrevert: true,
 					});
 
 					// Notify UI that unrevert is available
-					dispatchMockMessage('unrevertAvailable', {
-						sessionId: data.sessionId,
-						cliSessionId: data.cliSessionId,
+					dispatchRestore(targetSessionId, 'unrevert_available', {
+						available: true,
 					});
 
 					// Update restore commits list (remove the restored checkpoint)
-					dispatchMockMessage('updateRestoreCommits', []);
+					dispatchRestore(targetSessionId, 'set_commits', { commits: [] });
 				} else if (typeof data === 'string') {
 					// Git-based restore
-					dispatchMockMessage('restoreSuccess', {
+					dispatchRestore(targetSessionId, 'success', {
 						message: `Restored to commit: ${data}`,
 						canUnrevert: false,
 					});
-					dispatchMockMessage('updateRestoreCommits', []);
+					dispatchRestore(targetSessionId, 'set_commits', { commits: [] });
 				}
 			}, 300);
 		} else if (msg.type === 'unrevert') {
@@ -1390,7 +2098,12 @@ const mockVSCodeApi: VSCodeApi = {
 			setTimeout(() => {
 				if (data?.sessionId) {
 					// Restore messages from snapshot (simulate)
-					const restoredMessages = [
+					const restoredMessages: Array<{
+						type: string;
+						content: string;
+						id: string;
+						timestamp: string;
+					}> = [
 						{
 							type: 'assistant',
 							content: 'Previous response restored',
@@ -1399,19 +2112,18 @@ const mockVSCodeApi: VSCodeApi = {
 						},
 					];
 
-					dispatchMockMessage('messagesReloaded', {
+					dispatchSessionEvent(data.sessionId, 'messages_reload', {
 						messages: restoredMessages,
 					});
 
-					dispatchMockMessage('restoreSuccess', {
+					dispatchRestore(data.sessionId, 'success', {
 						message: 'Previous state restored',
 						canUnrevert: false,
 					});
 
 					// Clear unrevert availability
-					dispatchMockMessage('unrevertAvailable', {
-						sessionId: data.sessionId,
-						cliSessionId: data.cliSessionId,
+					dispatchRestore(data.sessionId, 'unrevert_available', {
+						available: false,
 					});
 				}
 			}, 300);

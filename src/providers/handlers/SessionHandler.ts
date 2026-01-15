@@ -1,18 +1,19 @@
 /**
  * @file SessionHandler
  * @description Manages session lifecycle operations: initialization, creation, switching, and closing.
- * Uses local conversation history as the authoritative source for message replay.
+ * Uses unified SessionRouter for lifecycle events and local conversation history as authoritative source.
  */
 
 import type { SessionManager } from '../../services/SessionManager';
 import { logger } from '../../utils/logger';
+import type { SessionRouter } from './SessionRouter';
 
 // =============================================================================
 // Types
 // =============================================================================
 
 export interface SessionHandlerDeps {
-	postMessage: (msg: unknown) => void;
+	router: SessionRouter;
 	sendReadyMessage: () => Promise<void>;
 	loadConversationHistory: (filename: string) => Promise<void>;
 	getLatestConversation: () => Promise<{ filename: string } | undefined>;
@@ -42,10 +43,7 @@ export class SessionHandler {
 
 			// First, notify UI about ALL restored sessions so they appear in the tab bar
 			for (const session of allSessions) {
-				this._deps.postMessage({
-					type: 'sessionCreated',
-					data: { sessionId: session.uiSessionId },
-				});
+				this._deps.router.emitSessionCreated(session.uiSessionId);
 			}
 
 			// Then send ready message for the active one to replay its history
@@ -93,16 +91,19 @@ export class SessionHandler {
 		}
 	}
 
-	public newSession(postMessage: (msg: unknown) => void): void {
+	public newSession(): void {
 		const session = this._sessionManager.getActiveSession();
-		if (session) {
-			session.stopProcess();
-			session.clearCommits();
-			session.clearConversation();
-			session.setProcessing(false);
+		if (!session) {
+			logger.warn('[SessionHandler] newSession called without active session');
+			return;
 		}
-		postMessage({ type: 'setProcessing', data: { isProcessing: false } });
-		postMessage({ type: 'sessionCleared' });
+
+		session.stopProcess();
+		session.clearCommits();
+		session.clearConversation();
+		// emitStatus handles both UI notification and backend state update
+		this._deps.router.emitStatus(session.uiSessionId, 'idle');
+		this._deps.router.emitSessionCleared(session.uiSessionId);
 	}
 
 	public async handleCreateSession(): Promise<void> {
@@ -112,12 +113,13 @@ export class SessionHandler {
 			logger.info(`[SessionHandler] Created session: ${uiSessionId}`);
 		} catch (error) {
 			logger.error('[SessionHandler] Failed to create session:', error);
-			this._deps.postMessage({
-				type: 'error',
-				data: {
-					content: error instanceof Error ? error.message : 'Failed to create session',
-				},
-			});
+			const activeSessionId = this._sessionManager.activeSessionId;
+			if (activeSessionId) {
+				this._deps.router.emitError(
+					activeSessionId,
+					error instanceof Error ? error.message : 'Failed to create session',
+				);
+			}
 		}
 	}
 
@@ -134,47 +136,20 @@ export class SessionHandler {
 		}
 
 		if (session) {
-			this._deps.postMessage({
-				type: 'sessionSwitched',
-				data: {
-					sessionId: uiSessionId,
-					isProcessing: session.isProcessing,
-					totalStats: session.getStats(),
-				},
-			});
-
 			// Clear any session-scoped UI state first to avoid mixing old and new.
-			this._deps.postMessage({ type: 'sessionCleared', sessionId: uiSessionId });
+			this._deps.router.emitSessionCleared(uiSessionId);
 
-			// Replay local conversation history (authoritative source after persistence improvements)
-			if (session.conversationMessages.length > 0) {
-				logger.info(
-					`[SessionHandler] Sending ${session.conversationMessages.length} messages from local history`,
-				);
-				// Messages are already in unified format, no conversion needed
-				this._deps.postMessage({
-					type: 'messagesReloaded',
-					data: { messages: session.conversationMessages },
-					sessionId: uiSessionId,
-				});
-			}
-
-			// Send stats
-			this._deps.postMessage({
-				type: 'updateTotals',
-				data: session.getStats(),
-				sessionId: uiSessionId,
+			// Then send sessionSwitched with correct state (including isProcessing)
+			this._deps.router.emitSessionSwitched(uiSessionId, {
+				isProcessing: session.isProcessing,
+				totalStats: session.getStats(),
+				messages:
+					session.conversationMessages.length > 0 ? session.conversationMessages : undefined,
 			});
 
 			// Restore commits/checkpoints for restore functionality
 			if (session.commits.length > 0) {
-				for (const commit of session.commits) {
-					this._deps.postMessage({
-						type: 'showRestoreOption',
-						data: commit,
-						sessionId: uiSessionId,
-					});
-				}
+				this._deps.router.emitRestoreCommits(uiSessionId, session.commits);
 			}
 		}
 	}
