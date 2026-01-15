@@ -52,7 +52,12 @@ export class SessionRouter {
 	 * @param message - Message data to emit
 	 * @param contextId - Optional context ID for subtask/subagent messages (routes to separate bucket)
 	 */
-	public emitMessage(sessionId: string, message: SessionMessageData, contextId?: string): void {
+	public emitMessage(
+		sessionId: string,
+		message: SessionMessageData,
+		contextId?: string,
+		skipPersist?: boolean,
+	): void {
 		if (!sessionId) {
 			logger.warn('[SessionRouter] emitMessage called without sessionId');
 			return;
@@ -78,12 +83,14 @@ export class SessionRouter {
 			timestamp: Date.now(),
 		});
 
-		// Persist into authoritative parent session history.
-		const session = this._sessionManager.getSession(sessionId);
-		if (session) {
-			session.addConversationMessage(
-				normalizedMessage as Partial<ConversationMessage> & { type: string },
-			);
+		// Persist into authoritative parent session history (unless skipPersist is true)
+		if (!skipPersist) {
+			const session = this._sessionManager.getSession(sessionId);
+			if (session) {
+				session.addConversationMessage(
+					normalizedMessage as Partial<ConversationMessage> & { type: string },
+				);
+			}
 		}
 	}
 

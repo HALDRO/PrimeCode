@@ -58,6 +58,7 @@ export class StreamHandler {
 
 	/**
 	 * Emit a message to a session via the unified router.
+	 * @param skipPersist - If true, message won't be saved to conversation history (for transient UI messages like retry status)
 	 */
 	private _emitMessage(
 		sessionId: string | undefined,
@@ -72,6 +73,7 @@ export class StreamHandler {
 			[key: string]: unknown;
 		},
 		contextId?: string,
+		skipPersist?: boolean,
 	): void {
 		if (!sessionId) {
 			logger.warn('[StreamHandler] _emitMessage called without sessionId');
@@ -91,6 +93,7 @@ export class StreamHandler {
 				hidden,
 			},
 			contextId,
+			skipPersist,
 		);
 	}
 
@@ -783,17 +786,34 @@ export class StreamHandler {
 		}
 
 		switch (status.type) {
-			case 'retry':
+			case 'retry': {
+				// Get session to track retry count
+				const session = sessionId ? this._sessionManager.getSession(sessionId) : undefined;
+				if (session) {
+					session.setAutoRetrying(true);
+				}
+				const attempt = session?.retryCount || 1;
+				const retryMessage = status.message || 'API request failed, retrying...';
+				const nextRetryAt = status.next ? new Date(status.next).toISOString() : undefined;
+
+				// Emit status update - webview renders retry overlay via isAutoRetrying/retryInfo state
 				this._emitStatus(sessionId, 'retrying', {
-					attempt: status.attempt || 1,
-					message: status.message || 'Retrying request...',
-					nextRetryAt: status.next ? new Date(status.next).toISOString() : undefined,
+					attempt,
+					message: retryMessage,
+					nextRetryAt,
 				});
 				break;
+			}
 
-			case 'idle':
+			case 'idle': {
+				// Reset retry count when idle
+				const session = sessionId ? this._sessionManager.getSession(sessionId) : undefined;
+				if (session) {
+					session.setAutoRetrying(false);
+				}
 				this._emitStatus(sessionId, 'idle');
 				break;
+			}
 
 			case 'busy':
 				this._emitStatus(sessionId, 'busy');

@@ -437,6 +437,33 @@ export const App: React.FC = () => {
 					components={virtuosoComponents}
 				/>
 
+				{/* Retry overlay - shown when API is auto-retrying or busy between retries */}
+				{retryInfo && isProcessing && (
+					<div className="absolute bottom-16 left-0 right-0 z-30 flex justify-center pointer-events-none px-4">
+						<div
+							className="pointer-events-auto flex items-center gap-2 px-4 py-2 rounded-lg shadow-lg border"
+							style={{
+								backgroundColor: 'var(--vscode-editorWidget-background)',
+								borderColor: '#f0ad4e',
+								color: '#f0ad4e',
+							}}
+						>
+							<span
+								className="inline-block w-2 h-2 rounded-full animate-pulse"
+								style={{ backgroundColor: '#f0ad4e' }}
+							/>
+							<span className="text-sm font-medium">
+								{retryInfo.message}
+								{retryInfo.nextRetryAt && (
+									<span className="ml-1 opacity-80">
+										— next: {new Date(retryInfo.nextRetryAt).toLocaleTimeString()}
+									</span>
+								)}
+							</span>
+						</div>
+					</div>
+				)}
+
 				<div className="absolute bottom-0 left-0 right-0 z-20 pointer-events-none">
 					<div
 						ref={changedFilesPanelHeight.ref}

@@ -13,7 +13,7 @@ import { useMcpServers } from '../../store';
 import type { Message } from '../../store/chatStore';
 import { Markdown } from '../../utils/markdown';
 import { groupToolMessages, shouldTriggerCollapse } from '../../utils/messageGrouping';
-import { ErrorMessage } from './ErrorMessage';
+import { NotificationMessage } from './NotificationMessage';
 import { SubtaskHeader } from './SubtaskHeader';
 import { ThinkingMessage } from './ThinkingMessage';
 import { ToolGroup } from './ToolGroup';
@@ -74,7 +74,7 @@ export const ResponseItem = React.memo<ResponseItemProps>(
 		switch (message.type) {
 			case 'system_notice':
 				return (
-					<ErrorMessage
+					<NotificationMessage
 						message={message as Extract<Message, { type: 'system_notice' }>}
 						onDismiss={onErrorDismiss}
 						canResume={false}
@@ -92,7 +92,7 @@ export const ResponseItem = React.memo<ResponseItemProps>(
 				return null;
 			case 'error':
 				return (
-					<ErrorMessage
+					<NotificationMessage
 						message={message as Extract<Message, { type: 'error' }>}
 						onResume={onErrorResume}
 						onDismiss={onErrorDismiss}
@@ -103,7 +103,7 @@ export const ResponseItem = React.memo<ResponseItemProps>(
 				);
 			case 'interrupted':
 				return (
-					<ErrorMessage
+					<NotificationMessage
 						message={message as Extract<Message, { type: 'interrupted' }>}
 						onResume={onErrorResume}
 						onDismiss={onErrorDismiss}

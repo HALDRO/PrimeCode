@@ -1,8 +1,8 @@
 /**
- * @file ErrorMessage - Chat error/interruption notification component
- * @description Premium error display component for chat messages with actionable controls.
+ * @file NotificationMessage - Chat notification component for errors, interruptions, and system notices
+ * @description Premium notification display component for chat messages with actionable controls.
  *              Features Resume button to continue model execution, dismiss functionality,
- *              copy error text, and collapsible details. Supports both error and interrupted
+ *              copy error text, and collapsible details. Supports error, interrupted, and system_notice
  *              message types with appropriate styling. Consistent with project's tool message
  *              styling while maintaining clear visual hierarchy.
  */
@@ -31,7 +31,7 @@ type SystemNoticeMessage = Extract<Message, { type: 'system_notice' }>;
 
 type ErrorLikeMessage = ErrorOrInterruptedMessage | SystemNoticeMessage;
 
-interface ErrorMessageProps {
+interface NotificationMessageProps {
 	message: ErrorLikeMessage;
 	/** Callback to resume/retry the model execution */
 	onResume?: () => void;
@@ -80,7 +80,7 @@ function parseErrorContent(content: string): {
 	};
 }
 
-export const ErrorMessage: React.FC<ErrorMessageProps> = ({
+export const NotificationMessage: React.FC<NotificationMessageProps> = ({
 	message,
 	onResume,
 	onDismiss,
@@ -103,6 +103,19 @@ export const ErrorMessage: React.FC<ErrorMessageProps> = ({
 	// Customize display based on message type
 	const getDisplayInfo = () => {
 		if (isSystemNotice) {
+			// Retry status notice (warning style)
+			const isRetryNotice = message.id === 'retry-status';
+			if (isRetryNotice) {
+				return {
+					icon: <AlertCircleIcon size={15} />,
+					title: parsed.title,
+					accentColor: '#f0ad4e',
+					gradientFrom: '#f0ad4e',
+					gradientTo: 'color-mix(in srgb, #f0ad4e 70%, black)',
+					resumeLabel: 'Resume',
+				};
+			}
+			// Other system notices (e.g., Context summarized) - info style
 			return {
 				icon: <ImprovePromptIcon size={15} />,
 				title: parsed.title,
@@ -364,4 +377,4 @@ export const ErrorMessage: React.FC<ErrorMessageProps> = ({
 	);
 };
 
-export default ErrorMessage;
+export default NotificationMessage;

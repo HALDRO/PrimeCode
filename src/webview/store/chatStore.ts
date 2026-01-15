@@ -371,6 +371,8 @@ export const useChatStore = create<ChatState>()(
 									...s,
 									messages: newMessages,
 									lastActive: Date.now(),
+									// Clear retryInfo when we receive actual content (retry succeeded)
+									retryInfo: message.type === 'assistant' ? null : s.retryInfo,
 								}));
 							}
 
@@ -381,11 +383,28 @@ export const useChatStore = create<ChatState>()(
 										statusPayload.status === 'retrying'
 											? statusPayload.retryInfo?.message || s.status
 											: statusPayload.statusText || s.status;
+									// Keep isProcessing true during retrying (API is still working)
+									const isActiveProcessing =
+										statusPayload.status === 'busy' || statusPayload.status === 'retrying';
+									// Keep retryInfo only during active retry cycle:
+									// - On 'retrying': set new retryInfo
+									// - On 'busy' while isAutoRetrying: keep retryInfo (busy between retries)
+									// - On 'busy' after retry succeeded: clear retryInfo (isAutoRetrying becomes false)
+									// - On 'idle': clear retryInfo
+									const shouldKeepRetryInfo = statusPayload.status === 'busy' && s.isAutoRetrying;
+									const newRetryInfo =
+										statusPayload.status === 'idle'
+											? null
+											: statusPayload.status === 'retrying'
+												? statusPayload.retryInfo || null
+												: shouldKeepRetryInfo
+													? s.retryInfo
+													: null;
 									return {
 										...s,
-										isProcessing: statusPayload.status === 'busy',
+										isProcessing: isActiveProcessing,
 										isAutoRetrying: statusPayload.status === 'retrying',
-										retryInfo: statusPayload.retryInfo || null,
+										retryInfo: newRetryInfo,
 										status: nextStatus,
 										isLoading: Boolean(statusPayload.loadingMessage),
 										lastActive: Date.now(),

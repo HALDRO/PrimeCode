@@ -92,6 +92,7 @@ export class SessionContext {
 	// Processing state
 	private _isProcessing: boolean = false;
 	private _isAutoRetrying: boolean = false;
+	private _retryCount: number = 0;
 	private _draftMessage: string = '';
 	private _receivedResponse: boolean = false;
 	private _checkpointCreated: boolean = false;
@@ -348,8 +349,17 @@ export class SessionContext {
 	}
 
 	public setAutoRetrying(value: boolean): void {
+		if (value) {
+			this._retryCount++;
+		} else {
+			this._retryCount = 0;
+		}
 		this._isAutoRetrying = value;
 		this._lastActiveAt = Date.now();
+	}
+
+	public get retryCount(): number {
+		return this._retryCount;
 	}
 
 	public setDraftMessage(value: string): void {
