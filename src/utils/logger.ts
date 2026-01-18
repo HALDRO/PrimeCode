@@ -62,6 +62,10 @@ export const logger = {
 		console.warn(`${message}`, ...args);
 	},
 	debug: (message: string, ...args: unknown[]) => {
+		// Skip debug logs in production to reduce noise
+		if (process.env.NODE_ENV === 'production') {
+			return;
+		}
 		const formatted = args.length > 0 ? `${message} ${formatArgs(args)}` : message;
 		outputChannel?.appendLine(`[DEBUG] ${new Date().toISOString()} - ${formatted}`);
 	},

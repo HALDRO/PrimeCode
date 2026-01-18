@@ -44,6 +44,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 		opencodeProviders,
 		enabledOpenCodeModels,
 		disabledProviders,
+		setSessionModel,
 	} = useModelSelection();
 	const { setShowModelDropdown } = useModelDropdownState();
 
@@ -89,6 +90,10 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 
 	const handleSelect = useCallback(
 		(model: ModelData) => {
+			// Persist per-session override (so different chats can use different models)
+			setSessionModel(model.id === 'default' ? undefined : model.id);
+
+			// Persist workspace default (so next new session starts with last used model)
 			if (provider === 'opencode') {
 				postMessage('setOpenCodeModel', { model: model.id });
 			} else {
@@ -96,7 +101,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 			}
 			onClose();
 		},
-		[postMessage, onClose, provider],
+		[postMessage, onClose, provider, setSessionModel],
 	);
 
 	// Custom render for model items with purple dot for active model

@@ -53,6 +53,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private alwaysAllowByTool: Record<string, boolean> = {};
 	private improvePromptController: AbortController | null = null;
 	private improvePromptActiveRequestId: string | null = null;
+	private startedSessions = new Set<string>(); // Track which sessions have been started
 
 	private readonly agentsConfigService: AgentsConfigService;
 	private readonly agentsSyncService: AgentsSyncService;
@@ -78,6 +79,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		getSubagents: () => this.onGetSubagents(),
 		getRules: () => this.onGetRules(),
 		checkDiscoveryStatus: () => this.onCheckDiscoveryStatus(),
+
+		// Session lifecycle
+		createSession: () => this.onCreateSession(),
+		switchSession: msg => this.onSwitchSession(msg),
+		closeSession: msg => this.onCloseSession(msg),
 
 		// MCP
 		loadMCPServers: () => this.onLoadMcpServers(),
@@ -113,6 +119,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		getClipboardContext: msg => this.onGetClipboardContext(msg),
 		improvePromptRequest: msg => this.onImprovePromptRequest(msg),
 		cancelImprovePrompt: msg => this.onCancelImprovePrompt(msg),
+		stopRequest: msg => this.onStopRequest(msg),
 	};
 
 	constructor(private context: vscode.ExtensionContext) {
@@ -211,15 +218,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			webviewView.webview.onDidReceiveMessage(msg => this.handleWebviewMessage(msg)),
 		);
 
-		// Send initial state
+		// Send initial state (session lifecycle handled by webviewDidLaunch)
 		this.sendInitialState();
 		this.postMessage({ type: 'accessData', data: [] });
-
-		// Create + switch to initial session (unified protocol)
-		this.postLifecycle('created', this.activeSessionId);
-		this.postLifecycle('switched', this.activeSessionId, { isProcessing: false });
-		this.postStatus(this.activeSessionId, 'idle', 'Ready');
-		this.postSessionInfo();
 	}
 
 	// =============================================================================
@@ -253,18 +254,40 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	// =============================================================================
 
 	private async onWebviewDidLaunch(msg: WebviewMessage): Promise<void> {
-		const uiSessionId = (msg.sessionId as string | undefined) || this.activeSessionId;
-		this.activeSessionId = uiSessionId;
-		this.postLifecycle('created', uiSessionId);
-		this.postLifecycle('switched', uiSessionId, { isProcessing: false });
-		this.postStatus(uiSessionId, 'idle', 'Ready');
+		this.activeSessionId = (msg.sessionId as string | undefined) || this.activeSessionId;
+		this.postLifecycle('created', this.activeSessionId);
+		this.postLifecycle('switched', this.activeSessionId, { isProcessing: false });
+		this.postStatus(this.activeSessionId, 'idle', 'Ready');
 		this.postSessionInfo();
+	}
+
+	private async onCreateSession(): Promise<void> {
+		const newSessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+		logger.info('[ChatProvider] Creating new session', { sessionId: newSessionId });
+		this.postLifecycle('created', newSessionId);
+	}
+
+	private async onSwitchSession(msg: WebviewMessage): Promise<void> {
+		const sessionId = typeof msg.sessionId === 'string' ? msg.sessionId : undefined;
+		if (!sessionId) return;
+		logger.info('[ChatProvider] Switching session', { from: this.activeSessionId, to: sessionId });
+		this.activeSessionId = sessionId;
+		this.postLifecycle('switched', sessionId, { isProcessing: false });
+		this.postStatus(sessionId, 'idle', 'Ready');
+		this.postSessionInfo();
+	}
+
+	private async onCloseSession(msg: WebviewMessage): Promise<void> {
+		const sessionId = typeof msg.sessionId === 'string' ? msg.sessionId : undefined;
+		if (!sessionId) return;
+		logger.info('[ChatProvider] Closing session', { sessionId });
+		this.postLifecycle('closed', sessionId);
 	}
 
 	private async onSendMessage(msg: WebviewMessage): Promise<void> {
 		const text = msg.text as string;
 		const uiModel = typeof msg.model === 'string' ? (msg.model as string) : undefined;
-		await this.handleSendMessage(text, msg.sessionId as string | undefined, uiModel);
+		await this.handleSendMessage(text, uiModel);
 	}
 
 	private async onAccessResponse(msg: WebviewMessage): Promise<void> {
@@ -571,14 +594,16 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				Array.isArray((json as { all?: unknown }).all)
 					? ((json as { all: unknown[] }).all as unknown[])
 					: [];
-			const connected =
+			const connectedRaw =
 				json &&
 				typeof json === 'object' &&
 				'connected' in json &&
 				Array.isArray((json as { connected?: unknown }).connected)
 					? ((json as { connected: unknown[] }).connected as unknown[])
 					: [];
-			const connectedSet = new Set(connected.map(x => String(x)));
+
+			const connectedIds = this.normalizeConnectedProviderIds(connectedRaw);
+			const connectedSet = new Set(connectedIds);
 
 			const providers = all
 				.filter((p): p is Record<string, unknown> => p != null && typeof p === 'object')
@@ -663,14 +688,16 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				Array.isArray((json as { all?: unknown }).all)
 					? ((json as { all: unknown[] }).all as unknown[])
 					: [];
-			const connected =
+			const connectedRaw =
 				json &&
 				typeof json === 'object' &&
 				'connected' in json &&
 				Array.isArray((json as { connected?: unknown }).connected)
 					? ((json as { connected: unknown[] }).connected as unknown[])
 					: [];
-			const connectedSet = new Set(connected.map(x => String(x)));
+
+			const connectedIds = this.normalizeConnectedProviderIds(connectedRaw);
+			const connectedSet = new Set(connectedIds);
 
 			const providers = all
 				.filter((p): p is Record<string, unknown> => p != null && typeof p === 'object')
@@ -690,6 +717,31 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 	private buildOpenCodeHeaders(directory: string): Record<string, string> {
 		return { 'x-opencode-directory': directory };
+	}
+
+	/**
+	 * Normalize OpenCode provider connection response to extract provider IDs.
+	 * Handles multiple response formats from OpenCode server.
+	 */
+	private normalizeConnectedProviderIds(connectedRaw: unknown[]): string[] {
+		return connectedRaw
+			.map(item => {
+				if (typeof item === 'string') return item;
+				if (!item || typeof item !== 'object') return '';
+				if ('id' in item && typeof (item as { id?: unknown }).id === 'string') {
+					return (item as { id: string }).id;
+				}
+				if (
+					'provider' in item &&
+					(item as { provider?: unknown }).provider &&
+					typeof (item as { provider: { id?: unknown } }).provider === 'object' &&
+					typeof (item as { provider: { id?: unknown } }).provider.id === 'string'
+				) {
+					return (item as { provider: { id: string } }).provider.id;
+				}
+				return '';
+			})
+			.filter(Boolean);
 	}
 
 	private async onSetOpenCodeProviderAuth(msg: WebviewMessage): Promise<void> {
@@ -800,20 +852,16 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private async onSetOpenCodeModel(msg: WebviewMessage): Promise<void> {
 		const model = typeof msg.model === 'string' ? msg.model : undefined;
 		if (model) {
-			await this.settings.set('model', model);
-			this.settings.refresh();
+			// Model is stored per-session in chatStore, not in workspace settings
 			this.postMessage({ type: 'openCodeModelSet', data: { model } });
-			this.postMessage({ type: 'settingsData', data: this.settings.getAll() });
 		}
 	}
 
 	private async onSelectModel(msg: WebviewMessage): Promise<void> {
 		const model = typeof msg.model === 'string' ? msg.model : undefined;
 		if (model) {
-			await this.settings.set('model', model);
-			this.settings.refresh();
+			// Model is stored per-session in chatStore, not in workspace settings
 			this.postMessage({ type: 'modelSelected', model });
-			this.postMessage({ type: 'settingsData', data: this.settings.getAll() });
 		}
 	}
 
@@ -977,6 +1025,19 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.postMessage({ type: 'improvePromptCancelled', data: { requestId: requestId || '' } });
 	}
 
+	private async onStopRequest(_msg: WebviewMessage): Promise<void> {
+		await this.cli.kill();
+		this.activeAssistantPartId = null;
+		this.postSessionMessage({
+			id: `interrupted-${Date.now()}`,
+			type: 'interrupted',
+			content: 'Stopped by user',
+			timestamp: new Date().toISOString(),
+		});
+		this.postStatus(this.activeSessionId, 'idle', 'Stopped');
+		this.postSessionInfo();
+	}
+
 	private async onImprovePromptRequest(msg: WebviewMessage): Promise<void> {
 		const data = (msg.data ?? {}) as {
 			text?: unknown;
@@ -1131,25 +1192,18 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		return improved;
 	}
 
-	private async handleSendMessage(
-		text: string,
-		_uiSessionId?: string,
-		uiModel?: string,
-	): Promise<void> {
+	private async handleSendMessage(text: string, uiModel?: string): Promise<void> {
 		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 		if (!workspaceRoot) {
 			throw new Error('No workspace root');
 		}
 
 		const settingsModel = this.settings.get('model');
+
+		// Per-session model override is provided by UI via sendMessage payload.
 		const model = uiModel ?? (typeof settingsModel === 'string' ? settingsModel : undefined);
 
-		// Persist model choice when UI provides it (production-like: last used sticks).
-		if (uiModel && uiModel !== settingsModel) {
-			await this.settings.set('model', uiModel);
-			this.settings.refresh();
-			this.postMessage({ type: 'settingsData', data: this.settings.getAll() });
-		}
+		// Model is stored per-session in chatStore, not persisted to workspace settings
 
 		const config = {
 			provider: (this.settings.get('provider') || 'claude') as 'claude' | 'opencode',
@@ -1158,41 +1212,81 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			yoloMode: Boolean(this.settings.get('yoloMode') || false),
 		};
 
+		// Check if this is a new session or follow-up in existing session
+		const isNewSession = !this.startedSessions.has(this.activeSessionId);
+
+		logger.info('[ChatProvider] handleSendMessage called', {
+			text: text.slice(0, 50),
+			model,
+			provider: config.provider,
+			sessionId: this.activeSessionId,
+			isNewSession,
+			hasCliSession: !!this.cli.getSessionId(),
+		});
+
 		// Immediately mark session as busy
 		this.postStatus(this.activeSessionId, 'busy', 'Working...');
 
-		if (this.cli.getSessionId()) {
-			await this.cli.spawnFollowUp(text, config);
-		} else {
-			await this.cli.spawn(text, config);
+		try {
+			if (isNewSession) {
+				logger.info('[ChatProvider] Spawning new session');
+				this.startedSessions.add(this.activeSessionId);
+
+				// For OpenCode: if server is already running, create new session instead of spawning new server
+				if (config.provider === 'opencode' && this.cli.getSessionId()) {
+					logger.info('[ChatProvider] OpenCode server already running, creating new session');
+					await this.cli.createNewSession(text, config);
+				} else {
+					await this.cli.spawn(text, config);
+				}
+			} else {
+				logger.info('[ChatProvider] Spawning follow-up message');
+				await this.cli.spawnFollowUp(text, config);
+			}
+		} catch (error) {
+			logger.error('[ChatProvider] Failed to spawn CLI:', error);
+			this.postSessionMessage({
+				id: `error-${Date.now()}`,
+				type: 'error',
+				content: error instanceof Error ? error.message : 'Failed to start CLI',
+				isError: true,
+				timestamp: new Date().toISOString(),
+			});
+			this.postStatus(this.activeSessionId, 'error', 'Failed to start');
 		}
 	}
 
 	private handleCliEvent(event: CLIEvent): void {
 		const now = Date.now();
 
+		logger.debug(`[ChatProvider] handleCliEvent: ${event.type}`, event.data);
+
 		switch (event.type) {
 			case 'message': {
-				const partId = this.activeAssistantPartId ?? `part-${now}`;
+				const e = event.data as { content?: string; partId?: string; isDelta?: boolean };
+				const partId = e.partId || this.activeAssistantPartId || `part-${now}`;
 				this.activeAssistantPartId = partId;
 				this.postSessionMessage({
 					id: partId,
 					type: 'assistant',
 					partId,
-					content: (event.data as { content?: string }).content || '',
+					content: e.content || '',
 					isStreaming: true,
-					isDelta: true,
+					isDelta: e.isDelta ?? true,
 					timestamp: new Date().toISOString(),
 				});
 				break;
 			}
 
 			case 'thinking': {
-				const thinkingId = `thinking-${now}`;
+				const e = event.data as { content?: string; partId?: string; isDelta?: boolean };
+				const partId = e.partId || `thinking-${now}`;
 				this.postSessionMessage({
-					id: thinkingId,
+					id: partId,
 					type: 'thinking',
-					content: (event.data as { content?: string }).content || '',
+					partId,
+					content: e.content || '',
+					isDelta: e.isDelta ?? false,
 					timestamp: new Date().toISOString(),
 				});
 				break;
@@ -1369,11 +1463,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					break;
 
 				case 'model':
-					if (typeof value === 'string') {
-						await this.settings.set('model', value);
-					} else if (value === null || value === undefined) {
-						await this.settings.set('model', undefined);
-					}
+					// Model is stored per-session in chatStore, not in workspace settings
 					break;
 
 				case 'autoApprove':

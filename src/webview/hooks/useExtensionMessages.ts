@@ -393,6 +393,8 @@ const handleSettingsMessages = (message: ExtensionMessage, ctx: HandlerContext):
 
 		case 'modelSelected':
 			if (message.model) {
+				// modelSelected updates the workspace default ("last used").
+				// It should NOT override per-session model (stored in chatStore).
 				settingsActions.setSelectedModel(message.model);
 			}
 			return true;

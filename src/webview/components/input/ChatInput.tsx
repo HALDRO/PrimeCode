@@ -225,9 +225,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
 	// Store-based state
 	const { input: storeInput } = useChatInputState();
-	const { setInput: setStoreInput, clearRevertedMessages, setImprovingPrompt } = useChatActions();
+	const {
+		setInput: setStoreInput,
+		clearRevertedMessages,
+		setImprovingPrompt,
+		addMessage,
+	} = useChatActions();
 	const isProcessing = useIsProcessing();
-	const { selectedModel, proxyModels, opencodeProviders } = useModelSelection();
+	const { selectedModel, proxyModels, opencodeProviders, getSessionModel } = useModelSelection();
 	const promptImproveTimeoutSeconds = useSettingsStore(state => state.promptImproveTimeoutSeconds);
 	const provider = useSettingsStore(state => state.provider);
 	const customCommands = useSettingsStore(state => state.commands.custom);
@@ -516,9 +521,20 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 		// Check if we have any attachments
 		const hasAttachments = attachments.files || attachments.codeSnippets || attachments.images;
 
+		// Resolve per-session model override (fallback: workspace default)
+		const sessionModel = getSessionModel();
+
+		// Add user message to store immediately
+		addMessage({
+			type: 'user',
+			content: inputValue.trim(),
+			attachments: hasAttachments ? attachments : undefined,
+		});
+
 		postSessionMessage('sendMessage', {
 			text: inputValue.trim(),
 			planMode,
+			model: sessionModel,
 			attachments: hasAttachments ? attachments : undefined,
 		});
 		// Clear any messages marked as reverted before sending new message
@@ -539,6 +555,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 		clearRevertedMessages,
 		setStoreInput,
 		clearAll,
+		getSessionModel,
+		addMessage,
 	]);
 
 	const handleStop = () => postSessionMessage('stopRequest');
@@ -648,14 +666,18 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 		setTimeout(() => textareaRef.current?.focus(), 50);
 	};
 
-	const getModelDisplayName = () => {
+	const getModelDisplayName = useCallback(() => {
 		if (selectedModel === 'default') {
 			return 'Default';
 		}
+
+		// Check standard models
 		const standardModel = STANDARD_MODELS.find(m => m.id === selectedModel);
 		if (standardModel) {
 			return standardModel.name;
 		}
+
+		// Check proxy models
 		const proxyModel = proxyModels.find(m => m.id === selectedModel);
 		if (proxyModel) {
 			return proxyModel.name;
@@ -665,18 +687,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 		if (selectedModel.includes('/')) {
 			const [providerId, modelId] = selectedModel.split('/');
 			const provider = opencodeProviders.find(p => p.id === providerId);
-			if (provider) {
-				const model = provider.models.find(m => m.id === modelId);
-				if (model) {
-					return model.name;
-				}
-			}
-			// Fallback: return just the model part without provider prefix
-			return modelId;
+			const model = provider?.models.find(m => m.id === modelId);
+			return model?.name || modelId;
 		}
 
 		return selectedModel;
-	};
+	}, [selectedModel, proxyModels, opencodeProviders]);
 
 	return (
 		<div

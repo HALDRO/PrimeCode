@@ -78,6 +78,7 @@ export interface CLIEvent {
 interface CLIExecutor extends EventEmitter {
 	spawn(prompt: string, config: CLIConfig): Promise<ChildProcess>;
 	spawnFollowUp(prompt: string, sessionId: string, config: CLIConfig): Promise<ChildProcess>;
+	createNewSession(prompt: string, config: CLIConfig): Promise<ChildProcess>;
 	kill(): Promise<void>;
 	parseStream(chunk: Buffer): CLIEvent[];
 	getSessionId(): string | null;
@@ -101,6 +102,11 @@ class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 	private stdoutBuffer = '';
 
 	async spawn(prompt: string, config: CLIConfig): Promise<ChildProcess> {
+		logger.info('[ClaudeExecutor] spawn called', {
+			prompt: prompt.slice(0, 50),
+			model: config.model,
+		});
+
 		const args = [
 			'-y',
 			'@anthropic-ai/claude-code@latest',
@@ -115,15 +121,24 @@ class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 		if (config.yoloMode) args.push('--yolo-mode');
 		if (config.agent) args.push('--agent', config.agent);
 
+		logger.info('[ClaudeExecutor] spawning npx', { args: args.join(' ') });
+
 		this.process = spawn('npx', args, {
 			cwd: config.workspaceRoot,
 			env: { ...process.env, ...config.env },
 			windowsHide: true,
 			stdio: ['pipe', 'pipe', 'pipe'],
-			detached: process.platform !== 'win32',
+			shell: true,
+			detached: false,
+		});
+
+		this.process.on('error', error => {
+			logger.error('[ClaudeExecutor] Process error:', error);
+			this.emit('event', { type: 'error', data: { message: error.message } });
 		});
 
 		this.process.stdout?.on('data', chunk => {
+			logger.debug('[ClaudeExecutor] stdout chunk:', chunk.toString().slice(0, 200));
 			const events = this.parseStream(chunk);
 			for (const event of events) {
 				this.emit('event', event);
@@ -135,6 +150,7 @@ class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 		});
 
 		this.process.on('close', code => {
+			logger.info('[ClaudeExecutor] Process closed', { code });
 			this.emit('event', { type: 'finished', data: { code } });
 			this.process = null;
 			this.sessionId = null;
@@ -165,7 +181,8 @@ class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 			env: { ...process.env, ...config.env },
 			windowsHide: true,
 			stdio: ['pipe', 'pipe', 'pipe'],
-			detached: process.platform !== 'win32',
+			shell: true,
+			detached: false,
 		});
 
 		this.process.stdout?.on('data', chunk => {
@@ -291,6 +308,10 @@ class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 		this.process.stdin.write(`${JSON.stringify(payload)}\n`);
 	}
 
+	async createNewSession(_prompt: string, _config: CLIConfig): Promise<ChildProcess> {
+		throw new Error('ClaudeExecutor does not support creating new sessions');
+	}
+
 	getSessionId(): string | null {
 		return this.sessionId;
 	}
@@ -359,7 +380,15 @@ class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	private seenToolCalls = new Set<string>();
 	private completedToolCalls = new Set<string>();
 
+	// Track message roles to filter out user messages (like Vibe Kanban does)
+	private messageRoles = new Map<string, 'user' | 'assistant'>();
+
 	async spawn(prompt: string, config: CLIConfig): Promise<ChildProcess> {
+		logger.info('[OpenCodeExecutor] spawn called', {
+			prompt: prompt.slice(0, 50),
+			model: config.model,
+		});
+
 		this.process = spawn(
 			'npx',
 			['-y', 'opencode-ai@1.1.3', 'serve', '--hostname', '127.0.0.1', '--port', '0'],
@@ -367,28 +396,47 @@ class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				cwd: config.workspaceRoot,
 				env: { ...process.env, ...config.env, NODE_NO_WARNINGS: '1', NO_COLOR: '1' },
 				stdio: ['pipe', 'pipe', 'pipe'],
+				shell: true,
 			},
 		);
+
+		this.process.on('error', error => {
+			logger.error('[OpenCodeExecutor] Process error:', error);
+			this.emit('event', { type: 'error', data: { message: error.message } });
+		});
 
 		if (!this.process.stdout) {
 			throw new Error('OpenCode process stdout is null');
 		}
 
+		logger.info('[OpenCodeExecutor] Waiting for server URL...');
 		this.serverUrl = await this.waitForServerUrl(this.process.stdout);
 		this.directory = config.workspaceRoot;
 		logger.info(`[OpenCode] Server started at ${this.serverUrl}`);
 
+		// Continue draining stdout to avoid backpressure (like Vibe Kanban does)
+		this.process.stdout.on('data', chunk => {
+			logger.debug(`[OpenCode stdout] ${chunk.toString()}`);
+		});
+
+		logger.info('[OpenCodeExecutor] Creating session...');
 		this.sessionId = await this.createSession(this.serverUrl, config.workspaceRoot);
+		logger.info(`[OpenCodeExecutor] Session created: ${this.sessionId}`);
 		this.emit('event', { type: 'session_updated', data: { sessionId: this.sessionId } });
 
+		logger.info('[OpenCodeExecutor] Starting event stream...');
 		this.startEventStream(this.serverUrl, config.workspaceRoot, this.sessionId);
+
+		logger.info('[OpenCodeExecutor] Sending prompt...');
 		await this.sendPrompt(this.serverUrl, config.workspaceRoot, this.sessionId, prompt, config);
+		logger.info('[OpenCodeExecutor] Prompt sent successfully');
 
 		this.process.stderr?.on('data', chunk => {
 			logger.debug(`[OpenCode stderr] ${chunk.toString()}`);
 		});
 
 		this.process.on('close', code => {
+			logger.info('[OpenCodeExecutor] Process closed', { code });
 			this.emit('event', { type: 'finished', data: { code } });
 			this.process = null;
 			this.serverUrl = null;
@@ -418,6 +466,22 @@ class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		return this.process;
 	}
 
+	async createNewSession(prompt: string, config: CLIConfig): Promise<ChildProcess> {
+		if (!this.serverUrl || !this.process) {
+			throw new Error('OpenCode server not running');
+		}
+
+		logger.info('[OpenCodeExecutor] Creating new session on existing server...');
+		this.sessionId = await this.createSession(this.serverUrl, config.workspaceRoot);
+		logger.info(`[OpenCodeExecutor] New session created: ${this.sessionId}`);
+		this.emit('event', { type: 'session_updated', data: { sessionId: this.sessionId } });
+
+		this.startEventStream(this.serverUrl, config.workspaceRoot, this.sessionId);
+		await this.sendPrompt(this.serverUrl, config.workspaceRoot, this.sessionId, prompt, config);
+		logger.info('[OpenCodeExecutor] Prompt sent to new session');
+		return this.process;
+	}
+
 	private async waitForServerUrl(stdout: NodeJS.ReadableStream): Promise<string> {
 		return new Promise((resolve, reject) => {
 			const timeout = setTimeout(
@@ -427,6 +491,7 @@ class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 			stdout.on('data', chunk => {
 				const text = chunk.toString();
+				logger.debug(`[OpenCode stdout] ${text}`);
 				for (const line of text.split(/\r?\n/)) {
 					const trimmed = line.trim();
 					const prefix = 'opencode server listening on ';
@@ -610,7 +675,8 @@ class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 				for await (const event of this.iterSseEvents(resp.body)) {
 					if (signal.aborted) break;
-					this.handleSdkEvent(event, sessionId);
+					// Don't filter by sessionId - handle events for all sessions
+					this.handleSdkEvent(event, this.sessionId || sessionId);
 				}
 			} catch (error) {
 				if ((error as { name?: string }).name === 'AbortError') {
@@ -663,7 +729,7 @@ class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 	}
 
-	private handleSdkEvent(raw: unknown, expectedSessionId: string): void {
+	private handleSdkEvent(raw: unknown, _expectedSessionId: string): void {
 		const envelope = raw as OpenCodeSdkEnvelope;
 		if (!envelope || typeof envelope.type !== 'string') {
 			return;
@@ -672,12 +738,23 @@ class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		const eventType = envelope.type;
 		const props = (envelope.properties ?? {}) as Record<string, unknown>;
 
-		const sessionIdFromEvent = this.extractSessionId(eventType, props);
-		if (sessionIdFromEvent && sessionIdFromEvent !== expectedSessionId) {
-			return;
-		}
+		// Don't filter by sessionId - OpenCode event stream includes all sessions
+		// We rely on this.sessionId being updated when forking sessions
 
 		switch (eventType) {
+			case 'message.updated': {
+				// Track message roles to filter out user messages
+				const info = props.info as Record<string, unknown> | undefined;
+				if (info) {
+					const messageId = typeof info.id === 'string' ? info.id : undefined;
+					const role = typeof info.role === 'string' ? info.role : undefined;
+					if (messageId && (role === 'user' || role === 'assistant')) {
+						this.messageRoles.set(messageId, role);
+					}
+				}
+				break;
+			}
+
 			case 'message.part.updated': {
 				const partValue = props.part as Record<string, unknown> | undefined;
 				const part = this.normalizePart(partValue);
@@ -747,21 +824,6 @@ class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		return { type: 'other', raw };
 	}
 
-	private extractSessionId(eventType: string, props: Record<string, unknown>): string | undefined {
-		if (eventType === 'message.part.updated') {
-			const partValue = props.part as Record<string, unknown> | undefined;
-			const part = this.normalizePart(partValue);
-			return part.type !== 'other' && typeof part.sessionID === 'string'
-				? part.sessionID
-				: undefined;
-		}
-		if (eventType === 'message.updated') {
-			const info = (props.info as Record<string, unknown> | undefined) ?? {};
-			return typeof info.sessionID === 'string' ? (info.sessionID as string) : undefined;
-		}
-		return typeof props.sessionID === 'string' ? (props.sessionID as string) : undefined;
-	}
-
 	private normalizePart(raw: Record<string, unknown> | undefined): OpenCodePart {
 		if (!raw) return { type: 'other', raw: null };
 
@@ -807,17 +869,60 @@ class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 	private handlePartUpdated(part: OpenCodePart, delta?: string): void {
 		if (part.type === 'text') {
-			const content = (delta ?? part.text ?? '').toString();
-			if (content.length > 0) {
-				this.emit('event', { type: 'message', data: { content } });
+			// Skip user messages - they're already added by webview
+			const messageId = part.messageID;
+			if (messageId && this.messageRoles.get(messageId) === 'user') {
+				return;
+			}
+
+			// If delta is present, it's an incremental update
+			if (delta) {
+				this.emit('event', {
+					type: 'message',
+					data: {
+						content: delta,
+						partId: part.messageID,
+						isDelta: true,
+					},
+				});
+			}
+			// If no delta but has text, it's either initial message or final complete text
+			// We only emit it if it's not empty (to avoid redundant updates)
+			else if (part.text && part.text.length > 0) {
+				this.emit('event', {
+					type: 'message',
+					data: {
+						content: part.text,
+						partId: part.messageID,
+						isDelta: false,
+					},
+				});
 			}
 			return;
 		}
 
 		if (part.type === 'reasoning') {
-			const content = (delta ?? part.text ?? '').toString();
-			if (content.length > 0) {
-				this.emit('event', { type: 'thinking', data: { content } });
+			// If delta is present, it's an incremental update
+			if (delta) {
+				this.emit('event', {
+					type: 'thinking',
+					data: {
+						content: delta,
+						partId: part.messageID,
+						isDelta: true,
+					},
+				});
+			}
+			// If no delta but has text, it's either initial message or final complete text
+			else if (part.text && part.text.length > 0) {
+				this.emit('event', {
+					type: 'thinking',
+					data: {
+						content: part.text,
+						partId: part.messageID,
+						isDelta: false,
+					},
+				});
 			}
 			return;
 		}
@@ -980,6 +1085,10 @@ export class CLIRunner extends EventEmitter {
 			throw new Error('No active session');
 		}
 		await this.executor.spawnFollowUp(prompt, this.currentSessionId, config);
+	}
+
+	async createNewSession(prompt: string, config: CLIConfig): Promise<void> {
+		await this.executor.createNewSession(prompt, config);
 	}
 
 	async respondToPermission(decision: {

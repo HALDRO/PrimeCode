@@ -52,6 +52,8 @@ export type MessageInput = Partial<ConversationMessage> & {
 
 export interface ChatSession {
 	id: string;
+	/** Per-session model override. Undefined means "use workspace default". */
+	model?: string;
 	messages: Message[];
 	input: string;
 	status: string;
@@ -150,6 +152,10 @@ export interface ChatActions {
 	// Bulk message operations (for extension message handlers)
 	setSessionMessages: (sessionId: string, messages: Message[]) => void;
 	deleteMessagesAfterMessageId: (sessionId: string, messageId: string) => void;
+
+	// Per-session model selection
+	setSessionModel: (model: string | undefined, sessionId?: string) => void;
+	getSessionModel: (sessionId?: string) => string | undefined;
 }
 
 // =============================================================================
@@ -180,6 +186,7 @@ export const DEFAULT_TOTAL_STATS: TotalStats = {
 
 const createEmptySession = (id: string): ChatSession => ({
 	id,
+	model: undefined,
 	messages: [],
 	input: '',
 	status: 'Ready',
@@ -201,8 +208,8 @@ function resolveTargetSessionId(state: ChatState, sessionId?: string): string | 
 	return sessionId || state.activeSessionId;
 }
 
-function warnMissingSession(actionName: string): void {
-	console.warn(`[chatStore] ${actionName} ignored: missing sessionId and no activeSessionId`);
+function warnMissingSession(_actionName: string): void {
+	// Silent: missing session is expected during initialization races
 }
 
 function upsertSession(
@@ -357,16 +364,35 @@ export const useChatStore = create<ChatState>()(
 								const newMessages = [...targetSession.messages];
 
 								if (existingIdx !== -1) {
-									// Merge with existing message, filtering out undefined values
-									// to prevent overwriting existing fields with undefined
-									const filteredMessage = Object.fromEntries(
-										Object.entries(message).filter(([_, v]) => v !== undefined),
-									);
-									newMessages[existingIdx] = {
-										...newMessages[existingIdx],
-										...filteredMessage,
-										id: newMessages[existingIdx].id,
-									} as Message;
+									const existing = newMessages[existingIdx];
+
+									// Handle delta streaming explicitly for better performance
+									if ('isDelta' in message && message.isDelta && 'content' in message) {
+										// Delta update: append content
+										const existingContent =
+											'content' in existing && typeof existing.content === 'string'
+												? existing.content
+												: '';
+										newMessages[existingIdx] = {
+											...existing,
+											...message,
+											id: existing.id,
+											content: existingContent + (message.content || ''),
+										} as Message;
+									} else {
+										// Full update: merge all defined fields
+										const updates: Partial<Message> = {};
+										for (const [key, value] of Object.entries(message)) {
+											if (value !== undefined) {
+												updates[key as keyof Message] = value as never;
+											}
+										}
+										newMessages[existingIdx] = {
+											...existing,
+											...updates,
+											id: existing.id,
+										} as Message;
+									}
 								} else {
 									newMessages.push(message);
 								}
@@ -670,7 +696,7 @@ export const useChatStore = create<ChatState>()(
 								return newState;
 
 							default:
-								console.warn(`[chatStore] Unknown event type: ${eventType}`);
+								// Unknown event type - ignore silently
 								return newState;
 						}
 					});
@@ -952,7 +978,6 @@ export const useChatStore = create<ChatState>()(
 				switchSession: sessionId => {
 					set(state => {
 						if (!state.sessionsById[sessionId]) {
-							console.warn(`[chatStore] Cannot switch to non-existent session: ${sessionId}`);
 							return state;
 						}
 						return { ...state, activeSessionId: sessionId, editingMessageId: null };
@@ -1213,6 +1238,31 @@ export const useChatStore = create<ChatState>()(
 						}));
 					});
 				},
+
+				setSessionModel: (model, sessionId) => {
+					set(state => {
+						const sid = resolveTargetSessionId(state, sessionId);
+						if (!sid) {
+							warnMissingSession('setSessionModel');
+							return state;
+						}
+						if (!state.sessionsById[sid]) {
+							return state;
+						}
+						return updateSessionById(state, sid, s => ({
+							...s,
+							model,
+							lastActive: Date.now(),
+						}));
+					});
+				},
+
+				getSessionModel: (sessionId): string | undefined => {
+					const state = useChatStore.getState();
+					const sid = resolveTargetSessionId(state, sessionId);
+					if (!sid) return undefined;
+					return state.sessionsById[sid]?.model;
+				},
 			},
 		}),
 		{
@@ -1223,9 +1273,10 @@ export const useChatStore = create<ChatState>()(
 				sessionOrder: state.sessionOrder,
 				sessionsById: filterPersistedSessions(state.sessionsById),
 			}),
-			version: 11,
+			version: 12,
 			migrate: (persistedState, version) => {
-				// Version 11: Remove child-session heuristics and persist all sessions.
+				// Version 12: Introduce per-session model override (optional field).
+				// Ensure existing persisted sessions remain valid.
 				if (version < 9) {
 					return {
 						sessionsById: {},

@@ -36,7 +36,7 @@ function getActiveSession(state: ChatState): ChatSession | undefined {
 
 /** Select messages array for active session */
 export const useMessages = () =>
-	useChatStore(state => getActiveSession(state)?.messages ?? EMPTY_MESSAGES);
+	useChatStore((state: ChatState) => getActiveSession(state)?.messages ?? EMPTY_MESSAGES);
 
 /** Select processing state for active session */
 export const useIsProcessing = () =>
@@ -112,7 +112,7 @@ export const useMessageEditingState = () =>
 	);
 
 /** Select chat actions only (stable references) */
-export const useChatActions = () => useChatStore(state => state.actions);
+export const useChatActions = () => useChatStore((state: ChatState) => state.actions);
 
 /** Select token stats for active session */
 export const useTokenStats = () =>
@@ -132,7 +132,7 @@ export const useRestoreCommits = () =>
 
 /** Select changed files for active session */
 export const useChangedFiles = () =>
-	useChatStore(state => getActiveSession(state)?.changedFiles ?? EMPTY_CHANGED_FILES);
+	useChatStore((state: ChatState) => getActiveSession(state)?.changedFiles ?? EMPTY_CHANGED_FILES);
 
 /** Select unrevert available state for active session */
 export const useUnrevertAvailable = () =>
@@ -337,8 +337,10 @@ export const useCommands = () =>
 export const useMcpServers = () =>
 	useSettingsStore(useShallow((state: SettingsState) => state.mcpServers));
 
-export const useModelSelection = () =>
-	useSettingsStore(
+export const useModelSelection = () => {
+	const chatActions = useChatStore(state => state.actions);
+
+	return useSettingsStore(
 		useShallow((state: SettingsState) => ({
 			provider: state.provider,
 			selectedModel: state.selectedModel,
@@ -348,8 +350,11 @@ export const useModelSelection = () =>
 			enabledOpenCodeModels: state.enabledOpenCodeModels,
 			disabledProviders: state.disabledProviders,
 			setSelectedModel: state.actions.setSelectedModel,
+			getSessionModel: chatActions.getSessionModel,
+			setSessionModel: chatActions.setSessionModel,
 		})),
 	);
+};
 
 export const useMainSettings = () =>
 	useSettingsStore(

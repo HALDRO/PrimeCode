@@ -166,7 +166,9 @@ export function useVSCode() {
  * // Automatically becomes: { type: 'sendMessage', text: 'Hello', sessionId: 'session-xxx' }
  */
 export function useSessionMessage() {
-	const activeSessionId = useChatStore(state => state.activeSessionId);
+	const activeSessionId = useChatStore(
+		(state: { activeSessionId?: string }) => state.activeSessionId,
+	);
 
 	// Post message with automatic sessionId attachment
 	const postSessionMessage = useCallback(
