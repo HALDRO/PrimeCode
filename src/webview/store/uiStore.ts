@@ -5,7 +5,12 @@
  */
 
 import { create } from 'zustand';
-import type { ConversationIndexEntry, PlatformInfo, SessionInfo, WorkspaceFile } from '../../types';
+import type {
+	ConversationIndexEntry,
+	PlatformInfo,
+	SessionInfo,
+	WorkspaceFile,
+} from '../../common';
 
 export type { ConversationIndexEntry, SessionInfo, WorkspaceFile };
 

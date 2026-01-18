@@ -13,7 +13,7 @@ import type {
 	SessionEventMessage,
 	SessionLifecycleMessage,
 	WorkspaceFile,
-} from '../../types';
+} from '../../common';
 import { type Message, useChatStore } from '../store/chatStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { useUIStore } from '../store/uiStore';
@@ -280,7 +280,7 @@ const handleSettingsMessages = (message: ExtensionMessage, ctx: HandlerContext):
 		case 'skillsList':
 			if (message.data) {
 				const { skills, isLoading, error, meta } = message.data as {
-					skills: import('../../types').ParsedSkill[];
+					skills: import('../../common').ParsedSkill[];
 					isLoading: boolean;
 					error?: string;
 					meta?: { operation?: string; message?: string };
@@ -293,7 +293,7 @@ const handleSettingsMessages = (message: ExtensionMessage, ctx: HandlerContext):
 		case 'hooksList':
 			if (message.data) {
 				const { hooks, isLoading, error, meta } = message.data as {
-					hooks: import('../../types').ParsedHook[];
+					hooks: import('../../common').ParsedHook[];
 					isLoading: boolean;
 					error?: string;
 					meta?: { operation?: string; message?: string };
@@ -306,7 +306,7 @@ const handleSettingsMessages = (message: ExtensionMessage, ctx: HandlerContext):
 		case 'subagentsList':
 			if (message.data) {
 				const { subagents, isLoading, error, meta } = message.data as {
-					subagents: import('../../types').ParsedSubagent[];
+					subagents: import('../../common').ParsedSubagent[];
 					isLoading: boolean;
 					error?: string;
 					meta?: { operation?: string; message?: string };
@@ -418,51 +418,6 @@ const handleSettingsMessages = (message: ExtensionMessage, ctx: HandlerContext):
 				// explicitly clicks "Fetch Models" button. The save is triggered
 				// by SettingsHandler.loadProxyModels which calls saveProxyProviderForOpenCode
 				// after successful model fetch. This prevents restart loops on init.
-			}
-			return true;
-
-		case 'anthropicModels':
-			if (message.data) {
-				const { models, error } = message.data;
-				settingsActions.setAnthropicModels(models || []);
-				settingsActions.setAnthropicModelsStatus({
-					isLoading: false,
-					success: !error && models && models.length > 0,
-					error: error || null,
-					lastTested: Date.now(),
-				});
-				if (typeof message.data.keyPresent === 'boolean') {
-					settingsActions.setAnthropicKeyStatus({ hasKey: message.data.keyPresent, error: null });
-				}
-			}
-			return true;
-
-		case 'anthropicKeyStatus':
-			if (message.data) {
-				const { hasKey, error } = message.data as { hasKey?: boolean; error?: string };
-				if (typeof hasKey === 'boolean') {
-					settingsActions.setAnthropicKeyStatus({ hasKey, error: error || null });
-				}
-			}
-			return true;
-
-		case 'anthropicKeySaved':
-			if (message.data) {
-				const { success, error } = message.data as { success?: boolean; error?: string };
-				if (!success && error) {
-					settingsActions.setAnthropicKeyStatus({ error });
-				}
-			}
-			return true;
-
-		case 'anthropicKeyCleared':
-			if (message.data) {
-				const { success, error } = message.data as { success?: boolean; error?: string };
-				if (success) {
-					settingsActions.setAnthropicKeyStatus({ hasKey: false, error: null });
-				} else if (error) {
-					settingsActions.setAnthropicKeyStatus({ error });
-				}
 			}
 			return true;
 
@@ -698,7 +653,7 @@ const handleDataMessages = (message: ExtensionMessage, ctx: HandlerContext): boo
 		case 'mcpInstalledMetadata':
 			if (message.data) {
 				const data = message.data as {
-					metadata?: Record<string, import('../../types').InstalledMcpServerMetadata>;
+					metadata?: Record<string, import('../../common').InstalledMcpServerMetadata>;
 				};
 				settingsActions.setMcpInstalledMetadata(data.metadata ?? {});
 			}
@@ -707,7 +662,7 @@ const handleDataMessages = (message: ExtensionMessage, ctx: HandlerContext): boo
 		case 'mcpMarketplaceCatalog':
 			if (message.data) {
 				const data = message.data as {
-					catalog?: import('../../types').McpMarketplaceCatalog;
+					catalog?: import('../../common').McpMarketplaceCatalog;
 					error?: string;
 				};
 				settingsActions.setMcpMarketplaceState({
@@ -984,13 +939,13 @@ export function useExtensionMessages(): void {
 		vscode.postMessage({ type: 'getSettings' });
 		vscode.postMessage({ type: 'getAccess' });
 		vscode.postMessage({ type: 'getCommands' });
+		vscode.postMessage({ type: 'getSkills' });
+		vscode.postMessage({ type: 'getHooks' });
 		vscode.postMessage({ type: 'getSubagents' });
 		vscode.postMessage({ type: 'loadMCPServers' });
 		vscode.postMessage({ type: 'fetchMcpMarketplaceCatalog', data: { forceRefresh: false } });
 		vscode.postMessage({ type: 'loadOpenCodeMcpStatus' });
 		vscode.postMessage({ type: 'loadProxyModels' });
-		vscode.postMessage({ type: 'getAnthropicKeyStatus' });
-		vscode.postMessage({ type: 'loadAnthropicModels' });
 		vscode.postMessage({ type: 'checkOpenCodeStatus' });
 		vscode.postMessage({ type: 'reloadAllProviders' });
 		vscode.postMessage({ type: 'checkDiscoveryStatus' });

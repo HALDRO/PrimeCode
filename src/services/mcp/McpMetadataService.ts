@@ -7,7 +7,7 @@
 
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import type { InstalledMcpServerMetadata } from '../../types';
+import type { InstalledMcpServerMetadata } from '../../common';
 
 export class McpMetadataService {
 	private static readonly MCP_DIR_NAME = 'mcp';

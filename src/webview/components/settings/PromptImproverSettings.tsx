@@ -20,8 +20,6 @@ export const PromptImproverSettings: React.FC = () => {
 		promptImproveTimeoutSeconds,
 		proxyModels,
 		enabledProxyModels,
-		anthropicModels,
-		disabledProviders,
 	} = useSettingsStore();
 	const { setSettings } = useSettingsActions();
 	const { postMessage } = useVSCode();
@@ -127,23 +125,8 @@ export const PromptImproverSettings: React.FC = () => {
 		};
 	}, []);
 
-	// Check if Anthropic provider is enabled
-	const isAnthropicEnabled = !disabledProviders.includes('anthropic');
-
 	const modelOptions = [
 		{ value: '', label: 'Use main model' },
-		// Anthropic Claude models (when available)
-		...(isAnthropicEnabled
-			? (anthropicModels.length > 0
-					? anthropicModels
-					: [
-							{ id: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5' },
-							{ id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5' },
-							{ id: 'claude-opus-4-5', name: 'Claude Opus 4.5' },
-						]
-				).map(m => ({ value: m.id, label: m.name }))
-			: []),
-		// OpenAI Compatible models
 		...enabledProxyModels.map(id => {
 			const model = proxyModels.find(m => m.id === id);
 			return { value: id, label: model?.name || id };

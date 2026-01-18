@@ -10,7 +10,7 @@
  */
 
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { TIMEOUTS } from '../../../shared';
+import { TIMEOUTS } from '../../../common';
 import { SETTINGS_NAV_ITEMS, type SettingsTab } from '../../constants';
 import { cn } from '../../lib/cn';
 import { useMainSettings, useSettingsActions, useSettingsStore, useUIActions } from '../../store';
@@ -28,7 +28,7 @@ import {
 import { Button, IconButton, ScrollContainer, Select, Switch, Tooltip } from '../ui';
 import { McpSettingsPanel } from './McpSettingsPanel';
 import { PromptImproverSettings } from './PromptImproverSettings';
-import { OpenCodeProviderManager } from './ProviderManager';
+import { ProviderManager } from './ProviderManager';
 import { RulesSettingsPanel } from './RulesSettingsPanel';
 import { CLIStatusBar, GroupTitle, SettingRow, SettingsBadge, SettingsGroup } from './SettingsUI';
 
@@ -184,7 +184,7 @@ const OpenCodeCLIStatus: React.FC = () => {
 };
 
 // OpenCode Providers & Model Selection component - uses new unified manager
-const OpenCodeProvidersSection: React.FC = () => <OpenCodeProviderManager />;
+const OpenCodeProvidersSection: React.FC = () => <ProviderManager />;
 
 // Rules settings tab (consolidated Rules, Skills, Hooks) - OPENCODE-REFAC: Moved to CommandsSettingsPanel.tsx as RulesSettingsPanel
 
@@ -319,9 +319,6 @@ const MainSettings: React.FC = () => {
 		proxySubagentModel,
 		proxyModels,
 		enabledProxyModels,
-		disabledProviders,
-		anthropicModels,
-		anthropicKeyStatus,
 	} = useSettingsStore();
 	const { setSettings } = useSettingsActions();
 	const { postMessage } = useVSCode();
@@ -353,24 +350,9 @@ const MainSettings: React.FC = () => {
 	// Check if OpenAI Compatible provider is enabled and has models
 	const hasEnabledProxyModels = enabledProxyModels.length > 0;
 
-	// Check if Anthropic provider is enabled and has models (via API key or CLI auth)
-	const isAnthropicEnabled = !disabledProviders.includes('anthropic');
-	const hasAnthropicModels = anthropicModels.length > 0 || anthropicKeyStatus.hasKey;
-
-	// Build model options for Select component - include both proxy and Anthropic models
+	// Build model options for Select component
 	const modelOptions = [
 		{ value: '', label: 'Use main model' },
-		// Anthropic Claude models (when available)
-		...(isAnthropicEnabled
-			? (anthropicModels.length > 0
-					? anthropicModels
-					: [
-							{ id: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5' },
-							{ id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5' },
-							{ id: 'claude-opus-4-5', name: 'Claude Opus 4.5' },
-						]
-				).map(m => ({ value: m.id, label: m.name }))
-			: []),
 		// OpenAI Compatible models
 		...enabledProxyModels.map(id => {
 			const model = proxyModels.find(m => m.id === id);
@@ -379,7 +361,7 @@ const MainSettings: React.FC = () => {
 	];
 
 	// Show task-specific models when we have any models available
-	const hasAnyModels = hasEnabledProxyModels || (isAnthropicEnabled && hasAnthropicModels);
+	const hasAnyModels = hasEnabledProxyModels;
 
 	return (
 		<div className="animate-fade-in">

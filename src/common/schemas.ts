@@ -282,7 +282,6 @@ export type CommitInfo = Static<typeof CommitInfoSchema>;
 // Message Attachments
 // =============================================================================
 
-/** Code snippet with file location and content */
 export const CodeSnippetAttachmentSchema = Type.Object({
 	filePath: Type.String(),
 	startLine: Type.Number(),
@@ -291,7 +290,6 @@ export const CodeSnippetAttachmentSchema = Type.Object({
 });
 export type CodeSnippetAttachment = Static<typeof CodeSnippetAttachmentSchema>;
 
-/** Image attachment with data URL or path */
 export const ImageAttachmentSchema = Type.Object({
 	id: Type.String(),
 	name: Type.String(),
@@ -300,13 +298,9 @@ export const ImageAttachmentSchema = Type.Object({
 });
 export type ImageAttachment = Static<typeof ImageAttachmentSchema>;
 
-/** Unified attachments structure for user messages */
 export const MessageAttachmentsSchema = Type.Object({
-	/** File paths referenced in the message */
 	files: Type.Optional(Type.Array(Type.String())),
-	/** Code snippets with line ranges */
 	codeSnippets: Type.Optional(Type.Array(CodeSnippetAttachmentSchema)),
-	/** Attached images */
 	images: Type.Optional(Type.Array(ImageAttachmentSchema)),
 });
 export type MessageAttachments = Static<typeof MessageAttachmentsSchema>;
@@ -322,7 +316,6 @@ export const ConversationMessageSchema = Type.Union([
 		type: Type.Literal('user'),
 		content: Type.String(),
 		model: Type.Optional(Type.String()),
-		/** Structured attachments (files, code snippets, images) */
 		attachments: Type.Optional(MessageAttachmentsSchema),
 	}),
 	Type.Object({
@@ -330,11 +323,8 @@ export const ConversationMessageSchema = Type.Union([
 		timestamp: Type.String(),
 		type: Type.Literal('assistant'),
 		content: Type.String(),
-		/** Part ID from SDK for streaming merge identification */
 		partId: Type.Optional(Type.String()),
-		/** Hide from main flow when nested under subtasks */
 		hidden: Type.Optional(Type.Boolean()),
-		/** Unified context ID (thread ID) */
 		contextId: Type.Optional(Type.String()),
 	}),
 	Type.Object({
@@ -342,19 +332,12 @@ export const ConversationMessageSchema = Type.Union([
 		timestamp: Type.String(),
 		type: Type.Literal('thinking'),
 		content: Type.String(),
-		/** Part ID from SDK for streaming merge identification */
 		partId: Type.Optional(Type.String()),
-		/** Reasoning tokens used for this thinking block */
 		reasoningTokens: Type.Optional(Type.Number()),
-		/** Start time in milliseconds (Date.now()) for frontend to compute elapsed */
 		startTime: Type.Optional(Type.Number()),
-		/** Duration of thinking in milliseconds (final value when streaming ends) */
 		durationMs: Type.Optional(Type.Number()),
-		/** Whether this message is currently streaming */
 		isStreaming: Type.Optional(Type.Boolean()),
-		/** Whether this is a delta update (append to existing content) */
 		isDelta: Type.Optional(Type.Boolean()),
-		/** Hide from main flow when nested under subtasks */
 		hidden: Type.Optional(Type.Boolean()),
 	}),
 	Type.Object({
@@ -366,14 +349,10 @@ export const ConversationMessageSchema = Type.Union([
 		toolInput: Type.Optional(Type.String()),
 		rawInput: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
 		filePath: Type.Optional(Type.String()),
-		/** Streaming output for running tools (e.g., Bash intermediate output) */
 		streamingOutput: Type.Optional(Type.String()),
-		/** Whether the tool is currently running */
 		isRunning: Type.Optional(Type.Boolean()),
 		hidden: Type.Optional(Type.Boolean()),
-		/** Tool metadata from SDK (OpenCode) */
 		metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-		/** Unified context ID (thread ID) */
 		contextId: Type.Optional(Type.String()),
 	}),
 	Type.Object({
@@ -386,11 +365,8 @@ export const ConversationMessageSchema = Type.Union([
 		isError: Type.Boolean(),
 		estimatedTokens: Type.Optional(Type.Number()),
 		hidden: Type.Optional(Type.Boolean()),
-		/** Human-readable title from SDK (e.g., "Reading file.ts") */
 		title: Type.Optional(Type.String()),
-		/** Tool execution time in milliseconds */
 		durationMs: Type.Optional(Type.Number()),
-		/** Attached files (e.g., screenshots, generated images) */
 		attachments: Type.Optional(
 			Type.Array(
 				Type.Object({
@@ -401,9 +377,7 @@ export const ConversationMessageSchema = Type.Union([
 				}),
 			),
 		),
-		/** Tool metadata from SDK */
 		metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-		/** Unified context ID (thread ID) */
 		contextId: Type.Optional(Type.String()),
 	}),
 	Type.Object({
@@ -417,7 +391,6 @@ export const ConversationMessageSchema = Type.Union([
 		timestamp: Type.String(),
 		type: Type.Literal('interrupted'),
 		content: Type.String(),
-		/** Reason for interruption: user_stopped, cli_crash, connection_lost, timeout */
 		reason: Type.Optional(
 			Type.Union([
 				Type.Literal('user_stopped'),
@@ -457,7 +430,6 @@ export const ConversationMessageSchema = Type.Union([
 		contextId: Type.Optional(Type.String()),
 		result: Type.Optional(Type.String()),
 		messageID: Type.Optional(Type.String()),
-		/** Archived child messages when subtask completes */
 		transcript: Type.Optional(Type.Array(Type.Any())),
 		startTime: Type.Optional(Type.String()),
 		durationMs: Type.Optional(Type.Number()),
@@ -491,7 +463,6 @@ export const SubtaskMessageSchema = Type.Object({
 	messageID: Type.Optional(Type.String()),
 	transcript: Type.Optional(Type.Array(ConversationMessageSchema)),
 	startTime: Type.Optional(Type.String()),
-	/** Duration in milliseconds (set when completed/error) */
 	durationMs: Type.Optional(Type.Number()),
 });
 export type SubtaskMessage = Static<typeof SubtaskMessageSchema>;
@@ -507,9 +478,7 @@ export const ConversationDataSchema = Type.Object({
 		output: Type.Number(),
 		reasoning: Type.Optional(Type.Number()),
 	}),
-	/** Total duration of all API calls in milliseconds */
 	totalDuration: Type.Optional(Type.Number()),
-	/** Number of API requests made */
 	requestCount: Type.Optional(Type.Number()),
 	messages: Type.Array(ConversationMessageSchema),
 	filename: Type.String(),
@@ -599,10 +568,6 @@ export const OpenCodeAgentSchema = Type.Object({
 });
 export type OpenCodeAgent = Static<typeof OpenCodeAgentSchema>;
 
-// =============================================================================
-// OpenCode Session Types
-// =============================================================================
-
 export const OpenCodeSessionSchema = Type.Object({
 	id: Type.String(),
 	title: Type.String(),
@@ -616,10 +581,6 @@ export const OpenCodeSessionSchema = Type.Object({
 	),
 });
 export type OpenCodeSession = Static<typeof OpenCodeSessionSchema>;
-
-// =============================================================================
-// OpenCode Access Types
-// =============================================================================
 
 export const OpenCodeAccessSchema = Type.Object({
 	id: Type.String(),
@@ -643,10 +604,6 @@ export const OpenCodeAccessResponseSchema = Type.Union([
 ]);
 export type OpenCodeAccessResponse = Static<typeof OpenCodeAccessResponseSchema>;
 
-// =============================================================================
-// OpenCode Project & Message Events
-// =============================================================================
-
 export const ProjectUpdatedSchema = Type.Object({
 	project: Type.Object({
 		id: Type.String(),
@@ -662,10 +619,6 @@ export const MessagePartRemovedSchema = Type.Object({
 	partId: Type.String(),
 });
 export type MessagePartRemoved = Static<typeof MessagePartRemovedSchema>;
-
-// =============================================================================
-// OpenCode Provider Types
-// =============================================================================
 
 export const OpenCodeModelDataSchema = Type.Object({
 	id: Type.String(),
@@ -698,7 +651,6 @@ export const RuleSchema = Type.Object({
 	isEnabled: Type.Boolean(),
 	source: Type.Union([Type.Literal('claude'), Type.Literal('opencode')]),
 	content: Type.Optional(Type.String()),
-	/** Read-only rules cannot be toggled (e.g., derived OpenCode files like AGENTS.md) */
 	isReadOnly: Type.Optional(Type.Boolean()),
 });
 export type Rule = Static<typeof RuleSchema>;
@@ -707,10 +659,6 @@ export type Rule = Static<typeof RuleSchema>;
 // Agents / Commands / Skills / Hooks
 // =============================================================================
 
-/**
- * Parsed command from .agents/commands/*.md
- * Supports both Claude (allowed-tools) and OpenCode (agent, model) formats
- */
 export const ParsedCommandSchema = Type.Object({
 	name: Type.String(),
 	description: Type.String(),
@@ -724,9 +672,6 @@ export const ParsedCommandSchema = Type.Object({
 });
 export type ParsedCommand = Static<typeof ParsedCommandSchema>;
 
-/**
- * Parsed skill from .agents/skills/*
- */
 export const ParsedSkillSchema = Type.Object({
 	name: Type.String(),
 	description: Type.String(),
@@ -736,9 +681,6 @@ export const ParsedSkillSchema = Type.Object({
 });
 export type ParsedSkill = Static<typeof ParsedSkillSchema>;
 
-/**
- * Parsed hook from .agents/hooks/*
- */
 export const ParsedHookSchema = Type.Object({
 	name: Type.String(),
 	enabled: Type.Boolean(),
@@ -750,10 +692,6 @@ export const ParsedHookSchema = Type.Object({
 });
 export type ParsedHook = Static<typeof ParsedHookSchema>;
 
-/**
- * Parsed subagent from .agents/subagents/*.md
- * Canonical format that can be synced to CLI-specific subagent locations.
- */
 export const ParsedSubagentSchema = Type.Object({
 	name: Type.String(),
 	description: Type.String(),
@@ -763,7 +701,7 @@ export const ParsedSubagentSchema = Type.Object({
 export type ParsedSubagent = Static<typeof ParsedSubagentSchema>;
 
 // =============================================================================
-// Discovery Status (Rules, Permissions, Skills, Hooks)
+// Discovery Status
 // =============================================================================
 
 export const DiscoveryStatusSchema = Type.Object({
@@ -816,7 +754,6 @@ export const WebviewMessageSchema = Type.Object({
 	path: Type.Optional(Type.String()),
 	imageData: Type.Optional(Type.String()),
 	imageType: Type.Optional(Type.String()),
-	/** Structured attachments for sendMessage (files, code snippets, images) */
 	attachments: Type.Optional(MessageAttachmentsSchema),
 	id: Type.Optional(Type.String()),
 	approved: Type.Optional(Type.Boolean()),
@@ -828,7 +765,6 @@ export const WebviewMessageSchema = Type.Object({
 	content: Type.Optional(Type.String()),
 	enabled: Type.Optional(Type.Boolean()),
 	source: Type.Optional(Type.Union([Type.Literal('claude'), Type.Literal('opencode')])),
-	/** Message ID for operations like dismissError */
 	messageId: Type.Optional(Type.String()),
 	policies: Type.Optional(
 		Type.Object({
@@ -841,19 +777,12 @@ export const WebviewMessageSchema = Type.Object({
 	url: Type.Optional(Type.String()),
 	baseUrl: Type.Optional(Type.String()),
 	apiKey: Type.Optional(Type.String()),
-	anthropicApiKey: Type.Optional(Type.String()),
-	loadAnthropicModels: Type.Optional(Type.Boolean()),
-	setAnthropicApiKey: Type.Optional(Type.Boolean()),
-	clearAnthropicApiKey: Type.Optional(Type.Boolean()),
-	getAnthropicKeyStatus: Type.Optional(Type.Boolean()),
 	mcpId: Type.Optional(Type.String()),
 	patch: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
 	oldContent: Type.Optional(Type.String()),
 	newContent: Type.Optional(Type.String()),
 	meta: Type.Optional(InstalledMcpServerMetadataSchema),
-	// Multi-session support: UI session identifier for routing messages
 	sessionId: Type.Optional(Type.String()),
-	// Prompt Improver
 	requestId: Type.Optional(Type.String()),
 	promptTemplate: Type.Optional(Type.String()),
 	timeoutMs: Type.Optional(Type.Number()),

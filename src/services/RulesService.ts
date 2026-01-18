@@ -7,7 +7,7 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { PATHS } from '../shared/constants';
+import { PATHS } from '../common/constants';
 import { logger } from '../utils/logger';
 import { normalizeToPosixPath } from '../utils/path';
 

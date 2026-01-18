@@ -7,8 +7,8 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { PATHS } from '../shared/constants';
-import type { ParsedSkill } from '../types';
+import type { ParsedSkill } from '../common';
+import { PATHS } from '../common/constants';
 import { parseFrontmatter, stringifyFrontmatter } from '../utils/frontmatter';
 import { normalizeToPosixPath } from '../utils/path';
 

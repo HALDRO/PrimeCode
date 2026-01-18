@@ -12,7 +12,7 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import type { MCPServerConfig } from '../../types';
+import type { MCPServerConfig } from '../../common';
 import { logger } from '../../utils/logger';
 
 // =============================================================================

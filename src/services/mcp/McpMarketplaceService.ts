@@ -7,7 +7,7 @@
  */
 
 import type * as vscode from 'vscode';
-import type { McpMarketplaceCatalog, McpMarketplaceItem } from '../../types';
+import type { McpMarketplaceCatalog, McpMarketplaceItem } from '../../common';
 
 const EMPTY_CATALOG: McpMarketplaceCatalog = { schemaVersion: 1, items: [] };
 

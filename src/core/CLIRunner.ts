@@ -87,6 +87,8 @@ interface CLIExecutor extends EventEmitter {
 		alwaysAllow?: boolean;
 		response?: 'once' | 'always' | 'reject';
 	}): Promise<void>;
+
+	getAdminInfo(): { baseUrl: string; directory: string } | null;
 }
 
 // =============================================================================
@@ -291,6 +293,10 @@ class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 
 	getSessionId(): string | null {
 		return this.sessionId;
+	}
+
+	getAdminInfo(): { baseUrl: string; directory: string } | null {
+		return null;
 	}
 }
 
@@ -925,6 +931,13 @@ class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	getSessionId(): string | null {
 		return this.sessionId;
 	}
+
+	getAdminInfo(): { baseUrl: string; directory: string } | null {
+		const baseUrl = this.serverUrl;
+		const directory = this.directory;
+		if (!baseUrl || !directory) return null;
+		return { baseUrl, directory };
+	}
 }
 
 // =============================================================================
@@ -985,5 +998,9 @@ export class CLIRunner extends EventEmitter {
 
 	getSessionId(): string | null {
 		return this.currentSessionId;
+	}
+
+	getOpenCodeServerInfo(): { baseUrl: string; directory: string } | null {
+		return this.executor.getAdminInfo();
 	}
 }

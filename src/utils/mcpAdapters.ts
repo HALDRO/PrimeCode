@@ -4,7 +4,7 @@
  * and provider-specific config formats (Claude Code CLI, OpenCode).
  */
 
-import type { MCPServerConfig, UnifiedMcpRegistry, UnifiedMcpServer } from '../types';
+import type { MCPServerConfig, UnifiedMcpRegistry, UnifiedMcpServer } from '../common';
 
 export const INTERNAL_PERMISSIONS_SERVER_NAME = 'internal-permissions';
 

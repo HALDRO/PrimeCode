@@ -3,27 +3,24 @@
  * @description Unified interface for managing AI providers. Shows connected providers with
  *              ability to enable/disable individual models and disconnect providers. Includes
  *              OpenAI-compatible provider configuration. Uses shared SettingsUI primitives.
- *              For OpenCode CLI, proxy settings are saved to opencode.json via SDK.
- *              For Claude CLI, proxy settings are passed via environment variables.
+ *              For OpenCode CLI, provider auth is handled via OpenCode server endpoints.
  */
 
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
-import { isNonDisconnectableProviderId, OPENAI_COMPATIBLE_PROVIDER_ID } from '../../../shared';
+import { isNonDisconnectableProviderId, OPENAI_COMPATIBLE_PROVIDER_ID } from '../../../common';
 import { useSettingsActions, useSettingsStore } from '../../store';
 import { useVSCode } from '../../utils/vscode';
 import { BrainSideIcon, RefreshIcon } from '../icons';
 import { Button, Select, Switch, TextInput } from '../ui';
 import {
 	EmptyState,
-	ErrorBox,
 	ExpandableRow,
 	GroupTitle,
 	ModelItem,
 	ModelList,
 	SettingRow,
 	SettingsBadge,
-	SettingsStatusIndicator,
 	StatusMessage,
 } from './SettingsUI';
 
@@ -33,7 +30,6 @@ interface ProviderItemData {
 	connected: boolean;
 	isCustom?: boolean;
 	isOpenAICompatible?: boolean;
-	isAnthropic?: boolean;
 	env?: string[];
 	models?: Array<{
 		id: string;
@@ -46,18 +42,12 @@ interface ProviderItemData {
 // OpenAI-compatible provider ID used by settings/UI
 const OPENAI_COMPATIBLE_ID = OPENAI_COMPATIBLE_PROVIDER_ID;
 
-// Providers that cannot be disconnected (built-in)
-// Centralized in @shared to avoid drift.
-
 export const ProviderManager: React.FC = () => {
 	const {
 		provider: cliProvider,
 		opencodeProviders,
 		availableProviders,
 		providerAuthState,
-		anthropicModels,
-		anthropicModelsStatus,
-		anthropicKeyStatus,
 		proxyBaseUrl,
 		proxyApiKey,
 		proxyModels,
@@ -66,6 +56,7 @@ export const ProviderManager: React.FC = () => {
 		enabledOpenCodeModels,
 		disabledProviders,
 	} = useSettingsStore();
+
 	const {
 		setProviderAuthState,
 		setSettings,
@@ -80,18 +71,15 @@ export const ProviderManager: React.FC = () => {
 	const [selectedNewProvider, setSelectedNewProvider] = useState('');
 	const [editingApiKey, setEditingApiKey] = useState<string | null>(null);
 	const [editApiKeyInput, setEditApiKeyInput] = useState('');
-	const [anthropicApiKeyInput, setAnthropicApiKeyInput] = useState('');
 
 	const isOpenCodeCLI = cliProvider === 'opencode';
 
-	// Load providers on mount (only for OpenCode CLI)
 	useEffect(() => {
 		if (isOpenCodeCLI) {
 			postMessage('reloadAllProviders');
 		}
 	}, [postMessage, isOpenCodeCLI]);
 
-	// Reset form on success
 	useEffect(() => {
 		if (providerAuthState?.success && !providerAuthState.isLoading) {
 			const timer = setTimeout(() => {
@@ -108,24 +96,15 @@ export const ProviderManager: React.FC = () => {
 		return undefined;
 	}, [providerAuthState, setProviderAuthState, postMessage]);
 
-	// Clear Anthropic API key input when key is successfully saved
-	useEffect(() => {
-		if (anthropicKeyStatus.hasKey && anthropicKeyStatus.lastChecked) {
-			setAnthropicApiKeyInput('');
-		}
-	}, [anthropicKeyStatus.hasKey, anthropicKeyStatus.lastChecked]);
-
-	// Merge connected and available providers into unified list
-	// For Claude CLI: OpenAI Compatible + Anthropic (API key)
-	// For OpenCode CLI: OpenAI Compatible + all connected OpenCode providers (excluding OpenAI-compatible to avoid duplication)
-	// Note: Anthropic provider with API key is hidden for OpenCode CLI because OpenCode has built-in Anthropic support
+	// Connected providers list:
+	// - Always show OpenAI Compatible provider
+	// - If OpenCode CLI: add OpenCode connected providers (excluding OpenAI-compatible)
 	const connectedProviders: ProviderItemData[] = useMemo(() => {
 		const list: ProviderItemData[] = [
-			// OpenAI Compatible provider always shown for both CLI providers
 			{
 				id: OPENAI_COMPATIBLE_ID,
 				name: 'OpenAI Compatible API',
-				connected: true, // Always "connected" - visibility controlled by disabledProviders
+				connected: true,
 				isOpenAICompatible: true,
 				models: proxyModels.map(m => ({
 					id: m.id,
@@ -136,20 +115,6 @@ export const ProviderManager: React.FC = () => {
 			},
 		];
 
-		// Anthropic (API key) provider only shown for Claude CLI
-		// OpenCode CLI has built-in Anthropic support, so showing this would cause duplication
-		if (!isOpenCodeCLI) {
-			list.push({
-				id: 'anthropic',
-				name: 'Anthropic (Claude API)',
-				connected: true,
-				isAnthropic: true,
-				models: anthropicModels,
-			});
-		}
-
-		// Add OpenCode providers only when using OpenCode CLI
-		// Filter out OpenAI-compatible provider to avoid duplication
 		if (isOpenCodeCLI) {
 			list.push(
 				...opencodeProviders
@@ -165,16 +130,11 @@ export const ProviderManager: React.FC = () => {
 		}
 
 		return list;
-	}, [opencodeProviders, proxyModels, anthropicModels, isOpenCodeCLI]);
+	}, [opencodeProviders, proxyModels, isOpenCodeCLI]);
 
-	// Available providers for Quick Add (not yet connected) - only for OpenCode CLI
-	// Sorted by popularity/importance, not alphabetically
 	const availableForConnection = useMemo(() => {
-		if (!isOpenCodeCLI) {
-			return [];
-		}
+		if (!isOpenCodeCLI) return [];
 
-		// Priority order for popular providers (lower = higher priority)
 		const providerPriority: Record<string, number> = {
 			anthropic: 1,
 			openai: 2,
@@ -198,10 +158,7 @@ export const ProviderManager: React.FC = () => {
 			.sort((a, b) => {
 				const priorityA = providerPriority[a.id] ?? 100;
 				const priorityB = providerPriority[b.id] ?? 100;
-				if (priorityA !== priorityB) {
-					return priorityA - priorityB;
-				}
-				// Fallback to alphabetical for same priority
+				if (priorityA !== priorityB) return priorityA - priorityB;
 				return a.name.localeCompare(b.name);
 			});
 	}, [availableProviders, opencodeProviders, isOpenCodeCLI]);
@@ -211,47 +168,19 @@ export const ProviderManager: React.FC = () => {
 			setExpandedProvider(null);
 			setApiKeyInput('');
 			setSelectedNewProvider('');
-		} else {
-			setExpandedProvider(providerId);
-			setApiKeyInput('');
-			setSelectedNewProvider('');
+			return;
 		}
+		setExpandedProvider(providerId);
+		setApiKeyInput('');
+		setSelectedNewProvider('');
 	};
 
-	const handleConnectProvider = (providerId: string) => {
-		if (apiKeyInput.trim()) {
-			postMessage('setOpenCodeProviderAuth', {
-				providerId,
-				apiKey: apiKeyInput.trim(),
-			});
-		}
-	};
-
-	const handleUpdateApiKey = (providerId: string) => {
-		if (editApiKeyInput.trim()) {
-			postMessage('setOpenCodeProviderAuth', {
-				providerId,
-				apiKey: editApiKeyInput.trim(),
-			});
-			setEditingApiKey(null);
-			setEditApiKeyInput('');
-		}
-	};
-
-	const handleDisconnectProvider = (providerId: string) => {
-		postMessage('disconnectOpenCodeProvider', { providerId });
-	};
-
-	// Check if provider can be disconnected
-	const canDisconnect = (providerId: string) => {
-		return !isNonDisconnectableProviderId(providerId);
-	};
+	const canDisconnect = (providerId: string) => !isNonDisconnectableProviderId(providerId);
 
 	const handleRefresh = () => {
 		postMessage('reloadAllProviders');
 	};
 
-	// OpenAI Compatible provider handlers
 	const saveProxySettings = () => {
 		postMessage('updateSettings', {
 			settings: {
@@ -259,28 +188,6 @@ export const ProviderManager: React.FC = () => {
 				'proxy.apiKey': proxyApiKey,
 			},
 		});
-	};
-
-	const saveAnthropicKey = (apiKey: string) => {
-		postMessage('setAnthropicApiKey', { anthropicApiKey: apiKey });
-	};
-
-	const clearAnthropicKey = () => {
-		postMessage('clearAnthropicApiKey', {});
-	};
-
-	const fetchAnthropicModels = (apiKey?: string) => {
-		postMessage('loadAnthropicModels', { anthropicApiKey: apiKey });
-	};
-
-	// Unified toggle for any provider visibility (hide from dropdown without disconnecting)
-	const handleToggleProviderEnabled = (providerId: string) => {
-		// Persist to settings (avoid stale-closure race by computing next state once)
-		const nextDisabled = disabledProviders.includes(providerId)
-			? disabledProviders.filter(id => id !== providerId)
-			: [...disabledProviders, providerId];
-		setSettings({ disabledProviders: nextDisabled });
-		postMessage('updateSettings', { settings: { 'providers.disabled': nextDisabled } });
 	};
 
 	const handleFetchProxyModels = () => {
@@ -299,7 +206,36 @@ export const ProviderManager: React.FC = () => {
 		postMessage('updateSettings', { settings: { 'proxy.enabledModels': newEnabled } });
 	};
 
-	// OpenCode provider model handlers
+	const handleToggleProviderEnabled = (providerId: string) => {
+		const nextDisabled = disabledProviders.includes(providerId)
+			? disabledProviders.filter(id => id !== providerId)
+			: [...disabledProviders, providerId];
+		setSettings({ disabledProviders: nextDisabled });
+		postMessage('updateSettings', { settings: { 'providers.disabled': nextDisabled } });
+	};
+
+	const handleConnectProvider = (providerId: string) => {
+		if (!apiKeyInput.trim()) return;
+		postMessage('setOpenCodeProviderAuth', {
+			providerId,
+			apiKey: apiKeyInput.trim(),
+		});
+	};
+
+	const handleUpdateApiKey = (providerId: string) => {
+		if (!editApiKeyInput.trim()) return;
+		postMessage('setOpenCodeProviderAuth', {
+			providerId,
+			apiKey: editApiKeyInput.trim(),
+		});
+		setEditingApiKey(null);
+		setEditApiKeyInput('');
+	};
+
+	const handleDisconnectProvider = (providerId: string) => {
+		postMessage('disconnectOpenCodeProvider', { providerId });
+	};
+
 	const handleToggleOpenCodeModel = (providerId: string, modelId: string) => {
 		const fullId = `${providerId}/${modelId}`;
 		const newEnabled = enabledOpenCodeModels.includes(fullId)
@@ -309,19 +245,14 @@ export const ProviderManager: React.FC = () => {
 		postMessage('updateSettings', { settings: { 'opencode.enabledModels': newEnabled } });
 	};
 
-	// Get enabled count for a provider
-	const getEnabledCountForProvider = (providerId: string) => {
-		return enabledOpenCodeModels.filter(id => id.startsWith(`${providerId}/`)).length;
-	};
+	const getEnabledCountForProvider = (providerId: string) =>
+		enabledOpenCodeModels.filter(id => id.startsWith(`${providerId}/`)).length;
 
-	// Check if model is enabled (if no models selected, all are enabled)
-	const isOpenCodeModelEnabled = (providerId: string, modelId: string) => {
-		return enabledOpenCodeModels.includes(`${providerId}/${modelId}`);
-	};
+	const isOpenCodeModelEnabled = (providerId: string, modelId: string) =>
+		enabledOpenCodeModels.includes(`${providerId}/${modelId}`);
 
 	return (
 		<div className="animate-fade-in">
-			{/* Connected Providers List Header */}
 			<div className="flex items-center justify-between mb-(--gap-2)">
 				<GroupTitle className="mb-0">
 					{isOpenCodeCLI ? 'Providers' : 'OpenAI Compatible'}
@@ -337,9 +268,7 @@ export const ProviderManager: React.FC = () => {
 				)}
 			</div>
 
-			{/* Connected Providers List */}
 			<div className="border border-vscode-panel-border rounded overflow-hidden mb-(--gap-6) mx-(--gap-1)">
-				{/* Add Provider Row - pinned at the top */}
 				{availableForConnection.length > 0 && (
 					<ExpandableRow
 						title="Add Provider"
@@ -355,10 +284,7 @@ export const ProviderManager: React.FC = () => {
 								onChange={e => setSelectedNewProvider(e.target.value)}
 								options={[
 									{ value: '', label: 'Select provider...' },
-									...availableForConnection.map(p => ({
-										value: p.id,
-										label: p.name,
-									})),
+									...availableForConnection.map(p => ({ value: p.id, label: p.name })),
 								]}
 								className="min-w-(--input-width-sm)"
 							/>
@@ -367,9 +293,7 @@ export const ProviderManager: React.FC = () => {
 						{selectedNewProvider &&
 							(() => {
 								const provider = availableForConnection.find(p => p.id === selectedNewProvider);
-								if (!provider) {
-									return null;
-								}
+								if (!provider) return null;
 								const isAuthLoading =
 									providerAuthState?.providerId === provider.id && providerAuthState?.isLoading;
 
@@ -420,17 +344,13 @@ export const ProviderManager: React.FC = () => {
 					</ExpandableRow>
 				)}
 
-				{/* Connected Providers */}
 				{connectedProviders.map((provider, idx) => {
 					const isExpanded = expandedProvider === provider.id;
 					const isOpenAICompatible = provider.isOpenAICompatible;
-					const isAnthropic = provider.isAnthropic;
 					const modelCount = provider.models?.length ?? 0;
 					const enabledCount = isOpenAICompatible
 						? enabledProxyModels.length
-						: isAnthropic
-							? (provider.models?.length ?? 0)
-							: getEnabledCountForProvider(provider.id);
+						: getEnabledCountForProvider(provider.id);
 
 					const badge = (
 						<>{provider.isCustom && <SettingsBadge variant="blue">custom</SettingsBadge>}</>
@@ -466,19 +386,6 @@ export const ProviderManager: React.FC = () => {
 									onFetchModels={handleFetchProxyModels}
 									onToggleModel={handleToggleProxyModel}
 								/>
-							) : isAnthropic ? (
-								<AnthropicConfig
-									enabled={!disabledProviders.includes('anthropic')}
-									apiKeyInput={anthropicApiKeyInput}
-									models={anthropicModels}
-									modelsStatus={anthropicModelsStatus}
-									keyStatus={anthropicKeyStatus}
-									onToggle={() => handleToggleProviderEnabled('anthropic')}
-									onApiKeyInputChange={setAnthropicApiKeyInput}
-									onSaveKey={saveAnthropicKey}
-									onClearKey={clearAnthropicKey}
-									onFetchModels={fetchAnthropicModels}
-								/>
 							) : (
 								<>
 									<SettingRow title="Enable Provider">
@@ -499,7 +406,6 @@ export const ProviderManager: React.FC = () => {
 										</div>
 									</SettingRow>
 
-									{/* API Key editing for connected providers */}
 									{canDisconnect(provider.id) && (
 										<SettingRow title="API Key" last={!provider.models?.length}>
 											{editingApiKey === provider.id ? (
@@ -550,7 +456,7 @@ export const ProviderManager: React.FC = () => {
 
 									{provider.models && provider.models.length > 0 ? (
 										<ModelList>
-											{provider.models.map((model, _modelIdx) => {
+											{provider.models.map(model => {
 												const isEnabled = isOpenCodeModelEnabled(provider.id, model.id);
 												return (
 													<ModelItem key={model.id} name={model.name} id={model.id}>
@@ -578,178 +484,6 @@ export const ProviderManager: React.FC = () => {
 				})}
 			</div>
 		</div>
-	);
-};
-
-// =============================================================================
-// Anthropic (Claude API) Provider Configuration
-// =============================================================================
-
-interface AnthropicConfigProps {
-	enabled: boolean;
-	apiKeyInput: string;
-	models: Array<{ id: string; name: string }>;
-	modelsStatus: {
-		isLoading: boolean;
-		success: boolean | null;
-		error: string | null;
-		lastTested: number | null;
-	};
-	keyStatus: {
-		hasKey: boolean;
-		lastChecked: number | null;
-		error: string | null;
-	};
-	onToggle: () => void;
-	onApiKeyInputChange: (value: string) => void;
-	onSaveKey: (apiKey: string) => void;
-	onClearKey: () => void;
-	onFetchModels: (apiKey?: string) => void;
-}
-
-const AnthropicConfig: React.FC<AnthropicConfigProps> = ({
-	enabled,
-	apiKeyInput,
-	models,
-	modelsStatus,
-	keyStatus,
-	onToggle,
-	onApiKeyInputChange,
-	onSaveKey,
-	onClearKey,
-	onFetchModels,
-}) => {
-	const hasKey = keyStatus.hasKey;
-	const isLoading = modelsStatus.isLoading;
-	const hasError = modelsStatus.error || keyStatus.error;
-	const status = isLoading
-		? 'loading'
-		: modelsStatus.success
-			? 'success'
-			: hasError
-				? 'error'
-				: 'idle';
-
-	return (
-		<>
-			<SettingRow title="Enable Provider" last={!enabled}>
-				<Switch checked={enabled} onChange={onToggle} />
-			</SettingRow>
-
-			{enabled && (
-				<>
-					<SettingRow title="API Key">
-						<div className="flex items-center gap-1.5 flex-1">
-							<TextInput
-								type="password"
-								value={apiKeyInput}
-								onChange={e => onApiKeyInputChange(e.target.value)}
-								placeholder={hasKey && !apiKeyInput ? 'API key is set' : 'Enter Anthropic API key'}
-								className="flex-1 max-w-(--input-width-lg)"
-							/>
-							{hasKey && !apiKeyInput ? (
-								<>
-									<Button
-										size="sm"
-										variant="secondary"
-										onClick={() => onApiKeyInputChange('')}
-										className="text-xs px-2"
-									>
-										Change
-									</Button>
-									<Button
-										size="sm"
-										variant="ghost"
-										onClick={onClearKey}
-										className="text-xs px-2 text-vscode-errorForeground/70 hover:text-vscode-errorForeground"
-									>
-										Clear
-									</Button>
-								</>
-							) : (
-								<>
-									<Button
-										size="sm"
-										variant="primary"
-										onClick={() => {
-											if (apiKeyInput.trim()) {
-												onSaveKey(apiKeyInput.trim());
-												onApiKeyInputChange('');
-											}
-										}}
-										disabled={!apiKeyInput.trim() || isLoading}
-										className="text-xs px-2"
-									>
-										{hasKey ? 'Save' : 'Connect'}
-									</Button>
-									{hasKey && apiKeyInput && (
-										<Button
-											size="sm"
-											variant="ghost"
-											onClick={() => onApiKeyInputChange('')}
-											className="text-xs px-2"
-										>
-											Cancel
-										</Button>
-									)}
-								</>
-							)}
-						</div>
-					</SettingRow>
-
-					{(keyStatus.error || modelsStatus.error) && (
-						<div className="px-2.5 py-1.5">
-							<StatusMessage
-								isLoading={false}
-								success={false}
-								error={keyStatus.error || modelsStatus.error || undefined}
-							/>
-						</div>
-					)}
-
-					{hasKey && (
-						<>
-							<div className="flex items-center justify-between px-2.5 py-1.5">
-								<div className="flex items-center gap-1.5">
-									<span className="text-sm text-vscode-foreground">Models</span>
-									{models.length > 0 && <SettingsBadge>{models.length} found</SettingsBadge>}
-									{modelsStatus.success !== null && <SettingsStatusIndicator status={status} />}
-								</div>
-								<Button
-									size="sm"
-									variant="secondary"
-									onClick={() => onFetchModels()}
-									disabled={isLoading}
-									className="text-xs px-2 py-0.5 h-(--btn-height-sm) min-h-[unset]"
-								>
-									{isLoading ? 'Loading...' : models.length > 0 ? 'Refresh' : 'Fetch'}
-								</Button>
-							</div>
-
-							{models.length > 0 && (
-								<ModelList>
-									{models.map((model, _idx) => (
-										<ModelItem key={model.id} name={model.name} id={model.id}>
-											<SettingsBadge variant="blue">enabled</SettingsBadge>
-										</ModelItem>
-									))}
-								</ModelList>
-							)}
-
-							{models.length === 0 && !isLoading && !modelsStatus.error && (
-								<EmptyState>Click "Fetch" to load available models</EmptyState>
-							)}
-						</>
-					)}
-
-					{!hasKey && (
-						<EmptyState>
-							Enter your Anthropic API key and click "Connect" to load available models
-						</EmptyState>
-					)}
-				</>
-			)}
-		</>
 	);
 };
 
@@ -818,11 +552,11 @@ const OpenAICompatibleConfig: React.FC<OpenAICompatibleConfigProps> = ({
 
 					<SettingRow title="API Key">
 						<TextInput
+							type="password"
 							value={apiKey}
 							onChange={e => onApiKeyChange(e.target.value)}
 							onBlur={onBlur}
-							placeholder="optional"
-							type="password"
+							placeholder="Optional"
 							className="flex-1 max-w-(--input-width-lg)"
 						/>
 					</SettingRow>
@@ -831,7 +565,7 @@ const OpenAICompatibleConfig: React.FC<OpenAICompatibleConfigProps> = ({
 						<div className="flex items-center gap-1.5">
 							<span className="text-sm text-vscode-foreground">Models</span>
 							{models.length > 0 && <SettingsBadge>{models.length} found</SettingsBadge>}
-							{testStatus.success !== null && <SettingsStatusIndicator status={status} />}
+							{status !== 'idle' && <SettingsBadge variant="blue">{status}</SettingsBadge>}
 						</div>
 						<Button
 							size="sm"
@@ -844,11 +578,15 @@ const OpenAICompatibleConfig: React.FC<OpenAICompatibleConfigProps> = ({
 						</Button>
 					</div>
 
-					{testStatus.error && <ErrorBox>{testStatus.error}</ErrorBox>}
+					{testStatus.error && (
+						<div className="px-2.5 py-1.5">
+							<StatusMessage error={testStatus.error} />
+						</div>
+					)}
 
-					{models.length > 0 && (
+					{models.length > 0 ? (
 						<ModelList>
-							{models.map((model, _idx) => (
+							{models.map(model => (
 								<ModelItem key={model.id} name={model.name} id={model.id}>
 									<Switch
 										checked={enabledModels.includes(model.id)}
@@ -857,9 +595,7 @@ const OpenAICompatibleConfig: React.FC<OpenAICompatibleConfigProps> = ({
 								</ModelItem>
 							))}
 						</ModelList>
-					)}
-
-					{models.length === 0 && !testStatus.isLoading && !testStatus.error && (
+					) : (
 						<EmptyState>Click "Fetch" to load available models</EmptyState>
 					)}
 				</>
@@ -867,8 +603,3 @@ const OpenAICompatibleConfig: React.FC<OpenAICompatibleConfigProps> = ({
 		</>
 	);
 };
-
-export default ProviderManager;
-
-// Alias for backward compatibility
-export { ProviderManager as OpenCodeProviderManager };

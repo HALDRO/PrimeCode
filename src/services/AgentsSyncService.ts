@@ -14,7 +14,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { Value } from '@sinclair/typebox/value';
 import * as vscode from 'vscode';
-import type { AgentsMcpConfig, AgentsMcpServer } from '../types';
+import type { AgentsMcpConfig, AgentsMcpServer } from '../common';
 import { logger } from '../utils/logger';
 import {
 	buildClaudeMcpServersJson,

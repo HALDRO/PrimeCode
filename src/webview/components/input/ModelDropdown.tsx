@@ -9,7 +9,7 @@
 
 import type React from 'react';
 import { useCallback, useMemo } from 'react';
-import { OPENAI_COMPATIBLE_PROVIDER_ID } from '../../../shared';
+import { OPENAI_COMPATIBLE_PROVIDER_ID } from '../../../common';
 import { cn } from '../../lib/cn';
 import { useModelDropdownState, useModelSelection } from '../../store';
 import { STANDARD_MODELS } from '../../utils/models';
@@ -39,8 +39,6 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 	const {
 		provider,
 		selectedModel,
-		anthropicModels,
-		anthropicModelsStatus,
 		proxyModels,
 		enabledProxyModels,
 		opencodeProviders,
@@ -146,11 +144,8 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 		const result: DropdownMenuItem<ModelData>[] = [];
 
 		if (provider === 'claude') {
-			// Claude models (dynamic from Anthropic API when available, otherwise fallback list)
-			const claudeModels =
-				anthropicModelsStatus.success === true && anthropicModels.length > 0
-					? anthropicModels
-					: STANDARD_MODELS;
+			// Claude models: use built-in list (Claude Code CLI handles actual selection)
+			const claudeModels = STANDARD_MODELS;
 
 			for (const model of claudeModels) {
 				const isActive = selectedModel === model.id;
@@ -253,14 +248,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 		}
 
 		return result;
-	}, [
-		selectedModel,
-		provider,
-		enabledProxyModelsList,
-		filteredOpencodeProviders,
-		anthropicModels,
-		anthropicModelsStatus.success,
-	]);
+	}, [selectedModel, provider, enabledProxyModelsList, filteredOpencodeProviders]);
 
 	return (
 		<DropdownMenu

@@ -9,7 +9,7 @@
  */
 
 import { useCallback, useMemo } from 'react';
-import type { VSCodeApi, WebviewMessage } from '../../types';
+import type { VSCodeApi, WebviewMessage } from '../../common';
 import { useChatStore } from '../store/chatStore';
 
 // ============================================================================

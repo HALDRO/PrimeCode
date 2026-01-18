@@ -10,7 +10,7 @@
 
 import type React from 'react';
 import { useMemo, useState } from 'react';
-import type { MCPServerConfig, McpMarketplaceItem } from '../../../types';
+import type { MCPServerConfig, McpMarketplaceItem } from '../../../common';
 import { useIsMounted } from '../../hooks/useIsMounted';
 import { cn } from '../../lib/cn';
 import { useSettingsStore } from '../../store';

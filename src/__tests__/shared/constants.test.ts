@@ -8,7 +8,7 @@ import {
 	isNonDisconnectableProviderId,
 	OPENAI_COMPATIBLE_PROVIDER_ID,
 	stripProviderPrefix,
-} from '../../shared/constants';
+} from '../../common/constants';
 
 describe('OPENAI_COMPATIBLE_PROVIDER_ID', () => {
 	it('should be "oai"', () => {

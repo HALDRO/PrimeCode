@@ -7,8 +7,8 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { PATHS } from '../shared/constants';
-import type { ParsedCommand } from '../types';
+import type { ParsedCommand } from '../common';
+import { PATHS } from '../common/constants';
 import { parseFrontmatter, stringifyFrontmatter } from '../utils/frontmatter';
 import { logger } from '../utils/logger';
 

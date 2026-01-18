@@ -291,7 +291,7 @@ export const THINKING_PREVIEW_LENGTH = 100;
  * All timeouts are in milliseconds.
  * Re-exports from @shared to maintain synchronization with extension backend.
  */
-export { TIMEOUTS } from '../shared';
+export { TIMEOUTS } from '../common/constants';
 
 /**
  * Language mapping for Monaco editor based on file extension

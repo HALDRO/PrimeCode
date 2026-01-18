@@ -7,7 +7,7 @@
  */
 
 import * as vscode from 'vscode';
-import type { AgentsMcpServer, MCPServerConfig } from '../../types';
+import type { AgentsMcpServer, MCPServerConfig } from '../../common';
 import { logger } from '../../utils/logger';
 import { claudeConfigToUnifiedServer } from '../../utils/mcpAdapters';
 import {

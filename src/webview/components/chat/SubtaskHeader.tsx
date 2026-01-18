@@ -1,5 +1,5 @@
 import type React from 'react';
-import type { SubtaskMessage } from '../../../types';
+import type { SubtaskMessage } from '../../../common';
 import { cn } from '../../lib/cn';
 import { formatDuration } from '../../utils/format';
 import { ExpandChevronIcon, TodoProgressIcon } from '../icons/CustomIcons';

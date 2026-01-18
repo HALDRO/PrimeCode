@@ -402,27 +402,6 @@ export interface ProxyModelsData {
 }
 export type ProxyModelsMessage = BaseExtensionMessage<'proxyModels', ProxyModelsData>;
 
-export interface AnthropicModelsData {
-	enabled: boolean;
-	models: { id: string; name: string }[];
-	keyPresent?: boolean;
-	error?: string;
-}
-export type AnthropicModelsMessage = BaseExtensionMessage<'anthropicModels', AnthropicModelsData>;
-
-export type AnthropicKeyStatusMessage = BaseExtensionMessage<
-	'anthropicKeyStatus',
-	{ hasKey: boolean; error?: string }
->;
-export type AnthropicKeySavedMessage = BaseExtensionMessage<
-	'anthropicKeySaved',
-	{ success: boolean; error?: string }
->;
-export type AnthropicKeyClearedMessage = BaseExtensionMessage<
-	'anthropicKeyCleared',
-	{ success: boolean; error?: string }
->;
-
 // =============================================================================
 // Clipboard Messages (global)
 // =============================================================================
@@ -674,35 +653,24 @@ export type ProjectUpdatedMessage = BaseExtensionMessage<
 // =============================================================================
 
 export type ExtensionMessage =
-	// Session events (unified protocol)
 	| SessionEventMessage
 	| SessionLifecycleMessage
-	// Access messages
 	| AccessDataMessage
-	// Rules & permissions
 	| RuleListMessage
 	| RuleUpdatedMessage
 	| PermissionsUpdatedMessage
-	// Files
 	| WorkspaceFilesMessage
 	| ImagePathMessage
 	| ImageDataMessage
 	| WorkspaceInfoMessage
-	// Model & settings
 	| ModelSelectedMessage
 	| SettingsDataMessage
 	| PlatformInfoMessage
 	| ProxyModelsMessage
-	| AnthropicModelsMessage
-	| AnthropicKeyStatusMessage
-	| AnthropicKeySavedMessage
-	| AnthropicKeyClearedMessage
 	| ConfigChangedMessage
-	// Clipboard
 	| ClipboardTextMessage
 	| ClipboardContextMessage
 	| ClipboardContextNotFoundMessage
-	// OpenCode
 	| OpenCodeStatusMessage
 	| OpenCodeProvidersMessage
 	| OpenCodeModelSetMessage
@@ -714,11 +682,9 @@ export type ExtensionMessage =
 	| ProxyProviderSavingMessage
 	| ProxyProviderSavedMessage
 	| ReloadOpenCodeProvidersMessage
-	// OpenCode MCP
 	| OpenCodeMcpStatusMessage
 	| OpenCodeMcpAuthStartedMessage
 	| OpenCodeMcpAuthErrorMessage
-	// MCP
 	| McpMarketplaceCatalogMessage
 	| McpMarketplaceInstallResultMessage
 	| McpInstalledMetadataMessage
@@ -727,24 +693,19 @@ export type ExtensionMessage =
 	| McpServerDeletedMessage
 	| McpServerErrorMessage
 	| McpStatusMessage
-	// Agents config
 	| AgentsConfigStatusMessage
 	| AgentsSyncResultMessage
 	| McpImportResultMessage
-	// Commands, skills, hooks, subagents
 	| CommandsListMessage
 	| SkillsListMessage
 	| HooksListMessage
 	| SubagentsListMessage
-	// Diagnostics & history
 	| CliDiagnosticsMessage
 	| ConversationListMessage
 	| AllConversationsClearedMessage
-	// Discovery & project
 	| DiscoveryStatusMessage
 	| McpConfigReloadedMessage
 	| ProjectUpdatedMessage
-	// Prompt improver
 	| ImprovePromptResultMessage
 	| ImprovePromptErrorMessage
 	| ImprovePromptCancelledMessage;

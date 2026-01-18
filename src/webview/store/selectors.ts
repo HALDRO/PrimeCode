@@ -343,8 +343,6 @@ export const useModelSelection = () =>
 			provider: state.provider,
 			selectedModel: state.selectedModel,
 			proxyModels: state.proxyModels,
-			anthropicModels: state.anthropicModels,
-			anthropicModelsStatus: state.anthropicModelsStatus,
 			enabledProxyModels: state.enabledProxyModels,
 			opencodeProviders: state.opencodeProviders,
 			enabledOpenCodeModels: state.enabledOpenCodeModels,

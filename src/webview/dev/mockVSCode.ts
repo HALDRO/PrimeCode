@@ -5,7 +5,7 @@
  *              Uses unified session_event / session_lifecycle protocol for consistency with production.
  */
 
-import type { VSCodeApi } from '../../types';
+import type { VSCodeApi } from '../../common';
 
 declare global {
 	interface Window {
@@ -247,7 +247,6 @@ const SCENARIO_1_RESEARCHER: MockMessage[] = (() => {
 					timestamp: new Date().toISOString(),
 					associatedMessageId: 'm1',
 					sessionId: mockActiveSessionId,
-					cliSessionId: 'cli-session-123',
 					isOpenCodeCheckpoint: true,
 				},
 			},
@@ -1562,7 +1561,6 @@ const mockVSCodeApi: VSCodeApi = {
 							timestamp: new Date().toISOString(),
 							associatedMessageId: userMessageId,
 							sessionId: mockActiveSessionId,
-							cliSessionId: 'cli-session-mock',
 							isOpenCodeCheckpoint: true,
 						},
 					},
@@ -2051,7 +2049,6 @@ const mockVSCodeApi: VSCodeApi = {
 				| {
 						messageId: string;
 						sessionId: string;
-						cliSessionId?: string;
 						associatedMessageId?: string;
 				  };
 			console.log('[Mock VS Code] Restore commit requested:', data);
@@ -2091,7 +2088,7 @@ const mockVSCodeApi: VSCodeApi = {
 			}, 300);
 		} else if (msg.type === 'unrevert') {
 			// Handle unrevert message
-			const data = msg.data as { sessionId: string; cliSessionId?: string } | undefined;
+			const data = msg.data as { sessionId: string } | undefined;
 			console.log('[Mock VS Code] Unrevert requested:', data);
 
 			// Simulate unrevert operation

@@ -10,9 +10,8 @@
 		"tsBuildInfoFile": "../../out/build-cache/webview.tsbuildinfo",
 		"allowImportingTsExtensions": true,
 		"types": ["node"],
-		"rootDirs": [".", "../types", "../shared"]
+		"rootDir": ".."
 	},
-	"include": ["./**/*.ts", "./**/*.tsx"],
-	"references": [{ "path": "../types" }, { "path": "../shared" }],
+	"include": ["./**/*.ts", "./**/*.tsx", "../common/**/*.ts"],
 	"exclude": ["node_modules"]
 }

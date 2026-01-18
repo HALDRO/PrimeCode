@@ -27,7 +27,7 @@ import type {
 	SubtaskMessage,
 	TokenStats,
 	TotalStats,
-} from '../../types';
+} from '../../common';
 
 export type { CommitInfo, ConversationMessage, SubtaskMessage, TokenStats, TotalStats };
 

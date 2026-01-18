@@ -9,7 +9,7 @@ import type {
 	InstalledMcpServerMetadata,
 	McpMarketplaceCatalog,
 	McpMarketplaceItem,
-} from '../../types';
+} from '../../common';
 import type { McpDownloadResponse, McpMarketplaceService } from './McpMarketplaceService';
 import type { McpMetadataService } from './McpMetadataService';
 

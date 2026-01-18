@@ -11,15 +11,15 @@
  * - Workspace root path resolution
  * - OpenCode service access helpers
  *
- * NOTE: CLIProviderType is derived from the TypeBox schema in `src/types/schemas.ts`
- * (re-exported via `src/types/index.ts`) and imported here type-only.
+ * NOTE: CLIProviderType is derived from the TypeBox schema in `src/common/schemas.ts`
+ * (re-exported via `src/common/index.ts`) and imported here type-only.
  */
 
 import * as vscode from 'vscode';
-import type { CLIProviderType } from '../types';
+import type { CLIProviderType } from '../common';
 import { logger } from '../utils/logger';
 
-export type { CLIProviderType } from '../types';
+export type { CLIProviderType } from '../common';
 
 // =============================================================================
 // Types

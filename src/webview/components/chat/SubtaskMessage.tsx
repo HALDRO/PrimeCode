@@ -7,7 +7,7 @@
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import type { SubtaskMessage as SubtaskMessageType } from '../../../types';
+import type { SubtaskMessage as SubtaskMessageType } from '../../../common';
 import { useSubtaskChildren } from '../../hooks/useSubtaskChildren';
 import { useMcpServers } from '../../store';
 import type { Message } from '../../store/chatStore';

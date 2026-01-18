@@ -15,32 +15,7 @@
 export const TIMEOUTS = {
 	/** Timeout for CLI status check operations */
 	CLI_STATUS_CHECK: 15000,
-	/** Timeout for proxy/OpenAI-compatible model fetch */
-	PROXY_MODELS_FETCH: 15000,
-	/** Timeout for OpenCode provider loading */
-	OPENCODE_PROVIDERS_LOAD: 15000,
-	/** Default network request timeout */
-	NETWORK_REQUEST: 15000,
-	/** Short timeout for quick operations */
-	SHORT: 5000,
-	/** Long timeout for heavy operations */
-	LONG: 30000,
 } as const;
-
-// =============================================================================
-// CLI Configuration
-// =============================================================================
-
-/**
- * CLI provider types.
- * NOTE: Kept here (not imported) so `src/shared` stays independent from other TS projects.
- */
-export type CLIProviderType = 'claude' | 'opencode';
-
-/**
- * Default CLI provider
- */
-export const DEFAULT_CLI_PROVIDER: CLIProviderType = 'claude';
 
 // =============================================================================
 // Provider IDs
@@ -90,11 +65,6 @@ export const stripProviderPrefix = (model: string): string => {
 };
 
 /**
- * @deprecated Use stripProviderPrefix instead
- */
-export const stripOaiPrefix = stripProviderPrefix;
-
-/**
  * Checks if a model is in the enabled proxy models list.
  * Handles both with provider prefix (e.g., "oai/model") and without.
  *
@@ -124,36 +94,26 @@ export const isModelInProxyList = (
 export const PATHS = {
 	/** Unified directory for all CLI configurations */
 	AGENTS_DIR: '.agents',
-	/** Permanent images storage */
-	AGENTS_IMAGES: '.agents/images',
-	/** Temporary files storage */
-	AGENTS_TEMP: '.agents/temp',
-	/** MCP configuration file */
-	AGENTS_MCP_JSON: '.agents/mcp.json',
-	/** Backups directory */
-	AGENTS_BACKUPS: '.agents/.backups',
 
-	// New Unified Structure
+	// Canonical structure
 	AGENTS_COMMANDS_DIR: '.agents/commands',
 	AGENTS_RULES_DIR: '.agents/rules',
 	AGENTS_SKILLS_DIR: '.agents/skills',
 	AGENTS_HOOKS_DIR: '.agents/hooks',
 	AGENTS_SUBAGENTS_DIR: '.agents/subagents',
 
-	// Legacy / Compatibility Paths - Claude
+	// Claude compatibility
 	CLAUDE_COMMANDS_DIR: '.claude/commands',
 	CLAUDE_RULES_DIR: '.claude/rules',
 	CLAUDE_SKILLS_DIR: '.claude/skills',
 	CLAUDE_AGENTS_DIR: '.claude/agents',
 
-	// Legacy / Compatibility Paths - OpenCode
+	// OpenCode compatibility
 	OPENCODE_COMMAND_DIR: '.opencode/command',
 	OPENCODE_AGENT_DIR: '.opencode/agent',
-	OPENCODE_INSTRUCTIONS: 'opencode.json',
 	OPENCODE_SKILL_DIR: '.opencode/skill',
 
-	// Legacy / Compatibility Paths - Cursor
-	CURSOR_RULES_DIR: '.cursor/rules',
+	// Cursor compatibility (import-only)
 	CURSOR_COMMANDS_DIR: '.cursor/commands',
 	CURSOR_SKILLS_DIR: '.cursor/skills',
 } as const;
@@ -164,20 +124,9 @@ export const PATHS = {
 
 /**
  * Centralized file exclusion patterns for workspace file search.
- * Used by both FileService (VS Code API) and fileSearch (ripgrep).
  */
 export const EXCLUDE_PATTERNS = {
-	/**
-	 * VS Code glob pattern for findFiles API.
-	 * Single string pattern with braces syntax.
-	 */
-	VSCODE_GLOB:
-		'{**/node_modules/**,**/.git/**,**/dist/**,**/build/**,**/.next/**,**/.nuxt/**,**/target/**,**/bin/**,**/obj/**,**/.vscode/**,**/__pycache__/**,**/out/**,**/*.pyc,**/.DS_Store,**/Thumbs.db}',
-
-	/**
-	 * Ripgrep exclusion arguments.
-	 * Array of glob patterns for --glob/-g option.
-	 */
+	/** Ripgrep exclusion arguments. */
 	RIPGREP_ARGS: [
 		'-g',
 		'!**/node_modules/**',

@@ -10,7 +10,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 import * as vscode from 'vscode';
-import { EXCLUDE_PATTERNS } from '../shared/constants';
+import { EXCLUDE_PATTERNS } from '../common/constants';
 import { logger } from '../utils/logger';
 import { getBinPath } from './ripgrep';
 

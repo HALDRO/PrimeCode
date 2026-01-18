@@ -28,7 +28,7 @@ import type {
 	OpenCodeProviderData,
 	PlatformInfo,
 	Rule,
-} from '../../types';
+} from '../../common';
 
 export type CommandItem = import('../constants').CommandItem;
 
@@ -71,9 +71,6 @@ export interface SettingsActions {
 			capabilities?: { reasoning?: boolean; vision?: boolean; tools?: boolean };
 		}>,
 	) => void;
-	setAnthropicModels: (models: Array<{ id: string; name: string }>) => void;
-	setAnthropicModelsStatus: (status: Partial<SettingsState['anthropicModelsStatus']>) => void;
-	setAnthropicKeyStatus: (status: Partial<SettingsState['anthropicKeyStatus']>) => void;
 	setEnabledProxyModels: (models: string[]) => void;
 	setProxyTestStatus: (status: Partial<SettingsState['proxyTestStatus']>) => void;
 	setSubagents: (subagents: Partial<SettingsState['subagents']>) => void;
@@ -83,7 +80,7 @@ export interface SettingsActions {
 	setMcpServers: (servers: MCPServersMap) => void;
 	setMcpStatus: (status: SettingsState['mcpStatus']) => void;
 	setMcpInstalledMetadata: (
-		metadata: Record<string, import('../../types').InstalledMcpServerMetadata>,
+		metadata: Record<string, import('../../common').InstalledMcpServerMetadata>,
 	) => void;
 	setMcpMarketplaceState: (state: Partial<SettingsState['mcpMarketplace']>) => void;
 	setAccess: (access: Access[]) => void;
@@ -122,10 +119,10 @@ export interface SettingsActions {
 }
 
 // Rule Type
-export type { Rule } from '../../types';
+export type { Rule } from '../../common';
 
 // Command Types
-export type ParsedCommand = import('../../types').ParsedCommand;
+export type ParsedCommand = import('../../common').ParsedCommand;
 // export type CommandItem = import('../constants').CommandItem;
 
 export interface OpenCodeConfigData {
@@ -233,18 +230,6 @@ export interface SettingsState {
 		maxCompletionTokens?: number;
 		capabilities?: { reasoning?: boolean; vision?: boolean; tools?: boolean };
 	}>;
-	anthropicModels: Array<{ id: string; name: string }>;
-	anthropicModelsStatus: {
-		isLoading: boolean;
-		success: boolean | null;
-		error: string | null;
-		lastTested: number | null;
-	};
-	anthropicKeyStatus: {
-		hasKey: boolean;
-		lastChecked: number | null;
-		error: string | null;
-	};
 	enabledProxyModels: string[]; // IDs of models enabled for selection in chat
 	proxyTestStatus: {
 		isLoading: boolean;
@@ -264,11 +249,11 @@ export interface SettingsState {
 			resources?: Array<{ uri: string; name: string; description?: string }>;
 		}
 	>;
-	mcpInstalledMetadata: Record<string, import('../../types').InstalledMcpServerMetadata>;
+	mcpInstalledMetadata: Record<string, import('../../common').InstalledMcpServerMetadata>;
 	mcpMarketplace: {
 		isLoading: boolean;
 		error: string | null;
-		catalog: import('../../types').McpMarketplaceCatalog | null;
+		catalog: import('../../common').McpMarketplaceCatalog | null;
 	};
 
 	// Commands
@@ -279,23 +264,22 @@ export interface SettingsState {
 		error?: string;
 	};
 
-	// Skills
 	skills: {
-		items: import('../../types').ParsedSkill[];
+		items: import('../../common').ParsedSkill[];
 		isLoading: boolean;
 		error?: string;
 	};
 
 	// Hooks
 	hooks: {
-		items: import('../../types').ParsedHook[];
+		items: import('../../common').ParsedHook[];
 		isLoading: boolean;
 		error?: string;
 	};
 
 	// Subagents
 	subagents: {
-		items: import('../../types').ParsedSubagent[];
+		items: import('../../common').ParsedSubagent[];
 		isLoading: boolean;
 		error?: string;
 	};
@@ -396,18 +380,6 @@ export const useSettingsStore = create<SettingsState>(set => ({
 
 	selectedModel: 'default',
 	proxyModels: [],
-	anthropicModels: [],
-	anthropicModelsStatus: {
-		isLoading: false,
-		success: null,
-		error: null,
-		lastTested: null,
-	},
-	anthropicKeyStatus: {
-		hasKey: false,
-		lastChecked: null,
-		error: null,
-	},
 	enabledProxyModels: [],
 	proxyTestStatus: {
 		isLoading: false,
@@ -473,19 +445,6 @@ export const useSettingsStore = create<SettingsState>(set => ({
 		setSettings: settings => set(state => ({ ...state, ...settings })),
 		setSelectedModel: selectedModel => set({ selectedModel }),
 		setProxyModels: proxyModels => set({ proxyModels }),
-		setAnthropicModels: anthropicModels => set({ anthropicModels }),
-		setAnthropicModelsStatus: status =>
-			set(state => ({
-				anthropicModelsStatus: { ...state.anthropicModelsStatus, ...status },
-			})),
-		setAnthropicKeyStatus: status =>
-			set(state => ({
-				anthropicKeyStatus: {
-					...state.anthropicKeyStatus,
-					...status,
-					lastChecked: Date.now(),
-				},
-			})),
 		setEnabledProxyModels: enabledProxyModels => set({ enabledProxyModels }),
 		setProxyTestStatus: (status: Partial<SettingsState['proxyTestStatus']>) =>
 			set(state => ({

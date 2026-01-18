@@ -12,14 +12,14 @@ import * as path from 'node:path';
 import type { TSchema } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import * as vscode from 'vscode';
-import { PATHS } from '../shared/constants';
 import {
 	type AgentsMcpConfig,
 	AgentsMcpConfigSchema,
 	type AgentsMcpServer,
 	type UnifiedMcpRegistry,
 	type UnifiedMcpServer,
-} from '../types';
+} from '../common';
+import { PATHS } from '../common/constants';
 import { logger } from '../utils/logger';
 
 // =============================================================================
@@ -101,7 +101,7 @@ export function unifiedServerToAgents(server: UnifiedMcpServer): AgentsMcpServer
  */
 export function agentsServerToMcpConfig(
 	server: AgentsMcpServer,
-): import('../types').MCPServerConfig | null {
+): import('../common').MCPServerConfig | null {
 	if (server.type === 'stdio' && server.command) {
 		const [command, ...args] = server.command;
 		return {
@@ -133,8 +133,8 @@ export function agentsServerToMcpConfig(
  */
 export function agentsServersToMcpConfigMap(
 	servers: Record<string, AgentsMcpServer>,
-): Record<string, import('../types').MCPServerConfig> {
-	const result: Record<string, import('../types').MCPServerConfig> = {};
+): Record<string, import('../common').MCPServerConfig> {
+	const result: Record<string, import('../common').MCPServerConfig> = {};
 	for (const [name, server] of Object.entries(servers)) {
 		const config = agentsServerToMcpConfig(server);
 		if (config) {
