@@ -10,10 +10,6 @@ import * as path from 'node:path';
 import { PATHS } from '../shared/constants';
 import { logger } from '../utils/logger';
 import { normalizeToPosixPath } from '../utils/path';
-import type { OpenCodeService } from './cli/opencode/OpenCodeService';
-
-const OPENCODE_MEMORIES_DIR = '.opencode/memories';
-const OPENCODE_AGENTS_MD = 'AGENTS.md';
 
 export interface Rule {
 	name: string;
@@ -74,7 +70,6 @@ export class RulesService {
 		name: string,
 		content: string,
 		_provider: 'claude' | 'opencode',
-		openCodeService?: OpenCodeService,
 	): Promise<Rule> {
 		const safeName = name.endsWith('.md') ? name : `${name}.md`;
 		const rulesDir = path.join(this._workspaceRoot, PATHS.AGENTS_RULES_DIR);
@@ -84,7 +79,7 @@ export class RulesService {
 		await fs.writeFile(filePath, content, 'utf8');
 
 		// Auto-sync to CLI formats
-		await this._autoSync(openCodeService);
+		await this._autoSync();
 
 		return {
 			name: safeName,
@@ -101,7 +96,6 @@ export class RulesService {
 		rulePath: string,
 		enabled: boolean,
 		_source: 'claude' | 'opencode',
-		openCodeService?: OpenCodeService,
 	): Promise<void> {
 		const rulesDir = path.join(this._workspaceRoot, PATHS.AGENTS_RULES_DIR);
 		const disabledDir = path.join(rulesDir, 'disabled');
@@ -116,7 +110,7 @@ export class RulesService {
 
 		try {
 			await fs.rename(fullPath, targetPath);
-			await this._autoSync(openCodeService);
+			await this._autoSync();
 		} catch (error) {
 			logger.error(`[RulesService] Failed to toggle rule ${rulePath}:`, error);
 			throw error;
@@ -126,11 +120,11 @@ export class RulesService {
 	/**
 	 * Delete rule and auto-sync
 	 */
-	public async deleteRule(rulePath: string, openCodeService?: OpenCodeService): Promise<void> {
+	public async deleteRule(rulePath: string): Promise<void> {
 		const fullPath = path.join(this._workspaceRoot, rulePath);
 		try {
 			await fs.unlink(fullPath);
-			await this._autoSync(openCodeService);
+			await this._autoSync();
 		} catch (error) {
 			logger.error(`[RulesService] Failed to delete rule ${rulePath}:`, error);
 		}
@@ -139,8 +133,8 @@ export class RulesService {
 	/**
 	 * Auto-sync: `.agents/rules/` → `.claude/rules/` + `AGENTS.md` + `.opencode/memories/`
 	 */
-	private async _autoSync(openCodeService?: OpenCodeService): Promise<void> {
-		await Promise.all([this._syncToClaude(), this._syncToOpenCode(openCodeService)]);
+	private async _autoSync(): Promise<void> {
+		await Promise.all([this._syncToClaude(), this._syncToOpenCode()]);
 	}
 
 	/**
@@ -173,51 +167,8 @@ export class RulesService {
 	/**
 	 * Generate `AGENTS.md` (first enabled rule) + `.opencode/memories/` (rest)
 	 */
-	private async _syncToOpenCode(_openCodeService?: OpenCodeService): Promise<void> {
-		const fromDir = path.join(this._workspaceRoot, PATHS.AGENTS_RULES_DIR);
-		const memoriesDir = path.join(this._workspaceRoot, OPENCODE_MEMORIES_DIR);
-		const agentsMdPath = path.join(this._workspaceRoot, OPENCODE_AGENTS_MD);
-
-		try {
-			// Get active rules sorted alphabetically
-			const activeRules = (await this._findMdFiles(fromDir, false)).sort((a, b) =>
-				a.localeCompare(b),
-			);
-
-			await fs.mkdir(memoriesDir, { recursive: true });
-
-			if (activeRules.length === 0) {
-				// No active rules: remove derived files
-				await fs.rm(agentsMdPath, { force: true });
-				await fs.rm(memoriesDir, { recursive: true, force: true });
-				logger.debug('[RulesService] No active rules, cleared OpenCode files');
-				return;
-			}
-
-			// First rule → AGENTS.md
-			const rootRuleName = activeRules[0];
-			const rootRulePath = path.join(fromDir, rootRuleName);
-			const rootContent = await fs.readFile(rootRulePath, 'utf8');
-			await fs.writeFile(agentsMdPath, rootContent, 'utf8');
-
-			// Rest → .opencode/memories/
-			const nonRootRules = activeRules.slice(1);
-			await fs.rm(memoriesDir, { recursive: true, force: true });
-			await fs.mkdir(memoriesDir, { recursive: true });
-
-			for (const ruleName of nonRootRules) {
-				const srcPath = path.join(fromDir, ruleName);
-				const dstPath = path.join(memoriesDir, ruleName);
-				const content = await fs.readFile(srcPath, 'utf8');
-				await fs.writeFile(dstPath, content, 'utf8');
-			}
-
-			logger.debug(
-				`[RulesService] Synced to OpenCode: AGENTS.md + ${nonRootRules.length} memories`,
-			);
-		} catch (error) {
-			logger.warn('[RulesService] Failed to sync to OpenCode:', error);
-		}
+	private async _syncToOpenCode(): Promise<void> {
+		// TODO: Implement OpenCode sync via CLIRunner if needed
 	}
 
 	// =========================================================================

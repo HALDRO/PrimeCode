@@ -11,10 +11,6 @@ import { PATHS } from '../shared/constants';
 import type { ParsedSkill } from '../types';
 import { parseFrontmatter, stringifyFrontmatter } from '../utils/frontmatter';
 import { normalizeToPosixPath } from '../utils/path';
-import { ErrorCode, ExtensionError } from './ErrorService';
-import { FileService } from './FileService';
-
-const fileService = new FileService();
 
 export class AgentsSkillsService {
 	private _workspaceRoot: string | undefined;
@@ -45,7 +41,7 @@ export class AgentsSkillsService {
 	}
 
 	public async getSkills(): Promise<ParsedSkill[]> {
-		await fileService.ensureDirectoryExists(this.agentsSkillsDir);
+		await fs.mkdir(this.agentsSkillsDir, { recursive: true });
 		const skills: ParsedSkill[] = [];
 
 		const entries = await fs.readdir(this.agentsSkillsDir, { withFileTypes: true });
@@ -54,7 +50,10 @@ export class AgentsSkillsService {
 			const skillName = entry.name;
 			const skillPath = path.join(this.agentsSkillsDir, skillName, 'SKILL.md');
 			try {
-				const exists = await fileService.fileExists(skillPath);
+				const exists = await fs
+					.access(skillPath)
+					.then(() => true)
+					.catch(() => false);
 				if (!exists) continue;
 				const content = await fs.readFile(skillPath, 'utf8');
 				skills.push(this._parseSkillFile(content, skillName));
@@ -69,11 +68,11 @@ export class AgentsSkillsService {
 	public async saveSkill(
 		skill: Pick<ParsedSkill, 'name' | 'description' | 'content' | 'version'>,
 	): Promise<void> {
-		await fileService.ensureDirectoryExists(this.agentsSkillsDir);
+		await fs.mkdir(this.agentsSkillsDir, { recursive: true });
 
 		const safeName = this._sanitizeSkillName(skill.name);
 		const dir = path.join(this.agentsSkillsDir, safeName);
-		await fileService.ensureDirectoryExists(dir);
+		await fs.mkdir(dir, { recursive: true });
 
 		const filePath = path.join(dir, 'SKILL.md');
 		await fs.writeFile(filePath, this._stringifySkill({ ...skill, name: safeName }), 'utf8');
@@ -114,8 +113,8 @@ export class AgentsSkillsService {
 		const skills = await this.getSkills();
 		let synced = 0;
 
-		await fileService.ensureDirectoryExists(this.claudeSkillsDir);
-		await fileService.ensureDirectoryExists(this.openCodeSkillDir);
+		await fs.mkdir(this.claudeSkillsDir, { recursive: true });
+		await fs.mkdir(this.openCodeSkillDir, { recursive: true });
 		// Cursor is read-only: do not write .cursor/skills
 
 		for (const skill of skills) {
@@ -123,12 +122,12 @@ export class AgentsSkillsService {
 
 			// Sync to Claude (.claude/skills/)
 			const claudeTargetDir = path.join(this.claudeSkillsDir, skill.name);
-			await fileService.ensureDirectoryExists(claudeTargetDir);
+			await fs.mkdir(claudeTargetDir, { recursive: true });
 			await fs.writeFile(path.join(claudeTargetDir, 'SKILL.md'), content, 'utf8');
 
 			// Sync to OpenCode (.opencode/skill/)
 			const openCodeTargetDir = path.join(this.openCodeSkillDir, skill.name);
-			await fileService.ensureDirectoryExists(openCodeTargetDir);
+			await fs.mkdir(openCodeTargetDir, { recursive: true });
 			await fs.writeFile(path.join(openCodeTargetDir, 'SKILL.md'), content, 'utf8');
 
 			// Cursor is read-only: do not write .cursor/skills
@@ -141,8 +140,7 @@ export class AgentsSkillsService {
 
 	private _sanitizeSkillName(name: string): string {
 		const trimmed = name.trim();
-		if (!trimmed)
-			throw new ExtensionError('Skill name is required', ErrorCode.VALIDATION_INVALID_INPUT);
+		if (!trimmed) throw new Error('Skill name is required');
 		// Keep it permissive but safe for folder names.
 		return trimmed.replace(/[\\/:*?"<>|]/g, '-');
 	}
@@ -174,10 +172,13 @@ export class AgentsSkillsService {
 		dir: string,
 		_source: 'claude' | 'opencode' | 'cursor',
 	): Promise<number> {
-		const exists = await fileService.directoryExists(dir);
+		const exists = await fs
+			.access(dir)
+			.then(() => true)
+			.catch(() => false);
 		if (!exists) return 0;
 
-		await fileService.ensureDirectoryExists(this.agentsSkillsDir);
+		await fs.mkdir(this.agentsSkillsDir, { recursive: true });
 
 		const entries = await fs.readdir(dir, { withFileTypes: true });
 		let count = 0;
@@ -188,10 +189,18 @@ export class AgentsSkillsService {
 			const dstDir = path.join(this.agentsSkillsDir, name);
 			const dstPath = path.join(dstDir, 'SKILL.md');
 
-			if (await fileService.fileExists(dstPath)) continue;
-			if (!(await fileService.fileExists(srcPath))) continue;
+			const dstExists = await fs
+				.access(dstPath)
+				.then(() => true)
+				.catch(() => false);
+			if (dstExists) continue;
+			const srcExists = await fs
+				.access(srcPath)
+				.then(() => true)
+				.catch(() => false);
+			if (!srcExists) continue;
 
-			await fileService.ensureDirectoryExists(dstDir);
+			await fs.mkdir(dstDir, { recursive: true });
 			const content = await fs.readFile(srcPath, 'utf8');
 			// Normalize to our canonical content: keep as-is.
 			await fs.writeFile(dstPath, content, 'utf8');

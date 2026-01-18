@@ -73,6 +73,7 @@ export const InlineToolAccessGate: React.FC<InlineToolAccessGateProps> = ({
 	const handleResponse = (isApproved: boolean, alwaysAllow = false) => {
 		postMessage('accessResponse', {
 			id: requestId,
+			toolName: tool,
 			approved: isApproved,
 			alwaysAllow,
 			response: isApproved ? (alwaysAllow ? 'always' : 'once') : 'reject',

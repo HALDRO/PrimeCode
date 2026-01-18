@@ -1,8 +1,6 @@
 import * as vscode from 'vscode';
 import { ChatProvider } from './providers/ChatProvider';
-import { ChatWebviewProvider } from './providers/ChatWebviewProvider';
 import { ClipboardContextService } from './services/ClipboardContextService';
-import { OpenCodeServerManager } from './services/cli/opencode/OpenCodeServerManager';
 import { cleanupDiffCache, getDiffContent } from './utils/diffCache';
 import { logger } from './utils/logger';
 
@@ -19,6 +17,7 @@ export function activate(context: vscode.ExtensionContext) {
 	logger.info('Extension is being activated...');
 	logger.info('Extension path:', context.extensionPath);
 	logger.info('Extension mode:', context.extensionMode);
+	logger.info('Architecture: NEW (simplified)');
 
 	// Track provider for lazy initialization
 	let provider: ChatProvider | undefined;
@@ -27,7 +26,7 @@ export function activate(context: vscode.ExtensionContext) {
 	// Register command FIRST to ensure it's always available
 	const disposable = vscode.commands.registerCommand(
 		'primecode.openChat',
-		async (column?: vscode.ViewColumn) => {
+		async (_column?: vscode.ViewColumn) => {
 			logger.info('openChat command executed');
 			try {
 				if (!provider && !providerError) {
@@ -35,7 +34,8 @@ export function activate(context: vscode.ExtensionContext) {
 					provider = await initializeProvider(context);
 				}
 				if (provider) {
-					provider.show(column);
+					// Reveal sidebar chat view
+					await vscode.commands.executeCommand('workbench.view.extension.primecode');
 				} else if (providerError) {
 					vscode.window.showErrorMessage(
 						`PrimeCode failed to initialize: ${providerError.message}`,
@@ -58,22 +58,24 @@ export function activate(context: vscode.ExtensionContext) {
 	): Promise<ChatProvider | undefined> {
 		try {
 			// Clean up orphaned OpenCode processes from previous sessions
-			await OpenCodeServerManager.cleanUpOrphans();
+			// TODO: Implement cleanup in CLIRunner if needed
+			logger.info('[Extension] Initialization starting...');
 
 			// Initialize clipboard context service for tracking copy events
 			const clipboardContextService = ClipboardContextService.getInstance();
 			ctx.subscriptions.push(clipboardContextService);
 
-			// Create main chat provider
-			logger.info('Creating ChatProvider...');
-			const newProvider = new ChatProvider(ctx.extensionUri, ctx);
-			logger.info('ChatProvider created');
+			// Create main chat provider (unified session_event architecture)
+			logger.info('Creating ChatProvider (unified session_event)...');
+			logger.info('Using unified session_event architecture');
 
 			const loadConversationDisposable = vscode.commands.registerCommand(
 				'primecode.loadConversation',
 				(filename: string) => {
 					logger.info('loadConversation command executed:', filename);
-					newProvider.loadConversation(filename);
+					vscode.window.showWarningMessage(
+						'Conversation history is not available in the unified session_event architecture yet.',
+					);
 				},
 			);
 
@@ -113,9 +115,9 @@ export function activate(context: vscode.ExtensionContext) {
 			const cacheCleanupInterval = setInterval(cleanupDiffCache, 60000);
 			ctx.subscriptions.push({ dispose: () => clearInterval(cacheCleanupInterval) });
 
-			// Register webview view provider for sidebar chat (using shared provider instance)
+			// Register webview view provider for sidebar chat
 			logger.info('Registering WebviewViewProvider...');
-			const webviewProvider = new ChatWebviewProvider(ctx.extensionUri, ctx, newProvider);
+			const webviewProvider = new ChatProvider(ctx);
 			const webviewProviderDisposable = vscode.window.registerWebviewViewProvider(
 				'primecode.chat',
 				webviewProvider,
@@ -130,7 +132,7 @@ export function activate(context: vscode.ExtensionContext) {
 			);
 
 			logger.info('Provider initialization completed successfully!');
-			return newProvider;
+			return webviewProvider;
 		} catch (error) {
 			logger.error('Provider initialization failed:', error);
 			providerError = error instanceof Error ? error : new Error(String(error));
@@ -167,13 +169,4 @@ export function activate(context: vscode.ExtensionContext) {
 
 export async function deactivate(): Promise<void> {
 	logger.info('Extension is being deactivated');
-
-	// Dispose CLI services to stop OpenCode/Claude processes
-	try {
-		const { CLIServiceFactory } = await import('./services/CLIServiceFactory.js');
-		await CLIServiceFactory.dispose();
-		logger.info('CLI services disposed successfully');
-	} catch (error) {
-		logger.error('Failed to dispose CLI services:', error);
-	}
 }

@@ -5,6 +5,9 @@
  * TypeBox schemas ensuring consistency between extension and webview.
  */
 
+// CLI Service types
+export * from './cli';
+
 // Extension message types for typed communication
 export type {
 	AccessRequestData,

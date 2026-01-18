@@ -196,9 +196,6 @@ export function getWorkspaceRootOrThrow(): string {
 // OpenCode Service Helpers
 // =============================================================================
 
-// Import types for return type annotations
-import type { OpenCodeService } from './cli/opencode/OpenCodeService.js';
-
 /**
  * Get OpenCode service for read operations.
  * Always tries to get the service regardless of current provider.
@@ -206,20 +203,8 @@ import type { OpenCodeService } from './cli/opencode/OpenCodeService.js';
  *
  * @returns OpenCode service instance or undefined if not available
  */
-export async function getOpenCodeServiceForRead(): Promise<OpenCodeService | undefined> {
-	try {
-		// Dynamic import to avoid circular dependencies
-		const { CLIServiceFactory } = await import('./CLIServiceFactory.js');
-		const { OpenCodeService: OpenCodeServiceClass } = await import(
-			'./cli/opencode/OpenCodeService.js'
-		);
-		const service = await CLIServiceFactory.getService('opencode');
-		if (service instanceof OpenCodeServiceClass) {
-			return service;
-		}
-	} catch {
-		// OpenCode not available, that's fine for read operations
-	}
+export async function getOpenCodeServiceForRead(): Promise<undefined> {
+	// OpenCode service removed - CLI unified in CLIRunner
 	return undefined;
 }
 
@@ -233,7 +218,7 @@ export async function getOpenCodeServiceForRead(): Promise<OpenCodeService | und
  */
 export async function getOpenCodeService(
 	session?: IProviderAwareSession | null,
-): Promise<OpenCodeService | undefined> {
+): Promise<undefined> {
 	if (getSessionProvider(session) === 'opencode') {
 		return getOpenCodeServiceForRead();
 	}

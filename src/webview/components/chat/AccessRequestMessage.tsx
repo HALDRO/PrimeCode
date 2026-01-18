@@ -26,6 +26,7 @@ export const AccessRequestMessage: React.FC<AccessRequestMessageProps> = ({ mess
 		// The extension backend will convert to the appropriate format
 		postMessage('accessResponse', {
 			id: requestId,
+			toolName: tool,
 			approved: isApproved,
 			alwaysAllow,
 			// Include OpenCode-compatible response for direct handling

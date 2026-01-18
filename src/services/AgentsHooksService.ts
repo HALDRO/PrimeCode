@@ -12,10 +12,6 @@ import { PATHS } from '../shared/constants';
 import type { ParsedHook } from '../types';
 import { parseFrontmatter, stringifyFrontmatter } from '../utils/frontmatter';
 import { normalizeToPosixPath } from '../utils/path';
-import { ErrorCode, ExtensionError } from './ErrorService';
-import { FileService } from './FileService';
-
-const fileService = new FileService();
 
 export class AgentsHooksService {
 	private _workspaceRoot: string | undefined;
@@ -38,7 +34,7 @@ export class AgentsHooksService {
 	}
 
 	public async getHooks(): Promise<ParsedHook[]> {
-		await fileService.ensureDirectoryExists(this.agentsHooksDir);
+		await fs.mkdir(this.agentsHooksDir, { recursive: true });
 		const files = await fs.readdir(this.agentsHooksDir, { withFileTypes: true });
 		const hooks: ParsedHook[] = [];
 
@@ -61,7 +57,7 @@ export class AgentsHooksService {
 	public async saveHook(
 		hook: Pick<ParsedHook, 'name' | 'event' | 'enabled' | 'pattern' | 'action' | 'content'>,
 	): Promise<void> {
-		await fileService.ensureDirectoryExists(this.agentsHooksDir);
+		await fs.mkdir(this.agentsHooksDir, { recursive: true });
 		const safeName = this._sanitizeName(hook.name);
 		const fileName = this._fileNameForHook(safeName);
 		const filePath = path.join(this.agentsHooksDir, fileName);
@@ -69,7 +65,7 @@ export class AgentsHooksService {
 	}
 
 	public async deleteHook(name: string): Promise<void> {
-		await fileService.ensureDirectoryExists(this.agentsHooksDir);
+		await fs.mkdir(this.agentsHooksDir, { recursive: true });
 		const safeName = this._sanitizeName(name);
 
 		// Delete any file that resolves to this hook name.
@@ -81,10 +77,13 @@ export class AgentsHooksService {
 	}
 
 	public async importFromClaude(): Promise<{ imported: number }> {
-		const exists = await fileService.directoryExists(this.claudeDir);
+		const exists = await fs
+			.access(this.claudeDir)
+			.then(() => true)
+			.catch(() => false);
 		if (!exists) return { imported: 0 };
 
-		await fileService.ensureDirectoryExists(this.agentsHooksDir);
+		await fs.mkdir(this.agentsHooksDir, { recursive: true });
 
 		const entries = await fs.readdir(this.claudeDir, { withFileTypes: true });
 		let imported = 0;
@@ -96,7 +95,11 @@ export class AgentsHooksService {
 
 			const src = path.join(this.claudeDir, entry.name);
 			const dst = path.join(this.agentsHooksDir, entry.name);
-			if (await fileService.fileExists(dst)) continue;
+			const dstExists = await fs
+				.access(dst)
+				.then(() => true)
+				.catch(() => false);
+			if (dstExists) continue;
 
 			const content = await fs.readFile(src, 'utf8');
 			await fs.writeFile(dst, content, 'utf8');
@@ -108,7 +111,7 @@ export class AgentsHooksService {
 
 	public async syncToClaude(): Promise<{ synced: number }> {
 		const hooks = await this.getHooks();
-		await fileService.ensureDirectoryExists(this.claudeDir);
+		await fs.mkdir(this.claudeDir, { recursive: true });
 
 		let synced = 0;
 		for (const hook of hooks) {
@@ -124,8 +127,7 @@ export class AgentsHooksService {
 
 	private _sanitizeName(name: string): string {
 		const trimmed = name.trim();
-		if (!trimmed)
-			throw new ExtensionError('Hook name is required', ErrorCode.VALIDATION_INVALID_INPUT);
+		if (!trimmed) throw new Error('Hook name is required');
 		return trimmed.replace(/[\\/:*?"<>|]/g, '-');
 	}
 

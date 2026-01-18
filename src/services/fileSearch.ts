@@ -11,7 +11,7 @@ import * as path from 'node:path';
 import * as readline from 'node:readline';
 import * as vscode from 'vscode';
 import { EXCLUDE_PATTERNS } from '../shared/constants';
-import { ErrorCode, errorService, FileSystemError, ProcessError } from './ErrorService';
+import { logger } from '../utils/logger';
 import { getBinPath } from './ripgrep';
 
 export interface FileSearchResult {
@@ -74,8 +74,7 @@ export async function searchWorkspaceFiles(
 
 		return results;
 	} catch (error) {
-		const fsError = FileSystemError.fromNodeError(error as NodeJS.ErrnoException, workspacePath);
-		errorService.handle(fsError, 'fileSearch.searchWorkspaceFiles');
+		logger.error('[fileSearch] searchWorkspaceFiles error:', error);
 		return [];
 	}
 }
@@ -102,10 +101,7 @@ async function executeRipgrep(
 	const rgPath = await getBinPath(vscode.env.appRoot);
 
 	if (!rgPath) {
-		const processError = new ProcessError('Ripgrep binary not found', ErrorCode.CLI_NOT_FOUND, {
-			tool: 'ripgrep',
-		});
-		errorService.handle(processError, 'fileSearch.executeRipgrep');
+		logger.error('[fileSearch] Ripgrep binary not found');
 		return [];
 	}
 
@@ -162,8 +158,7 @@ async function executeRipgrep(
 		});
 
 		rgProcess.on('error', error => {
-			const processError = ProcessError.fromSpawnError(error);
-			errorService.handle(processError, 'fileSearch.executeRipgrep.spawn');
+			logger.error('[fileSearch] Ripgrep spawn error:', error);
 			resolve([]);
 		});
 	});

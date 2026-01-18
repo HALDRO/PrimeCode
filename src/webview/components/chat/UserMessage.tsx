@@ -594,9 +594,9 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(({ message }) 
 	);
 
 	const restoreCommit = useMemo(() => {
-		// Prefer OpenCode checkpoints when present (they support native revert + workspace restore metadata).
+		// Prefer OpenCode checkpoints when present.
 		const byMessage = restoreCommits.filter(c => c.associatedMessageId === message.id);
-		return byMessage.find(c => c.isOpenCodeCheckpoint) || byMessage[0];
+		return byMessage.find(c => c.isOpenCodeCheckpoint && c.sessionId) || byMessage[0];
 	}, [restoreCommits, message.id]);
 
 	const isEditing = editingMessageId === message.id;
@@ -651,7 +651,6 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(({ message }) 
 						data: {
 							messageId: restoreCommit.sha,
 							sessionId: restoreCommit.sessionId,
-							cliSessionId: restoreCommit.cliSessionId,
 							associatedMessageId: restoreCommit.associatedMessageId,
 						},
 					});
@@ -742,15 +741,13 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(({ message }) 
 			// OpenCode checkpoints carry session metadata; git commits do not.
 			if (restoreCommit.isOpenCodeCheckpoint && restoreCommit.sessionId) {
 				// For OpenCode: use native SDK revert with messageId
-				// sessionId is UI session ID for SessionManager lookup
-				// cliSessionId is CLI session ID for SDK revert (passed as part of data)
+				// sessionId is the OpenCode session ID used for revert
 				// associatedMessageId is the user message ID that triggered this checkpoint
 				// SDK reverts files, UI keeps user message for inline editing
 				postMessage('restoreCommit', {
 					data: {
 						messageId: restoreCommit.sha, // sha contains messageId for OpenCode
 						sessionId: restoreCommit.sessionId, // UI session ID
-						cliSessionId: restoreCommit.cliSessionId, // CLI session ID for SDK
 						associatedMessageId: restoreCommit.associatedMessageId, // User message ID
 					},
 				});
@@ -765,15 +762,12 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(({ message }) 
 	}, [restoreCommit, postMessage, chatActions]);
 
 	const handleUnrevert = useCallback(() => {
-		// Get cliSessionId from the last OpenCode checkpoint if available
-		const lastOpenCodeCheckpoint = restoreCommits.find(c => c.isOpenCodeCheckpoint);
 		postMessage('unrevert', {
 			data: {
 				sessionId: activeSessionId,
-				cliSessionId: lastOpenCodeCheckpoint?.cliSessionId,
 			},
 		});
-	}, [postMessage, activeSessionId, restoreCommits]);
+	}, [postMessage, activeSessionId]);
 
 	// Show unrevert button only on the last user message when unrevert is available
 	// BUT don't show both restore and unrevert at the same time - unrevert takes priority

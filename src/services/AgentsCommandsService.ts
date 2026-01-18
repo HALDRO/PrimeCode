@@ -11,10 +11,6 @@ import { PATHS } from '../shared/constants';
 import type { ParsedCommand } from '../types';
 import { parseFrontmatter, stringifyFrontmatter } from '../utils/frontmatter';
 import { logger } from '../utils/logger';
-import { ErrorCode, ExtensionError, errorService } from './ErrorService';
-import { FileService } from './FileService';
-
-const fileService = new FileService();
 
 export class AgentsCommandsService {
 	private _workspaceRoot: string | undefined;
@@ -36,7 +32,7 @@ export class AgentsCommandsService {
 			if (!this._workspaceRoot) return [];
 
 			// Ensure directory exists
-			await fileService.ensureDirectoryExists(this.agentsCommandsDir);
+			await fs.mkdir(this.agentsCommandsDir, { recursive: true });
 
 			const files = await fs.readdir(this.agentsCommandsDir);
 			const commands: ParsedCommand[] = [];
@@ -56,7 +52,7 @@ export class AgentsCommandsService {
 
 			return commands.sort((a, b) => a.name.localeCompare(b.name));
 		} catch (error) {
-			errorService.handle(error, 'AgentsCommandsService.getCommands');
+			logger.error('[AgentsCommandsService] getCommands error:', error);
 			return [];
 		}
 	}
@@ -92,17 +88,14 @@ export class AgentsCommandsService {
 		if (!this._workspaceRoot) return;
 
 		try {
-			await fileService.ensureDirectoryExists(this.agentsCommandsDir);
+			await fs.mkdir(this.agentsCommandsDir, { recursive: true });
 
 			const filePath = path.join(this.agentsCommandsDir, `${command.name}.md`);
 			const content = this.stringifyCommand(command);
 
 			await fs.writeFile(filePath, content, 'utf-8');
 		} catch (error) {
-			throw new ExtensionError('Failed to save command', ErrorCode.FS_WRITE_ERROR, undefined, {
-				name: command.name,
-				error,
-			});
+			throw new Error(`Failed to save command ${command.name}: ${error}`);
 		}
 	}
 
@@ -177,7 +170,10 @@ export class AgentsCommandsService {
 
 	private async importFromDir(sourceDir: string): Promise<number> {
 		try {
-			const exists = await fileService.directoryExists(sourceDir);
+			const exists = await fs
+				.access(sourceDir)
+				.then(() => true)
+				.catch(() => false);
 			if (!exists) return 0;
 
 			const files = await fs.readdir(sourceDir);
@@ -190,7 +186,11 @@ export class AgentsCommandsService {
 				const targetPath = path.join(this.agentsCommandsDir, file);
 
 				// Only import if doesn't exist in .agents/commands/
-				if (!(await fileService.fileExists(targetPath))) {
+				const targetExists = await fs
+					.access(targetPath)
+					.then(() => true)
+					.catch(() => false);
+				if (!targetExists) {
 					const content = await fs.readFile(sourcePath, 'utf-8');
 					await this.saveCommand(this.parseCommandFile(content, file));
 					count++;
@@ -212,7 +212,7 @@ export class AgentsCommandsService {
 
 		// Sync to Claude (.claude/commands/)
 		const claudeDir = path.join(this._workspaceRoot, PATHS.CLAUDE_COMMANDS_DIR);
-		await fileService.ensureDirectoryExists(claudeDir);
+		await fs.mkdir(claudeDir, { recursive: true });
 
 		for (const cmd of commands) {
 			await fs.writeFile(
@@ -224,7 +224,7 @@ export class AgentsCommandsService {
 
 		// Sync to OpenCode (.opencode/command/)
 		const openCodeDir = path.join(this._workspaceRoot, PATHS.OPENCODE_COMMAND_DIR);
-		await fileService.ensureDirectoryExists(openCodeDir);
+		await fs.mkdir(openCodeDir, { recursive: true });
 
 		for (const cmd of commands) {
 			await fs.writeFile(

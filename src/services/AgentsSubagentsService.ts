@@ -13,11 +13,8 @@ import * as path from 'node:path';
 import yaml from 'js-yaml';
 import { PATHS } from '../shared/constants';
 import { parseFrontmatter, stringifyFrontmatter } from '../utils/frontmatter';
+import { logger } from '../utils/logger';
 import { normalizeToPosixPath } from '../utils/path';
-import { ErrorCode, ExtensionError, errorService } from './ErrorService';
-import { FileService } from './FileService';
-
-const fileService = new FileService();
 
 export interface ParsedSubagent {
 	name: string;
@@ -84,7 +81,7 @@ export class AgentsSubagentsService {
 	public async getSubagents(): Promise<ParsedSubagent[]> {
 		try {
 			if (!this._workspaceRoot) return [];
-			await fileService.ensureDirectoryExists(this.agentsSubagentsDir);
+			await fs.mkdir(this.agentsSubagentsDir, { recursive: true });
 			const files = await fs.readdir(this.agentsSubagentsDir, { withFileTypes: true });
 			const subagents: ParsedSubagent[] = [];
 
@@ -98,13 +95,13 @@ export class AgentsSubagentsService {
 					subagents.push(this._parseSubagentFile(content, entry.name));
 				} catch (err) {
 					// Skip broken file
-					errorService.handle(err, 'AgentsSubagentsService.getSubagents.parse');
+					logger.warn('[AgentsSubagentsService] Failed to parse subagent:', err);
 				}
 			}
 
 			return subagents.sort((a, b) => a.name.localeCompare(b.name));
 		} catch (error) {
-			errorService.handle(error, 'AgentsSubagentsService.getSubagents');
+			logger.error('[AgentsSubagentsService] getSubagents error:', error);
 			return [];
 		}
 	}
@@ -113,7 +110,7 @@ export class AgentsSubagentsService {
 		if (!this._workspaceRoot) return;
 		const safeName = this._sanitizeName(subagent.name);
 		try {
-			await fileService.ensureDirectoryExists(this.agentsSubagentsDir);
+			await fs.mkdir(this.agentsSubagentsDir, { recursive: true });
 			const filePath = path.join(this.agentsSubagentsDir, `${safeName}.md`);
 			await fs.writeFile(
 				filePath,
@@ -121,10 +118,7 @@ export class AgentsSubagentsService {
 				'utf8',
 			);
 		} catch (error) {
-			throw new ExtensionError('Failed to save subagent', ErrorCode.FS_WRITE_ERROR, undefined, {
-				name: safeName,
-				error,
-			});
+			throw new Error(`Failed to save subagent ${safeName}: ${error}`);
 		}
 	}
 
@@ -132,7 +126,7 @@ export class AgentsSubagentsService {
 		if (!this._workspaceRoot) return;
 		const safeName = this._sanitizeName(name);
 		try {
-			await fileService.ensureDirectoryExists(this.agentsSubagentsDir);
+			await fs.mkdir(this.agentsSubagentsDir, { recursive: true });
 			const filePath = path.join(this.agentsSubagentsDir, `${safeName}.md`);
 			await fs.unlink(filePath);
 		} catch (error) {
@@ -143,10 +137,13 @@ export class AgentsSubagentsService {
 	public async importFromClaude(): Promise<{ imported: number }> {
 		if (!this._workspaceRoot) return { imported: 0 };
 		try {
-			const exists = await fileService.directoryExists(this.claudeAgentsDir);
+			const exists = await fs
+				.access(this.claudeAgentsDir)
+				.then(() => true)
+				.catch(() => false);
 			if (!exists) return { imported: 0 };
 
-			await fileService.ensureDirectoryExists(this.agentsSubagentsDir);
+			await fs.mkdir(this.agentsSubagentsDir, { recursive: true });
 			const files = await fs.readdir(this.claudeAgentsDir);
 			let imported = 0;
 
@@ -154,7 +151,11 @@ export class AgentsSubagentsService {
 				if (!file.endsWith('.md')) continue;
 				const sourcePath = path.join(this.claudeAgentsDir, file);
 				const targetPath = path.join(this.agentsSubagentsDir, file);
-				if (await fileService.fileExists(targetPath)) continue;
+				const targetExists = await fs
+					.access(targetPath)
+					.then(() => true)
+					.catch(() => false);
+				if (targetExists) continue;
 				const content = await fs.readFile(sourcePath, 'utf8');
 				await fs.writeFile(targetPath, content, 'utf8');
 				imported += 1;
@@ -162,7 +163,7 @@ export class AgentsSubagentsService {
 
 			return { imported };
 		} catch (error) {
-			errorService.handle(error, 'AgentsSubagentsService.importFromClaude');
+			logger.error('[AgentsSubagentsService] importFromClaude error:', error);
 			return { imported: 0 };
 		}
 	}
@@ -170,10 +171,13 @@ export class AgentsSubagentsService {
 	public async importFromOpenCode(): Promise<{ imported: number }> {
 		if (!this._workspaceRoot) return { imported: 0 };
 		try {
-			const exists = await fileService.directoryExists(this.openCodeAgentDir);
+			const exists = await fs
+				.access(this.openCodeAgentDir)
+				.then(() => true)
+				.catch(() => false);
 			if (!exists) return { imported: 0 };
 
-			await fileService.ensureDirectoryExists(this.agentsSubagentsDir);
+			await fs.mkdir(this.agentsSubagentsDir, { recursive: true });
 			const files = await fs.readdir(this.openCodeAgentDir);
 			let imported = 0;
 
@@ -181,7 +185,11 @@ export class AgentsSubagentsService {
 				if (!file.endsWith('.md')) continue;
 				const sourcePath = path.join(this.openCodeAgentDir, file);
 				const targetPath = path.join(this.agentsSubagentsDir, file);
-				if (await fileService.fileExists(targetPath)) continue;
+				const targetExists = await fs
+					.access(targetPath)
+					.then(() => true)
+					.catch(() => false);
+				if (targetExists) continue;
 				const content = await fs.readFile(sourcePath, 'utf8');
 				await fs.writeFile(targetPath, content, 'utf8');
 				imported += 1;
@@ -189,7 +197,7 @@ export class AgentsSubagentsService {
 
 			return { imported };
 		} catch (error) {
-			errorService.handle(error, 'AgentsSubagentsService.importFromOpenCode');
+			logger.error('[AgentsSubagentsService] importFromOpenCode error:', error);
 			return { imported: 0 };
 		}
 	}
@@ -198,8 +206,8 @@ export class AgentsSubagentsService {
 		if (!this._workspaceRoot) return { synced: 0 };
 
 		const subagents = await this.getSubagents();
-		await fileService.ensureDirectoryExists(this.claudeAgentsDir);
-		await fileService.ensureDirectoryExists(this.openCodeAgentDir);
+		await fs.mkdir(this.claudeAgentsDir, { recursive: true });
+		await fs.mkdir(this.openCodeAgentDir, { recursive: true });
 
 		let synced = 0;
 		for (const sa of subagents) {
@@ -249,8 +257,7 @@ export class AgentsSubagentsService {
 
 	private _sanitizeName(name: string): string {
 		const trimmed = name.trim();
-		if (!trimmed)
-			throw new ExtensionError('Subagent name is required', ErrorCode.VALIDATION_INVALID_INPUT);
+		if (!trimmed) throw new Error('Subagent name is required');
 		return trimmed.replace(/[\\/:*?"<>|\s]/g, '-');
 	}
 
