@@ -28,6 +28,7 @@ import type {
 	TokenStats,
 	TotalStats,
 } from '../../common';
+import { computeDiffStats } from '../utils/diffStats';
 
 export type { CommitInfo, ConversationMessage, SubtaskMessage, TokenStats, TotalStats };
 
@@ -359,7 +360,14 @@ export const useChatStore = create<ChatState>()(
 								const msgPartId = (message as { partId?: string }).partId;
 								const existingIdx = targetSession.messages.findIndex(m => {
 									const mPartId = (m as { partId?: string }).partId;
-									return m.id === message.id || (msgPartId && mPartId === msgPartId);
+									// Merge by id always.
+									if (m.id === message.id) return true;
+									// Merge by partId only when message types match.
+									// This prevents tool_result from overwriting tool_use (they share toolUseId).
+									if (msgPartId && mPartId === msgPartId) {
+										return m.type === message.type;
+									}
+									return false;
 								});
 								const newMessages = [...targetSession.messages];
 
@@ -546,11 +554,41 @@ export const useChatStore = create<ChatState>()(
 												filePayload.fileName ||
 												filePayload.filePath.split(/[/\\]/).pop() ||
 												filePayload.filePath;
+											const stats = (() => {
+												const toolUseId = filePayload.toolUseId;
+												if (!toolUseId) return null;
+												const toolMsg = targetSession.messages.find(
+													m =>
+														m.type === 'tool_use' &&
+														(m as { toolUseId?: string }).toolUseId === toolUseId,
+												) as (Message & { rawInput?: Record<string, unknown> }) | undefined;
+												const raw = toolMsg?.rawInput;
+												if (!raw) return null;
+												const oldContent =
+													typeof raw.old_string === 'string'
+														? raw.old_string
+														: typeof raw.old_str === 'string'
+															? raw.old_str
+															: typeof raw.oldString === 'string'
+																? raw.oldString
+																: '';
+												const newContent =
+													typeof raw.new_string === 'string'
+														? raw.new_string
+														: typeof raw.new_str === 'string'
+															? raw.new_str
+															: typeof raw.newString === 'string'
+																? raw.newString
+																: typeof raw.content === 'string'
+																	? raw.content
+																	: '';
+												return computeDiffStats(oldContent, newContent);
+											})();
 											const newFile = {
 												filePath: filePayload.filePath,
 												fileName,
-												linesAdded: filePayload.linesAdded || 0,
-												linesRemoved: filePayload.linesRemoved || 0,
+												linesAdded: stats?.added ?? (filePayload.linesAdded || 0),
+												linesRemoved: stats?.removed ?? (filePayload.linesRemoved || 0),
 												toolUseId: filePayload.toolUseId || '',
 												timestamp: Date.now(),
 											};

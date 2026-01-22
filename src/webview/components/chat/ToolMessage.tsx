@@ -16,6 +16,7 @@ import {
 	useMcpServers,
 	useStreamingToolId,
 } from '../../store';
+import { computeDiffStats } from '../../utils/diffStats';
 import { getShortFileName } from '../../utils/format';
 import { useVSCode } from '../../utils/vscode';
 import {
@@ -30,7 +31,7 @@ import {
 import { FileTypeIcon } from '../icons/FileTypeIcon';
 import { Button, CollapseOverlay, IconButton, Tooltip } from '../ui';
 import { InlineToolAccessGate } from './InlineToolAccessGate';
-import { getDiffContentHeight, getDiffStats, SimpleDiff } from './SimpleDiff';
+import { getDiffContentHeight, SimpleDiff } from './SimpleDiff';
 
 interface TodoItem {
 	id?: string;
@@ -151,7 +152,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = React.memo(
 				(rawInput.content as string) ||
 				'';
 
-			const stats = getDiffStats(oldContent, newContent);
+			const stats = computeDiffStats(oldContent, newContent);
 			const fileName = filePath ? getShortFileName(filePath) : 'unknown';
 			const maxHeight = 120;
 			const contentHeight = getDiffContentHeight(oldContent, newContent);

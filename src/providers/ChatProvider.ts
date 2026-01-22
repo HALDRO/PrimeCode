@@ -5,7 +5,12 @@
  */
 
 import * as vscode from 'vscode';
-import type { SessionEventMessage, SessionLifecycleMessage } from '../common';
+import type {
+	SessionEventMessage,
+	SessionLifecycleMessage,
+	TokenStats,
+	TotalStats,
+} from '../common';
 import { type CLIEvent, CLIRunner } from '../core/CLIRunner';
 import { Settings } from '../core/Settings';
 // Import existing services (keep the good stuff)
@@ -55,6 +60,18 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private improvePromptActiveRequestId: string | null = null;
 	private startedSessions = new Set<string>(); // Track which sessions have been started
 
+	private sessionTotalsByUiSession = new Map<
+		string,
+		{
+			startedAtMs: number;
+			totalTokensInput: number;
+			totalTokensOutput: number;
+			totalReasoningTokens: number;
+			requestCount: number;
+			totalDuration: number;
+		}
+	>();
+
 	private readonly agentsConfigService: AgentsConfigService;
 	private readonly agentsSyncService: AgentsSyncService;
 	private readonly mcpConfigWatcher: McpConfigWatcherService;
@@ -95,8 +112,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		importMcpFromCLI: () => this.onImportMcpFromCli(),
 		syncAgentsToClaudeProject: () => this.onSyncAgentsToProject('claude'),
 		syncAgentsToOpenCodeProject: () => this.onSyncAgentsToProject('opencode'),
-		startOpenCodeMcpAuth: msg => this.onStartOpenCodeMcpAuth(msg),
-		loadOpenCodeMcpStatus: () => this.onLoadOpenCodeMcpStatus(),
+		// OpenCode MCP auth/status is handled via unified MCP flow.
 
 		// Providers / Proxy
 		reloadAllProviders: () => this.onReloadAllProviders(),
@@ -114,6 +130,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		getPermissions: msg => this.onGetPermissions(msg),
 		setPermissions: msg => this.onSetPermissions(msg),
 		openFile: msg => this.onOpenFile(msg),
+		openFileDiff: msg => this.onOpenFileDiff(msg),
 		openExternal: msg => this.onOpenExternal(msg),
 		getImageData: msg => this.onGetImageData(msg),
 		getClipboardContext: msg => this.onGetClipboardContext(msg),
@@ -259,6 +276,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.postLifecycle('switched', this.activeSessionId, { isProcessing: false });
 		this.postStatus(this.activeSessionId, 'idle', 'Ready');
 		this.postSessionInfo();
+		this.initializeSessionStats(this.activeSessionId);
+	}
+
+	private clearSessionStats(sessionId: string): void {
+		this.sessionTotalsByUiSession.delete(sessionId);
 	}
 
 	private async onCreateSession(): Promise<void> {
@@ -275,12 +297,17 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.postLifecycle('switched', sessionId, { isProcessing: false });
 		this.postStatus(sessionId, 'idle', 'Ready');
 		this.postSessionInfo();
+		this.initializeSessionStats(sessionId);
 	}
 
 	private async onCloseSession(msg: WebviewMessage): Promise<void> {
 		const sessionId = typeof msg.sessionId === 'string' ? msg.sessionId : undefined;
 		if (!sessionId) return;
 		logger.info('[ChatProvider] Closing session', { sessionId });
+
+		this.startedSessions.delete(sessionId);
+		this.clearSessionStats(sessionId);
+
 		this.postLifecycle('closed', sessionId);
 	}
 
@@ -490,18 +517,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 	private async onSyncAgentsToProject(target: 'claude' | 'opencode'): Promise<void> {
 		await this.mcpManagementService.syncAgentsToProject(target);
-	}
-
-	private async onStartOpenCodeMcpAuth(_msg: WebviewMessage): Promise<void> {
-		// OpenCode MCP auth flow is not implemented in CLIRunner-based architecture.
-		this.postMessage({
-			type: 'opencodeMcpAuthError',
-			data: { name: 'opencode', error: 'OpenCode MCP auth flow is not implemented' },
-		});
-	}
-
-	private async onLoadOpenCodeMcpStatus(): Promise<void> {
-		this.postMessage({ type: 'opencodeMcpStatus', data: {} });
 	}
 
 	private async onGetAccess(): Promise<void> {
@@ -987,14 +1002,79 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		await vscode.window.showTextDocument(vscode.Uri.file(filePath));
 	}
 
+	private async onOpenFileDiff(msg: WebviewMessage): Promise<void> {
+		const filePath = typeof msg.filePath === 'string' ? msg.filePath : undefined;
+		if (!filePath) throw new Error('Missing filePath');
+		await vscode.commands.executeCommand('primecode.openFileDiff', filePath);
+	}
+
 	private async onOpenExternal(msg: WebviewMessage): Promise<void> {
 		const url = typeof msg.url === 'string' ? msg.url : undefined;
 		if (!url) throw new Error('Missing url');
 		await vscode.env.openExternal(vscode.Uri.parse(url));
 	}
 
-	private async onGetImageData(_msg: WebviewMessage): Promise<void> {
-		this.postMessage({ type: 'imageData', data: { id: '', dataUrl: '' } });
+	private async onGetImageData(msg: WebviewMessage): Promise<void> {
+		const maybeId = typeof msg.id === 'string' ? msg.id : undefined;
+		const maybeName = typeof msg.name === 'string' ? msg.name : undefined;
+		const requestedPath = typeof msg.path === 'string' ? msg.path : undefined;
+
+		let fileUri: vscode.Uri | undefined;
+		if (requestedPath) {
+			try {
+				fileUri = vscode.Uri.file(requestedPath);
+			} catch {
+				fileUri = undefined;
+			}
+		}
+
+		if (!fileUri) {
+			const pick = await vscode.window.showOpenDialog({
+				canSelectMany: false,
+				openLabel: 'Attach',
+				filters: {
+					Images: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico'],
+				},
+			});
+			fileUri = pick?.[0];
+		}
+
+		if (!fileUri) {
+			return; // user cancelled
+		}
+
+		const ext = fileUri.path.split('.').pop()?.toLowerCase() ?? '';
+		const mime =
+			ext === 'png'
+				? 'image/png'
+				: ext === 'jpg' || ext === 'jpeg'
+					? 'image/jpeg'
+					: ext === 'gif'
+						? 'image/gif'
+						: ext === 'webp'
+							? 'image/webp'
+							: ext === 'bmp'
+								? 'image/bmp'
+								: ext === 'svg'
+									? 'image/svg+xml'
+									: ext === 'ico'
+										? 'image/x-icon'
+										: 'application/octet-stream';
+
+		const bytes = await vscode.workspace.fs.readFile(fileUri);
+		const base64 = Buffer.from(bytes).toString('base64');
+		const dataUrl = `data:${mime};base64,${base64}`;
+
+		const name = maybeName || fileUri.path.split('/').pop() || 'image';
+		const id = maybeId || `img-${Date.now()}-${name}`;
+
+		this.postMessage({
+			type: 'imageData',
+			id,
+			name,
+			path: fileUri.fsPath,
+			dataUrl,
+		});
 	}
 
 	private async onGetClipboardContext(msg: WebviewMessage): Promise<void> {
@@ -1205,11 +1285,19 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 		// Model is stored per-session in chatStore, not persisted to workspace settings
 
+		const opencodeAgent = this.settings.get('opencode.agent');
+		const opencodeServerTimeout = this.settings.get('opencode.serverTimeout');
+
 		const config = {
 			provider: (this.settings.get('provider') || 'claude') as 'claude' | 'opencode',
 			model,
 			workspaceRoot,
 			yoloMode: Boolean(this.settings.get('yoloMode') || false),
+			agent: typeof opencodeAgent === 'string' ? opencodeAgent : undefined,
+			serverTimeoutMs:
+				typeof opencodeServerTimeout === 'number' && Number.isFinite(opencodeServerTimeout)
+					? Math.max(0, opencodeServerTimeout) * 1000
+					: undefined,
 		};
 
 		// Check if this is a new session or follow-up in existing session
@@ -1230,7 +1318,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		try {
 			if (isNewSession) {
 				logger.info('[ChatProvider] Spawning new session');
-				this.startedSessions.add(this.activeSessionId);
+
+				this.initializeSessionStats(this.activeSessionId);
 
 				// For OpenCode: if server is already running, create new session instead of spawning new server
 				if (config.provider === 'opencode' && this.cli.getSessionId()) {
@@ -1239,12 +1328,21 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				} else {
 					await this.cli.spawn(text, config);
 				}
+
+				// Mark session as started only after successful spawn.
+				this.startedSessions.add(this.activeSessionId);
 			} else {
 				logger.info('[ChatProvider] Spawning follow-up message');
+				this.initializeSessionStats(this.activeSessionId);
 				await this.cli.spawnFollowUp(text, config);
 			}
 		} catch (error) {
 			logger.error('[ChatProvider] Failed to spawn CLI:', error);
+
+			// If initial spawn failed, allow retry as a "new" session.
+			this.startedSessions.delete(this.activeSessionId);
+			this.sessionTotalsByUiSession.delete(this.activeSessionId);
+
 			this.postSessionMessage({
 				id: `error-${Date.now()}`,
 				type: 'error',
@@ -1260,6 +1358,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		const now = Date.now();
 
 		logger.debug(`[ChatProvider] handleCliEvent: ${event.type}`, event.data);
+
+		if (event.type === 'session_updated') {
+			this.handleSessionUpdatedEvent(event.data);
+			return;
+		}
 
 		switch (event.type) {
 			case 'message': {
@@ -1314,6 +1417,54 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				const e = event.data as Record<string, unknown>;
 				const toolUseId = (e.tool_use_id as string) || (e.id as string) || `tool-${now}`;
 				const toolName = (e.name as string) || (e.tool as string) || 'unknown';
+
+				// For OpenCode file tools, the useful payload often arrives only in tool_result.input.
+				// Backfill the corresponding tool_use message so the UI can render diffs/links.
+				const toolInputRaw = e.input;
+				let emittedFileChange = false;
+				if (toolInputRaw && typeof toolInputRaw === 'object') {
+					const toolInput = toolInputRaw as Record<string, unknown>;
+					const filePath = typeof toolInput.filePath === 'string' ? toolInput.filePath : undefined;
+					this.postSessionMessage({
+						id: toolUseId,
+						type: 'tool_use',
+						partId: toolUseId,
+						toolUseId,
+						toolName,
+						toolInput: JSON.stringify(toolInput),
+						rawInput: toolInput,
+						filePath,
+						isRunning: false,
+						timestamp: new Date().toISOString(),
+					});
+
+					// Emit a file change event for ChangedFilesPanel.
+					// For Write/Edit-like tools we can compute basic line stats from content.
+					if (filePath && !emittedFileChange) {
+						const normalizedTool = toolName.toLowerCase();
+						const isFileTool = ['write', 'edit', 'multiedit', 'patch'].includes(normalizedTool);
+						if (isFileTool) {
+							this.postMessage({
+								type: 'session_event',
+								targetId: this.activeSessionId,
+								eventType: 'file',
+								payload: {
+									eventType: 'file',
+									action: 'changed',
+									filePath,
+									fileName: filePath.split(/[/\\]/).pop() || filePath,
+									linesAdded: 0,
+									linesRemoved: 0,
+									toolUseId,
+								},
+								timestamp: Date.now(),
+								sessionId: this.activeSessionId,
+							} satisfies SessionEventMessage);
+							emittedFileChange = true;
+						}
+					}
+				}
+
 				const content =
 					typeof e.content === 'string'
 						? (e.content as string)
@@ -1622,6 +1773,157 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		} satisfies SessionEventMessage);
 	}
 
+	private postStats(
+		sessionId: string,
+		payload: { tokenStats?: Partial<TokenStats>; totalStats?: Partial<TotalStats> },
+	): void {
+		this.postMessage({
+			type: 'session_event',
+			targetId: sessionId,
+			eventType: 'stats',
+			payload: { eventType: 'stats', ...payload },
+			timestamp: Date.now(),
+			sessionId,
+		} satisfies SessionEventMessage);
+	}
+
+	private initializeSessionStats(sessionId: string): void {
+		if (this.sessionTotalsByUiSession.has(sessionId)) {
+			return;
+		}
+		this.sessionTotalsByUiSession.set(sessionId, {
+			startedAtMs: Date.now(),
+			totalTokensInput: 0,
+			totalTokensOutput: 0,
+			totalReasoningTokens: 0,
+			requestCount: 0,
+			totalDuration: 0,
+		});
+
+		this.postStats(sessionId, {
+			tokenStats: {
+				totalTokensInput: 0,
+				totalTokensOutput: 0,
+				currentInputTokens: 0,
+				currentOutputTokens: 0,
+				cacheCreationTokens: 0,
+				cacheReadTokens: 0,
+				reasoningTokens: 0,
+				totalReasoningTokens: 0,
+				subagentTokensInput: 0,
+				subagentTokensOutput: 0,
+			},
+			totalStats: {
+				totalCost: 0,
+				totalTokensInput: 0,
+				totalTokensOutput: 0,
+				totalReasoningTokens: 0,
+				requestCount: 0,
+				totalDuration: 0,
+				currentCost: 0,
+				currentDuration: 0,
+				currentTurns: 0,
+			},
+		});
+	}
+
+	private handleSessionUpdatedEvent(data: unknown): void {
+		const record = (
+			data && typeof data === 'object' ? (data as Record<string, unknown>) : {}
+		) as Record<string, unknown>;
+
+		const sessionId =
+			typeof record.sessionId === 'string' ? (record.sessionId as string) : this.cli.getSessionId();
+		if (!sessionId) {
+			return;
+		}
+
+		const status = record.status as
+			| { type?: string; attempt?: number; message?: string; next?: number }
+			| undefined;
+		if (status?.type === 'busy') {
+			this.postStatus(this.activeSessionId, 'busy', 'Working...');
+		} else if (status?.type === 'idle') {
+			this.postStatus(this.activeSessionId, 'idle', 'Ready');
+		} else if (status?.type === 'retry') {
+			this.postMessage({
+				type: 'session_event',
+				targetId: this.activeSessionId,
+				eventType: 'status',
+				payload: {
+					eventType: 'status',
+					status: 'retrying',
+					statusText: 'Retrying…',
+					retryInfo: {
+						attempt: typeof status.attempt === 'number' ? status.attempt : 1,
+						message: typeof status.message === 'string' ? status.message : 'Retrying…',
+						nextRetryAt:
+							typeof status.next === 'number' ? new Date(status.next).toISOString() : undefined,
+					},
+				},
+				timestamp: Date.now(),
+				sessionId: this.activeSessionId,
+			} satisfies SessionEventMessage);
+		}
+
+		const tokenStats = record.tokenStats as Partial<TokenStats> | undefined;
+		const totalStatsPatch = record.totalStats as Partial<TotalStats> | undefined;
+
+		// Aggregate per-UI-session totals for consistent UI behavior across providers.
+		this.initializeSessionStats(this.activeSessionId);
+		const totals = this.sessionTotalsByUiSession.get(this.activeSessionId);
+		if (!totals) {
+			return;
+		}
+
+		let totalTokensPatch: Partial<TotalStats> | undefined;
+		if (tokenStats) {
+			totals.totalTokensInput += tokenStats.currentInputTokens ?? 0;
+			totals.totalTokensOutput += tokenStats.currentOutputTokens ?? 0;
+			totals.totalReasoningTokens += tokenStats.reasoningTokens ?? 0;
+
+			totalTokensPatch = {
+				totalTokensInput: totals.totalTokensInput,
+				totalTokensOutput: totals.totalTokensOutput,
+				totalReasoningTokens: totals.totalReasoningTokens,
+			};
+		}
+
+		let durationPatch: Partial<TotalStats> | undefined;
+		if (totalStatsPatch?.currentDuration) {
+			totals.totalDuration += totalStatsPatch.currentDuration;
+			durationPatch = { totalDuration: totals.totalDuration };
+		}
+
+		if (typeof totalStatsPatch?.requestCount === 'number') {
+			totals.requestCount += totalStatsPatch.requestCount;
+		}
+
+		this.postStats(this.activeSessionId, {
+			tokenStats,
+			totalStats: {
+				...(totalStatsPatch ?? {}),
+				...(totalTokensPatch ?? {}),
+				...(durationPatch ?? {}),
+				requestCount: totals.requestCount,
+			},
+		});
+
+		// Reflect provider session id in UI session lifecycle for continuity.
+		// Current UI uses `targetId` as the session key; the provider session id is tracked inside the executor.
+		this.postMessage({
+			type: 'session_event',
+			targetId: this.activeSessionId,
+			eventType: 'session_info',
+			payload: {
+				eventType: 'session_info',
+				data: { sessionId: this.activeSessionId, tools: [], mcpServers: [] },
+			},
+			timestamp: Date.now(),
+			sessionId: this.activeSessionId,
+		} satisfies SessionEventMessage);
+	}
+
 	private postComplete(partId: string, toolUseId?: string): void {
 		this.postMessage({
 			type: 'session_event',
@@ -1634,6 +1936,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	}
 
 	private postSessionInfo(): void {
+		// Kept for UI parity: the header renders MCP/tools from this payload.
+		// `tools` and `mcpServers` are filled by the webview itself today.
 		this.postMessage({
 			type: 'session_event',
 			targetId: this.activeSessionId,

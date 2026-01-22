@@ -64,9 +64,29 @@ const generateSummary = (counts: Map<string, number>): string => {
 /**
  * Check if tool should use ToolMessage (Edit/Write/TodoWrite) or ToolResultMessage (all others)
  */
-const shouldUseToolMessage = (toolName: string): boolean => {
-	// File edit tools and TodoWrite use ToolMessage for their specialized UI
-	return isToolInList(toolName, FILE_EDIT_TOOLS) || isToolMatch(toolName, 'TodoWrite');
+const shouldUseToolMessage = (msg: Extract<Message, { type: 'tool_use' }>): boolean => {
+	// TodoWrite uses ToolMessage for its specialized UI
+	if (isToolMatch(msg.toolName, 'TodoWrite')) {
+		return true;
+	}
+
+	// File edit tools use ToolMessage only when we have enough payload to render a diff
+	if (!isToolInList(msg.toolName, FILE_EDIT_TOOLS)) {
+		return false;
+	}
+
+	const raw = msg.rawInput as Record<string, unknown> | undefined;
+	if (!raw) return false;
+
+	return (
+		raw.old_string !== undefined ||
+		raw.new_string !== undefined ||
+		raw.old_str !== undefined ||
+		raw.new_str !== undefined ||
+		raw.oldString !== undefined ||
+		raw.newString !== undefined ||
+		raw.content !== undefined
+	);
 };
 
 export const ToolGroup: React.FC<ToolGroupProps> = ({ messages, hasFollowingContent = false }) => {
@@ -154,7 +174,7 @@ export const ToolGroup: React.FC<ToolGroupProps> = ({ messages, hasFollowingCont
 								: 'mb-(--tool-block-margin)'
 						}
 					>
-						{shouldUseToolMessage(msg.toolName) ? (
+						{shouldUseToolMessage(msg) ? (
 							<ToolMessage message={msg} />
 						) : (
 							<ToolResultMessage message={msg} toolResult={localToolResults[msg.toolUseId]} />
@@ -204,7 +224,7 @@ export const ToolGroup: React.FC<ToolGroupProps> = ({ messages, hasFollowingCont
 			>
 				{toolUseMessages.slice(0, visibleCount).map(msg => (
 					<div key={msg.id}>
-						{shouldUseToolMessage(msg.toolName) ? (
+						{shouldUseToolMessage(msg) ? (
 							isToolMatch(msg.toolName, 'TodoWrite') ? (
 								<ToolMessage message={msg} />
 							) : (

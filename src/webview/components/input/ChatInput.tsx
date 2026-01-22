@@ -1017,7 +1017,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 										className="transition-transform duration-200 group-hover/image:scale-110"
 									/>
 								}
-								onClick={() => postMessage('selectImageFile')}
+								onClick={() => postMessage('getImageData')}
 								title="Attach image"
 								size={22}
 								className="group/image text-vscode-foreground opacity-70 hover:opacity-100"

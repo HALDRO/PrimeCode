@@ -28,8 +28,7 @@ type McpTab = (typeof MCP_TABS)[number]['id'];
 
 export const McpSettingsPanel: React.FC = () => {
 	const { postMessage } = useVSCode();
-	const { provider, mcpServers, mcpStatus, mcpInstalledMetadata, mcpMarketplace } =
-		useSettingsStore();
+	const { mcpServers, mcpStatus, mcpInstalledMetadata, mcpMarketplace } = useSettingsStore();
 	const isMounted = useIsMounted();
 
 	const [activeTab, setActiveTab] = useState<McpTab>('installed');
@@ -203,7 +202,6 @@ export const McpSettingsPanel: React.FC = () => {
 						installedRows.map((r, idx) => {
 							const displayName = r.meta?.displayName || r.name;
 							const status = r.status?.status;
-							const canAuth = provider === 'opencode' && status === 'needs_auth';
 							const enabled = r.config.enabled !== false;
 							const isExpanded = expandedServers.has(r.name);
 							const tools = r.status?.tools ?? [];
@@ -278,15 +276,6 @@ export const McpSettingsPanel: React.FC = () => {
 
 										{/* Actions */}
 										<div className="flex items-center gap-1 shrink-0">
-											{canAuth && (
-												<Button
-													size="sm"
-													variant="secondary"
-													onClick={() => postMessage('startOpenCodeMcpAuth', { name: r.name })}
-												>
-													Auth
-												</Button>
-											)}
 											<IconButton
 												icon={<EditIcon size={10} />}
 												title="Edit in .agents/mcp.json"

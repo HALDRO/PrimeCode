@@ -1,10 +1,8 @@
 import * as vscode from 'vscode';
 import { ChatProvider } from './providers/ChatProvider';
 import { ClipboardContextService } from './services/ClipboardContextService';
-import { cleanupDiffCache, getDiffContent } from './utils/diffCache';
 import { logger } from './utils/logger';
 
-export { cacheDiffContent } from './utils/diffCache';
 export { logger } from './utils/logger';
 
 export function activate(context: vscode.ExtensionContext) {
@@ -99,22 +97,6 @@ export function activate(context: vscode.ExtensionContext) {
 				},
 			);
 
-			// Register TextDocumentContentProvider for virtual diff documents
-			// Uses cache-based approach instead of query-string to avoid encoding issues
-			const diffContentProvider = new (class implements vscode.TextDocumentContentProvider {
-				provideTextDocumentContent(uri: vscode.Uri): string {
-					return getDiffContent(uri);
-				}
-			})();
-			const diffProviderDisposable = vscode.workspace.registerTextDocumentContentProvider(
-				'prime-diff',
-				diffContentProvider,
-			);
-
-			// Periodically cleanup diff cache
-			const cacheCleanupInterval = setInterval(cleanupDiffCache, 60000);
-			ctx.subscriptions.push({ dispose: () => clearInterval(cacheCleanupInterval) });
-
 			// Register webview view provider for sidebar chat
 			logger.info('Registering WebviewViewProvider...');
 			const webviewProvider = new ChatProvider(ctx);
@@ -127,7 +109,6 @@ export function activate(context: vscode.ExtensionContext) {
 			ctx.subscriptions.push(
 				loadConversationDisposable,
 				openFileDiffDisposable,
-				diffProviderDisposable,
 				webviewProviderDisposable,
 			);
 

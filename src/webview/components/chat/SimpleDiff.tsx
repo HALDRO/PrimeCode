@@ -11,6 +11,8 @@ import type React from 'react';
 import { Fragment, useMemo } from 'react';
 import { cn } from '../../lib/cn';
 
+import { computeDiff } from '../../utils/diffStats';
+
 const LINE_HEIGHT = 19;
 
 interface SimpleDiffProps {
@@ -21,168 +23,13 @@ interface SimpleDiffProps {
 	showLineNumbers?: boolean;
 }
 
-type DiffLineType = 'added' | 'removed' | 'unchanged';
-
 interface DiffLine {
-	type: DiffLineType;
+	type: 'added' | 'removed' | 'unchanged';
 	content: string;
 	oldLineNumber?: number;
 	newLineNumber?: number;
 	/** If present, render a separator before this line showing skipped unchanged lines */
 	separatorBefore?: number;
-}
-
-/**
- * Myers diff algorithm implementation for accurate LCS-based diff
- * This produces minimal edit scripts between two sequences
- */
-function myersDiff(oldLines: string[], newLines: string[]): DiffLine[] {
-	const n = oldLines.length;
-	const m = newLines.length;
-	const max = n + m;
-
-	// Handle edge cases
-	if (n === 0 && m === 0) {
-		return [];
-	}
-	if (n === 0) {
-		return newLines.map((line, i) => ({
-			type: 'added' as const,
-			content: line,
-			newLineNumber: i + 1,
-		}));
-	}
-	if (m === 0) {
-		return oldLines.map((line, i) => ({
-			type: 'removed' as const,
-			content: line,
-			oldLineNumber: i + 1,
-		}));
-	}
-
-	// V array stores the furthest reaching D-path endpoints
-	const v: Map<number, number>[] = [];
-	const trace: Map<number, number>[] = [];
-
-	// Find the shortest edit script
-	outer: for (let d = 0; d <= max; d++) {
-		const vCurrent = new Map<number, number>();
-		v.push(vCurrent);
-
-		for (let k = -d; k <= d; k += 2) {
-			let x: number;
-
-			// Decide whether to go down or right
-			if (k === -d || (k !== d && (v[d - 1]?.get(k - 1) ?? -1) < (v[d - 1]?.get(k + 1) ?? -1))) {
-				x = v[d - 1]?.get(k + 1) ?? 0; // Move down (insertion)
-			} else {
-				x = (v[d - 1]?.get(k - 1) ?? -1) + 1; // Move right (deletion)
-			}
-
-			let y = x - k;
-
-			// Follow diagonal (matching lines)
-			while (x < n && y < m && oldLines[x] === newLines[y]) {
-				x++;
-				y++;
-			}
-
-			vCurrent.set(k, x);
-
-			// Check if we've reached the end
-			if (x >= n && y >= m) {
-				trace.push(vCurrent);
-				break outer;
-			}
-		}
-		trace.push(vCurrent);
-	}
-
-	// Backtrack to find the actual edit operations
-	const result: DiffLine[] = [];
-	let x = n;
-	let y = m;
-
-	const edits: Array<{ type: 'insert' | 'delete' | 'equal'; oldIdx?: number; newIdx?: number }> =
-		[];
-
-	for (let d = trace.length - 1; d >= 0; d--) {
-		const vPrev = d > 0 ? trace[d - 1] : new Map<number, number>([[0, 0]]);
-		const k = x - y;
-
-		let prevK: number;
-		if (k === -d || (k !== d && (vPrev.get(k - 1) ?? -1) < (vPrev.get(k + 1) ?? -1))) {
-			prevK = k + 1; // Came from above (insertion)
-		} else {
-			prevK = k - 1; // Came from left (deletion)
-		}
-
-		const prevX = vPrev.get(prevK) ?? 0;
-		const prevY = prevX - prevK;
-
-		// Add diagonal moves (equal lines)
-		while (x > prevX && y > prevY) {
-			x--;
-			y--;
-			edits.unshift({ type: 'equal', oldIdx: x, newIdx: y });
-		}
-
-		// Add the edit operation
-		if (d > 0) {
-			if (x === prevX) {
-				// Insertion
-				y--;
-				edits.unshift({ type: 'insert', newIdx: y });
-			} else {
-				// Deletion
-				x--;
-				edits.unshift({ type: 'delete', oldIdx: x });
-			}
-		}
-	}
-
-	// Convert edits to DiffLines
-	let oldLineNum = 1;
-	let newLineNum = 1;
-
-	for (const edit of edits) {
-		if (edit.type === 'equal' && edit.oldIdx !== undefined) {
-			result.push({
-				type: 'unchanged',
-				content: oldLines[edit.oldIdx],
-				oldLineNumber: oldLineNum++,
-				newLineNumber: newLineNum++,
-			});
-		} else if (edit.type === 'delete' && edit.oldIdx !== undefined) {
-			result.push({
-				type: 'removed',
-				content: oldLines[edit.oldIdx],
-				oldLineNumber: oldLineNum++,
-			});
-		} else if (edit.type === 'insert' && edit.newIdx !== undefined) {
-			result.push({
-				type: 'added',
-				content: newLines[edit.newIdx],
-				newLineNumber: newLineNum++,
-			});
-		}
-	}
-
-	return result;
-}
-
-/**
- * Compute diff between two strings using Myers algorithm
- * Normalizes line endings to ensure consistent comparison
- */
-function computeDiff(original: string, modified: string): DiffLine[] {
-	// Normalize line endings: remove \r and trim trailing whitespace from each line
-	const normalize = (str: string): string[] =>
-		str ? str.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n') : [];
-
-	const oldLines = normalize(original);
-	const newLines = normalize(modified);
-	return myersDiff(oldLines, newLines);
 }
 
 /**
@@ -259,21 +106,6 @@ export function getDiffContentHeight(original: string, modified: string): number
 	// Count separators (lines with separatorBefore) as additional height
 	const separatorCount = displayLines.filter(l => l.separatorBefore !== undefined).length;
 	return (displayLines.length + separatorCount) * LINE_HEIGHT;
-}
-
-/**
- * Get diff statistics (added/removed line counts)
- */
-export function getDiffStats(
-	original: string,
-	modified: string,
-): { added: number; removed: number; unchanged: number } {
-	const diffLines = computeDiff(original, modified);
-	return {
-		added: diffLines.filter(l => l.type === 'added').length,
-		removed: diffLines.filter(l => l.type === 'removed').length,
-		unchanged: diffLines.filter(l => l.type === 'unchanged').length,
-	};
 }
 
 /**

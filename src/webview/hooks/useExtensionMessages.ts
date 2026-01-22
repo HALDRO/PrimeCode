@@ -725,14 +725,6 @@ const handleDataMessages = (message: ExtensionMessage, ctx: HandlerContext): boo
 			}
 			return true;
 
-		case 'opencodeMcpStatus':
-			if (message.data) {
-				settingsActions.setMcpStatus(
-					message.data as Record<string, { status: string; error?: string }>,
-				);
-			}
-			return true;
-
 		case 'mcpStatus':
 			if (message.data) {
 				settingsActions.setMcpStatus(
@@ -747,28 +739,6 @@ const handleDataMessages = (message: ExtensionMessage, ctx: HandlerContext): boo
 					>,
 				);
 			}
-			return true;
-
-		case 'opencodeMcpAuthStarted':
-			if (message.data) {
-				const { name, authorizationUrl } = message.data as {
-					name?: string;
-					authorizationUrl?: string;
-				};
-				if (name && authorizationUrl) {
-					// Silent operation (open the URL)
-					// Send to extension to open external URL (webview cannot call VS Code API directly)
-					vscode.postMessage({ type: 'openExternal', url: authorizationUrl });
-					// Refresh MCP status after auth flow
-					setTimeout(() => {
-						vscode.postMessage({ type: 'loadOpenCodeMcpStatus' });
-					}, 2000);
-				}
-			}
-			return true;
-
-		case 'opencodeMcpAuthError':
-			// Silent operation
 			return true;
 
 		case 'agentsSyncResult':
@@ -946,8 +916,7 @@ export function useExtensionMessages(): void {
 		vscode.postMessage({ type: 'getSubagents' });
 		vscode.postMessage({ type: 'loadMCPServers' });
 		vscode.postMessage({ type: 'fetchMcpMarketplaceCatalog', data: { forceRefresh: false } });
-		vscode.postMessage({ type: 'loadOpenCodeMcpStatus' });
-		vscode.postMessage({ type: 'loadProxyModels' });
+		vscode.postMessage({ type: 'loadProxyModels', data: { baseUrl: '' } });
 		vscode.postMessage({ type: 'checkOpenCodeStatus' });
 		vscode.postMessage({ type: 'reloadAllProviders' });
 		vscode.postMessage({ type: 'checkDiscoveryStatus' });
