@@ -44,7 +44,7 @@ export const FileLink: React.FC<FileLinkProps> = ({
 					type="button"
 					onClick={onClick}
 					className={cn(
-						'inline-flex items-center gap-1 p-0 m-0 text-(length:--font-size-sm) leading-tight cursor-pointer',
+						'inline-flex items-center gap-1 h-4 p-0 m-0 text-(length:--font-size-sm) leading-none cursor-pointer',
 						'bg-none border-none text-vscode-foreground font-(family-name:--font-family-mono)',
 						'opacity-90 hover:opacity-100 transition-opacity',
 					)}

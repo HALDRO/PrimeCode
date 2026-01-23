@@ -1,8 +1,9 @@
 /**
- * @file diffStats - compute line-level diff statistics for webview
- * @description Shared, dependency-free diff utilities used by chat UI and state.
- * Exposes `computeDiffStats` for `ChangedFilesPanel` aggregation without importing TSX.
- * The algorithm matches the `SimpleDiff` line classifier to keep UI and stats consistent.
+ * @file diffStats - shared diff utilities for extension and webview
+ * @description Dependency-free, line-level diff implementation (Myers) used to compute consistent
+ * added/removed/unchanged statistics and to power lightweight diff rendering.
+ * Located under `src/common` so both TS projects (extension + webview) can import it without
+ * widening webview tsconfig `include` patterns.
  */
 
 export type DiffLineType = 'added' | 'removed' | 'unchanged';

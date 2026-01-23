@@ -57,14 +57,16 @@ export const AccessRequestMessage: React.FC<AccessRequestMessageProps> = ({ mess
 	}
 
 	return (
-		<div className="flex gap-1.5 items-start mb-0-5 ml-0.5">
-			<span className="flex items-center h-(--h-xs)">
+		<div className="mb-(--tool-block-margin)">
+			<div className="flex items-center gap-1.5 mb-1 py-px ml-0.5">
 				<GlowDot color="var(--vscode-editorWarning-foreground)" glow="var(--glow-warning)" />
-			</span>
+				<span className="text-sm leading-none text-warning">Access</span>
+				<span className="text-sm leading-none text-vscode-foreground opacity-70 truncate">
+					{tool}
+				</span>
+			</div>
 
-			<div className="flex-1">
-				<div className="text-sm text-warning mb-0-5">Access: {tool}</div>
-
+			<div className="ml-0.5">
 				<div className="text-sm text-vscode-foreground p-[calc(var(--spacing-0-5))_calc(var(--spacing-1))] mb-1 bg-black/25 rounded-md whitespace-pre-wrap break-all">
 					{isToolMatch(tool, 'Bash') && input && typeof input === 'object' && 'command' in input
 						? String((input as Record<string, unknown>).command)

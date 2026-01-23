@@ -524,12 +524,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 		// Resolve per-session model override (fallback: workspace default)
 		const sessionModel = getSessionModel();
 
-		// Add user message to store immediately
-		addMessage({
-			type: 'user',
-			content: inputValue.trim(),
-			attachments: hasAttachments ? attachments : undefined,
-		});
+		// In VS Code, the extension echoes the user message back as a session_event.
+		// To avoid duplicates, we do not optimistic-add user messages here.
 
 		postSessionMessage('sendMessage', {
 			text: inputValue.trim(),

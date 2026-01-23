@@ -11,6 +11,7 @@ import type {
 	TokenStats,
 	TotalStats,
 } from '../common';
+import { computeDiffStats } from '../common/diffStats';
 import { type CLIEvent, CLIRunner } from '../core/CLIRunner';
 import { Settings } from '../core/Settings';
 // Import existing services (keep the good stuff)
@@ -1439,11 +1440,33 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					});
 
 					// Emit a file change event for ChangedFilesPanel.
-					// For Write/Edit-like tools we can compute basic line stats from content.
+					// Prefer computing diff stats from tool payload so webview and extension stay consistent.
 					if (filePath && !emittedFileChange) {
 						const normalizedTool = toolName.toLowerCase();
 						const isFileTool = ['write', 'edit', 'multiedit', 'patch'].includes(normalizedTool);
 						if (isFileTool) {
+							const oldContent =
+								typeof toolInput.old_string === 'string'
+									? toolInput.old_string
+									: typeof toolInput.old_str === 'string'
+										? toolInput.old_str
+										: typeof toolInput.oldString === 'string'
+											? toolInput.oldString
+											: '';
+
+							const newContent =
+								typeof toolInput.new_string === 'string'
+									? toolInput.new_string
+									: typeof toolInput.new_str === 'string'
+										? toolInput.new_str
+										: typeof toolInput.newString === 'string'
+											? toolInput.newString
+											: typeof toolInput.content === 'string'
+												? toolInput.content
+												: '';
+
+							const stats = computeDiffStats(oldContent, newContent);
+
 							this.postMessage({
 								type: 'session_event',
 								targetId: this.activeSessionId,
@@ -1453,8 +1476,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 									action: 'changed',
 									filePath,
 									fileName: filePath.split(/[/\\]/).pop() || filePath,
-									linesAdded: 0,
-									linesRemoved: 0,
+									linesAdded: stats.added,
+									linesRemoved: stats.removed,
 									toolUseId,
 								},
 								timestamp: Date.now(),
@@ -1516,6 +1539,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					break;
 				}
 
+				const toolUseId = typeof e.toolUseId === 'string' ? (e.toolUseId as string) : undefined;
+
 				const tool =
 					(typeof e.tool === 'string' ? (e.tool as string) : undefined) ??
 					(typeof e.permission === 'string' ? (e.permission as string) : undefined) ??
@@ -1555,6 +1580,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					type: 'access_request',
 					requestId,
 					tool,
+					toolUseId,
 					input,
 					pattern: patterns?.[0],
 					resolved: false,

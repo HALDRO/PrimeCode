@@ -19,6 +19,8 @@ import { useSettingsStore } from '../store/settingsStore';
 import { useUIStore } from '../store/uiStore';
 import { vscode } from '../utils/vscode';
 
+let didSendInitialRequests = false;
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -906,21 +908,24 @@ export function useExtensionMessages(): void {
 
 		window.addEventListener('message', handleMessage);
 
-		// Request initial data from extension
-		vscode.postMessage({ type: 'webviewDidLaunch' });
-		vscode.postMessage({ type: 'getSettings' });
-		vscode.postMessage({ type: 'getAccess' });
-		vscode.postMessage({ type: 'getCommands' });
-		vscode.postMessage({ type: 'getSkills' });
-		vscode.postMessage({ type: 'getHooks' });
-		vscode.postMessage({ type: 'getSubagents' });
-		vscode.postMessage({ type: 'loadMCPServers' });
-		vscode.postMessage({ type: 'fetchMcpMarketplaceCatalog', data: { forceRefresh: false } });
-		vscode.postMessage({ type: 'loadProxyModels', data: { baseUrl: '' } });
-		vscode.postMessage({ type: 'checkOpenCodeStatus' });
-		vscode.postMessage({ type: 'reloadAllProviders' });
-		vscode.postMessage({ type: 'checkDiscoveryStatus' });
-		vscode.postMessage({ type: 'getRules' });
+		if (!didSendInitialRequests) {
+			didSendInitialRequests = true;
+			// Request initial data from extension
+			vscode.postMessage({ type: 'webviewDidLaunch' });
+			vscode.postMessage({ type: 'getSettings' });
+			vscode.postMessage({ type: 'getAccess' });
+			vscode.postMessage({ type: 'getCommands' });
+			vscode.postMessage({ type: 'getSkills' });
+			vscode.postMessage({ type: 'getHooks' });
+			vscode.postMessage({ type: 'getSubagents' });
+			vscode.postMessage({ type: 'loadMCPServers' });
+			vscode.postMessage({ type: 'fetchMcpMarketplaceCatalog', data: { forceRefresh: false } });
+			vscode.postMessage({ type: 'loadProxyModels', data: { baseUrl: '' } });
+			vscode.postMessage({ type: 'checkOpenCodeStatus' });
+			vscode.postMessage({ type: 'reloadAllProviders' });
+			vscode.postMessage({ type: 'checkDiscoveryStatus' });
+			vscode.postMessage({ type: 'getRules' });
+		}
 
 		return () => window.removeEventListener('message', handleMessage);
 	}, []);

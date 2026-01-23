@@ -1,16 +1,10 @@
 /**
  * @file Main App component for PrimeCode webview
- * @description Root React component that orchestrates the chat interface. Renders message list
- *              with section-based layout where each user message + its responses form a section.
- *              User messages use CSS position:sticky within their section for push-up behavior.
- *              Uses react-virtuoso for virtualization.
- *              Avoids scroll jank on send by keeping scroll logic declarative (followOutput)
- *              and using a stable footer spacer instead of imperative timed scroll jumps.
- *              Integrates OverlayScrollbars via a custom Virtuoso Scroller component so the
- *              scrollable element is always the OverlayScrollbars viewport (no native scrollbar
- *              fallback). Always lands at bottom on session switch/history load by remounting
- *              Virtuoso when a session transitions from empty->loaded.
- *              Zustand stores manage state, useExtensionMessages hook handles VS Code communication.
+ * @description Root React component that orchestrates the chat interface. Renders the chat list
+ * with section-based layout (each user message + its responses form a section) and sticky user headers.
+ * Uses react-virtuoso for virtualization, OverlayScrollbars for consistent scroll UX, and a footer spacer
+ * to reserve space for the bottom overlay (ChangedFilesPanel) so the last messages are never obscured.
+ * Zustand stores manage state; `useExtensionMessages` handles VS Code communication.
  */
 
 import { useOverlayScrollbars } from 'overlayscrollbars-react';
@@ -18,7 +12,7 @@ import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { ChangedFilesPanel } from './components/chat/ChangedFilesPanel';
 import { GenerationStatus } from './components/chat/GenerationStatus';
-import { ResponseItem } from './components/chat/SubtaskMessage';
+import { MessageItem } from './components/chat/MessageItem';
 import { UserMessage } from './components/chat/UserMessage';
 import { Header } from './components/header/Header';
 import { ChatInput } from './components/input/ChatInput';
@@ -37,7 +31,7 @@ import {
 	useMessages,
 	useRetryInfo,
 } from './store';
-import { groupToolMessages, shouldTriggerCollapse } from './utils/messageGrouping';
+import { groupToolMessages } from './utils/messageGrouping';
 import { vscode } from './utils/vscode';
 
 /**
@@ -134,29 +128,11 @@ const MessageSectionComponent = React.memo<MessageSectionProps>(
 				</div>
 				<div className="px-(--content-padding-x)">
 					{section.responses.map((responseItem, idx) => {
-						// Check if there's following content after this item
-						// (text, edit tools, bash, etc - anything that's not a utility tool group)
-						const hasFollowingContent =
-							idx < section.responses.length - 1 &&
-							section.responses.slice(idx + 1).some(item => {
-								if (Array.isArray(item)) return false; // Another tool group - doesn't count
-								return shouldTriggerCollapse(item as Message);
-							});
+						const key = Array.isArray(responseItem)
+							? (responseItem[0]?.id ?? `tool-group-${idx}`)
+							: (responseItem.id ?? `message-${idx}`);
 
-						return (
-							<ResponseItem
-								key={
-									Array.isArray(responseItem) ? responseItem[0]?.id || idx : responseItem.id || idx
-								}
-								item={responseItem}
-								onErrorResume={context.onErrorResume}
-								onErrorDismiss={context.onErrorDismiss}
-								canResume={context.canResume}
-								isAutoRetrying={context.isAutoRetrying}
-								retryInfo={context.retryInfo}
-								hasFollowingContent={hasFollowingContent}
-							/>
-						);
+						return <MessageItem key={key} item={responseItem} ctx={context} />;
 					})}
 					{/* Show generation status at the end of the last section during processing */}
 					{isLastSection && context.isProcessing && <GenerationStatus />}
@@ -218,15 +194,12 @@ const EmptyState: React.FC = () => (
 			className="text-vscode-descriptionForeground"
 			style={{ fontSize: 'var(--vscode-font-size)' }}
 		>
-			Start a conversation with Claude Code
+			Start a conversation...
 		</div>
 	</div>
 );
 
-// Modals container
-const Modals: React.FC = () => <FilePicker />;
-
-// Virtuoso Footer component - uses context for dynamic height
+// Virtuoso Footer - dynamic height spacer based on current layout
 const VirtuosoFooterDynamic: React.FC<{ context?: VirtuosoContext }> = ({ context }) => (
 	<div style={{ height: context?.footerHeightPx ?? 0 }} />
 );
@@ -237,6 +210,7 @@ const followOutputCallback = (isAtBottom: boolean): 'auto' | false => (isAtBotto
 
 type ScrollerProps = React.ComponentPropsWithoutRef<'div'>;
 
+// OverlayScrollbars scroller component for Virtuoso
 const OverlayScroller = React.forwardRef<HTMLDivElement, ScrollerProps>(
 	({ style, className, children, ...restProps }, forwardedRef) => {
 		const targetRef = useRef<HTMLDivElement | null>(null);
@@ -257,28 +231,21 @@ const OverlayScroller = React.forwardRef<HTMLDivElement, ScrollerProps>(
 
 		const [initialize, instance] = useOverlayScrollbars({
 			options: {
-				showNativeOverlaidScrollbars: false,
 				overflow: { x: 'hidden', y: 'scroll' },
-				scrollbars: {
-					autoHide: 'scroll',
-					autoHideDelay: 700,
-					autoHideSuspend: false,
-					theme: 'os-theme-dark',
-				},
+				scrollbars: { autoHide: 'leave', autoHideDelay: 500 },
 			},
 			defer: true,
 		});
 
 		useEffect(() => {
-			if (targetRef.current) {
-				initialize({
-					target: targetRef.current,
-					elements: {
-						viewport: viewportRef.current || undefined,
-						content: contentRef.current || undefined,
-					},
-				});
-			}
+			if (!targetRef.current) return;
+			initialize({
+				target: targetRef.current,
+				elements: {
+					viewport: viewportRef.current || undefined,
+					content: contentRef.current || undefined,
+				},
+			});
 			return () => {
 				instance()?.destroy();
 			};
@@ -300,7 +267,7 @@ OverlayScroller.displayName = 'OverlayScroller';
 export const App: React.FC = () => {
 	useExtensionMessages();
 
-	const chatInputHeight = useElementHeight<HTMLDivElement>({ fallbackHeight: 0 });
+	const headerHeight = useElementHeight<HTMLDivElement>({ fallbackHeight: 44 });
 	const changedFilesPanelHeight = useElementHeight<HTMLDivElement>({ fallbackHeight: 0 });
 
 	const messages = useMessages();
@@ -319,8 +286,6 @@ export const App: React.FC = () => {
 	);
 
 	const virtuosoRef = useRef<VirtuosoHandle>(null);
-	const lastSectionCount = useRef(sections.length);
-	const lastSessionId = useRef<string | null>(activeSessionId);
 
 	// Error message handlers - use proper message types instead of text workarounds
 	const handleErrorResume = useCallback(() => {
@@ -353,16 +318,14 @@ export const App: React.FC = () => {
 		[],
 	);
 
-	const bottomReservePx = chatInputHeight.height + changedFilesPanelHeight.height;
-	const footerPx = Math.max(80, bottomReservePx);
+	const footerPx = Math.max(80, changedFilesPanelHeight.height);
 
 	// Memoized context for Virtuoso - contains all callbacks and state needed by items
-	// This prevents renderItem from being recreated when these values change
-	const virtuosoContext = useMemo<VirtuosoContext>(
+	const virtuosoContext: VirtuosoContext = useMemo(
 		() => ({
 			onErrorResume: handleErrorResume,
 			onErrorDismiss: handleErrorDismiss,
-			canResume: !isProcessing,
+			canResume: Boolean(activeSessionId) && !isProcessing,
 			isAutoRetrying,
 			retryInfo,
 			stickyTopOffset: 0,
@@ -373,6 +336,7 @@ export const App: React.FC = () => {
 		[
 			handleErrorResume,
 			handleErrorDismiss,
+			activeSessionId,
 			isProcessing,
 			isAutoRetrying,
 			retryInfo,
@@ -381,7 +345,6 @@ export const App: React.FC = () => {
 		],
 	);
 
-	// Memoized itemContent renderer - now only depends on stable reference
 	const renderItem = useCallback(
 		(_index: number, section: MessageSection, context: VirtuosoContext) => (
 			<MessageSectionComponent section={section} context={context} />
@@ -389,27 +352,25 @@ export const App: React.FC = () => {
 		[],
 	);
 
-	useEffect(() => {
-		// Track session changes for section count reset
-		const sessionChanged = activeSessionId !== lastSessionId.current;
-		lastSessionId.current = activeSessionId;
-
-		if (sessionChanged) {
-			lastSectionCount.current = sections.length;
-		}
-
-		lastSectionCount.current = sections.length;
-	}, [sections.length, activeSessionId]);
+	if (!activeSessionId) {
+		return (
+			<div className="flex flex-col h-full">
+				<div ref={headerHeight.ref}>
+					<Header />
+				</div>
+				<EmptyState />
+			</div>
+		);
+	}
 
 	return (
-		<div
-			className="flex flex-col overflow-hidden w-full h-screen"
-			style={{ backgroundColor: 'var(--vscode-sideBar-background)' }}
-		>
-			<Header />
+		<div className="flex flex-col h-full">
+			<div ref={headerHeight.ref}>
+				<Header />
+			</div>
 
 			<div className="flex-1 overflow-hidden relative">
-				{messages.length === 0 && (
+				{sections.length === 0 && (
 					<div className="absolute inset-0 pointer-events-none">
 						<EmptyState />
 					</div>
@@ -417,13 +378,13 @@ export const App: React.FC = () => {
 
 				<Virtuoso
 					ref={virtuosoRef}
-					key={`${activeSessionId ?? 'no-session'}:${sections.length > 0 ? 'loaded' : 'empty'}`}
+					key={activeSessionId}
 					style={{
 						fontFamily: 'var(--vscode-editor-font-family)',
 						fontSize: 'var(--vscode-editor-font-size)',
 						lineHeight: 1.6,
 						height: '100%',
-						scrollPaddingTop: 'var(--gap-4)',
+						scrollPaddingTop: '0px',
 					}}
 					data={sections}
 					context={virtuosoContext}
@@ -437,33 +398,6 @@ export const App: React.FC = () => {
 					components={virtuosoComponents}
 				/>
 
-				{/* Retry overlay - shown when API is auto-retrying or busy between retries */}
-				{retryInfo && isProcessing && (
-					<div className="absolute bottom-16 left-0 right-0 z-30 flex justify-center pointer-events-none px-4">
-						<div
-							className="pointer-events-auto flex items-center gap-2 px-4 py-2 rounded-lg shadow-lg border"
-							style={{
-								backgroundColor: 'var(--vscode-editorWidget-background)',
-								borderColor: '#f0ad4e',
-								color: '#f0ad4e',
-							}}
-						>
-							<span
-								className="inline-block w-2 h-2 rounded-full animate-pulse"
-								style={{ backgroundColor: '#f0ad4e' }}
-							/>
-							<span className="text-sm font-medium">
-								{retryInfo.message}
-								{retryInfo.nextRetryAt && (
-									<span className="ml-1 opacity-80">
-										— next: {new Date(retryInfo.nextRetryAt).toLocaleTimeString()}
-									</span>
-								)}
-							</span>
-						</div>
-					</div>
-				)}
-
 				<div className="absolute bottom-0 left-0 right-0 z-20 pointer-events-none">
 					<div
 						ref={changedFilesPanelHeight.ref}
@@ -474,12 +408,11 @@ export const App: React.FC = () => {
 				</div>
 			</div>
 
-			<div ref={chatInputHeight.ref}>
-				<ChatInput />
-			</div>
-			<Modals />
-			<ConfirmDialog />
+			<ChatInput />
+
+			{activeModal === 'filePicker' && <FilePicker />}
 			{activeModal === 'settings' && <SettingsPage />}
+			<ConfirmDialog />
 		</div>
 	);
 };

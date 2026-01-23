@@ -17,7 +17,7 @@ initMockVSCode();
 import '../global.css';
 
 // Import the main App component
-import App from '../App';
+import { App } from '../App';
 
 // Render the app
 const container = document.getElementById('root');

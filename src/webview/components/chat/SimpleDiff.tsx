@@ -9,9 +9,8 @@
 import { OverlayScrollbarsComponent } from 'overlayscrollbars-react';
 import type React from 'react';
 import { Fragment, useMemo } from 'react';
+import { computeDiff } from '../../../common/diffStats';
 import { cn } from '../../lib/cn';
-
-import { computeDiff } from '../../utils/diffStats';
 
 const LINE_HEIGHT = 19;
 

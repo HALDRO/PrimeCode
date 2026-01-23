@@ -28,7 +28,7 @@ import type {
 	TokenStats,
 	TotalStats,
 } from '../../common';
-import { computeDiffStats } from '../utils/diffStats';
+import { computeDiffStats } from '../../common/diffStats';
 
 export type { CommitInfo, ConversationMessage, SubtaskMessage, TokenStats, TotalStats };
 
