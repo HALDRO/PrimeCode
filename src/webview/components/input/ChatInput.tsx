@@ -225,12 +225,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
 	// Store-based state
 	const { input: storeInput } = useChatInputState();
-	const {
-		setInput: setStoreInput,
-		clearRevertedMessages,
-		setImprovingPrompt,
-		addMessage,
-	} = useChatActions();
+	const { setInput: setStoreInput, clearRevertedMessages, setImprovingPrompt } = useChatActions();
 	const isProcessing = useIsProcessing();
 	const { selectedModel, proxyModels, opencodeProviders, getSessionModel } = useModelSelection();
 	const promptImproveTimeoutSeconds = useSettingsStore(state => state.promptImproveTimeoutSeconds);
@@ -552,7 +547,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 		setStoreInput,
 		clearAll,
 		getSessionModel,
-		addMessage,
 	]);
 
 	const handleStop = () => postSessionMessage('stopRequest');

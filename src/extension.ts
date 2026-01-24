@@ -1,9 +1,12 @@
 import * as vscode from 'vscode';
+import { ServiceRegistry } from './core/ServiceRegistry';
 import { ChatProvider } from './providers/ChatProvider';
 import { ClipboardContextService } from './services/ClipboardContextService';
 import { logger } from './utils/logger';
 
 export { logger } from './utils/logger';
+
+let serviceRegistry: ServiceRegistry | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
 	// Create output channel first for logging
@@ -16,6 +19,10 @@ export function activate(context: vscode.ExtensionContext) {
 	logger.info('Extension path:', context.extensionPath);
 	logger.info('Extension mode:', context.extensionMode);
 	logger.info('Architecture: NEW (simplified)');
+
+	// Initialize Service Registry
+	serviceRegistry = new ServiceRegistry(context);
+	context.subscriptions.push(serviceRegistry);
 
 	// Track provider for lazy initialization
 	let provider: ChatProvider | undefined;
@@ -99,7 +106,12 @@ export function activate(context: vscode.ExtensionContext) {
 
 			// Register webview view provider for sidebar chat
 			logger.info('Registering WebviewViewProvider...');
-			const webviewProvider = new ChatProvider(ctx);
+
+			if (!serviceRegistry) {
+				throw new Error('ServiceRegistry not initialized');
+			}
+
+			const webviewProvider = new ChatProvider(ctx, serviceRegistry);
 			const webviewProviderDisposable = vscode.window.registerWebviewViewProvider(
 				'primecode.chat',
 				webviewProvider,
