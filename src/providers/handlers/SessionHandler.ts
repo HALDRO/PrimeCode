@@ -62,6 +62,12 @@ export class SessionHandler implements WebviewMessageHandler {
 	// =============================================================================
 
 	public postSessionMessage(message: SessionMessageData): void {
+		logger.debug('[SessionHandler] postSessionMessage', {
+			messageType: message.type,
+			messageId: message.id,
+			targetSessionId: this.context.sessionState.activeSessionId,
+		});
+
 		this.context.view.postMessage({
 			type: 'session_event',
 			targetId: this.context.sessionState.activeSessionId,
@@ -223,21 +229,30 @@ export class SessionHandler implements WebviewMessageHandler {
 	// =============================================================================
 
 	private async onWebviewDidLaunch(msg: WebviewMessage): Promise<void> {
-		this.context.sessionState.activeSessionId =
-			(msg.sessionId as string | undefined) || this.context.sessionState.activeSessionId;
-		this.postLifecycle('created', this.context.sessionState.activeSessionId);
-		this.postLifecycle('switched', this.context.sessionState.activeSessionId, {
-			isProcessing: false,
-		});
-		this.postStatus(this.context.sessionState.activeSessionId, 'idle', 'Ready');
-		this.postSessionInfo();
-		this.initializeSessionStats(this.context.sessionState.activeSessionId);
+		const restoredSessionId = typeof msg.sessionId === 'string' ? msg.sessionId : undefined;
+
+		if (restoredSessionId) {
+			this.context.sessionState.activeSessionId = restoredSessionId;
+			logger.info('[SessionHandler] Restoring session', { sessionId: restoredSessionId });
+			this.postLifecycle('created', restoredSessionId);
+			this.postLifecycle('switched', restoredSessionId, { isProcessing: false });
+			this.postStatus(restoredSessionId, 'idle', 'Ready');
+			this.postSessionInfo();
+			this.initializeSessionStats(restoredSessionId);
+		} else {
+			logger.info('[SessionHandler] No active session to restore');
+			// Do NOT auto-create logic here. Let the UI stay in EmptyState until user interaction.
+		}
 	}
 
 	private async onCreateSession(): Promise<void> {
 		const newSessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 		logger.info('[SessionHandler] Creating new session', { sessionId: newSessionId });
+		this.context.sessionState.activeSessionId = newSessionId; // Update backend state
 		this.postLifecycle('created', newSessionId);
+		// Force switch to the new session
+		this.postLifecycle('switched', newSessionId, { isProcessing: false });
+		this.initializeSessionStats(newSessionId);
 	}
 
 	private async onSwitchSession(msg: WebviewMessage): Promise<void> {
@@ -262,6 +277,11 @@ export class SessionHandler implements WebviewMessageHandler {
 		this.context.sessionState.startedSessions.delete(sessionId);
 		this.clearSessionStats(sessionId);
 
+		// If closing active session, clear backend reference
+		if (this.context.sessionState.activeSessionId === sessionId) {
+			this.context.sessionState.activeSessionId = undefined as unknown as string; // Allow undefined
+		}
+
 		this.postLifecycle('closed', sessionId);
 	}
 
@@ -279,7 +299,10 @@ export class SessionHandler implements WebviewMessageHandler {
 			content: 'Stopped by user',
 			timestamp: new Date().toISOString(),
 		});
-		this.postStatus(this.context.sessionState.activeSessionId, 'idle', 'Stopped');
+		// activeSessionId check
+		if (this.context.sessionState.activeSessionId) {
+			this.postStatus(this.context.sessionState.activeSessionId, 'idle', 'Stopped');
+		}
 		this.postSessionInfo();
 	}
 
@@ -308,6 +331,18 @@ export class SessionHandler implements WebviewMessageHandler {
 					: undefined,
 		};
 
+		// Lazy creation: If no active session, create one now
+		if (!this.context.sessionState.activeSessionId) {
+			const newSessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+			logger.info('[SessionHandler] Lazy creating session for message', {
+				sessionId: newSessionId,
+			});
+			this.context.sessionState.activeSessionId = newSessionId;
+			this.postLifecycle('created', newSessionId);
+			this.postLifecycle('switched', newSessionId, { isProcessing: false });
+			this.initializeSessionStats(newSessionId);
+		}
+
 		const activeId = this.context.sessionState.activeSessionId;
 		const isNewSession = !this.context.sessionState.startedSessions.has(activeId);
 
@@ -318,6 +353,17 @@ export class SessionHandler implements WebviewMessageHandler {
 			sessionId: activeId,
 			isNewSession,
 			hasCliSession: !!this.context.cli.getSessionId(),
+		});
+
+		// CRITICAL: Post user message to UI immediately
+		// Frontend does NOT optimistically add user messages (ChatInput.tsx:522-523)
+		// It expects backend to echo the message back via session_event
+		this.postSessionMessage({
+			id: `user-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+			type: 'user',
+			content: text,
+			model: model,
+			timestamp: new Date().toISOString(),
 		});
 
 		this.postStatus(activeId, 'busy', 'Working...');
@@ -359,8 +405,6 @@ export class SessionHandler implements WebviewMessageHandler {
 
 	// =============================================================================
 	// Prompt Improvement
-	// =============================================================================
-
 	private async onImprovePromptRequest(msg: WebviewMessage): Promise<void> {
 		const data = (msg.data ?? {}) as {
 			text?: unknown;

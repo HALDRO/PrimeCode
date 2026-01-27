@@ -290,13 +290,16 @@ export const useChatStore = create<ChatState>()(
 						let newState = state;
 
 						// Auto-create session if it doesn't exist.
-						// Do NOT infer child/parent by activeSessionId: that heuristic breaks
-						// for background sessions and during initialization races.
 						if (!targetSession) {
 							const newSession: ChatSession = {
 								...createEmptySession(targetId),
 							};
 							newState = upsertSession(state, newSession, { ensureOrder: true });
+							// Only set activeSessionId to the new session if NO session is currently active.
+							// This prevents background sessions (like sub-agents) from stealing focus.
+							if (!newState.activeSessionId) {
+								newState = { ...newState, activeSessionId: targetId };
+							}
 							targetSession = newState.sessionsById[targetId];
 						}
 
@@ -1016,8 +1019,11 @@ export const useChatStore = create<ChatState>()(
 
 				switchSession: sessionId => {
 					set(state => {
+						// Auto-create session if it doesn't exist
 						if (!state.sessionsById[sessionId]) {
-							return state;
+							const newSession = createEmptySession(sessionId);
+							const next = upsertSession(state, newSession);
+							return { ...next, activeSessionId: sessionId, editingMessageId: null };
 						}
 						return { ...state, activeSessionId: sessionId, editingMessageId: null };
 					});

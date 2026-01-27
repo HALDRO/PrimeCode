@@ -1,10 +1,8 @@
 /**
  * @file Main App component for PrimeCode webview
- * @description Root React component that orchestrates the chat interface. Renders the chat list
- * with section-based layout (each user message + its responses form a section) and sticky user headers.
- * Uses react-virtuoso for virtualization, OverlayScrollbars for consistent scroll UX, and a footer spacer
- * to reserve space for the bottom overlay (ChangedFilesPanel) so the last messages are never obscured.
- * Zustand stores manage state; `useExtensionMessages` handles VS Code communication.
+ * @description Root React component that orchestrates the chat interface.
+ * Uses react-virtuoso for message virtualization with sticky headers.
+ * Implements a robust Flex Column layout to ensure the chat input is pinned to the bottom.
  */
 
 import { useOverlayScrollbars } from 'overlayscrollbars-react';
@@ -36,24 +34,18 @@ import { vscode } from './utils/vscode';
 
 /**
  * Section represents a user message and all subsequent messages until the next user message.
- * This structure enables push-up sticky headers - each user message sticks within their section,
- * and when the section scrolls away, the sticky header goes with it.
  */
 interface MessageSection {
 	userMessage: Message & { type: 'user' };
-	responses: (Message | Message[])[]; // Grouped tool messages and other responses
+	responses: (Message | Message[])[];
 	sectionIndex: number;
 }
 
 /**
- * Group messages into sections. Each section starts with a user message
- * and contains all responses until the next user message.
- * Filters out hidden messages (dismissed errors, etc.)
+ * Group messages into sections.
  */
 const groupMessagesIntoSections = (msgs: Message[], mcpServerNames: string[]): MessageSection[] => {
-	// Filter out hidden messages
 	const visibleMsgs = msgs.filter(m => !('hidden' in m && m.hidden));
-
 	const sections: MessageSection[] = [];
 	let currentSection: MessageSection | null = null;
 	let currentResponses: Message[] = [];
@@ -61,13 +53,11 @@ const groupMessagesIntoSections = (msgs: Message[], mcpServerNames: string[]): M
 
 	for (const msg of visibleMsgs) {
 		if (msg.type === 'user') {
-			// Flush previous section
 			if (currentSection) {
 				currentSection.responses = groupToolMessages(currentResponses, mcpServerNames);
 				sections.push(currentSection);
 				currentResponses = [];
 			}
-			// Start new section
 			currentSection = {
 				userMessage: msg as Message & { type: 'user' },
 				responses: [],
@@ -78,7 +68,6 @@ const groupMessagesIntoSections = (msgs: Message[], mcpServerNames: string[]): M
 		}
 	}
 
-	// Flush last section
 	if (currentSection) {
 		currentSection.responses = groupToolMessages(currentResponses, mcpServerNames);
 		sections.push(currentSection);
@@ -87,29 +76,17 @@ const groupMessagesIntoSections = (msgs: Message[], mcpServerNames: string[]): M
 	return sections;
 };
 
-/**
- * MessageSection component - renders a user message with its responses in a section.
- * The user message is sticky within this section, enabling push-up behavior:
- * when this section scrolls away, the sticky header goes with it.
- * UserMessage uses --layout-padding-x, responses use --content-padding-x for wider content area.
- */
 interface MessageSectionProps {
 	section: MessageSection;
 	context: VirtuosoContext;
 }
 
-/**
- * Context passed to Virtuoso itemContent for stable callback references.
- * Using context prop prevents renderItem from being recreated when callbacks change.
- */
 interface VirtuosoContext {
 	onErrorResume: () => void;
 	onErrorDismiss: (messageId: string) => void;
 	canResume: boolean;
 	isAutoRetrying: boolean;
 	retryInfo: { attempt: number; message: string; nextRetryAt?: string } | null;
-	stickyTopOffset: number;
-	footerHeightPx: number;
 	isProcessing: boolean;
 	totalSections: number;
 }
@@ -119,10 +96,10 @@ const MessageSectionComponent = React.memo<MessageSectionProps>(
 		const isLastSection = section.sectionIndex === context.totalSections - 1;
 
 		return (
-			<section className="relative">
+			<section className="relative pb-(--gap-4)">
 				<div
-					className="sticky z-40 px-(--layout-padding-x)"
-					style={{ top: `${context.stickyTopOffset}px` }}
+					className="sticky top-0 z-40 px-(--layout-padding-x)"
+					style={{ backgroundColor: 'var(--surface-base)' }}
 				>
 					<UserMessage message={section.userMessage} />
 				</div>
@@ -134,59 +111,17 @@ const MessageSectionComponent = React.memo<MessageSectionProps>(
 
 						return <MessageItem key={key} item={responseItem} ctx={context} />;
 					})}
-					{/* Show generation status at the end of the last section during processing */}
 					{isLastSection && context.isProcessing && <GenerationStatus />}
 				</div>
 			</section>
 		);
 	},
 	(prev, next) => {
-		// 1. Context is compared by reference - if context object is stable, skip deep comparison
-		// The context object is memoized in App component, so it only changes when its values change
-		if (prev.context !== next.context) {
-			return false;
-		}
-
-		// 2. Check User Message (should be stable ref if not editing/streaming that specific msg)
-		if (prev.section.userMessage !== next.section.userMessage) {
-			return false;
-		}
-
-		// 3. Check Responses (array of Messages or Arrays of Messages)
-		const prevResp = prev.section.responses;
-		const nextResp = next.section.responses;
-
-		if (prevResp.length !== nextResp.length) {
-			return false;
-		}
-
-		// Shallow compare of response list items
-		for (let i = 0; i < prevResp.length; i++) {
-			const p = prevResp[i];
-			const n = nextResp[i];
-
-			if (Array.isArray(p) && Array.isArray(n)) {
-				// Tool Group: check content refs
-				if (p.length !== n.length) {
-					return false;
-				}
-				for (let j = 0; j < p.length; j++) {
-					if (p[j] !== n[j]) {
-						return false;
-					}
-				}
-			} else if (p !== n) {
-				// Single Message
-				return false;
-			}
-		}
-
-		return true;
+		return prev.section === next.section && prev.context === next.context;
 	},
 );
 MessageSectionComponent.displayName = 'MessageSectionComponent';
 
-// Empty state component
 const EmptyState: React.FC = () => (
 	<div className="flex items-center justify-center flex-col h-full opacity-50">
 		<div style={{ fontSize: 'var(--spacing-4)', marginBottom: 'var(--spacing-2)' }}>🤖</div>
@@ -199,18 +134,8 @@ const EmptyState: React.FC = () => (
 	</div>
 );
 
-// Virtuoso Footer - dynamic height spacer based on current layout
-const VirtuosoFooterDynamic: React.FC<{ context?: VirtuosoContext }> = ({ context }) => (
-	<div style={{ height: context?.footerHeightPx ?? 0 }} />
-);
-VirtuosoFooterDynamic.displayName = 'VirtuosoFooterDynamic';
-
-// followOutput callback - stable reference
-const followOutputCallback = (isAtBottom: boolean): 'auto' | false => (isAtBottom ? 'auto' : false);
-
 type ScrollerProps = React.ComponentPropsWithoutRef<'div'>;
 
-// OverlayScrollbars scroller component for Virtuoso
 const OverlayScroller = React.forwardRef<HTMLDivElement, ScrollerProps>(
 	({ style, className, children, ...restProps }, forwardedRef) => {
 		const targetRef = useRef<HTMLDivElement | null>(null);
@@ -268,7 +193,7 @@ export const App: React.FC = () => {
 	useExtensionMessages();
 
 	const headerHeight = useElementHeight<HTMLDivElement>({ fallbackHeight: 44 });
-	const changedFilesPanelHeight = useElementHeight<HTMLDivElement>({ fallbackHeight: 0 });
+	const virtuosoRef = useRef<VirtuosoHandle>(null);
 
 	const messages = useMessages();
 	const activeSessionId = useActiveSessionId();
@@ -277,7 +202,7 @@ export const App: React.FC = () => {
 	const isProcessing = useIsProcessing();
 	const isAutoRetrying = useIsAutoRetrying();
 	const retryInfo = useRetryInfo();
-	// Get MCP server names for tool grouping
+
 	const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
 
 	const sections = useMemo(
@@ -285,9 +210,6 @@ export const App: React.FC = () => {
 		[messages, mcpServerNames],
 	);
 
-	const virtuosoRef = useRef<VirtuosoHandle>(null);
-
-	// Error message handlers - use proper message types instead of text workarounds
 	const handleErrorResume = useCallback(() => {
 		if (activeSessionId) {
 			vscode.postMessage({
@@ -310,17 +232,6 @@ export const App: React.FC = () => {
 		[activeSessionId],
 	);
 
-	const virtuosoComponents = useMemo(
-		() => ({
-			Scroller: OverlayScroller,
-			Footer: VirtuosoFooterDynamic,
-		}),
-		[],
-	);
-
-	const footerPx = Math.max(80, changedFilesPanelHeight.height);
-
-	// Memoized context for Virtuoso - contains all callbacks and state needed by items
 	const virtuosoContext: VirtuosoContext = useMemo(
 		() => ({
 			onErrorResume: handleErrorResume,
@@ -328,8 +239,6 @@ export const App: React.FC = () => {
 			canResume: Boolean(activeSessionId) && !isProcessing,
 			isAutoRetrying,
 			retryInfo,
-			stickyTopOffset: 0,
-			footerHeightPx: footerPx,
 			isProcessing,
 			totalSections: sections.length,
 		}),
@@ -340,21 +249,31 @@ export const App: React.FC = () => {
 			isProcessing,
 			isAutoRetrying,
 			retryInfo,
-			footerPx,
 			sections.length,
 		],
 	);
 
-	const renderItem = useCallback(
-		(_index: number, section: MessageSection, context: VirtuosoContext) => (
-			<MessageSectionComponent section={section} context={context} />
-		),
+	const virtuosoComponents = useMemo(
+		() => ({
+			Scroller: OverlayScroller,
+			Footer: () => <div style={{ height: '2px' }} />,
+		}),
 		[],
 	);
 
+	// Auto-scroll logic
+	useEffect(() => {
+		if (isProcessing && virtuosoRef.current) {
+			virtuosoRef.current.scrollToIndex({ index: 'LAST', behavior: 'auto' });
+		}
+	}, [isProcessing]);
+
 	if (!activeSessionId) {
 		return (
-			<div className="flex flex-col h-full">
+			<div
+				className="flex flex-col h-screen overflow-hidden"
+				style={{ backgroundColor: 'var(--surface-base)' }}
+			>
 				<div ref={headerHeight.ref}>
 					<Header />
 				</div>
@@ -364,51 +283,55 @@ export const App: React.FC = () => {
 	}
 
 	return (
-		<div className="flex flex-col h-full">
-			<div ref={headerHeight.ref}>
+		<div
+			className="flex flex-col h-screen overflow-hidden"
+			style={{ backgroundColor: 'var(--surface-base)' }}
+		>
+			<div ref={headerHeight.ref} className="shrink-0 z-10">
 				<Header />
 			</div>
 
-			<div className="flex-1 overflow-hidden relative">
-				{sections.length === 0 && (
-					<div className="absolute inset-0 pointer-events-none">
+			<div className="flex-1 min-h-0 relative">
+				{sections.length === 0 ? (
+					<div className="absolute inset-0 pointer-events-none z-0">
 						<EmptyState />
 					</div>
+				) : (
+					<Virtuoso
+						ref={virtuosoRef}
+						className="h-full w-full"
+						style={{
+							fontFamily: 'var(--vscode-editor-font-family)',
+							fontSize: 'var(--vscode-editor-font-size)',
+							lineHeight: 1.6,
+						}}
+						data={sections}
+						context={virtuosoContext}
+						initialTopMostItemIndex={{ index: 'LAST', align: 'end' }}
+						followOutput={isAtBottom => (isAtBottom ? 'auto' : false)}
+						itemContent={(index, section) => (
+							<MessageSectionComponent
+								key={section.userMessage.id ?? index}
+								section={section}
+								context={virtuosoContext}
+							/>
+						)}
+						components={virtuosoComponents}
+					/>
 				)}
-
-				<Virtuoso
-					ref={virtuosoRef}
-					key={activeSessionId}
-					style={{
-						fontFamily: 'var(--vscode-editor-font-family)',
-						fontSize: 'var(--vscode-editor-font-size)',
-						lineHeight: 1.6,
-						height: '100%',
-						scrollPaddingTop: '0px',
-					}}
-					data={sections}
-					context={virtuosoContext}
-					initialTopMostItemIndex={
-						sections.length > 0 ? ({ index: 'LAST', align: 'end' } as const) : 0
-					}
-					atBottomThreshold={32}
-					followOutput={followOutputCallback}
-					itemContent={renderItem}
-					computeItemKey={(index, section) => section.userMessage.id ?? `${index}`}
-					components={virtuosoComponents}
-				/>
-
-				<div className="absolute bottom-0 left-0 right-0 z-20 pointer-events-none">
-					<div
-						ref={changedFilesPanelHeight.ref}
-						className="pointer-events-auto px-(--content-padding-x)"
-					>
-						<ChangedFilesPanel />
-					</div>
-				</div>
 			</div>
 
-			<ChatInput />
+			<div
+				className="shrink-0 z-20"
+				style={{
+					backgroundColor: 'var(--surface-base)',
+				}}
+			>
+				<div className="px-(--content-padding-x)">
+					<ChangedFilesPanel />
+				</div>
+				<ChatInput />
+			</div>
 
 			{activeModal === 'filePicker' && <FilePicker />}
 			{activeModal === 'settings' && <SettingsPage />}

@@ -177,6 +177,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	}
 
 	resolveWebviewView(webviewView: vscode.WebviewView): void {
+		logger.info('[ChatProvider] resolveWebviewView called - webview is now initialized');
 		this.view = webviewView;
 
 		webviewView.webview.options = {
@@ -527,7 +528,19 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	}
 
 	private postMessage(msg: unknown): void {
-		this.view?.webview.postMessage(msg);
+		if (!this.view) {
+			logger.error('[ChatProvider] postMessage called but view is not initialized!', {
+				messageType: (msg as { type?: string })?.type,
+			});
+			return;
+		}
+
+		logger.debug('[ChatProvider] postMessage', {
+			type: (msg as { type?: string })?.type,
+			targetId: (msg as { targetId?: string })?.targetId,
+		});
+
+		this.view.webview.postMessage(msg);
 	}
 
 	dispose(): void {
