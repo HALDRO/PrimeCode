@@ -258,10 +258,23 @@ function removeSession(state: ChatState, sessionId: string): ChatState {
 	};
 }
 
+/**
+ * Filter sessions before persisting to localStorage.
+ * Only persist sessions that are in sessionOrder (visible tabs).
+ * Context buckets (hidden sessions for subtasks) are excluded,
+ * as they are archived into transcript field after subtask completion.
+ */
 function filterPersistedSessions(
 	sessionsById: Record<string, ChatSession>,
+	sessionOrder: string[],
 ): Record<string, ChatSession> {
-	return sessionsById;
+	const filtered: Record<string, ChatSession> = {};
+	for (const sid of sessionOrder) {
+		if (sessionsById[sid]) {
+			filtered[sid] = sessionsById[sid];
+		}
+	}
+	return filtered;
 }
 
 // =============================================================================
@@ -359,21 +372,46 @@ export const useChatStore = create<ChatState>()(
 									normalizedEntry: msgData.normalizedEntry,
 								} as Message;
 
+								// Determine storage target:
+								// - Subtask messages themselves → parent session (with contextId for linking)
+								// - Messages with contextId that are NOT subtask → hidden context bucket
+								// - Messages without contextId → parent session as normal
+								const isSubtaskMessage = message.type === 'subtask';
+								const hasContext = !!msgData.contextId && !isSubtaskMessage;
+
+								// Select storage session: context bucket or target session
+								let storageSessionId = targetId;
+								let storageSession = targetSession;
+								let stateForStorage = newState;
+
+								if (hasContext) {
+									// Route to hidden context bucket (not in sessionOrder)
+									const ctxId = msgData.contextId as string;
+									storageSessionId = ctxId;
+
+									if (!newState.sessionsById[ctxId]) {
+										// Create hidden context bucket (ensureOrder: false)
+										const contextBucket = createEmptySession(ctxId);
+										stateForStorage = upsertSession(newState, contextBucket, {
+											ensureOrder: false,
+										});
+									} else {
+										stateForStorage = newState;
+									}
+									storageSession = stateForStorage.sessionsById[ctxId];
+								}
+
 								// Merge or append message
-								// Use type assertion for partId since it's not in all message types
 								const msgPartId = (message as { partId?: string }).partId;
-								const existingIdx = targetSession.messages.findIndex(m => {
+								const existingIdx = storageSession.messages.findIndex(m => {
 									const mPartId = (m as { partId?: string }).partId;
-									// Merge by id always.
 									if (m.id === message.id) return true;
-									// Merge by partId only when message types match.
-									// This prevents tool_result from overwriting tool_use (they share toolUseId).
 									if (msgPartId && mPartId === msgPartId) {
 										return m.type === message.type;
 									}
 									return false;
 								});
-								const newMessages = [...targetSession.messages];
+								const newMessages = [...storageSession.messages];
 
 								if (existingIdx !== -1) {
 									const existing = newMessages[existingIdx];
@@ -409,7 +447,38 @@ export const useChatStore = create<ChatState>()(
 									newMessages.push(message);
 								}
 
-								return updateSessionById(newState, targetId, s => ({
+								// Handle subtask completion: archive context bucket into transcript
+								if (
+									isSubtaskMessage &&
+									(message.status === 'completed' || message.status === 'error')
+								) {
+									const subtaskContextId = msgData.contextId as string | undefined;
+									if (subtaskContextId && stateForStorage.sessionsById[subtaskContextId]) {
+										const contextMessages =
+											stateForStorage.sessionsById[subtaskContextId]?.messages ?? [];
+
+										// Find the subtask message and inject transcript
+										const subtaskIdx = newMessages.findIndex(m => m.id === message.id);
+										if (subtaskIdx !== -1) {
+											const subtaskMsg = newMessages[subtaskIdx];
+											newMessages[subtaskIdx] = {
+												...subtaskMsg,
+												transcript: contextMessages,
+												contextId: undefined, // Clear contextId after archiving
+											} as Message;
+										}
+
+										// Remove context bucket from state
+										const cleanedState = removeSession(stateForStorage, subtaskContextId);
+										return updateSessionById(cleanedState, storageSessionId, s => ({
+											...s,
+											messages: newMessages,
+											lastActive: Date.now(),
+										}));
+									}
+								}
+
+								return updateSessionById(stateForStorage, storageSessionId, s => ({
 									...s,
 									messages: newMessages,
 									lastActive: Date.now(),
@@ -1316,7 +1385,7 @@ export const useChatStore = create<ChatState>()(
 				activeSessionId: state.activeSessionId,
 				editingMessageId: state.editingMessageId,
 				sessionOrder: state.sessionOrder,
-				sessionsById: filterPersistedSessions(state.sessionsById),
+				sessionsById: filterPersistedSessions(state.sessionsById, state.sessionOrder),
 			}),
 			version: 12,
 			migrate: (persistedState, version) => {

@@ -61,20 +61,21 @@ export class SessionHandler implements WebviewMessageHandler {
 	// Public Methods for ChatProvider interaction (Event Reflection)
 	// =============================================================================
 
-	public postSessionMessage(message: SessionMessageData): void {
+	public postSessionMessage(message: SessionMessageData, sessionId?: string): void {
+		const targetId = sessionId || this.context.sessionState.activeSessionId;
 		logger.debug('[SessionHandler] postSessionMessage', {
 			messageType: message.type,
 			messageId: message.id,
-			targetSessionId: this.context.sessionState.activeSessionId,
+			targetSessionId: targetId,
 		});
 
 		this.context.view.postMessage({
 			type: 'session_event',
-			targetId: this.context.sessionState.activeSessionId,
+			targetId,
 			eventType: 'message',
 			payload: { eventType: 'message', message },
 			timestamp: Date.now(),
-			sessionId: this.context.sessionState.activeSessionId,
+			sessionId: targetId,
 			normalizedEntry: message.normalizedEntry,
 		} satisfies SessionEventMessage);
 	}
@@ -94,32 +95,34 @@ export class SessionHandler implements WebviewMessageHandler {
 		} satisfies SessionEventMessage);
 	}
 
-	public postComplete(partId: string, toolUseId?: string): void {
+	public postComplete(partId: string, toolUseId?: string, sessionId?: string): void {
+		const targetId = sessionId || this.context.sessionState.activeSessionId;
 		this.context.view.postMessage({
 			type: 'session_event',
-			targetId: this.context.sessionState.activeSessionId,
+			targetId,
 			eventType: 'complete',
 			payload: { eventType: 'complete', partId, toolUseId },
 			timestamp: Date.now(),
-			sessionId: this.context.sessionState.activeSessionId,
+			sessionId: targetId,
 		} satisfies SessionEventMessage);
 	}
 
-	public postSessionInfo(): void {
+	public postSessionInfo(sessionId?: string): void {
+		const targetId = sessionId || this.context.sessionState.activeSessionId;
 		this.context.view.postMessage({
 			type: 'session_event',
-			targetId: this.context.sessionState.activeSessionId,
+			targetId,
 			eventType: 'session_info',
 			payload: {
 				eventType: 'session_info',
 				data: {
-					sessionId: this.context.sessionState.activeSessionId,
+					sessionId: targetId,
 					tools: [],
 					mcpServers: [],
 				},
 			},
 			timestamp: Date.now(),
-			sessionId: this.context.sessionState.activeSessionId,
+			sessionId: targetId,
 		} satisfies SessionEventMessage);
 	}
 
@@ -137,11 +140,23 @@ export class SessionHandler implements WebviewMessageHandler {
 		}
 
 		// Update active session stats if matched
-		const activeId = this.context.sessionState.activeSessionId;
+		const activeId = sessionId;
+		const isActiveSession = activeId === this.context.sessionState.activeSessionId;
+
+		// Only broadcast status updates for the PRIMARY active session.
+		// Sub-session statuses (e.g., from subagents) are handled within their
+		// respective Subtask cards, not as top-level session status changes.
+		// Broadcasting them would cause the frontend to auto-create UI sessions
+		// for backend-only sub-sessions, leading to empty chat tabs in the header.
+		if (!isActiveSession) {
+			return;
+		}
 
 		const status = record.status as
 			| { type?: string; attempt?: number; message?: string; next?: number }
 			| undefined;
+
+		// Always broadcast status for the active (main) session
 		if (status?.type === 'busy') {
 			this.postStatus(activeId, 'busy', 'Working...');
 		} else if (status?.type === 'idle') {

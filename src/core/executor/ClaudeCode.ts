@@ -38,6 +38,7 @@ export class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 				type: 'normalized_log',
 				data: entry,
 				normalizedEntry: entry,
+				sessionId: this.sessionId ?? undefined,
 			});
 
 			// Legacy compatibility: ensure 'error' events are still emitted for clustered stderr
@@ -46,6 +47,7 @@ export class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 					type: 'error',
 					data: { message: entry.content },
 					normalizedEntry: entry,
+					sessionId: this.sessionId ?? undefined,
 				});
 			}
 		});
@@ -224,6 +226,7 @@ export class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 				type: 'message',
 				data: { content, sender: 'assistant' },
 				normalizedEntry: entry,
+				sessionId: this.sessionId ?? undefined,
 			};
 		}
 		if (e.type === 'tool_use') {
@@ -236,6 +239,7 @@ export class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 				type: 'normalized_log',
 				data: normalized,
 				normalizedEntry: normalized,
+				sessionId: this.sessionId ?? undefined,
 			});
 
 			return {
@@ -246,32 +250,41 @@ export class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 					tool_use_id: toolUseId,
 				},
 				normalizedEntry: normalized,
+				sessionId: this.sessionId ?? undefined,
 			};
 		}
 		if (e.type === 'tool_result') {
-			return { type: 'tool_result', data: event };
+			return { type: 'tool_result', data: event, sessionId: this.sessionId ?? undefined };
 		}
 		if (e.type === 'thinking') {
-			return { type: 'thinking', data: { content: e.thinking } };
+			return {
+				type: 'thinking',
+				data: { content: e.thinking },
+				sessionId: this.sessionId ?? undefined,
+			};
 		}
 		if (e.type === 'assistant' || e.type === 'user') {
 			const sessionId = typeof e.session_id === 'string' ? e.session_id : undefined;
 			if (sessionId) {
 				this.sessionId = sessionId;
-				return { type: 'session_updated', data: { sessionId } };
+				return { type: 'session_updated', data: { sessionId }, sessionId };
 			}
 		}
 		if (e.type === 'stream_event') {
 			const sessionId = typeof e.session_id === 'string' ? e.session_id : undefined;
 			if (sessionId) {
 				this.sessionId = sessionId;
-				return { type: 'session_updated', data: { sessionId } };
+				return { type: 'session_updated', data: { sessionId }, sessionId };
 			}
 
 			const usage = (e.usage as TokenUsageAPI | undefined) ?? undefined;
 			if (usage) {
 				this.applyUsage(usage);
-				return { type: 'session_updated', data: { tokenStats: this.getTokenStatsSnapshot() } };
+				return {
+					type: 'session_updated',
+					data: { tokenStats: this.getTokenStatsSnapshot() },
+					sessionId: this.sessionId ?? undefined,
+				};
 			}
 		}
 		if (e.type === 'result') {
@@ -297,6 +310,7 @@ export class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 					tokenStats: tokenSnapshot,
 					totalStats,
 				},
+				sessionId: this.sessionId ?? undefined,
 			};
 		}
 		if (e.type === 'control_request') {
@@ -315,6 +329,7 @@ export class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 						input,
 						toolUseId,
 					},
+					sessionId: this.sessionId ?? undefined,
 				};
 			}
 			if (req?.subtype === 'hook_callback') {
@@ -337,15 +352,16 @@ export class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 							input,
 							metadata: { callbackId },
 						},
+						sessionId: this.sessionId ?? undefined,
 					};
 				}
 			}
 		}
 		if (e.type === 'permission_required') {
-			return { type: 'permission', data: event };
+			return { type: 'permission', data: event, sessionId: this.sessionId ?? undefined };
 		}
 		if (e.type === 'error') {
-			return { type: 'error', data: { message: e.error } };
+			return { type: 'error', data: { message: e.error }, sessionId: this.sessionId ?? undefined };
 		}
 		return null;
 	}

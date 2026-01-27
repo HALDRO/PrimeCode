@@ -168,11 +168,14 @@ export class LogNormalizer extends EventEmitter {
 					type: 'TodoManagement',
 					operation: 'write',
 					todos: Array.isArray(input.todos)
-						? input.todos.map((t: any) => ({
-								content: t.content,
-								status: t.status,
-								priority: t.priority,
-							}))
+						? input.todos.map(t => {
+								const item = t as { content?: string; status?: string; priority?: string };
+								return {
+									content: item.content || '',
+									status: item.status || 'pending',
+									priority: item.priority || 'medium',
+								};
+							})
 						: [],
 				};
 				break;

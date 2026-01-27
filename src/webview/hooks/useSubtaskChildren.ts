@@ -30,14 +30,17 @@ export function useSubtaskChildren(subtaskId: string): Message[] {
 		// Get contextId from subtask message
 		const contextId = message.contextId;
 
-		if (!contextId) return EMPTY_MESSAGES;
+		// If contextId exists, look up live session bucket
+		if (contextId) {
+			const contextSession = sessionsById[contextId];
+			// If session exists (live), return its messages.
+			if (contextSession?.messages?.length) {
+				return contextSession.messages;
+			}
+		}
 
-		// Lookup session bucket by contextId
-		const contextSession = sessionsById[contextId];
-
-		// If session exists (live), return its messages.
-		// If session is closed/completed, messages are moved to transcript.
-		return contextSession?.messages ?? message.transcript ?? EMPTY_MESSAGES;
+		// If no live session or contextId cleared, use archived transcript
+		return message.transcript ?? EMPTY_MESSAGES;
 	}, [message, sessionsById]);
 
 	return children;

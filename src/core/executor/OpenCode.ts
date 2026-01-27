@@ -843,7 +843,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	}
 
 	private handleSdkEvent(raw: unknown): void {
-		const expectedSessionId = this.sessionId ?? '';
 		const envelope = raw as OpenCodeSdkEnvelope;
 		if (!envelope || typeof envelope.type !== 'string') {
 			return;
@@ -880,12 +879,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		};
 
 		const sessionId = extractSessionId();
-		if (expectedSessionId) {
-			// Be conservative: if we cannot attribute an event to the expected session, ignore it.
-			if (typeof sessionId !== 'string' || sessionId !== expectedSessionId) {
-				return;
-			}
-		}
+		// Allow events from any session to flow through.
+		// We pass the sessionId to the event so the provider can route it.
 
 		switch (eventType) {
 			case 'message.updated': {
@@ -904,7 +899,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				const partValue = props.part as Record<string, unknown> | undefined;
 				const part = this.normalizePart(partValue);
 				const delta = typeof props.delta === 'string' ? props.delta : undefined;
-				this.handlePartUpdated(part, delta);
+				this.handlePartUpdated(part, sessionId, delta);
 				break;
 			}
 
@@ -920,6 +915,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 						toolInput: p.toolInput,
 						metadata: p.metadata,
 					},
+					sessionId,
 				});
 				break;
 			}
@@ -927,7 +923,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			case 'session.status': {
 				const statusRaw = props.status as Record<string, unknown> | undefined;
 				const status = this.normalizeSessionStatus(statusRaw);
-				this.emit('event', { type: 'session_updated', data: { status } });
+				this.emit('event', { type: 'session_updated', data: { status }, sessionId });
 				break;
 			}
 
@@ -940,12 +936,12 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 						? (errorRecord.message as string)
 						: undefined) ??
 					'OpenCode session error';
-				this.emit('event', { type: 'error', data: { message } });
+				this.emit('event', { type: 'error', data: { message }, sessionId });
 				break;
 			}
 
 			case 'session.idle': {
-				this.emit('event', { type: 'finished', data: { reason: 'idle' } });
+				this.emit('event', { type: 'finished', data: { reason: 'idle' }, sessionId });
 				break;
 			}
 
@@ -1012,7 +1008,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		return { type: 'other', raw };
 	}
 
-	private handlePartUpdated(part: OpenCodePart, delta?: string): void {
+	private handlePartUpdated(part: OpenCodePart, sessionId?: string, delta?: string): void {
 		if (part.type === 'text') {
 			// Skip user messages - they're already added by webview
 			const messageId = part.messageID;
@@ -1044,11 +1040,13 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 						isDelta: false,
 					},
 					normalizedEntry: entry,
+					sessionId: part.sessionID ?? sessionId,
 				});
 				this.emit('event', {
 					type: 'normalized_log',
 					data: entry,
 					normalizedEntry: entry,
+					sessionId: part.sessionID ?? sessionId,
 				});
 			}
 			return;
@@ -1064,6 +1062,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 						partId: part.messageID,
 						isDelta: true,
 					},
+					sessionId: part.sessionID ?? sessionId,
 				});
 			}
 			// If no delta but has text, it's either initial message or final complete text
@@ -1075,6 +1074,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 						partId: part.messageID,
 						isDelta: false,
 					},
+					sessionId: part.sessionID ?? sessionId,
 				});
 			}
 			return;
@@ -1108,11 +1108,13 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 						metadata: part.state?.metadata,
 					},
 					normalizedEntry: normalized,
+					sessionId: part.sessionID ?? sessionId,
 				});
 				this.emit('event', {
 					type: 'normalized_log',
 					data: normalized,
 					normalizedEntry: normalized,
+					sessionId: part.sessionID ?? sessionId,
 				});
 			}
 
@@ -1129,6 +1131,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 						title: part.state?.title,
 						metadata: part.state?.metadata,
 					},
+					sessionId: part.sessionID ?? sessionId,
 				});
 			}
 		}

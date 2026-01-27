@@ -24,6 +24,17 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private disposables: vscode.Disposable[] = [];
 
 	private activeAssistantPartId: string | null = null;
+	private subSessionParentMap = new Map<string, string>();
+	/**
+	 * Tracks the currently active subtask (task tool) execution.
+	 * When set, all incoming messages are routed to this context bucket
+	 * until the corresponding tool_result is received.
+	 */
+	private activeSubtaskContext: {
+		toolUseId: string;
+		contextId: string;
+		parentSessionId: string;
+	} | null = null;
 
 	// Handlers
 	private sessionHandler: SessionHandler;
@@ -231,7 +242,12 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 	private handleCliEvent(event: CLIEvent): void {
 		const now = Date.now();
-		const activeSessionId = this.sessionState.activeSessionId;
+		let targetSessionId = event.sessionId || this.sessionState.activeSessionId;
+
+		// Check if this session is a sub-session mapped to a parent
+		if (event.sessionId && this.subSessionParentMap.has(event.sessionId)) {
+			targetSessionId = this.subSessionParentMap.get(event.sessionId) ?? targetSessionId;
+		}
 
 		logger.debug(`[ChatProvider] handleCliEvent: ${event.type}`, event.data);
 
@@ -252,30 +268,65 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				const e = event.data as { content?: string; partId?: string; isDelta?: boolean };
 				const partId = e.partId || this.activeAssistantPartId || `part-${now}`;
 				this.activeAssistantPartId = partId;
-				this.sessionHandler.postSessionMessage({
-					id: partId,
-					type: 'assistant',
-					partId,
-					content: e.content || '',
-					isStreaming: true,
-					isDelta: e.isDelta ?? true,
-					timestamp: new Date().toISOString(),
-					normalizedEntry: event.normalizedEntry,
-				});
+
+				// Determine context: prefer event.sessionId mapping, fallback to activeSubtaskContext
+				let contextId: string | undefined;
+				let messageTargetSessionId = targetSessionId;
+
+				if (event.sessionId && this.subSessionParentMap.has(event.sessionId)) {
+					// Message from a known sub-session
+					contextId = event.sessionId;
+				} else if (this.activeSubtaskContext) {
+					// Message during active subtask - route to subtask context bucket
+					contextId = this.activeSubtaskContext.contextId;
+					// Keep target as parent session but messages will be stored in context bucket
+					messageTargetSessionId = this.activeSubtaskContext.parentSessionId;
+				}
+
+				this.sessionHandler.postSessionMessage(
+					{
+						id: partId,
+						type: 'assistant',
+						partId,
+						content: e.content || '',
+						isStreaming: true,
+						isDelta: e.isDelta ?? true,
+						timestamp: new Date().toISOString(),
+						normalizedEntry: event.normalizedEntry,
+						contextId,
+					},
+					messageTargetSessionId,
+				);
 				break;
 			}
 
 			case 'thinking': {
 				const e = event.data as { content?: string; partId?: string; isDelta?: boolean };
 				const partId = e.partId || `thinking-${now}`;
-				this.sessionHandler.postSessionMessage({
-					id: partId,
-					type: 'thinking',
-					partId,
-					content: e.content || '',
-					isDelta: e.isDelta ?? false,
-					timestamp: new Date().toISOString(),
-				});
+
+				// Determine context: prefer event.sessionId mapping, fallback to activeSubtaskContext
+				let contextId: string | undefined;
+				let thinkingTargetSessionId = targetSessionId;
+
+				if (event.sessionId && this.subSessionParentMap.has(event.sessionId)) {
+					contextId = event.sessionId;
+				} else if (this.activeSubtaskContext) {
+					contextId = this.activeSubtaskContext.contextId;
+					thinkingTargetSessionId = this.activeSubtaskContext.parentSessionId;
+				}
+
+				this.sessionHandler.postSessionMessage(
+					{
+						id: partId,
+						type: 'thinking',
+						partId,
+						content: e.content || '',
+						isDelta: e.isDelta ?? false,
+						timestamp: new Date().toISOString(),
+						contextId,
+					},
+					thinkingTargetSessionId,
+				);
 				break;
 			}
 
@@ -283,18 +334,78 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				const e = event.data as Record<string, unknown>;
 				const toolUseId = (e.id as string) || `tool-${now}`;
 				const toolName = (e.name as string) || (e.tool as string) || 'unknown';
-				this.sessionHandler.postSessionMessage({
-					id: toolUseId,
-					type: 'tool_use',
-					partId: toolUseId,
-					toolUseId,
-					toolName,
-					toolInput: e.input ? JSON.stringify(e.input) : '',
-					rawInput: (e.input as Record<string, unknown>) || {},
-					isRunning: true,
-					timestamp: new Date().toISOString(),
-					normalizedEntry: event.normalizedEntry,
-				});
+
+				if (toolName === 'task') {
+					// Register this sub-session to the current active session (Parent)
+					const parentSessionId = this.sessionState.activeSessionId;
+					// The event.sessionId here is likely the *Sub-Session* ID (allocated by OpenCode executor)
+					// Verify if event.sessionId is different from activeSessionId to confirm it's a sub-session
+					if (event.sessionId && event.sessionId !== parentSessionId) {
+						this.subSessionParentMap.set(event.sessionId, parentSessionId);
+					}
+
+					// Use toolUseId as the contextId for this subtask's message bucket.
+					// This ensures all subagent messages are routed to this bucket.
+					const subtaskContextId = toolUseId;
+					this.activeSubtaskContext = {
+						toolUseId,
+						contextId: subtaskContextId,
+						parentSessionId,
+					};
+
+					const input = (e.input as Record<string, unknown>) || {};
+					this.sessionHandler.postSessionMessage(
+						{
+							id: toolUseId,
+							type: 'subtask',
+							partId: toolUseId,
+							toolUseId,
+							toolName,
+							agent: (input.subagent_type as string) || 'subagent',
+							prompt: (input.prompt as string) || '',
+							description: (input.description as string) || 'Running subtask...',
+							status: 'running',
+							toolInput: e.input ? JSON.stringify(e.input) : '',
+							rawInput: input,
+							isRunning: true,
+							timestamp: new Date().toISOString(),
+							normalizedEntry: event.normalizedEntry,
+							// Link this card to the context bucket (using toolUseId)
+							contextId: subtaskContextId,
+						},
+						parentSessionId,
+					);
+					break;
+				}
+
+				// Check if this tool use belongs to a known sub-session or active subtask
+				let contextId: string | undefined;
+				let toolUseTargetSessionId = targetSessionId;
+
+				if (event.sessionId && this.subSessionParentMap.has(event.sessionId)) {
+					contextId = event.sessionId;
+				} else if (this.activeSubtaskContext) {
+					// Tool use during active subtask - route to subtask context bucket
+					contextId = this.activeSubtaskContext.contextId;
+					toolUseTargetSessionId = this.activeSubtaskContext.parentSessionId;
+				}
+
+				this.sessionHandler.postSessionMessage(
+					{
+						id: toolUseId,
+						type: 'tool_use',
+						partId: toolUseId,
+						toolUseId,
+						toolName,
+						toolInput: e.input ? JSON.stringify(e.input) : '',
+						rawInput: (e.input as Record<string, unknown>) || {},
+						isRunning: true,
+						timestamp: new Date().toISOString(),
+						normalizedEntry: event.normalizedEntry,
+						contextId,
+					},
+					toolUseTargetSessionId,
+				);
 				break;
 			}
 
@@ -303,23 +414,74 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				const toolUseId = (e.tool_use_id as string) || (e.id as string) || `tool-${now}`;
 				const toolName = (e.name as string) || (e.tool as string) || 'unknown';
 
+				if (toolName === 'task') {
+					const content =
+						typeof e.content === 'string'
+							? (e.content as string)
+							: e.content
+								? JSON.stringify(e.content)
+								: '';
+					const sessionIdMatch = content.match(
+						/<task_metadata>\s*session_id:\s*(.*?)\s*<\/task_metadata>/s,
+					);
+					const extractedContextId = sessionIdMatch ? sessionIdMatch[1].trim() : undefined;
+
+					// Use the contextId from activeSubtaskContext (consistent with setup)
+					const subtaskContextId = this.activeSubtaskContext?.contextId ?? extractedContextId;
+
+					this.sessionHandler.postSessionMessage(
+						{
+							id: toolUseId,
+							type: 'subtask',
+							partId: toolUseId,
+							status: 'completed',
+							result: content,
+							contextId: subtaskContextId,
+							timestamp: new Date().toISOString(),
+							normalizedEntry: event.normalizedEntry,
+						},
+						// Always route task FULL completion to the ACTIVE session (Parent) where the card lives
+						this.sessionState.activeSessionId,
+					);
+					this.sessionHandler.postComplete(toolUseId, toolUseId, this.sessionState.activeSessionId);
+
+					// Clear activeSubtaskContext now that the subtask is complete
+					this.activeSubtaskContext = null;
+					break;
+				}
+
+				// Determine context for subagent tool results
+				let contextId: string | undefined;
+				let toolResultTargetSessionId = targetSessionId;
+
+				if (event.sessionId && this.subSessionParentMap.has(event.sessionId)) {
+					contextId = event.sessionId;
+				} else if (this.activeSubtaskContext) {
+					contextId = this.activeSubtaskContext.contextId;
+					toolResultTargetSessionId = this.activeSubtaskContext.parentSessionId;
+				}
+
 				const toolInputRaw = e.input;
 				let emittedFileChange = false;
 				if (toolInputRaw && typeof toolInputRaw === 'object') {
 					const toolInput = toolInputRaw as Record<string, unknown>;
 					const filePath = typeof toolInput.filePath === 'string' ? toolInput.filePath : undefined;
-					this.sessionHandler.postSessionMessage({
-						id: toolUseId,
-						type: 'tool_use',
-						partId: toolUseId,
-						toolUseId,
-						toolName,
-						toolInput: JSON.stringify(toolInput),
-						rawInput: toolInput,
-						filePath,
-						isRunning: false,
-						timestamp: new Date().toISOString(),
-					});
+					this.sessionHandler.postSessionMessage(
+						{
+							id: toolUseId,
+							type: 'tool_use',
+							partId: toolUseId,
+							toolUseId,
+							toolName,
+							toolInput: JSON.stringify(toolInput),
+							rawInput: toolInput,
+							filePath,
+							isRunning: false,
+							timestamp: new Date().toISOString(),
+							contextId,
+						},
+						toolResultTargetSessionId,
+					);
 
 					if (filePath && !emittedFileChange) {
 						const normalizedTool = toolName.toLowerCase();
@@ -349,7 +511,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 							this.postMessage({
 								type: 'session_event',
-								targetId: activeSessionId,
+								targetId: toolResultTargetSessionId,
 								eventType: 'file',
 								payload: {
 									eventType: 'file',
@@ -361,7 +523,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 									toolUseId,
 								},
 								timestamp: Date.now(),
-								sessionId: activeSessionId,
+								sessionId: toolResultTargetSessionId,
 							} satisfies SessionEventMessage);
 							emittedFileChange = true;
 						}
@@ -374,41 +536,58 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 						: e.content
 							? JSON.stringify(e.content)
 							: '';
-				this.sessionHandler.postSessionMessage({
-					id: `${toolUseId}-result-${now}`,
-					type: 'tool_result',
-					partId: toolUseId,
-					toolUseId,
-					toolName,
-					content,
-					isError: Boolean(e.is_error),
-					timestamp: new Date().toISOString(),
-					normalizedEntry: event.normalizedEntry,
-				});
-				this.sessionHandler.postComplete(toolUseId, toolUseId);
+				this.sessionHandler.postSessionMessage(
+					{
+						id: `${toolUseId}-result-${now}`,
+						type: 'tool_result',
+						partId: toolUseId,
+						toolUseId,
+						toolName,
+						content,
+						isError: Boolean(e.is_error),
+						timestamp: new Date().toISOString(),
+						normalizedEntry: event.normalizedEntry,
+						contextId,
+					},
+					toolResultTargetSessionId,
+				);
+				this.sessionHandler.postComplete(toolUseId, toolUseId, toolResultTargetSessionId);
 				break;
 			}
 
 			case 'error': {
 				const errorId = `error-${now}`;
-				this.sessionHandler.postSessionMessage({
-					id: errorId,
-					type: 'error',
-					content: (event.data as { message?: string }).message || 'Unknown error',
-					isError: true,
-					timestamp: new Date().toISOString(),
-					normalizedEntry: event.normalizedEntry,
-				});
-				this.sessionHandler.postStatus(activeSessionId, 'error', 'Error');
+				const contextId =
+					event.sessionId && this.subSessionParentMap.has(event.sessionId)
+						? event.sessionId
+						: undefined;
+
+				this.sessionHandler.postSessionMessage(
+					{
+						id: errorId,
+						type: 'error',
+						content: (event.data as { message?: string }).message || 'Unknown error',
+						isError: true,
+						timestamp: new Date().toISOString(),
+						normalizedEntry: event.normalizedEntry,
+						contextId,
+					},
+					targetSessionId,
+				);
+				this.sessionHandler.postStatus(targetSessionId, 'error', 'Error');
 				break;
 			}
 
 			case 'finished': {
 				if (this.activeAssistantPartId) {
-					this.sessionHandler.postComplete(this.activeAssistantPartId, this.activeAssistantPartId);
+					this.sessionHandler.postComplete(
+						this.activeAssistantPartId,
+						this.activeAssistantPartId,
+						targetSessionId,
+					);
 					this.activeAssistantPartId = null;
 				}
-				this.sessionHandler.postStatus(activeSessionId, 'idle', 'Ready');
+				this.sessionHandler.postStatus(targetSessionId, 'idle', 'Ready');
 				break;
 			}
 
@@ -442,7 +621,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 						.catch(error => logger.error('[ChatProvider] auto-approve failed:', error));
 					this.postMessage({
 						type: 'session_event',
-						targetId: activeSessionId,
+						targetId: targetSessionId,
 						eventType: 'access',
 						payload: {
 							eventType: 'access',
@@ -452,24 +631,27 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 							alwaysAllow: true,
 						},
 						timestamp: Date.now(),
-						sessionId: activeSessionId,
+						sessionId: targetSessionId,
 					} satisfies SessionEventMessage);
 					break;
 				}
 
 				const patterns = Array.isArray(e.patterns) ? (e.patterns as string[]) : undefined;
 
-				this.sessionHandler.postSessionMessage({
-					id: `access-${requestId}`,
-					type: 'access_request',
-					requestId,
-					tool,
-					toolUseId,
-					input,
-					pattern: patterns?.[0],
-					resolved: false,
-					timestamp: new Date().toISOString(),
-				});
+				this.sessionHandler.postSessionMessage(
+					{
+						id: `access-${requestId}`,
+						type: 'access_request',
+						requestId,
+						tool,
+						toolUseId,
+						input,
+						pattern: patterns?.[0],
+						resolved: false,
+						timestamp: new Date().toISOString(),
+					},
+					targetSessionId,
+				);
 				break;
 			}
 

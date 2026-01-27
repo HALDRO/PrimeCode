@@ -36,6 +36,7 @@ export interface CLIEvent {
 		| 'normalized_log';
 	data: unknown;
 	normalizedEntry?: NormalizedEntry;
+	sessionId?: string;
 }
 
 export interface CLIExecutor extends EventEmitter {

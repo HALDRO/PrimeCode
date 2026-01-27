@@ -30,13 +30,41 @@ export class FileHandler implements WebviewMessageHandler {
 	private async onOpenFile(msg: WebviewMessage): Promise<void> {
 		const filePath = typeof msg.filePath === 'string' ? msg.filePath : undefined;
 		if (!filePath) throw new Error('Missing filePath');
-		await vscode.window.showTextDocument(vscode.Uri.file(filePath));
+
+		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		const isAbsolute =
+			process.platform === 'win32'
+				? /^[a-zA-Z]:\\/.test(filePath) || /^[a-zA-Z]:\//.test(filePath)
+				: filePath.startsWith('/');
+
+		const absolutePath =
+			!isAbsolute && root ? vscode.Uri.joinPath(vscode.Uri.file(root), filePath).fsPath : filePath;
+
+		let uri: vscode.Uri;
+		try {
+			uri = vscode.Uri.file(absolutePath);
+		} catch {
+			// Fallback if formatting fails
+			uri = vscode.Uri.file(filePath);
+		}
+
+		await vscode.window.showTextDocument(uri);
 	}
 
 	private async onOpenFileDiff(msg: WebviewMessage): Promise<void> {
 		const filePath = typeof msg.filePath === 'string' ? msg.filePath : undefined;
 		if (!filePath) throw new Error('Missing filePath');
-		await vscode.commands.executeCommand('primecode.openFileDiff', filePath);
+
+		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		const isAbsolute =
+			process.platform === 'win32'
+				? /^[a-zA-Z]:\\/.test(filePath) || /^[a-zA-Z]:\//.test(filePath)
+				: filePath.startsWith('/');
+
+		const absolutePath =
+			!isAbsolute && root ? vscode.Uri.joinPath(vscode.Uri.file(root), filePath).fsPath : filePath;
+
+		await vscode.commands.executeCommand('primecode.openFileDiff', absolutePath);
 	}
 
 	private async onOpenExternal(msg: WebviewMessage): Promise<void> {
