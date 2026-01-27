@@ -20,11 +20,14 @@ export interface ICLIConfig {
 	agent?: string;
 	env?: Record<string, string>;
 	serverTimeoutMs?: number;
+	autoCompact?: boolean;
+	commitReminder?: boolean;
 }
 
 export interface ICLIRunner {
 	spawn(prompt: string, config: ICLIConfig): Promise<void>;
 	spawnFollowUp(prompt: string, config: ICLIConfig): Promise<void>;
+	spawnReview(prompt: string, config: ICLIConfig): Promise<void>;
 	createNewSession(prompt: string, config: ICLIConfig): Promise<void>;
 	respondToPermission(decision: {
 		requestId: string;

@@ -53,6 +53,15 @@ export class CLIRunner extends EventEmitter {
 		await this.executor.spawnFollowUp(prompt, this.currentSessionId, config);
 	}
 
+	async spawnReview(prompt: string, config: CLIConfig): Promise<void> {
+		if (this.executor.spawnReview) {
+			await this.executor.spawnReview(prompt, config);
+		} else {
+			// Fallback if not specifically implemented
+			await this.executor.spawn(prompt, config);
+		}
+	}
+
 	async createNewSession(prompt: string, config: CLIConfig): Promise<void> {
 		await this.executor.createNewSession(prompt, config);
 	}

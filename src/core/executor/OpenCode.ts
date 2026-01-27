@@ -7,6 +7,7 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { logger } from '../../utils/logger';
 import { killProcessTree } from '../../utils/process';
+import { LogNormalizer } from './LogNormalizer';
 import type { CLIConfig, CLIEvent, CLIExecutor } from './types';
 
 type OpenCodeSdkEnvelope = {
@@ -54,9 +55,20 @@ type OpenCodePart =
 
 export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	private process: ChildProcess | null = null;
+	private serverPassword: string | null = null;
 	private serverUrl: string | null = null;
 	private sessionId: string | null = null;
 	private directory: string | null = null;
+	private logNormalizer = new LogNormalizer();
+
+	constructor() {
+		super();
+		this.logNormalizer.on('entry', entry => {
+			if (entry.entryType.type === 'ErrorMessage') {
+				this.emit('event', { type: 'error', data: { message: entry.content } });
+			}
+		});
+	}
 
 	getCapabilities(): ReadonlyArray<'SessionFork' | 'SetupHelper'> {
 		return ['SessionFork'];
@@ -78,29 +90,81 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			return;
 		}
 
-		const timeoutMs =
-			typeof config.serverTimeoutMs === 'number' && Number.isFinite(config.serverTimeoutMs)
-				? config.serverTimeoutMs
-				: 180_000;
-
-		await this.ensureOpenCodeServer(config.workspaceRoot, config.env, timeoutMs);
+		await this.ensureOpenCodeServer(config.workspaceRoot, config);
 	}
 
-	private async ensureOpenCodeServer(
-		workspaceRoot: string,
-		env: Record<string, string> | undefined,
-		timeoutMs: number,
-	): Promise<void> {
+	private generateServerPassword(): string {
+		const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+		let password = '';
+		for (let i = 0; i < 32; i++) {
+			password += chars.charAt(Math.floor(Math.random() * chars.length));
+		}
+		return password;
+	}
+
+	private buildPermissionsEnv(autoApprove: boolean, env?: Record<string, string>): string {
+		// If already set in env, add "question": "deny" if missing, but generally respect it.
+		// For now, we'll just build the default like the reference does.
+		if (env?.OPENCODE_PERMISSION) {
+			try {
+				const existing = JSON.parse(env.OPENCODE_PERMISSION);
+				return JSON.stringify({ ...existing, question: 'deny' });
+			} catch {
+				// ignore invalid json
+			}
+		}
+
+		if (autoApprove) {
+			return JSON.stringify({ question: 'deny' });
+		}
+		return JSON.stringify({
+			edit: 'ask',
+			bash: 'ask',
+			webfetch: 'ask',
+			doom_loop: 'ask',
+			external_directory: 'ask',
+			question: 'deny',
+		});
+	}
+
+	private async ensureOpenCodeServer(workspaceRoot: string, config: CLIConfig): Promise<void> {
 		if (this.serverUrl && this.process) {
 			return;
 		}
 
+		this.serverPassword = this.generateServerPassword();
+		const permissionsEnv = this.buildPermissionsEnv(false, config.env);
+
+		const processEnv: NodeJS.ProcessEnv & {
+			OPENCODE_SERVER_PASSWORD?: string;
+			OPENCODE_PERMISSION?: string;
+			OPENCODE_CONFIG_CONTENT?: string;
+		} = {
+			...process.env,
+			...config.env,
+			NODE_NO_WARNINGS: '1',
+			NO_COLOR: '1',
+			NPM_CONFIG_LOGLEVEL: 'error',
+			OPENCODE_SERVER_PASSWORD: this.serverPassword,
+			OPENCODE_PERMISSION: permissionsEnv,
+		};
+
+		// Inject auto-compaction if not present and enabled (default true)
+		if (!processEnv.OPENCODE_CONFIG_CONTENT) {
+			const autoCompact = config.autoCompact ?? true; // Default to true matching reference
+			if (autoCompact) {
+				processEnv.OPENCODE_CONFIG_CONTENT = JSON.stringify({
+					compaction: { auto: true },
+				});
+			}
+		}
+
 		this.process = spawn(
 			'npx',
-			['-y', 'opencode-ai@1.1.3', 'serve', '--hostname', '127.0.0.1', '--port', '0'],
+			['-y', 'opencode-ai@1.1.25', 'serve', '--hostname', '127.0.0.1', '--port', '0'],
 			{
 				cwd: workspaceRoot,
-				env: { ...process.env, ...env, NODE_NO_WARNINGS: '1', NO_COLOR: '1' },
+				env: processEnv,
 				stdio: ['pipe', 'pipe', 'pipe'],
 				windowsHide: true,
 				shell: true,
@@ -118,6 +182,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 
 		logger.info('[OpenCodeExecutor] Waiting for server URL...');
+		const timeoutMs = config.serverTimeoutMs ?? 180_000;
 		this.serverUrl = await this.waitForServerUrl(this.process.stdout, timeoutMs);
 		this.directory = workspaceRoot;
 		logger.info(`[OpenCode] Server started at ${this.serverUrl}`);
@@ -127,7 +192,9 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		});
 
 		this.process.stderr?.on('data', chunk => {
-			logger.debug(`[OpenCode stderr] ${chunk.toString()}`);
+			const text = chunk.toString();
+			logger.debug(`[OpenCode stderr] ${text}`);
+			this.logNormalizer.processStderr(text);
 		});
 
 		this.process.on('close', code => {
@@ -137,7 +204,225 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			this.serverUrl = null;
 			this.directory = null;
 			this.sessionId = null;
+			this.serverPassword = null;
 		});
+	}
+
+	async executeCommand(
+		command: string,
+		_args: string[], // OpenCode commands are usually single strings like "status" or "models/anthropic"
+		config: CLIConfig,
+	): Promise<void> {
+		if (!this.serverUrl) {
+			await this.ensureServer(config);
+		}
+		if (!this.serverUrl || !this.directory) {
+			throw new Error('OpenCode server not ready');
+		}
+
+		// Map slash commands to OpenCode SDK calls
+		const cmd = command.replace(/^\//, '');
+
+		// First try to check if it's a dynamic command supported by the server
+		// Reference: available_slash_commands/discover_slash_commands
+		// We can list commands and see if it exists, or just try to execute specific ones we know.
+		// Since executeCommand interface is generic, we can try to find if it matches known SDK commands.
+
+		// For now we keep hardcoded handling for critical ones, but fall back or check list.
+		// Reference implementation "run_slash_command" effectively handles discovery.
+		// Here we implement specific handlers for known commands that map to SDK endpoints.
+
+		switch (cmd) {
+			case 'compact':
+			case 'summarize': {
+				if (!this.sessionId) {
+					throw new Error('No active session to compact');
+				}
+
+				// Resolve model from configuration for summarization
+				const modelSpec = this.parseModel(config.model);
+				if (!modelSpec) {
+					this.emit('event', {
+						type: 'tool_result',
+						data: {
+							tool_use_id: 'system',
+							name: 'compact',
+							content: 'Error: No model configured for compaction.',
+							is_error: true,
+						},
+					});
+					break;
+				}
+
+				try {
+					await this.sessionSummarize(this.serverUrl, this.directory, this.sessionId, modelSpec);
+					this.emit('event', {
+						type: 'tool_result',
+						data: {
+							tool_use_id: 'system',
+							name: 'compact',
+							content: 'Session compacted successfully.',
+						},
+					});
+				} catch (error) {
+					this.emit('event', {
+						type: 'tool_result',
+						data: {
+							tool_use_id: 'system',
+							name: 'compact',
+							content: `Error compacting session: ${error instanceof Error ? error.message : String(error)}`,
+							is_error: true,
+						},
+					});
+				}
+				break;
+			}
+			case 'commands': {
+				const commands = await this.listCommands(this.serverUrl, this.directory);
+				this.emit('event', {
+					type: 'tool_result',
+					data: {
+						tool_use_id: 'system',
+						name: 'commands',
+						content: JSON.stringify(commands, null, 2),
+					},
+				});
+				break;
+			}
+			case 'models': {
+				const providers = await this.listConfigProviders(this.serverUrl, this.directory);
+				this.emit('event', {
+					type: 'tool_result',
+					data: {
+						tool_use_id: 'system',
+						name: 'models',
+						content: JSON.stringify(providers, null, 2),
+					},
+				});
+				break;
+			}
+			case 'agents': {
+				const agents = await this.listAgents(this.serverUrl, this.directory);
+				this.emit('event', {
+					type: 'tool_result',
+					data: {
+						tool_use_id: 'system',
+						name: 'agents',
+						content: JSON.stringify(agents, null, 2),
+					},
+				});
+				break;
+			}
+			case 'status': {
+				const mcp = await this.getMcpStatus(this.serverUrl, this.directory);
+				this.emit('event', {
+					type: 'tool_result',
+					data: {
+						tool_use_id: 'system',
+						name: 'status',
+						content: JSON.stringify({ mcp }, null, 2),
+					},
+				});
+				break;
+			}
+			default: {
+				// Dynamic command handling
+				// Check if the command exists in the server
+				const commands = await this.listCommands(this.serverUrl, this.directory);
+				const targetCmd = commands.find(c => c.name === cmd);
+
+				if (targetCmd) {
+					// NOTE: To properly support arbitrary slash commands from the SDK, we would need
+					// a generic "run_slash_command" endpoint or mechanism in the OpenCode server/SDK logic
+					// which currently maps specific commands (like /compact) to tailored implementations.
+					// For now, we acknowledge it exists but explain limitation to the user.
+					logger.warn(`OpenCode command '${cmd}' found but generic execution not implemented.`);
+					this.emit('event', {
+						type: 'tool_result',
+						data: {
+							tool_use_id: 'system',
+							name: cmd,
+							content: `Command '/${cmd}' is recognized but generic execution is not yet supported in this client version.`,
+						},
+					});
+				} else {
+					logger.warn(`Unknown OpenCode command: ${command}`);
+					this.emit('event', {
+						type: 'error',
+						data: { message: `Unknown command: ${command}` },
+					});
+				}
+				break;
+			}
+		}
+	}
+
+	private async listCommands(
+		baseUrl: string,
+		directory: string,
+	): Promise<Array<{ name: string; description?: string }>> {
+		const resp = await fetch(`${baseUrl}/command?directory=${encodeURIComponent(directory)}`, {
+			headers: this.buildOpenCodeHeaders(directory),
+		});
+		if (!resp.ok) return [];
+		return (await resp.json()) as Array<{ name: string; description?: string }>;
+	}
+
+	private async listConfigProviders(baseUrl: string, directory: string): Promise<unknown> {
+		const resp = await fetch(
+			`${baseUrl}/config/providers?directory=${encodeURIComponent(directory)}`,
+			{
+				headers: this.buildOpenCodeHeaders(directory),
+			},
+		);
+		if (!resp.ok) return {};
+		return await resp.json();
+	}
+
+	private async listAgents(baseUrl: string, directory: string): Promise<unknown> {
+		const resp = await fetch(`${baseUrl}/agent?directory=${encodeURIComponent(directory)}`, {
+			headers: this.buildOpenCodeHeaders(directory),
+		});
+		if (!resp.ok) return [];
+		return await resp.json();
+	}
+
+	private async getMcpStatus(baseUrl: string, directory: string): Promise<unknown> {
+		const resp = await fetch(`${baseUrl}/mcp?directory=${encodeURIComponent(directory)}`, {
+			headers: this.buildOpenCodeHeaders(directory),
+		});
+		if (!resp.ok) return {};
+		return await resp.json();
+	}
+
+	private async sessionSummarize(
+		baseUrl: string,
+		directory: string,
+		sessionId: string,
+		model: { providerID: string; modelID: string },
+	): Promise<void> {
+		const req = {
+			providerID: model.providerID,
+			modelID: model.modelID,
+			auto: false,
+		};
+
+		const resp = await fetch(
+			`${baseUrl}/session/${encodeURIComponent(sessionId)}/summarize?directory=${encodeURIComponent(directory)}`,
+			{
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					...this.buildOpenCodeHeaders(directory),
+				},
+				body: JSON.stringify(req),
+			},
+		);
+
+		if (!resp.ok) {
+			const text = await resp.text();
+			throw new Error(`OpenCode summarize failed: ${resp.status} ${resp.statusText}: ${text}`);
+		}
 	}
 
 	async spawn(prompt: string, config: CLIConfig): Promise<ChildProcess> {
@@ -165,6 +450,24 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		this.startEventStream(this.serverUrl, config.workspaceRoot);
 		await this.sendPrompt(this.serverUrl, config.workspaceRoot, forkedSessionId, prompt, config);
 		return this.process;
+	}
+
+	async spawnReview(prompt: string, config: CLIConfig): Promise<ChildProcess> {
+		if (!this.serverUrl) {
+			await this.ensureServer(config);
+		}
+		if (!this.serverUrl || !this.process) {
+			throw new Error('OpenCode server not running');
+		}
+
+		// Reference: build_review_prompt.
+		// For now we just prepend context if not already done by caller.
+		// The caller usually constructs the prompt with diffs.
+		// We treat this as a standard session creation but semantically distinct.
+		// Ideally we would inspect 'context' (RepoReviewContext) but we receive a string prompt here.
+
+		logger.info('[OpenCodeExecutor] spawnReview called');
+		return await this.createNewSession(prompt, config);
 	}
 
 	async createNewSession(prompt: string, config: CLIConfig): Promise<ChildProcess> {
@@ -215,9 +518,14 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	}
 
 	private buildOpenCodeHeaders(directory: string): Record<string, string> {
-		return {
+		const headers: Record<string, string> = {
 			'x-opencode-directory': directory,
 		};
+		if (this.serverPassword) {
+			const encoded = Buffer.from(`opencode:${this.serverPassword}`).toString('base64');
+			headers.Authorization = `Basic ${encoded}`;
+		}
+		return headers;
 	}
 
 	private async createSession(baseUrl: string, directory: string): Promise<string> {
@@ -726,13 +1034,21 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			// If no delta but has text, it's either initial message or final complete text
 			// We only emit it if it's not empty (to avoid redundant updates)
 			else if (part.text && part.text.length > 0) {
+				const content = part.text;
+				const entry = this.logNormalizer.normalizeMessage(content, 'assistant');
 				this.emit('event', {
 					type: 'message',
 					data: {
-						content: part.text,
+						content,
 						partId: part.messageID,
 						isDelta: false,
 					},
+					normalizedEntry: entry,
+				});
+				this.emit('event', {
+					type: 'normalized_log',
+					data: entry,
+					normalizedEntry: entry,
 				});
 			}
 			return;
@@ -774,6 +1090,13 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 			if ((status === 'pending' || status === 'running') && !this.seenToolCalls.has(callId)) {
 				this.seenToolCalls.add(callId);
+
+				const normalized = this.logNormalizer.normalizeToolUse(
+					toolName,
+					(input as Record<string, unknown>) || {},
+					callId,
+				);
+
 				this.emit('event', {
 					type: 'tool_use',
 					data: {
@@ -784,6 +1107,12 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 						title: part.state?.title,
 						metadata: part.state?.metadata,
 					},
+					normalizedEntry: normalized,
+				});
+				this.emit('event', {
+					type: 'normalized_log',
+					data: normalized,
+					normalizedEntry: normalized,
 				});
 			}
 
@@ -837,6 +1166,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		this.serverUrl = null;
 		this.directory = null;
 		this.sessionId = null;
+		this.serverPassword = null;
 		this.eventStreamRunning = false;
 		this.eventAbort = null;
 		this.seenToolCalls.clear();

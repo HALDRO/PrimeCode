@@ -240,6 +240,13 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		}
 
 		switch (event.type) {
+			case 'normalized_log': {
+				// Pure data event for history/logs, no direct UI message by default
+				// but can be attached to other messages or used for auditing
+				// We don't need to post it as a separate session message unless requested
+				break;
+			}
+
 			case 'message': {
 				const e = event.data as { content?: string; partId?: string; isDelta?: boolean };
 				const partId = e.partId || this.activeAssistantPartId || `part-${now}`;
@@ -252,6 +259,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					isStreaming: true,
 					isDelta: e.isDelta ?? true,
 					timestamp: new Date().toISOString(),
+					normalizedEntry: event.normalizedEntry,
 				});
 				break;
 			}
@@ -284,6 +292,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					rawInput: (e.input as Record<string, unknown>) || {},
 					isRunning: true,
 					timestamp: new Date().toISOString(),
+					normalizedEntry: event.normalizedEntry,
 				});
 				break;
 			}
@@ -373,6 +382,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					content,
 					isError: Boolean(e.is_error),
 					timestamp: new Date().toISOString(),
+					normalizedEntry: event.normalizedEntry,
 				});
 				this.sessionHandler.postComplete(toolUseId, toolUseId);
 				break;
@@ -386,6 +396,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					content: (event.data as { message?: string }).message || 'Unknown error',
 					isError: true,
 					timestamp: new Date().toISOString(),
+					normalizedEntry: event.normalizedEntry,
 				});
 				this.sessionHandler.postStatus(activeSessionId, 'error', 'Error');
 				break;

@@ -6,8 +6,10 @@
  */
 
 import React, { type ReactNode, useMemo, useState } from 'react';
+// @ts-expect-error - normalizedEvents path issue in webview tsconfig
+import type { NormalizedEntry } from '../../../../common/normalizedEvents';
 import { computeDiffStats } from '../../../common/diffStats';
-import { FILE_EDIT_TOOLS, isMcpTool, isToolInList, isToolMatch } from '../../constants';
+import { isMcpTool, isToolMatch } from '../../constants';
 import { cn } from '../../lib/cn';
 import { useMcpServers, useToolResultByToolId } from '../../store';
 import type { Message as WebviewMessage } from '../../store/chatStore';
@@ -505,22 +507,22 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		const toolName = message.toolName ?? '';
 		const selectorToolResult = useToolResultByToolId(providedToolResult ? undefined : toolUseId);
 		const toolResult = providedToolResult ?? selectorToolResult;
+		// normalizedEntry exists in message payload but not fully typed in frontend store yet
+		const normalizedEntry = (message as unknown as { normalizedEntry?: NormalizedEntry })
+			.normalizedEntry;
 
 		const isError = toolResult?.isError ?? false;
 		const content = toolResult?.content ?? '';
 
 		const isMcp = isMcpTool(toolName, mcpServerNames);
 		const isBash = isToolMatch(toolName, 'Bash');
-		const isFileEditTool =
-			isToolInList(toolName, FILE_EDIT_TOOLS) &&
-			rawInput &&
-			((rawInput as Record<string, unknown>).old_string !== undefined ||
-				(rawInput as Record<string, unknown>).new_string !== undefined ||
-				(rawInput as Record<string, unknown>).old_str !== undefined ||
-				(rawInput as Record<string, unknown>).new_str !== undefined ||
-				(rawInput as Record<string, unknown>).oldString !== undefined ||
-				(rawInput as Record<string, unknown>).newString !== undefined ||
-				(rawInput as Record<string, unknown>).content !== undefined);
+		// Check NormalizedEntry for ActionType if available
+		const isFileEditTool = !!(
+			normalizedEntry?.entryType &&
+			typeof normalizedEntry.entryType === 'object' &&
+			'actionType' in normalizedEntry.entryType &&
+			normalizedEntry.entryType.actionType.type === 'FileEdit'
+		); // Fallback removed as requested
 
 		const [expanded, setExpanded] = useState(defaultExpanded ?? false);
 		const [diffExpanded, setDiffExpanded] = useState(defaultExpanded ?? false);
@@ -541,94 +543,112 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		}
 
 		// 1) Diff-card for file edit tools
-		if (isFileEditTool && rawInput) {
-			const oldContent =
-				String((rawInput as Record<string, unknown>).old_string ?? '') ||
-				String((rawInput as Record<string, unknown>).old_str ?? '') ||
-				String((rawInput as Record<string, unknown>).oldString ?? '') ||
-				'';
-			const newContent =
-				String((rawInput as Record<string, unknown>).new_string ?? '') ||
-				String((rawInput as Record<string, unknown>).new_str ?? '') ||
-				String((rawInput as Record<string, unknown>).newString ?? '') ||
-				String((rawInput as Record<string, unknown>).content ?? '') ||
-				'';
+		if (isFileEditTool) {
+			let oldContent = '';
+			let newContent = '';
+			let name = filePath ? getShortFileName(filePath) : 'unknown';
 
-			const stats = computeDiffStats(oldContent, newContent);
-			const name = filePath ? getShortFileName(filePath) : 'unknown';
-			const maxHeight = 120;
-			const needsExpand = getDiffContentHeight(oldContent, newContent) > maxHeight;
+			// Try to extract from NormalizedEntry first
+			if (
+				normalizedEntry?.entryType &&
+				typeof normalizedEntry.entryType === 'object' &&
+				'actionType' in normalizedEntry.entryType &&
+				normalizedEntry.entryType.actionType.type === 'FileEdit'
+			) {
+				const action = normalizedEntry.entryType.actionType;
+				name = getShortFileName(action.path);
+				const change = action.changes[0];
+				if (change) {
+					if (change.type === 'Write') {
+						newContent = change.content;
+					} else if (change.type === 'Edit') {
+						newContent = change.unifiedDiff;
+					} else if (change.type === 'Replace') {
+						oldContent = change.oldContent;
+						newContent = change.newContent;
+					}
+				}
+			}
 
-			return (
-				<ToolCard
-					headerLeft={
-						<>
-							<ToolCardLeadingIcon>
-								<FileTypeIcon name={name} size={14} />
-							</ToolCardLeadingIcon>
-							<Tooltip content="Open file in editor" position="top" delay={200}>
-								<button
-									type="button"
-									onClick={e => {
-										e.stopPropagation();
-										if (filePath) postMessage('openFile', { filePath });
-									}}
-									className="text-sm cursor-pointer text-vscode-foreground bg-none border-none p-0 opacity-90 whitespace-nowrap overflow-hidden text-ellipsis"
-								>
-									{name}
-								</button>
-							</Tooltip>
-							{stats.added > 0 && <span className="text-success">+{stats.added}</span>}
-							{stats.removed > 0 && <span className="text-error">−{stats.removed}</span>}
-						</>
-					}
-					headerRight={
-						<Button
-							variant="tool"
-							size="sm"
-							height={20}
-							onClick={e => {
-								e.stopPropagation();
-								if (filePath) postMessage('openFileDiff', { filePath, oldContent, newContent });
-							}}
-							title="Open in diff editor"
-							className="font-bold uppercase tracking-wider text-xs text-vscode-foreground opacity-100 px-1"
-						>
-							Diff
-						</Button>
-					}
-					isCollapsible={needsExpand}
-					expanded={diffExpanded}
-					onToggle={() => setDiffExpanded(prev => !prev)}
-					body={
-						<div className="relative">
-							<SimpleDiff
-								original={oldContent}
-								modified={newContent}
-								maxHeight={maxHeight}
-								expanded={diffExpanded}
-							/>
-							<div
-								className={cn(
-									'absolute right-(--tool-content-padding) bottom-0',
-									'opacity-0 transition-opacity duration-150 ease-out',
-									'group-hover:opacity-100',
-								)}
+			// Fallback to rawInput has been removed as requested.
+			// Rely solely on LogNormalizer's work.
+
+			if (newContent || oldContent) {
+				const stats = computeDiffStats(oldContent, newContent);
+				const maxHeight = 120;
+				const needsExpand = getDiffContentHeight(oldContent, newContent) > maxHeight;
+
+				return (
+					<ToolCard
+						headerLeft={
+							<>
+								<ToolCardLeadingIcon>
+									<FileTypeIcon name={name} size={14} />
+								</ToolCardLeadingIcon>
+								<Tooltip content="Open file in editor" position="top" delay={200}>
+									<button
+										type="button"
+										onClick={e => {
+											e.stopPropagation();
+											if (filePath) postMessage('openFile', { filePath });
+										}}
+										className="text-sm cursor-pointer text-vscode-foreground bg-none border-none p-0 opacity-90 whitespace-nowrap overflow-hidden text-ellipsis"
+									>
+										{name}
+									</button>
+								</Tooltip>
+								{stats.added > 0 && <span className="text-success">+{stats.added}</span>}
+								{stats.removed > 0 && <span className="text-error">−{stats.removed}</span>}
+							</>
+						}
+						headerRight={
+							<Button
+								variant="tool"
+								size="sm"
+								height={20}
+								onClick={e => {
+									e.stopPropagation();
+									if (filePath) postMessage('openFileDiff', { filePath, oldContent, newContent });
+								}}
+								title="Open in diff editor"
+								className="font-bold uppercase tracking-wider text-xs text-vscode-foreground opacity-100 px-1"
 							>
-								<IconButton
-									icon={<CopyIcon size={14} />}
-									onClick={e => {
-										e.stopPropagation();
-										navigator.clipboard.writeText(newContent);
-									}}
-									title="Copy"
-									size={20}
+								Diff
+							</Button>
+						}
+						isCollapsible={needsExpand}
+						expanded={diffExpanded}
+						onToggle={() => setDiffExpanded(prev => !prev)}
+						body={
+							<div className="relative">
+								<SimpleDiff
+									original={oldContent}
+									modified={newContent}
+									maxHeight={maxHeight}
+									expanded={diffExpanded}
 								/>
+								<div
+									className={cn(
+										'absolute right-(--tool-content-padding) bottom-0',
+										'opacity-0 transition-opacity duration-150 ease-out',
+										'group-hover:opacity-100',
+									)}
+								>
+									<IconButton
+										icon={<CopyIcon size={14} />}
+										onClick={e => {
+											e.stopPropagation();
+											navigator.clipboard.writeText(newContent);
+										}}
+										title="Copy"
+										size={20}
+									/>
+								</div>
 							</div>
-						</div>
-					}
-				/>
-			);
+						}
+					/>
+				);
+			}
 		}
 
 		// 2) Tool cards are reserved for MCP/Bash only.

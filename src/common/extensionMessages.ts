@@ -103,6 +103,7 @@ export interface SessionMessageData {
 	approved?: boolean;
 	reason?: string;
 	model?: string;
+	normalizedEntry?: import('./normalizedEvents').NormalizedEntry;
 }
 
 export interface SessionMessagePayload {
@@ -237,6 +238,7 @@ export interface SessionEventMessage {
 	payload: SessionEventPayload;
 	timestamp: number;
 	sessionId?: string;
+	normalizedEntry?: import('./normalizedEvents').NormalizedEntry;
 }
 
 export type SessionLifecycleAction = 'created' | 'closed' | 'switched' | 'cleared';

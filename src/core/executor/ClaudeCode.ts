@@ -8,12 +8,14 @@ import { EventEmitter } from 'node:events';
 import { apiTokensToStats, type TokenStats, type TokenUsageAPI } from '../../common';
 import { logger } from '../../utils/logger';
 import { killProcessTree } from '../../utils/process';
+import { LogNormalizer } from './LogNormalizer';
 import type { CLIConfig, CLIEvent, CLIExecutor } from './types';
 
 export class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 	private process: ChildProcess | null = null;
 	private sessionId: string | null = null;
 	private stdoutBuffer = '';
+	private logNormalizer = new LogNormalizer();
 
 	private tokenStats: TokenStats = {
 		totalTokensInput: 0,
@@ -27,6 +29,27 @@ export class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 		subagentTokensInput: 0,
 		subagentTokensOutput: 0,
 	};
+
+	constructor() {
+		super();
+		// Forward normalized entries
+		this.logNormalizer.on('entry', entry => {
+			this.emit('event', {
+				type: 'normalized_log',
+				data: entry,
+				normalizedEntry: entry,
+			});
+
+			// Legacy compatibility: ensure 'error' events are still emitted for clustered stderr
+			if (entry.entryType.type === 'ErrorMessage') {
+				this.emit('event', {
+					type: 'error',
+					data: { message: entry.content },
+					normalizedEntry: entry,
+				});
+			}
+		});
+	}
 
 	getCapabilities(): ReadonlyArray<'SessionFork' | 'SetupHelper'> {
 		return ['SessionFork'];
@@ -59,6 +82,7 @@ export class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 			'--output-format=stream-json',
 			'--input-format=stream-json',
 			'--include-partial-messages',
+			'--disallowedTools=AskUserQuestion',
 		];
 
 		if (config.model) args.push('--model', config.model);
@@ -69,7 +93,7 @@ export class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 
 		this.process = this.spawnProcess('npx', args, {
 			cwd: config.workspaceRoot,
-			env: { ...process.env, ...config.env },
+			env: { ...process.env, ...config.env, NPM_CONFIG_LOGLEVEL: 'error' },
 			windowsHide: true,
 			stdio: ['pipe', 'pipe', 'pipe'],
 			shell: true,
@@ -90,7 +114,9 @@ export class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 		});
 
 		this.process.stderr?.on('data', chunk => {
-			logger.debug(`[Claude stderr] ${chunk.toString()}`);
+			const text = chunk.toString();
+			logger.debug(`[Claude stderr] ${text}`);
+			this.logNormalizer.processStderr(text);
 		});
 
 		this.process.on('close', code => {
@@ -124,7 +150,7 @@ export class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 
 		this.process = this.spawnProcess('npx', args, {
 			cwd: config.workspaceRoot,
-			env: { ...process.env, ...config.env },
+			env: { ...process.env, ...config.env, NPM_CONFIG_LOGLEVEL: 'error' },
 			windowsHide: true,
 			stdio: ['pipe', 'pipe', 'pipe'],
 			shell: true,
@@ -147,6 +173,16 @@ export class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 		});
 
 		return this.process;
+	}
+
+	async spawnReview(prompt: string, config: CLIConfig): Promise<ChildProcess> {
+		// Reference: spawn_review in Rust implementation
+		// Effectively calls spawn_follow_up if session exists, or spawn new.
+		// Since we don't track session ID here easily for "current", we rely on spawn being sufficient
+		// or spawnFollowUp if requested.
+		// For a fresh review, it's just spawn with a specific prompt (already constructed by caller).
+		logger.info('[ClaudeExecutor] spawnReview called');
+		return this.spawn(prompt, config);
 	}
 
 	parseStream(chunk: Buffer): CLIEvent[] {
@@ -174,11 +210,43 @@ export class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 
 	private normalizeClaudeEvent(event: unknown): CLIEvent | null {
 		const e = event as Record<string, unknown>;
-		if (e.type === 'text') {
-			return { type: 'message', data: { content: e.text } };
+		if (e.type === 'message') {
+			const content = typeof e.content === 'string' ? e.content : '';
+
+			const entry = this.logNormalizer.normalizeMessage(content, 'assistant');
+			this.emit('event', {
+				type: 'normalized_log',
+				data: entry,
+				normalizedEntry: entry,
+			});
+
+			return {
+				type: 'message',
+				data: { content, sender: 'assistant' },
+				normalizedEntry: entry,
+			};
 		}
 		if (e.type === 'tool_use') {
-			return { type: 'tool_use', data: event };
+			const toolName = (e.tool as string) || 'unknown';
+			const input = (e.tool_input as Record<string, unknown>) || {};
+			const toolUseId = (e.tool_use_id as string) || 'unknown';
+
+			const normalized = this.logNormalizer.normalizeToolUse(toolName, input, toolUseId);
+			this.emit('event', {
+				type: 'normalized_log',
+				data: normalized,
+				normalizedEntry: normalized,
+			});
+
+			return {
+				type: 'tool_use',
+				data: {
+					tool: toolName,
+					input,
+					tool_use_id: toolUseId,
+				},
+				normalizedEntry: normalized,
+			};
 		}
 		if (e.type === 'tool_result') {
 			return { type: 'tool_result', data: event };
@@ -248,6 +316,29 @@ export class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 						toolUseId,
 					},
 				};
+			}
+			if (req?.subtype === 'hook_callback') {
+				// Handle hook callbacks (e.g. Stop Git Check)
+				const requestId = typeof e.request_id === 'string' ? e.request_id : undefined;
+				const callbackId = typeof req.callback_id === 'string' ? req.callback_id : undefined;
+				const input = (req.input as Record<string, unknown> | undefined) ?? {};
+
+				if (requestId && callbackId === 'STOP_GIT_CHECK_CALLBACK_ID') {
+					// Auto-approve or check status.
+					// Since we don't have direct git access here, we should probably emit permission request
+					// or handle it if we can.
+					// Reference: client.rs handles this by checking git status.
+					// We'll emit a special permission type so Handler can check Git.
+					return {
+						type: 'permission',
+						data: {
+							id: requestId,
+							tool: 'StopGitCheck', // Virtual tool name for hook
+							input,
+							metadata: { callbackId },
+						},
+					};
+				}
 			}
 		}
 		if (e.type === 'permission_required') {

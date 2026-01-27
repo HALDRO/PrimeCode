@@ -6,6 +6,7 @@
  */
 
 import type { VSCodeApi } from '../../common';
+import type { NormalizedEntry } from '../../common/normalizedEvents';
 
 declare global {
 	interface Window {
@@ -398,6 +399,28 @@ const SCENARIO_1_RESEARCHER: MockMessage[] = (() => {
 						new_string:
 							'const [count, setCount] = useState(0);\nconst increment = () => setCount(c => c + 1);\nreturn <button onClick={increment}>{count}</button>;',
 					},
+					normalizedEntry: {
+						timestamp: new Date().toISOString(),
+						entryType: {
+							type: 'ToolUse',
+							toolName: 'Edit',
+							status: 'created',
+							actionType: {
+								type: 'FileEdit',
+								path: 'src/App.tsx',
+								changes: [
+									{
+										type: 'Replace',
+										oldContent:
+											'const [count, setCount] = useState(0);\nreturn <button>{count}</button>;',
+										newContent:
+											'const [count, setCount] = useState(0);\nconst increment = () => setCount(c => c + 1);\nreturn <button onClick={increment}>{count}</button>;',
+									},
+								],
+							},
+						},
+						content: '',
+					} as NormalizedEntry,
 					timestamp: new Date().toISOString(),
 				},
 			},
@@ -1069,6 +1092,25 @@ const mockVSCodeApi: VSCodeApi = {
 									old_string: '',
 									new_string: '// Demo change',
 								},
+								normalizedEntry: {
+									timestamp: new Date().toISOString(),
+									entryType: {
+										type: 'ToolUse',
+										toolName: 'Edit',
+										status: 'created',
+										actionType: {
+											type: 'FileEdit',
+											path: 'src/demo.ts',
+											changes: [
+												{
+													type: 'Write',
+													content: '// Demo change',
+												},
+											],
+										},
+									},
+									content: '',
+								} as NormalizedEntry,
 								timestamp: new Date().toISOString(),
 							},
 						},

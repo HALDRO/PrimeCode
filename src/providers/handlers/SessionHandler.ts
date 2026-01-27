@@ -69,6 +69,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			payload: { eventType: 'message', message },
 			timestamp: Date.now(),
 			sessionId: this.context.sessionState.activeSessionId,
+			normalizedEntry: message.normalizedEntry,
 		} satisfies SessionEventMessage);
 	}
 

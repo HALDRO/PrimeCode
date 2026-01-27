@@ -353,6 +353,7 @@ export const useChatStore = create<ChatState>()(
 									// Attachments
 									attachments: msgData.attachments,
 									metadata: msgData.metadata,
+									normalizedEntry: msgData.normalizedEntry,
 								} as Message;
 
 								// Merge or append message
