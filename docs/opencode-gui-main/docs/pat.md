@@ -1,0 +1,5 @@
+## Link to update personal access token
+
+This is the link for developers to update the personal access token (PAT) if needed.
+
+https://dev.azure.com/tanishqk/_details/security/tokens?id=5362a08d-c572-4e51-813b-5c8de5aca2c2&tracking_data=eyJTb3VyY2UiOiJFbWFpbCIsIlR5cGUiOiJOb3RpZmljYXRpb24iLCJTSUQiOiJtcy52c3MtdG9rZW4tbm90aWZpY2F0aW9ucy5leHBpcmVkLXRva2VuLXN1YnNjcmlwdGlvbiIsIlNUeXBlIjoiQ09OIiwiUmVjaXAiOjEsIl94Y2kiOnsiTklEIjozNDE3OTIzNzcsIk1SZWNpcCI6Im0wPTEgIiwiQWN0IjoiYjkwMTEyODItYWVmNy00MjM5LWJmMGQtZDExMzk3YzQwZmIzIn0sIkVsZW1lbnQiOiJoZXJvL2N0YSJ9
