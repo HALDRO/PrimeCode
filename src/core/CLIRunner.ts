@@ -4,6 +4,7 @@
  * Re-exports from src/core/cli.
  */
 
+import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { ClaudeExecutor } from './executor/ClaudeCode';
 import { OpenCodeExecutor } from './executor/OpenCode';
@@ -18,9 +19,11 @@ export type { CLIConfig, CLIEvent, CLIExecutor };
 export class CLIRunner extends EventEmitter {
 	private executor: CLIExecutor;
 	private currentSessionId: string | null = null;
+	private provider: 'claude' | 'opencode';
 
 	constructor(provider: 'claude' | 'opencode') {
 		super();
+		this.provider = provider;
 
 		if (provider === 'claude') {
 			this.executor = new ClaudeExecutor();
@@ -42,28 +45,38 @@ export class CLIRunner extends EventEmitter {
 		});
 	}
 
-	async spawn(prompt: string, config: CLIConfig): Promise<void> {
-		await this.executor.spawn(prompt, config);
+	async start(config: CLIConfig): Promise<void> {
+		if (this.executor instanceof OpenCodeExecutor) {
+			await this.executor.ensureServer(config);
+		}
 	}
 
-	async spawnFollowUp(prompt: string, config: CLIConfig): Promise<void> {
+	async spawn(prompt: string, config: CLIConfig): Promise<ChildProcess | null> {
+		await this.executor.spawn(prompt, config);
+		return null;
+	}
+
+	async spawnFollowUp(prompt: string, config: CLIConfig): Promise<ChildProcess | null> {
 		if (!this.currentSessionId) {
 			throw new Error('No active session');
 		}
 		await this.executor.spawnFollowUp(prompt, this.currentSessionId, config);
+		return null;
 	}
 
-	async spawnReview(prompt: string, config: CLIConfig): Promise<void> {
+	async spawnReview(prompt: string, config: CLIConfig): Promise<ChildProcess | null> {
 		if (this.executor.spawnReview) {
 			await this.executor.spawnReview(prompt, config);
 		} else {
 			// Fallback if not specifically implemented
 			await this.executor.spawn(prompt, config);
 		}
+		return null;
 	}
 
-	async createNewSession(prompt: string, config: CLIConfig): Promise<void> {
+	async createNewSession(prompt: string, config: CLIConfig): Promise<ChildProcess | null> {
 		await this.executor.createNewSession(prompt, config);
+		return null;
 	}
 
 	async respondToPermission(decision: {
@@ -80,11 +93,27 @@ export class CLIRunner extends EventEmitter {
 		this.currentSessionId = null;
 	}
 
+	async dispose(): Promise<void> {
+		if (this.executor instanceof OpenCodeExecutor) {
+			await this.executor.dispose();
+		} else {
+			await this.executor.kill();
+		}
+	}
+
+	async abort(): Promise<void> {
+		await this.executor.abort();
+	}
+
 	getSessionId(): string | null {
 		return this.currentSessionId;
 	}
 
 	getOpenCodeServerInfo(): { baseUrl: string; directory: string } | null {
 		return this.executor.getAdminInfo();
+	}
+
+	getProvider(): 'claude' | 'opencode' {
+		return this.provider;
 	}
 }

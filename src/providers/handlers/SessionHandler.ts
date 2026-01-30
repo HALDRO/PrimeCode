@@ -307,7 +307,7 @@ export class SessionHandler implements WebviewMessageHandler {
 	}
 
 	private async onStopRequest(_msg: WebviewMessage): Promise<void> {
-		await this.context.cli.kill();
+		await this.context.cli.abort();
 		this.postSessionMessage({
 			id: `interrupted-${Date.now()}`,
 			type: 'interrupted',
@@ -340,6 +340,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			workspaceRoot,
 			yoloMode: Boolean(this.context.settings.get('yoloMode') || false),
 			agent: typeof opencodeAgent === 'string' ? opencodeAgent : undefined,
+			autoApprove: Boolean(this.context.settings.get('autoApprove') || false),
 			serverTimeoutMs:
 				typeof opencodeServerTimeout === 'number' && Number.isFinite(opencodeServerTimeout)
 					? Math.max(0, opencodeServerTimeout) * 1000

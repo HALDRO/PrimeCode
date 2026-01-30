@@ -651,8 +651,14 @@ export type ProjectUpdatedMessage = BaseExtensionMessage<
 >;
 
 // =============================================================================
-// Union of All Extension Messages
+// Editor Messages (global)
 // =============================================================================
+
+export type EditorSelectionMessage = BaseExtensionMessage<
+	'editorSelection',
+	{ text: string; fileName?: string }
+>;
+export type ServerInfoMessage = BaseExtensionMessage<'serverInfo', { url: string }>;
 
 export type ExtensionMessage =
 	| SessionEventMessage
@@ -710,4 +716,6 @@ export type ExtensionMessage =
 	| ProjectUpdatedMessage
 	| ImprovePromptResultMessage
 	| ImprovePromptErrorMessage
-	| ImprovePromptCancelledMessage;
+	| ImprovePromptCancelledMessage
+	| EditorSelectionMessage
+	| ServerInfoMessage;

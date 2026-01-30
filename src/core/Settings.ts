@@ -31,6 +31,7 @@ export interface PrimeCodeSettings {
 
 	'opencode.autoStart'?: boolean;
 	'opencode.serverTimeout'?: number;
+	'opencode.serverUrl'?: string;
 	'opencode.agent'?: string;
 	'opencode.enabledModels': string[];
 
@@ -97,6 +98,7 @@ export class Settings {
 
 			'opencode.autoStart': this.get('opencode.autoStart'),
 			'opencode.serverTimeout': this.get('opencode.serverTimeout'),
+			'opencode.serverUrl': this.get('opencode.serverUrl'),
 			'opencode.agent': this.get('opencode.agent'),
 			'opencode.enabledModels': this.get('opencode.enabledModels') || [],
 

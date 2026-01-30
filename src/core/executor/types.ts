@@ -17,6 +17,8 @@ export interface CLIConfig {
 	env?: Record<string, string>;
 	/** Optional server startup timeout override (milliseconds). */
 	serverTimeoutMs?: number;
+	/** Optional existing server URL to connect to. */
+	serverUrl?: string;
 	/** Enable auto-compaction for OpenCode. */
 	autoCompact?: boolean;
 	/** Enable git commit reminder checks (Claude). */
@@ -41,12 +43,13 @@ export interface CLIEvent {
 
 export interface CLIExecutor extends EventEmitter {
 	ensureServer(config: CLIConfig): Promise<void>;
-	spawn(prompt: string, config: CLIConfig): Promise<ChildProcess>;
-	spawnFollowUp(prompt: string, sessionId: string, config: CLIConfig): Promise<ChildProcess>;
+	spawn(prompt: string, config: CLIConfig): Promise<ChildProcess | null>;
+	spawnFollowUp(prompt: string, sessionId: string, config: CLIConfig): Promise<ChildProcess | null>;
 	/** Spawn a process specifically for code review. */
-	spawnReview?(prompt: string, config: CLIConfig): Promise<ChildProcess>;
-	createNewSession(prompt: string, config: CLIConfig): Promise<ChildProcess>;
+	spawnReview?(prompt: string, config: CLIConfig): Promise<ChildProcess | null>;
+	createNewSession(prompt: string, config: CLIConfig): Promise<ChildProcess | null>;
 	kill(): Promise<void>;
+	abort(): Promise<void>;
 	parseStream(chunk: Buffer): CLIEvent[];
 	getSessionId(): string | null;
 	respondToPermission(decision: {

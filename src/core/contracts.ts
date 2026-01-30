@@ -25,10 +25,10 @@ export interface ICLIConfig {
 }
 
 export interface ICLIRunner {
-	spawn(prompt: string, config: ICLIConfig): Promise<void>;
-	spawnFollowUp(prompt: string, config: ICLIConfig): Promise<void>;
-	spawnReview(prompt: string, config: ICLIConfig): Promise<void>;
-	createNewSession(prompt: string, config: ICLIConfig): Promise<void>;
+	spawn(prompt: string, config: ICLIConfig): Promise<unknown>;
+	spawnFollowUp(prompt: string, config: ICLIConfig): Promise<unknown>;
+	spawnReview(prompt: string, config: ICLIConfig): Promise<unknown>;
+	createNewSession(prompt: string, config: ICLIConfig): Promise<unknown>;
 	respondToPermission(decision: {
 		requestId: string;
 		approved: boolean;
@@ -38,6 +38,7 @@ export interface ICLIRunner {
 	kill(): Promise<void>;
 	getSessionId(): string | null;
 	getOpenCodeServerInfo(): { baseUrl: string; directory: string } | null;
+	abort(): Promise<void>;
 	on(event: string, listener: (...args: unknown[]) => void): this;
 	off(event: string, listener: (...args: unknown[]) => void): this;
 }

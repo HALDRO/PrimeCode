@@ -326,6 +326,8 @@ export const ConversationMessageSchema = Type.Union([
 		partId: Type.Optional(Type.String()),
 		hidden: Type.Optional(Type.Boolean()),
 		contextId: Type.Optional(Type.String()),
+		isStreaming: Type.Optional(Type.Boolean()),
+		isDelta: Type.Optional(Type.Boolean()),
 	}),
 	Type.Object({
 		id: Type.Optional(Type.String()),

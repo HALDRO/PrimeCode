@@ -62,10 +62,6 @@ export function activate(context: vscode.ExtensionContext) {
 		ctx: vscode.ExtensionContext,
 	): Promise<ChatProvider | undefined> {
 		try {
-			// Clean up orphaned OpenCode processes from previous sessions
-			// TODO: Implement cleanup in CLIRunner if needed
-			logger.info('[Extension] Initialization starting...');
-
 			// Initialize clipboard context service for tracking copy events
 			const clipboardContextService = ClipboardContextService.getInstance();
 			ctx.subscriptions.push(clipboardContextService);
@@ -104,6 +100,50 @@ export function activate(context: vscode.ExtensionContext) {
 				},
 			);
 
+			// Command to add selection to prompt
+			const addSelectionDisposable = vscode.commands.registerCommand(
+				'primecode.addSelectionToPrompt',
+				async () => {
+					const editor = vscode.window.activeTextEditor;
+					if (!editor) {
+						vscode.window.showInformationMessage('PrimeCode: No active editor selection.');
+						return;
+					}
+
+					const selection = editor.selection;
+					const text = editor.document.getText(selection);
+
+					if (!text.trim()) {
+						vscode.window.showInformationMessage('PrimeCode: Selection is empty.');
+						return;
+					}
+
+					const document = editor.document;
+					// Resolve relative path
+					const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+					const relPath = workspaceFolder
+						? vscode.workspace.asRelativePath(document.uri)
+						: document.uri.fsPath;
+
+					// Format the selection as a block with file context
+					const formattedSelection = `\n\n\`\`\`${document.languageId}:${relPath}\n${text}\n\`\`\`\n\n`;
+
+					// Ensure chat is open
+					await vscode.commands.executeCommand('primecode.openChat');
+
+					// Send to webview
+					if (provider) {
+						provider.postMessage({
+							type: 'editorSelection',
+							data: {
+								text: formattedSelection,
+								fileName: relPath,
+							},
+						});
+					}
+				},
+			);
+
 			// Register webview view provider for sidebar chat
 			logger.info('Registering WebviewViewProvider...');
 
@@ -121,7 +161,9 @@ export function activate(context: vscode.ExtensionContext) {
 			ctx.subscriptions.push(
 				loadConversationDisposable,
 				openFileDiffDisposable,
+				addSelectionDisposable,
 				webviewProviderDisposable,
+				webviewProvider,
 			);
 
 			logger.info('Provider initialization completed successfully!');

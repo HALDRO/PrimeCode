@@ -34,6 +34,7 @@
 		"@sinclair/typebox": "^0.34.45",
 		"class-variance-authority": "^0.7.1",
 		"clsx": "^2.1.1",
+		"immer": "^11.1.3",
 		"js-yaml": "^4.1.1",
 		"lucide-react": "^0.562.0",
 		"openai": "^6.16.0",
@@ -141,12 +142,21 @@
 				"title": "Open PrimeCode",
 				"category": "PrimeCode",
 				"icon": "public/icon.png"
+			},
+			{
+				"command": "primecode.addSelectionToPrompt",
+				"title": "Add Selection to Chat",
+				"category": "PrimeCode",
+				"icon": "$(add)"
 			}
 		],
 		"menus": {
 			"commandPalette": [
 				{
 					"command": "primecode.openChat"
+				},
+				{
+					"command": "primecode.addSelectionToPrompt"
 				}
 			],
 			"editor/context": [
@@ -154,6 +164,11 @@
 					"command": "primecode.openChat",
 					"group": "primecode@1",
 					"when": "editorTextFocus"
+				},
+				{
+					"command": "primecode.addSelectionToPrompt",
+					"group": "primecode@2",
+					"when": "editorHasSelection"
 				}
 			],
 			"editor/title": [
@@ -249,6 +264,11 @@
 					"type": "number",
 					"default": 15000,
 					"description": "Timeout in milliseconds for OpenCode server to start"
+				},
+				"primeCode.opencode.serverUrl": {
+					"type": "string",
+					"default": "",
+					"description": "URL of an existing OpenCode server to connect to (e.g. http://127.0.0.1:3000). If set, the extension will not start a new server."
 				},
 				"primeCode.opencode.agent": {
 					"type": "string",

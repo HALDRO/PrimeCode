@@ -24,6 +24,7 @@ import type {
 	Access,
 	CLIProviderType,
 	DiscoveryStatus,
+	ExtensionMessage,
 	MCPServersMap,
 	OpenCodeProviderData,
 	PlatformInfo,
@@ -40,6 +41,71 @@ export type {
 	OpenCodeProviderData,
 	PlatformInfo,
 	DiscoveryStatus,
+};
+
+// Helper for loading meta logic
+const handleLoadingMeta = (
+	meta: { operation?: string; message?: string } | undefined,
+	error: string | undefined,
+	setAgentsOps: (ops: Partial<SettingsState['agentsOps']>) => void,
+) => {
+	if (meta?.operation && meta.message) {
+		setAgentsOps({
+			lastAction: meta.operation,
+			status: 'success',
+			message: meta.message,
+		});
+		setTimeout(() => setAgentsOps({ status: 'idle' }), 3500);
+	}
+	if (error) {
+		setAgentsOps({
+			lastAction: 'error',
+			status: 'error',
+			message: error,
+		});
+		setTimeout(() => setAgentsOps({ status: 'idle' }), 6000);
+	}
+};
+
+// Helper for settings data mapping
+const handleSettingsData = (settings: Record<string, unknown>, actions: SettingsActions) => {
+	const mappedSettings: Record<string, unknown> = {};
+
+	if (settings.provider !== undefined) mappedSettings.provider = settings.provider;
+	if (settings['proxy.baseUrl'] !== undefined)
+		mappedSettings.proxyBaseUrl = settings['proxy.baseUrl'];
+	if (settings['proxy.apiKey'] !== undefined) mappedSettings.proxyApiKey = settings['proxy.apiKey'];
+	if (settings['proxy.enabledModels'] !== undefined)
+		mappedSettings.enabledProxyModels = settings['proxy.enabledModels'];
+	if (settings['proxy.useSingleModel'] !== undefined)
+		mappedSettings.proxyUseSingleModel = settings['proxy.useSingleModel'];
+	if (settings['proxy.haikuModel'] !== undefined)
+		mappedSettings.proxyHaikuModel = settings['proxy.haikuModel'];
+	if (settings['proxy.sonnetModel'] !== undefined)
+		mappedSettings.proxySonnetModel = settings['proxy.sonnetModel'];
+	if (settings['proxy.opusModel'] !== undefined)
+		mappedSettings.proxyOpusModel = settings['proxy.opusModel'];
+	if (settings['proxy.subagentModel'] !== undefined)
+		mappedSettings.proxySubagentModel = settings['proxy.subagentModel'];
+
+	if (settings['promptImprove.model'] !== undefined)
+		mappedSettings.promptImproveModel = settings['promptImprove.model'];
+	if (settings['promptImprove.template'] !== undefined)
+		mappedSettings.promptImproveTemplate = settings['promptImprove.template'];
+	if (settings['promptImprove.timeoutMs'] !== undefined) {
+		const ms = settings['promptImprove.timeoutMs'];
+		mappedSettings.promptImproveTimeoutSeconds =
+			typeof ms === 'number' && Number.isFinite(ms) ? Math.max(1, Math.round(ms / 1000)) : 30;
+	}
+
+	if (settings['opencode.agent'] !== undefined)
+		mappedSettings.opencodeAgent = settings['opencode.agent'];
+	if (settings['opencode.enabledModels'] !== undefined)
+		mappedSettings.enabledOpenCodeModels = settings['opencode.enabledModels'];
+	if (settings['providers.disabled'] !== undefined)
+		mappedSettings.disabledProviders = settings['providers.disabled'];
+
+	actions.setSettings(mappedSettings);
 };
 
 // CLI Diagnostics info
@@ -116,6 +182,8 @@ export interface SettingsActions {
 
 	// Import/Sync feedback in Settings (avoids noisy toasts)
 	setAgentsOps: (ops: Partial<SettingsState['agentsOps']>) => void;
+
+	handleExtensionMessage: (message: ExtensionMessage) => void;
 }
 
 // Rule Type
@@ -304,7 +372,7 @@ export interface SettingsState {
 	actions: SettingsActions;
 }
 
-export const useSettingsStore = create<SettingsState>(set => ({
+export const useSettingsStore = create<SettingsState>((set, get) => ({
 	workspaceName: '',
 
 	provider: 'claude',
@@ -571,6 +639,294 @@ export const useSettingsStore = create<SettingsState>(set => ({
 					updatedAt: Date.now(),
 				},
 			})),
+
+		handleExtensionMessage: (message: ExtensionMessage) => {
+			const actions = get().actions;
+
+			switch (message.type) {
+				case 'commandsList':
+					if (message.data) {
+						const { custom, isLoading, error, meta } = message.data as {
+							custom: ParsedCommand[];
+							isLoading: boolean;
+							error?: string;
+							meta?: { operation?: string; message?: string };
+						};
+						actions.setCommands({ custom, isLoading, error });
+						handleLoadingMeta(meta, error, actions.setAgentsOps);
+					}
+					break;
+
+				case 'skillsList':
+					if (message.data) {
+						const { skills, isLoading, error, meta } = message.data as {
+							skills: import('../../common').ParsedSkill[];
+							isLoading: boolean;
+							error?: string;
+							meta?: { operation?: string; message?: string };
+						};
+						actions.setSkills({ items: skills, isLoading, error });
+						handleLoadingMeta(meta, error, actions.setAgentsOps);
+					}
+					break;
+
+				case 'hooksList':
+					if (message.data) {
+						const { hooks, isLoading, error, meta } = message.data as {
+							hooks: import('../../common').ParsedHook[];
+							isLoading: boolean;
+							error?: string;
+							meta?: { operation?: string; message?: string };
+						};
+						actions.setHooks({ items: hooks, isLoading, error });
+						handleLoadingMeta(meta, error, actions.setAgentsOps);
+					}
+					break;
+
+				case 'subagentsList':
+					if (message.data) {
+						const { subagents, isLoading, error, meta } = message.data as {
+							subagents: import('../../common').ParsedSubagent[];
+							isLoading: boolean;
+							error?: string;
+							meta?: { operation?: string; message?: string };
+						};
+						actions.setSubagents({ items: subagents, isLoading, error });
+						handleLoadingMeta(meta, error, actions.setAgentsOps);
+					}
+					break;
+
+				case 'settingsData':
+					if (message.data) {
+						handleSettingsData(message.data as Record<string, unknown>, actions);
+					}
+					break;
+
+				case 'modelSelected':
+					if (message.model) {
+						actions.setSelectedModel(message.model);
+					}
+					break;
+
+				case 'proxyModels':
+					if (message.data) {
+						const { models, error, baseUrl } = message.data;
+						actions.setProxyModels(models || []);
+						actions.setProxyTestStatus({
+							isLoading: false,
+							success: !error && models && models.length > 0,
+							error: error || null,
+							lastTested: Date.now(),
+						});
+						if (baseUrl) {
+							actions.setSettings({ proxyBaseUrl: baseUrl });
+						}
+					}
+					break;
+
+				case 'cliDiagnostics':
+					if (message.data) {
+						actions.setCLIDiagnostics(message.data);
+					}
+					break;
+
+				case 'discoveryStatus':
+					if (message.data) {
+						actions.setDiscoveryStatus(message.data);
+					}
+					break;
+
+				case 'ruleList':
+					if (message.data?.rules) {
+						actions.setRules(message.data.rules);
+						const meta = (message.data as { meta?: { operation?: string; message?: string } })
+							?.meta;
+						handleLoadingMeta(meta, undefined, actions.setAgentsOps);
+					}
+					break;
+
+				case 'ruleUpdated':
+					if (message.data?.rule) {
+						actions.updateRule(message.data.rule);
+					}
+					break;
+
+				case 'permissionsUpdated':
+					if (message.data?.policies) {
+						actions.setPolicies(message.data.policies);
+					}
+					break;
+
+				case 'accessData':
+					if (message.data) {
+						const access = Array.isArray(message.data)
+							? (message.data as Access[])
+							: [message.data as Access];
+						actions.setAccess(access);
+					}
+					break;
+
+				case 'openCodeStatus':
+					if (message.data) {
+						const status = message.data;
+						actions.setOpenCodeStatus({
+							isChecking: false,
+							installed: status.installed,
+							version: status.version ?? undefined,
+							error: status.error,
+						});
+					}
+					break;
+
+				case 'openCodeProviders':
+					if (message.data) {
+						const { providers, config } = message.data;
+						actions.setOpenCodeProviders(providers);
+						actions.setOpenCodeConfig({ isLoading: false, error: config?.error });
+					}
+					break;
+
+				case 'openCodeModelSet':
+					if (message.data) {
+						actions.setSelectedModel(message.data.model);
+					}
+					break;
+
+				case 'openCodeAuthResult':
+					if (message.data) {
+						const { success, error, providerId, isLoading } = message.data as {
+							success?: boolean;
+							error?: string;
+							providerId?: string;
+							isLoading?: boolean;
+						};
+						actions.setProviderAuthState(
+							providerId
+								? {
+										providerId,
+										isLoading: isLoading ?? false,
+										success: success ?? false,
+										error: error ?? undefined,
+									}
+								: null,
+						);
+						if (success && !isLoading && providerId) {
+							actions.clearSessionDisconnectedProvider(providerId);
+						}
+					}
+					break;
+
+				case 'removeOpenCodeProvider':
+					if (message.data) {
+						const { providerId, providerName } = message.data as {
+							providerId?: string;
+							providerName?: string;
+						};
+						if (providerId) {
+							const provider = get().opencodeProviders.find(p => p.id === providerId);
+							actions.removeOpenCodeProvider(providerId);
+							const nextEnabled = get().enabledOpenCodeModels.filter(
+								id => !id.startsWith(`${providerId}/`),
+							);
+							actions.setEnabledOpenCodeModels(nextEnabled);
+							if (provider || providerName) {
+								actions.addAvailableProvider({
+									id: providerId,
+									name: provider?.name || providerName || providerId,
+									env: [],
+								});
+							}
+						}
+					}
+					break;
+
+				case 'availableProviders':
+					if (message.data) {
+						const { providers } = message.data as {
+							providers?: Array<{ id: string; name: string; env?: string[] }>;
+						};
+						if (providers) {
+							const normalizedProviders = providers.map(p => ({
+								id: p.id,
+								name: p.name,
+								env: p.env || [],
+							}));
+							actions.setAvailableProviders(normalizedProviders);
+						}
+					}
+					break;
+
+				case 'mcpServers':
+					if (message.data) {
+						actions.setMcpServers(message.data);
+					}
+					break;
+
+				case 'mcpInstalledMetadata':
+					if (message.data) {
+						const data = message.data as {
+							metadata?: Record<string, import('../../common').InstalledMcpServerMetadata>;
+						};
+						actions.setMcpInstalledMetadata(data.metadata ?? {});
+					}
+					break;
+
+				case 'mcpMarketplaceCatalog':
+					if (message.data) {
+						const data = message.data as {
+							catalog?: import('../../common').McpMarketplaceCatalog;
+							error?: string;
+						};
+						actions.setMcpMarketplaceState({
+							isLoading: false,
+							error: data.error ?? null,
+							catalog: data.catalog ?? null,
+						});
+					}
+					break;
+
+				case 'mcpMarketplaceInstallResult':
+					if (message.data) {
+						const data = message.data as {
+							success: boolean;
+							installPrompt?: string;
+						};
+						if (data.success && data.installPrompt) {
+							navigator.clipboard.writeText(data.installPrompt).catch(() => {});
+						}
+					}
+					break;
+
+				case 'agentsConfigStatus':
+					if (message.data) {
+						const data = message.data as {
+							hasProjectConfig?: boolean;
+							projectPath?: string;
+						};
+						actions.setAgentsConfigStatus({
+							hasProjectConfig: data.hasProjectConfig ?? false,
+							projectPath: data.projectPath,
+						});
+					}
+					break;
+
+				case 'mcpStatus':
+					if (message.data) {
+						actions.setMcpStatus(
+							message.data as Record<
+								string,
+								{
+									status: string;
+									error?: string;
+									tools?: Array<{ name: string; description?: string }>;
+									resources?: Array<{ uri: string; name: string; description?: string }>;
+								}
+							>,
+						);
+					}
+					break;
+			}
+		},
 	},
 }));
 

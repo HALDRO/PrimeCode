@@ -368,12 +368,30 @@ const components: Components = {
 // ----------------------------------------------------------------------
 
 /**
+ * Pre-process markdown content to close unclosed code blocks for smoother streaming rendering.
+ * This emulates the "liquid" feel by preventing layout shifts when code blocks are incomplete.
+ */
+const preprocessContent = (content: string): string => {
+	// Count backticks to see if we have an open code block
+	const codeBlockMatches = content.match(/```/g);
+	const count = codeBlockMatches ? codeBlockMatches.length : 0;
+
+	// If odd number of backticks, we have an open block. Close it.
+	if (count % 2 !== 0) {
+		return `${content}\n\`\`\``;
+	}
+	return content;
+};
+
+/**
  * Memoized Markdown renderer - prevents expensive re-renders when content hasn't changed.
  * Markdown parsing with syntax highlighting is CPU-intensive, so we skip re-renders
  * when props are identical.
  */
 export const Markdown: React.FC<MarkdownProps> = React.memo(
 	({ content, className }) => {
+		const processedContent = React.useMemo(() => preprocessContent(content), [content]);
+
 		return (
 			<div
 				className={cn(
@@ -387,7 +405,7 @@ export const Markdown: React.FC<MarkdownProps> = React.memo(
 					components={components}
 					urlTransform={url => url}
 				>
-					{content}
+					{processedContent}
 				</ReactMarkdown>
 			</div>
 		);

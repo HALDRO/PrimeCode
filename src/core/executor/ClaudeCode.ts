@@ -5,18 +5,29 @@
 
 import { type ChildProcess, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { apiTokensToStats, type TokenStats, type TokenUsageAPI } from '../../common';
+import { apiTokensToStats, type TokenUsageAPI } from '../../common';
 import { logger } from '../../utils/logger';
-import { killProcessTree } from '../../utils/process';
 import { LogNormalizer } from './LogNormalizer';
 import type { CLIConfig, CLIEvent, CLIExecutor } from './types';
+
+interface TokenStats {
+	totalTokensInput: number;
+	totalTokensOutput: number;
+	currentInputTokens: number;
+	currentOutputTokens: number;
+	cacheCreationTokens: number;
+	cacheReadTokens: number;
+	reasoningTokens: number;
+	totalReasoningTokens: number;
+	subagentTokensInput: number;
+	subagentTokensOutput: number;
+}
 
 export class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 	private process: ChildProcess | null = null;
 	private sessionId: string | null = null;
 	private stdoutBuffer = '';
 	private logNormalizer = new LogNormalizer();
-
 	private tokenStats: TokenStats = {
 		totalTokensInput: 0,
 		totalTokensOutput: 0,
@@ -187,6 +198,10 @@ export class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 		return this.spawn(prompt, config);
 	}
 
+	async createNewSession(_prompt: string, _config: CLIConfig): Promise<ChildProcess | null> {
+		throw new Error('ClaudeExecutor does not support creating new sessions');
+	}
+
 	parseStream(chunk: Buffer): CLIEvent[] {
 		this.stdoutBuffer += chunk.toString();
 
@@ -220,6 +235,7 @@ export class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 				type: 'normalized_log',
 				data: entry,
 				normalizedEntry: entry,
+				sessionId: this.sessionId ?? undefined,
 			});
 
 			return {
@@ -396,9 +412,15 @@ export class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 		return { ...this.tokenStats };
 	}
 
+	async abort(): Promise<void> {
+		// Claude executor runs as a process, so aborting basically means killing the process
+		// or sending SIGINT if we want to be gentle, but for now kill is fine.
+		await this.kill();
+	}
+
 	async kill(): Promise<void> {
-		if (this.process?.pid) {
-			await killProcessTree(this.process.pid);
+		if (this.process) {
+			this.process.kill();
 		}
 		this.process = null;
 		this.sessionId = null;
@@ -436,10 +458,6 @@ export class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 			throw new Error('Claude stdin is not available');
 		}
 		this.process.stdin.write(`${JSON.stringify(payload)}\n`);
-	}
-
-	async createNewSession(_prompt: string, _config: CLIConfig): Promise<ChildProcess> {
-		throw new Error('ClaudeExecutor does not support creating new sessions');
 	}
 
 	getSessionId(): string | null {

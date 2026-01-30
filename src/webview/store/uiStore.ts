@@ -7,7 +7,9 @@
 import { create } from 'zustand';
 import type {
 	ConversationIndexEntry,
+	ExtensionMessage,
 	PlatformInfo,
+	SessionEventMessage,
 	SessionInfo,
 	WorkspaceFile,
 } from '../../common';
@@ -36,6 +38,7 @@ export interface UIActions {
 	setSessionInfo: (info: SessionInfo | null) => void;
 	setWorkspaceName: (name: string) => void;
 	setPlatformInfo: (info: PlatformInfo | null) => void;
+	setServerUrl: (url: string | null) => void;
 	setShowSlashCommands: (show: boolean) => void;
 	setSlashFilter: (filter: string) => void;
 	setShowFilePicker: (show: boolean) => void;
@@ -44,6 +47,7 @@ export interface UIActions {
 	setShowHistoryDropdown: (show: boolean) => void;
 	showConfirmDialog: (data: ConfirmDialogData) => void;
 	hideConfirmDialog: () => void;
+	handleExtensionMessage: (message: ExtensionMessage) => void;
 }
 
 export interface UIState {
@@ -55,6 +59,7 @@ export interface UIState {
 	sessionInfo: SessionInfo | null;
 	workspaceName: string;
 	platformInfo: PlatformInfo | null;
+	serverUrl: string | null;
 
 	showSlashCommands: boolean;
 	slashFilter: string;
@@ -69,7 +74,7 @@ export interface UIState {
 	actions: UIActions;
 }
 
-export const useUIStore = create<UIState>(set => ({
+export const useUIStore = create<UIState>((set, get) => ({
 	activeModal: null,
 	filePickerSearch: '',
 	workspaceFiles: [],
@@ -78,6 +83,7 @@ export const useUIStore = create<UIState>(set => ({
 	sessionInfo: null,
 	workspaceName: '',
 	platformInfo: null,
+	serverUrl: null,
 
 	showSlashCommands: false,
 	slashFilter: '',
@@ -97,6 +103,7 @@ export const useUIStore = create<UIState>(set => ({
 		setSessionInfo: sessionInfo => set({ sessionInfo }),
 		setWorkspaceName: workspaceName => set({ workspaceName }),
 		setPlatformInfo: platformInfo => set({ platformInfo }),
+		setServerUrl: serverUrl => set({ serverUrl }),
 		setShowSlashCommands: showSlashCommands => set({ showSlashCommands }),
 		setSlashFilter: slashFilter => set({ slashFilter }),
 		setShowFilePicker: showFilePicker => set({ showFilePicker }),
@@ -104,9 +111,84 @@ export const useUIStore = create<UIState>(set => ({
 		setShowModelDropdown: showModelDropdown => set({ showModelDropdown }),
 		setShowHistoryDropdown: showHistoryDropdown => set({ showHistoryDropdown }),
 
-		// Confirm dialog actions
 		showConfirmDialog: data => set({ confirmDialog: data }),
 		hideConfirmDialog: () => set({ confirmDialog: null }),
+
+		handleExtensionMessage: (message: ExtensionMessage) => {
+			const actions = get().actions;
+
+			switch (message.type) {
+				case 'session_event': {
+					const event = message as SessionEventMessage;
+					if (event.eventType === 'session_info') {
+						const info = (
+							event.payload as {
+								data: { sessionId: string; tools: string[]; mcpServers: string[] };
+							}
+						).data;
+						actions.setSessionInfo({
+							sessionId: info.sessionId,
+							tools: info.tools || [],
+							mcpServers: info.mcpServers || [],
+						});
+					}
+					break;
+				}
+
+				case 'workspaceInfo':
+					if (message.data?.name) {
+						actions.setWorkspaceName(message.data.name);
+					}
+					break;
+
+				case 'projectUpdated':
+					if (message.data?.project) {
+						const { name } = message.data.project;
+						if (name) {
+							actions.setWorkspaceName(name);
+						}
+					}
+					break;
+
+				case 'workspaceFiles':
+					if (Array.isArray(message.data)) {
+						actions.setWorkspaceFiles(message.data as WorkspaceFile[]);
+					}
+					break;
+
+				case 'imagePath':
+					if (message.data?.filePath) {
+						const path = message.data.filePath;
+						window.dispatchEvent(new CustomEvent('image-captured', { detail: path }));
+					}
+					break;
+
+				case 'conversationList':
+					if (Array.isArray(message.data)) {
+						actions.setConversationList(message.data);
+					}
+					break;
+
+				case 'allConversationsCleared':
+					actions.setConversationList([]);
+					break;
+
+				case 'platformInfo':
+					if (message.data) {
+						actions.setPlatformInfo(message.data);
+					}
+					break;
+
+				case 'serverInfo':
+					if (message.data) {
+						const { url } = message.data as { url: string };
+						if (url) {
+							actions.setServerUrl(url);
+						}
+					}
+					break;
+			}
+		},
 	},
 }));
 

@@ -7,16 +7,20 @@
  * Supports unified session event protocol for simplified message routing.
  */
 
+import { produce } from 'immer';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type {
 	CommitInfo,
 	ConversationMessage,
+	ExtensionMessage,
 	SessionAccessPayload,
 	SessionDeleteMessagesAfterPayload,
+	SessionEventMessage,
 	SessionEventPayload,
 	SessionEventType,
 	SessionFilePayload,
+	SessionLifecycleMessage,
 	SessionMessagePayload,
 	SessionMessageRemovedPayload,
 	SessionMessagesReloadPayload,
@@ -94,6 +98,7 @@ export interface ChatActions {
 	 * Auto-creates child sessions if they don't exist.
 	 */
 	dispatch: (targetId: string, eventType: SessionEventType, payload: SessionEventPayload) => void;
+	handleExtensionMessage: (message: ExtensionMessage) => void;
 
 	// ==========================================================================
 	// Session-aware message actions
@@ -209,81 +214,13 @@ function resolveTargetSessionId(state: ChatState, sessionId?: string): string | 
 	return sessionId || state.activeSessionId;
 }
 
-function warnMissingSession(_actionName: string): void {
-	// Silent: missing session is expected during initialization races
-}
-
-function upsertSession(
-	state: ChatState,
-	session: ChatSession,
-	options?: { ensureOrder?: boolean },
-): ChatState {
-	const exists = !!state.sessionsById[session.id];
-	const ensureOrder = options?.ensureOrder !== false;
-	const sessionOrder =
-		ensureOrder && !exists && !state.sessionOrder.includes(session.id)
-			? [...state.sessionOrder, session.id]
-			: state.sessionOrder;
-	return {
-		...state,
-		sessionsById: { ...state.sessionsById, [session.id]: session },
-		sessionOrder,
-	};
-}
-
-function updateSessionById(
-	state: ChatState,
-	sessionId: string,
-	updater: (session: ChatSession) => ChatSession,
-): ChatState {
-	const existing = state.sessionsById[sessionId];
-	if (!existing) {
-		return state;
-	}
-	return {
-		...state,
-		sessionsById: { ...state.sessionsById, [sessionId]: updater(existing) },
-	};
-}
-
-function removeSession(state: ChatState, sessionId: string): ChatState {
-	if (!state.sessionsById[sessionId]) {
-		return state;
-	}
-	const { [sessionId]: _removed, ...rest } = state.sessionsById;
-	return {
-		...state,
-		sessionsById: rest,
-		sessionOrder: state.sessionOrder.filter(id => id !== sessionId),
-	};
-}
-
-/**
- * Filter sessions before persisting to localStorage.
- * Only persist sessions that are in sessionOrder (visible tabs).
- * Context buckets (hidden sessions for subtasks) are excluded,
- * as they are archived into transcript field after subtask completion.
- */
-function filterPersistedSessions(
-	sessionsById: Record<string, ChatSession>,
-	sessionOrder: string[],
-): Record<string, ChatSession> {
-	const filtered: Record<string, ChatSession> = {};
-	for (const sid of sessionOrder) {
-		if (sessionsById[sid]) {
-			filtered[sid] = sessionsById[sid];
-		}
-	}
-	return filtered;
-}
-
 // =============================================================================
 // Store
 // =============================================================================
 
 export const useChatStore = create<ChatState>()(
 	persist(
-		set => ({
+		(set, get) => ({
 			sessionsById: {},
 			sessionOrder: [],
 			activeSessionId: undefined,
@@ -292,1025 +229,794 @@ export const useChatStore = create<ChatState>()(
 			improvingPromptRequestId: null,
 
 			actions: {
-				// ==========================================================================
-				// Unified Session Event Dispatch (new architecture)
-				// ==========================================================================
+				handleExtensionMessage: (message: ExtensionMessage) => {
+					// Handle session lifecycle events
+					if (message.type === 'session_lifecycle') {
+						const lifecycle = message as SessionLifecycleMessage;
+						const actions = get().actions;
 
-				dispatch: (targetId, eventType, payload) => {
-					set(state => {
-						// Get or create target session
-						let targetSession = state.sessionsById[targetId];
-						let newState = state;
+						switch (lifecycle.action) {
+							case 'created':
+								actions.handleSessionCreated(lifecycle.sessionId);
+								break;
+							case 'closed':
+								actions.closeSession(lifecycle.sessionId);
+								break;
+							case 'switched':
+								actions.switchSession(lifecycle.sessionId);
+								if (lifecycle.data?.messages) {
+									actions.setSessionMessages(
+										lifecycle.sessionId,
+										lifecycle.data.messages as Message[],
+									);
+								}
+								if (lifecycle.data?.isProcessing !== undefined) {
+									actions.setProcessing(lifecycle.data.isProcessing, lifecycle.sessionId);
+								}
+								if (lifecycle.data?.totalStats) {
+									actions.setTotalStats(lifecycle.data.totalStats, lifecycle.sessionId);
+								}
+								break;
+							case 'cleared':
+								actions.clearMessages(lifecycle.sessionId);
+								break;
+						}
+						return;
+					}
 
-						// Auto-create session if it doesn't exist.
-						if (!targetSession) {
-							const newSession: ChatSession = {
-								...createEmptySession(targetId),
-							};
-							newState = upsertSession(state, newSession, { ensureOrder: true });
-							// Only set activeSessionId to the new session if NO session is currently active.
-							// This prevents background sessions (like sub-agents) from stealing focus.
-							if (!newState.activeSessionId) {
-								newState = { ...newState, activeSessionId: targetId };
-							}
-							targetSession = newState.sessionsById[targetId];
+					// Handle unified session events
+					if (message.type === 'session_event') {
+						const event = message as SessionEventMessage;
+						// Handle sessionInfo locally if possible, or delegate
+						if (event.eventType === 'session_info') {
+							// session_info is typically UI state, but if we need it here...
+							// For now, let's just delegate everything to dispatch
 						}
 
-						switch (eventType) {
-							case 'message': {
-								const msgPayload = payload as SessionMessagePayload;
-								const msgData = msgPayload.message;
+						get().actions.dispatch(event.targetId, event.eventType, event.payload);
+						return;
+					}
+				},
 
-								// Build message from payload
-								const message: Message = {
-									id: msgData.id || `msg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-									type: msgData.type,
-									content: msgData.content,
-									timestamp: msgData.timestamp || new Date().toISOString(),
-									partId: msgData.partId,
-									isStreaming: msgData.isStreaming,
-									isDelta: msgData.isDelta,
-									hidden: msgData.hidden,
-									// Tool fields
-									toolName: msgData.toolName,
-									toolUseId: msgData.toolUseId,
-									toolInput: msgData.toolInput,
-									rawInput: msgData.rawInput,
-									filePath: msgData.filePath,
-									isError: msgData.isError,
-									isRunning: msgData.isRunning,
-									streamingOutput: msgData.streamingOutput,
-									estimatedTokens: msgData.estimatedTokens,
-									title: msgData.title,
-									durationMs: msgData.durationMs,
-									// Subtask fields
-									agent: msgData.agent,
-									prompt: msgData.prompt,
-									description: msgData.description,
-									command: msgData.command,
-									status: msgData.status,
-									result: msgData.result,
-									messageID: msgData.messageID,
-									contextId: msgData.contextId,
-									startTime: msgData.startTime,
-									// Thinking fields
-									reasoningTokens: msgData.reasoningTokens,
-									// Access request fields
-									requestId: msgData.requestId,
-									tool: msgData.tool,
-									input: msgData.input,
-									pattern: msgData.pattern,
-									resolved: msgData.resolved,
-									approved: msgData.approved,
-									// Error fields
-									reason: msgData.reason,
-									// Model info
-									model: msgData.model,
-									// Attachments
-									attachments: msgData.attachments,
-									metadata: msgData.metadata,
-									normalizedEntry: msgData.normalizedEntry,
-								} as Message;
+				dispatch: (targetId, eventType, payload) => {
+					set(
+						produce((state: ChatState) => {
+							// Auto-create session if it doesn't exist
+							if (!state.sessionsById[targetId]) {
+								const newSession = createEmptySession(targetId);
+								state.sessionsById[targetId] = newSession;
+								if (!state.sessionOrder.includes(targetId)) {
+									state.sessionOrder.push(targetId);
+								}
+								if (!state.activeSessionId) {
+									state.activeSessionId = targetId;
+								}
+							}
 
-								// Determine storage target:
-								// - Subtask messages themselves → parent session (with contextId for linking)
-								// - Messages with contextId that are NOT subtask → hidden context bucket
-								// - Messages without contextId → parent session as normal
-								const isSubtaskMessage = message.type === 'subtask';
-								const hasContext = !!msgData.contextId && !isSubtaskMessage;
+							const targetSession = state.sessionsById[targetId];
+							targetSession.lastActive = Date.now();
 
-								// Select storage session: context bucket or target session
-								let storageSessionId = targetId;
-								let storageSession = targetSession;
-								let stateForStorage = newState;
+							switch (eventType) {
+								case 'message': {
+									const msgPayload = payload as SessionMessagePayload;
+									const msgData = msgPayload.message;
 
-								if (hasContext) {
-									// Route to hidden context bucket (not in sessionOrder)
-									const ctxId = msgData.contextId as string;
-									storageSessionId = ctxId;
+									// Build message
+									const message: Message = {
+										id: msgData.id || `msg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+										type: msgData.type,
+										content: msgData.content,
+										timestamp: msgData.timestamp || new Date().toISOString(),
+										partId: msgData.partId,
+										isStreaming: msgData.isStreaming,
+										isDelta: msgData.isDelta,
+										hidden: msgData.hidden,
+										toolName: msgData.toolName,
+										toolUseId: msgData.toolUseId,
+										toolInput: msgData.toolInput,
+										rawInput: msgData.rawInput,
+										filePath: msgData.filePath,
+										isError: msgData.isError,
+										isRunning: msgData.isRunning,
+										streamingOutput: msgData.streamingOutput,
+										estimatedTokens: msgData.estimatedTokens,
+										title: msgData.title,
+										durationMs: msgData.durationMs,
+										agent: msgData.agent,
+										prompt: msgData.prompt,
+										description: msgData.description,
+										command: msgData.command,
+										status: msgData.status,
+										result: msgData.result,
+										messageID: msgData.messageID,
+										contextId: msgData.contextId,
+										startTime: msgData.startTime,
+										reasoningTokens: msgData.reasoningTokens,
+										requestId: msgData.requestId,
+										tool: msgData.tool,
+										input: msgData.input,
+										pattern: msgData.pattern,
+										resolved: msgData.resolved,
+										approved: msgData.approved,
+										reason: msgData.reason,
+										model: msgData.model,
+										attachments: msgData.attachments,
+										metadata: msgData.metadata,
+										normalizedEntry: msgData.normalizedEntry,
+									} as Message;
 
-									if (!newState.sessionsById[ctxId]) {
-										// Create hidden context bucket (ensureOrder: false)
-										const contextBucket = createEmptySession(ctxId);
-										stateForStorage = upsertSession(newState, contextBucket, {
-											ensureOrder: false,
-										});
-									} else {
-										stateForStorage = newState;
+									const isSubtaskMessage = message.type === 'subtask';
+									const hasContext = !!msgData.contextId && !isSubtaskMessage;
+
+									// Determine storage target
+									let storageSession = targetSession;
+									if (hasContext) {
+										const ctxId = msgData.contextId as string;
+										if (!state.sessionsById[ctxId]) {
+											state.sessionsById[ctxId] = createEmptySession(ctxId);
+											// Hidden context buckets are not added to sessionOrder
+										}
+										storageSession = state.sessionsById[ctxId];
+										storageSession.lastActive = Date.now();
 									}
-									storageSession = stateForStorage.sessionsById[ctxId];
-								}
 
-								// Merge or append message
-								const msgPartId = (message as { partId?: string }).partId;
-								const existingIdx = storageSession.messages.findIndex(m => {
-									const mPartId = (m as { partId?: string }).partId;
-									if (m.id === message.id) return true;
-									if (msgPartId && mPartId === msgPartId) {
-										return m.type === message.type;
-									}
-									return false;
-								});
-								const newMessages = [...storageSession.messages];
+									// Merge or append
+									const existingIdx = storageSession.messages.findIndex(m => {
+										if (m.id === message.id) return true;
+										// Safe check for partId existence
+										const mPartId = 'partId' in m ? m.partId : undefined;
+										const msgPartId = 'partId' in message ? message.partId : undefined;
 
-								if (existingIdx !== -1) {
-									const existing = newMessages[existingIdx];
-
-									// Handle delta streaming explicitly for better performance
-									if ('isDelta' in message && message.isDelta && 'content' in message) {
-										// Delta update: append content
-										const existingContent =
-											'content' in existing && typeof existing.content === 'string'
-												? existing.content
-												: '';
-										newMessages[existingIdx] = {
-											...existing,
-											...message,
-											id: existing.id,
-											content: existingContent + (message.content || ''),
-										} as Message;
-									} else {
-										// Full update: merge all defined fields
-										const updates: Partial<Message> = {};
-										for (const [key, value] of Object.entries(message)) {
-											if (value !== undefined) {
-												updates[key as keyof Message] = value as never;
-											}
-										}
-										newMessages[existingIdx] = {
-											...existing,
-											...updates,
-											id: existing.id,
-										} as Message;
-									}
-								} else {
-									newMessages.push(message);
-								}
-
-								// Handle subtask completion: archive context bucket into transcript
-								if (
-									isSubtaskMessage &&
-									(message.status === 'completed' || message.status === 'error')
-								) {
-									const subtaskContextId = msgData.contextId as string | undefined;
-									if (subtaskContextId && stateForStorage.sessionsById[subtaskContextId]) {
-										const contextMessages =
-											stateForStorage.sessionsById[subtaskContextId]?.messages ?? [];
-
-										// Find the subtask message and inject transcript
-										const subtaskIdx = newMessages.findIndex(m => m.id === message.id);
-										if (subtaskIdx !== -1) {
-											const subtaskMsg = newMessages[subtaskIdx];
-											newMessages[subtaskIdx] = {
-												...subtaskMsg,
-												transcript: contextMessages,
-												contextId: undefined, // Clear contextId after archiving
-											} as Message;
-										}
-
-										// Remove context bucket from state
-										const cleanedState = removeSession(stateForStorage, subtaskContextId);
-										return updateSessionById(cleanedState, storageSessionId, s => ({
-											...s,
-											messages: newMessages,
-											lastActive: Date.now(),
-										}));
-									}
-								}
-
-								return updateSessionById(stateForStorage, storageSessionId, s => ({
-									...s,
-									messages: newMessages,
-									lastActive: Date.now(),
-									// Clear retryInfo when we receive actual content (retry succeeded)
-									retryInfo: message.type === 'assistant' ? null : s.retryInfo,
-								}));
-							}
-
-							case 'status': {
-								const statusPayload = payload as SessionStatusPayload;
-								return updateSessionById(newState, targetId, s => {
-									const nextStatus =
-										statusPayload.status === 'retrying'
-											? statusPayload.retryInfo?.message || s.status
-											: statusPayload.statusText || s.status;
-									// Keep isProcessing true during retrying (API is still working)
-									const isActiveProcessing =
-										statusPayload.status === 'busy' || statusPayload.status === 'retrying';
-									// Keep retryInfo only during active retry cycle:
-									// - On 'retrying': set new retryInfo
-									// - On 'busy' while isAutoRetrying: keep retryInfo (busy between retries)
-									// - On 'busy' after retry succeeded: clear retryInfo (isAutoRetrying becomes false)
-									// - On 'idle': clear retryInfo
-									const shouldKeepRetryInfo = statusPayload.status === 'busy' && s.isAutoRetrying;
-									const newRetryInfo =
-										statusPayload.status === 'idle'
-											? null
-											: statusPayload.status === 'retrying'
-												? statusPayload.retryInfo || null
-												: shouldKeepRetryInfo
-													? s.retryInfo
-													: null;
-									return {
-										...s,
-										isProcessing: isActiveProcessing,
-										isAutoRetrying: statusPayload.status === 'retrying',
-										retryInfo: newRetryInfo,
-										status: nextStatus,
-										isLoading: Boolean(statusPayload.loadingMessage),
-										lastActive: Date.now(),
-									};
-								});
-							}
-
-							case 'stats': {
-								const statsPayload = payload as SessionStatsPayload;
-								return updateSessionById(newState, targetId, s => ({
-									...s,
-									tokenStats: statsPayload.tokenStats
-										? { ...s.tokenStats, ...statsPayload.tokenStats }
-										: s.tokenStats,
-									totalStats: statsPayload.totalStats
-										? { ...s.totalStats, ...statsPayload.totalStats }
-										: s.totalStats,
-									lastActive: Date.now(),
-								}));
-							}
-
-							case 'complete': {
-								// Mark streaming as complete for a part
-								// Find message by partId and mark as not streaming
-								const completePartId = (payload as { partId?: string }).partId;
-								return updateSessionById(newState, targetId, s => ({
-									...s,
-									messages: s.messages.map(m => {
-										const mPartId = (m as { partId?: string }).partId;
-										return mPartId === completePartId ? { ...m, isStreaming: false } : m;
-									}),
-									lastActive: Date.now(),
-								}));
-							}
-
-							case 'restore': {
-								const restorePayload = payload as SessionRestorePayload;
-								switch (restorePayload.action) {
-									case 'add_commit':
-										if (restorePayload.commit) {
-											const existingCommits = targetSession.restoreCommits || [];
-											const commitToAdd = restorePayload.commit;
-											const alreadyExists = existingCommits.some(c => c.sha === commitToAdd.sha);
-											if (!alreadyExists) {
-												return updateSessionById(newState, targetId, s => ({
-													...s,
-													restoreCommits: [...existingCommits, commitToAdd],
-													lastActive: Date.now(),
-												}));
-											}
-										}
-										return newState;
-
-									case 'set_commits':
-										return updateSessionById(newState, targetId, s => ({
-											...s,
-											restoreCommits: restorePayload.commits || [],
-											lastActive: Date.now(),
-										}));
-
-									case 'clear_commits':
-										return updateSessionById(newState, targetId, s => ({
-											...s,
-											restoreCommits: [],
-											lastActive: Date.now(),
-										}));
-
-									case 'unrevert_available':
-										return updateSessionById(newState, targetId, s => ({
-											...s,
-											unrevertAvailable: restorePayload.available ?? false,
-											lastActive: Date.now(),
-										}));
-
-									case 'restore_input':
-										return updateSessionById(newState, targetId, s => ({
-											...s,
-											input: restorePayload.text || '',
-											lastActive: Date.now(),
-										}));
-
-									case 'success':
-										// Update unrevert availability if provided
-										if (restorePayload.canUnrevert !== undefined) {
-											return updateSessionById(newState, targetId, s => ({
-												...s,
-												unrevertAvailable: restorePayload.canUnrevert ?? false,
-												lastActive: Date.now(),
-											}));
-										}
-										return newState;
-
-									case 'error':
-									case 'progress':
-										// These are informational, no state change needed
-										return newState;
-
-									default:
-										return newState;
-								}
-							}
-
-							case 'file': {
-								const filePayload = payload as SessionFilePayload;
-								switch (filePayload.action) {
-									case 'changed':
-										if (filePayload.filePath) {
-											const fileName =
-												filePayload.fileName ||
-												filePayload.filePath.split(/[/\\]/).pop() ||
-												filePayload.filePath;
-											const stats = (() => {
-												const toolUseId = filePayload.toolUseId;
-												if (!toolUseId) return null;
-												const toolMsg = targetSession.messages.find(
-													m =>
-														m.type === 'tool_use' &&
-														(m as { toolUseId?: string }).toolUseId === toolUseId,
-												) as (Message & { rawInput?: Record<string, unknown> }) | undefined;
-												const raw = toolMsg?.rawInput;
-												if (!raw) return null;
-												const oldContent =
-													typeof raw.old_string === 'string'
-														? raw.old_string
-														: typeof raw.old_str === 'string'
-															? raw.old_str
-															: typeof raw.oldString === 'string'
-																? raw.oldString
-																: '';
-												const newContent =
-													typeof raw.new_string === 'string'
-														? raw.new_string
-														: typeof raw.new_str === 'string'
-															? raw.new_str
-															: typeof raw.newString === 'string'
-																? raw.newString
-																: typeof raw.content === 'string'
-																	? raw.content
-																	: '';
-												return computeDiffStats(oldContent, newContent);
-											})();
-											const newFile = {
-												filePath: filePayload.filePath,
-												fileName,
-												linesAdded: stats?.added ?? (filePayload.linesAdded || 0),
-												linesRemoved: stats?.removed ?? (filePayload.linesRemoved || 0),
-												toolUseId: filePayload.toolUseId || '',
-												timestamp: Date.now(),
-											};
-											const existingFiles = targetSession.changedFiles || [];
-											const existingIdx = existingFiles.findIndex(
-												f => f.filePath === filePayload.filePath,
-											);
-											const newFiles =
-												existingIdx !== -1
-													? existingFiles.map((f, i) => (i === existingIdx ? newFile : f))
-													: [...existingFiles, newFile];
-											return updateSessionById(newState, targetId, s => ({
-												...s,
-												changedFiles: newFiles,
-												lastActive: Date.now(),
-											}));
-										}
-										return newState;
-
-									case 'undone':
-										if (filePayload.filePath) {
-											return updateSessionById(newState, targetId, s => ({
-												...s,
-												changedFiles: (s.changedFiles || []).filter(
-													f => f.filePath !== filePayload.filePath,
-												),
-												lastActive: Date.now(),
-											}));
-										}
-										return newState;
-
-									case 'all_undone':
-										return updateSessionById(newState, targetId, s => ({
-											...s,
-											changedFiles: [],
-											lastActive: Date.now(),
-										}));
-
-									default:
-										return newState;
-								}
-							}
-
-							case 'access': {
-								const accessPayload = payload as SessionAccessPayload;
-								if (accessPayload.action === 'response') {
-									// Find and update the access_request message
-									const updatedMessages = targetSession.messages.map(m => {
-										if (
-											m.type === 'access_request' &&
-											(m as { requestId?: string }).requestId === accessPayload.requestId
-										) {
-											return {
-												...m,
-												resolved: true,
-												approved: accessPayload.approved,
-											};
-										}
-										return m;
+										return (
+											msgPartId !== undefined && mPartId === msgPartId && m.type === message.type
+										);
 									});
-									return updateSessionById(newState, targetId, s => ({
-										...s,
-										messages: updatedMessages,
-										lastActive: Date.now(),
-									}));
-								}
-								return newState;
-							}
 
-							case 'messages_reload': {
-								const reloadPayload = payload as SessionMessagesReloadPayload;
-								const messages = (reloadPayload.messages || []).map(
-									(m: { id?: string; timestamp?: string }) => ({
+									if (existingIdx !== -1) {
+										const existing = storageSession.messages[existingIdx];
+										if (
+											'isDelta' in message &&
+											message.isDelta &&
+											'content' in existing &&
+											'content' in message
+										) {
+											existing.content = (existing.content || '') + (message.content || '');
+											Object.assign(existing, { ...message, content: existing.content });
+										} else {
+											Object.assign(existing, message);
+										}
+									} else {
+										storageSession.messages.push(message);
+									}
+
+									// Handle subtask completion/archiving
+									if (
+										isSubtaskMessage &&
+										(message.status === 'completed' || message.status === 'error')
+									) {
+										const subtaskContextId = msgData.contextId as string | undefined;
+										if (subtaskContextId && state.sessionsById[subtaskContextId]) {
+											const contextMessages = state.sessionsById[subtaskContextId].messages;
+											const subtaskMsg = storageSession.messages.find(m => m.id === message.id);
+											if (subtaskMsg && subtaskMsg.type === 'subtask') {
+												subtaskMsg.transcript = contextMessages;
+												subtaskMsg.contextId = undefined;
+											}
+											delete state.sessionsById[subtaskContextId];
+											// No need to update sessionOrder as context buckets aren't in it
+										}
+									}
+
+									// Clear retry info on success
+									if (message.type === 'assistant') {
+										storageSession.retryInfo = null;
+									}
+									break;
+								}
+
+								case 'status': {
+									const s = payload as SessionStatusPayload;
+									targetSession.status =
+										s.status === 'retrying'
+											? s.retryInfo?.message || targetSession.status
+											: s.statusText || targetSession.status;
+									targetSession.isProcessing = s.status === 'busy' || s.status === 'retrying';
+									targetSession.isAutoRetrying = s.status === 'retrying';
+									if (s.status === 'retrying') targetSession.retryInfo = s.retryInfo || null;
+									else if (s.status === 'idle') targetSession.retryInfo = null;
+									targetSession.isLoading = Boolean(s.loadingMessage);
+									break;
+								}
+
+								case 'stats': {
+									const s = payload as SessionStatsPayload;
+									if (s.tokenStats) Object.assign(targetSession.tokenStats, s.tokenStats);
+									if (s.totalStats) Object.assign(targetSession.totalStats, s.totalStats);
+									break;
+								}
+
+								case 'complete': {
+									const completePartId = (payload as { partId?: string }).partId;
+									targetSession.messages.forEach(m => {
+										if ('partId' in m && m.partId === completePartId) {
+											// We need to check if the message supports isStreaming
+											if ((m.type === 'assistant' || m.type === 'thinking') && 'isStreaming' in m) {
+												m.isStreaming = false;
+											}
+										}
+									});
+									break;
+								}
+
+								case 'restore': {
+									const r = payload as SessionRestorePayload;
+									if (r.action === 'add_commit' && r.commit) {
+										if (!targetSession.restoreCommits.some(c => c.sha === r.commit?.sha)) {
+											targetSession.restoreCommits.push(r.commit);
+										}
+									} else if (r.action === 'set_commits') {
+										targetSession.restoreCommits = r.commits || [];
+									} else if (r.action === 'clear_commits') {
+										targetSession.restoreCommits = [];
+									} else if (r.action === 'unrevert_available') {
+										targetSession.unrevertAvailable = r.available ?? false;
+									} else if (r.action === 'restore_input') {
+										targetSession.input = r.text || '';
+									} else if (r.action === 'success') {
+										if (r.canUnrevert !== undefined)
+											targetSession.unrevertAvailable = r.canUnrevert;
+									}
+									break;
+								}
+
+								case 'file': {
+									const f = payload as SessionFilePayload;
+									if (f.action === 'changed' && f.filePath) {
+										const fileName = f.fileName || f.filePath.split(/[/\\]/).pop() || f.filePath;
+
+										// Recalculate diff stats logic inline or keep helper? Keeping logic inline for now to match original behavior roughly
+										let linesAdded = f.linesAdded || 0;
+										let linesRemoved = f.linesRemoved || 0;
+
+										if (f.toolUseId && linesAdded === 0 && linesRemoved === 0) {
+											const toolMsg = targetSession.messages.find(
+												m => m.type === 'tool_use' && m.toolUseId === f.toolUseId,
+											);
+
+											if (toolMsg && toolMsg.type === 'tool_use' && toolMsg.rawInput) {
+												const raw = toolMsg.rawInput as Record<string, string>;
+												const oldContent = raw.old_string || raw.old_str || raw.oldString || '';
+												const newContent =
+													raw.new_string || raw.new_str || raw.newString || raw.content || '';
+												const stats = computeDiffStats(oldContent, newContent);
+												linesAdded = stats.added;
+												linesRemoved = stats.removed;
+											}
+										}
+
+										const newFile = {
+											filePath: f.filePath,
+											fileName,
+											linesAdded,
+											linesRemoved,
+											toolUseId: f.toolUseId || '',
+											timestamp: Date.now(),
+										};
+
+										const existingIdx = targetSession.changedFiles.findIndex(
+											file => file.filePath === f.filePath,
+										);
+										if (existingIdx !== -1) {
+											targetSession.changedFiles[existingIdx] = newFile;
+										} else {
+											targetSession.changedFiles.push(newFile);
+										}
+									} else if (f.action === 'undone' && f.filePath) {
+										targetSession.changedFiles = targetSession.changedFiles.filter(
+											file => file.filePath !== f.filePath,
+										);
+									} else if (f.action === 'all_undone') {
+										targetSession.changedFiles = [];
+									}
+									break;
+								}
+
+								case 'access': {
+									const a = payload as SessionAccessPayload;
+									if (a.action === 'response') {
+										const msg = targetSession.messages.find(
+											m => m.type === 'access_request' && m.requestId === a.requestId,
+										);
+										if (msg && msg.type === 'access_request') {
+											msg.resolved = true;
+											msg.approved = a.approved;
+										}
+									}
+									break;
+								}
+
+								case 'messages_reload': {
+									const r = payload as SessionMessagesReloadPayload;
+									targetSession.messages = (r.messages || []).map(m => ({
 										...m,
 										id: m.id || `msg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
 										timestamp: m.timestamp || new Date().toISOString(),
-									}),
-								) as Message[];
-								return updateSessionById(newState, targetId, s => ({
-									...s,
-									messages,
-									lastActive: Date.now(),
-								}));
-							}
-
-							case 'delete_messages_after': {
-								const deletePayload = payload as SessionDeleteMessagesAfterPayload;
-								const messageId = deletePayload.messageId;
-								if (!messageId) return newState;
-
-								const idx = targetSession.messages.findIndex(m => m.id === messageId);
-								if (idx === -1) return newState;
-
-								// Keep messages up to and including the target message
-								const newMessages = targetSession.messages.slice(0, idx + 1);
-								return updateSessionById(newState, targetId, s => ({
-									...s,
-									messages: newMessages,
-									revertedFromMessageId: messageId,
-									lastActive: Date.now(),
-								}));
-							}
-
-							case 'message_removed': {
-								const removedPayload = payload as SessionMessageRemovedPayload;
-								if (removedPayload.partId || removedPayload.messageId) {
-									const newMessages = targetSession.messages.filter(m => {
-										const mPartId = (m as { partId?: string }).partId;
-										return mPartId !== removedPayload.partId && m.id !== removedPayload.messageId;
-									});
-									return updateSessionById(newState, targetId, s => ({
-										...s,
-										messages: newMessages,
-										lastActive: Date.now(),
-									}));
+									})) as Message[];
+									break;
 								}
-								return newState;
-							}
 
-							case 'terminal': {
-								const terminalPayload = payload as SessionTerminalPayload;
-								if (terminalPayload.action === 'opened' && terminalPayload.content) {
-									const message: Message = {
-										id: `sys-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-										type: 'system_notice',
-										content: terminalPayload.content,
-										timestamp: new Date().toISOString(),
-									};
-									const newMessages = [...targetSession.messages, message];
-									return updateSessionById(newState, targetId, s => ({
-										...s,
-										messages: newMessages,
-										lastActive: Date.now(),
-									}));
+								case 'delete_messages_after': {
+									const d = payload as SessionDeleteMessagesAfterPayload;
+									if (d.messageId) {
+										const idx = targetSession.messages.findIndex(m => m.id === d.messageId);
+										if (idx !== -1) {
+											targetSession.messages = targetSession.messages.slice(0, idx + 1);
+											targetSession.revertedFromMessageId = d.messageId;
+										}
+									}
+									break;
 								}
-								return newState;
+
+								case 'message_removed': {
+									const rm = payload as SessionMessageRemovedPayload;
+									if (rm.partId || rm.messageId) {
+										targetSession.messages = targetSession.messages.filter(m => {
+											const mPartId = 'partId' in m ? m.partId : undefined;
+											return mPartId !== rm.partId && m.id !== rm.messageId;
+										});
+									}
+									break;
+								}
+
+								case 'terminal': {
+									const t = payload as SessionTerminalPayload;
+									if (t.action === 'opened' && t.content) {
+										targetSession.messages.push({
+											id: `sys-${Date.now()}-${Math.random()}`,
+											type: 'system_notice',
+											content: t.content,
+											timestamp: new Date().toISOString(),
+										});
+									}
+									break;
+								}
 							}
-
-							case 'auth':
-							case 'session_info':
-								// These events are informational and don't require state changes
-								// They may be handled by other listeners (e.g., useExtensionMessages)
-								return newState;
-
-							default:
-								// Unknown event type - ignore silently
-								return newState;
-						}
-					});
+						}),
+					);
 				},
 
-				// ==========================================================================
-				// Direct actions (used by dispatch and external callers)
-				// ==========================================================================
-
 				addMessage: (msgInput, sessionId) => {
-					set(state => {
-						const targetSessionId = resolveTargetSessionId(state, sessionId);
-						if (!targetSessionId) {
-							warnMissingSession('addMessage');
-							return state;
-						}
+					set(
+						produce((state: ChatState) => {
+							const sid = resolveTargetSessionId(state, sessionId);
+							if (!sid || !state.sessionsById[sid]) return;
+							const session = state.sessionsById[sid];
+							session.lastActive = Date.now();
 
-						const targetSession = state.sessionsById[targetSessionId];
-						if (!targetSession) {
-							return state;
-						}
-
-						const messageId = msgInput.id || `msg-${Date.now()}-${Math.random()}`;
-						const message: Message = {
-							...msgInput,
-							id: messageId,
-							timestamp:
-								typeof msgInput.timestamp === 'string'
-									? msgInput.timestamp
-									: new Date(msgInput.timestamp || Date.now()).toISOString(),
-						} as Message;
-
-						const existingIdx = targetSession.messages.findIndex(m => m.id === message.id);
-						const newMessages = [...targetSession.messages];
-						if (existingIdx !== -1) {
-							newMessages[existingIdx] = {
-								...newMessages[existingIdx],
-								...message,
-								id: newMessages[existingIdx].id,
+							const messageId = msgInput.id || `msg-${Date.now()}-${Math.random()}`;
+							const message = {
+								...msgInput,
+								id: messageId,
+								timestamp:
+									typeof msgInput.timestamp === 'string'
+										? msgInput.timestamp
+										: new Date(msgInput.timestamp || Date.now()).toISOString(),
 							} as Message;
-						} else {
-							newMessages.push(message);
-						}
 
-						return updateSessionById(state, targetSessionId, s => ({
-							...s,
-							messages: newMessages,
-							lastActive: Date.now(),
-						}));
-					});
+							const idx = session.messages.findIndex(m => m.id === message.id);
+							if (idx !== -1) {
+								Object.assign(session.messages[idx], message);
+							} else {
+								session.messages.push(message);
+							}
+						}),
+					);
 				},
 
 				setProcessing: (isProcessing, sessionId) => {
-					set(state => {
-						const sid = resolveTargetSessionId(state, sessionId);
-						if (!sid) {
-							warnMissingSession('setProcessing');
-							return state;
-						}
-						return updateSessionById(state, sid, s => ({
-							...s,
-							isProcessing,
-							lastActive: Date.now(),
-						}));
-					});
+					set(
+						produce((state: ChatState) => {
+							const sid = resolveTargetSessionId(state, sessionId);
+							if (sid && state.sessionsById[sid]) {
+								state.sessionsById[sid].isProcessing = isProcessing;
+								state.sessionsById[sid].lastActive = Date.now();
+							}
+						}),
+					);
 				},
 
 				setAutoRetrying: (isRetrying, retryInfo, sessionId) => {
-					set(state => {
-						const sid = resolveTargetSessionId(state, sessionId);
-						if (!sid) {
-							warnMissingSession('setAutoRetrying');
-							return state;
-						}
-						return updateSessionById(state, sid, s => ({
-							...s,
-							isAutoRetrying: isRetrying,
-							retryInfo: isRetrying && retryInfo ? retryInfo : null,
-							lastActive: Date.now(),
-						}));
-					});
+					set(
+						produce((state: ChatState) => {
+							const sid = resolveTargetSessionId(state, sessionId);
+							if (sid && state.sessionsById[sid]) {
+								const s = state.sessionsById[sid];
+								s.isAutoRetrying = isRetrying;
+								s.retryInfo = isRetrying && retryInfo ? retryInfo : null;
+								s.lastActive = Date.now();
+							}
+						}),
+					);
 				},
 
 				setLoading: (isLoading, sessionId) => {
-					set(state => {
-						const sid = resolveTargetSessionId(state, sessionId);
-						if (!sid) {
-							warnMissingSession('setLoading');
-							return state;
-						}
-						return updateSessionById(state, sid, s => ({
-							...s,
-							isLoading,
-							lastActive: Date.now(),
-						}));
-					});
+					set(
+						produce((state: ChatState) => {
+							const sid = resolveTargetSessionId(state, sessionId);
+							if (sid && state.sessionsById[sid]) {
+								state.sessionsById[sid].isLoading = isLoading;
+								state.sessionsById[sid].lastActive = Date.now();
+							}
+						}),
+					);
 				},
 
 				setInput: (input, sessionId) => {
-					set(state => {
-						const sid = resolveTargetSessionId(state, sessionId);
-						if (!sid) {
-							warnMissingSession('setInput');
-							return state;
-						}
-						return updateSessionById(state, sid, s => ({ ...s, input, lastActive: Date.now() }));
-					});
+					set(
+						produce((state: ChatState) => {
+							const sid = resolveTargetSessionId(state, sessionId);
+							if (sid && state.sessionsById[sid]) {
+								state.sessionsById[sid].input = input;
+								state.sessionsById[sid].lastActive = Date.now();
+							}
+						}),
+					);
 				},
 
 				appendInput: (text, sessionId) => {
-					set(state => {
-						const sid = resolveTargetSessionId(state, sessionId);
-						if (!sid) {
-							warnMissingSession('appendInput');
-							return state;
-						}
-						const session = state.sessionsById[sid];
-						if (!session) return state;
-						return updateSessionById(state, sid, s => ({
-							...s,
-							input: session.input + text,
-							lastActive: Date.now(),
-						}));
-					});
+					set(
+						produce((state: ChatState) => {
+							const sid = resolveTargetSessionId(state, sessionId);
+							if (sid && state.sessionsById[sid]) {
+								state.sessionsById[sid].input += text;
+								state.sessionsById[sid].lastActive = Date.now();
+							}
+						}),
+					);
 				},
 
 				setStatus: (status, sessionId) => {
-					set(state => {
-						const sid = resolveTargetSessionId(state, sessionId);
-						if (!sid) {
-							warnMissingSession('setStatus');
-							return state;
-						}
-						return updateSessionById(state, sid, s => ({ ...s, status, lastActive: Date.now() }));
-					});
+					set(
+						produce((state: ChatState) => {
+							const sid = resolveTargetSessionId(state, sessionId);
+							if (sid && state.sessionsById[sid]) {
+								state.sessionsById[sid].status = status;
+								state.sessionsById[sid].lastActive = Date.now();
+							}
+						}),
+					);
 				},
 
 				setStreamingToolId: (toolId, sessionId) => {
-					set(state => {
-						const sid = resolveTargetSessionId(state, sessionId);
-						if (!sid) {
-							warnMissingSession('setStreamingToolId');
-							return state;
-						}
-						return updateSessionById(state, sid, s => ({
-							...s,
-							streamingToolId: toolId,
-							lastActive: Date.now(),
-						}));
-					});
+					set(
+						produce((state: ChatState) => {
+							const sid = resolveTargetSessionId(state, sessionId);
+							if (sid && state.sessionsById[sid]) {
+								state.sessionsById[sid].streamingToolId = toolId;
+								state.sessionsById[sid].lastActive = Date.now();
+							}
+						}),
+					);
 				},
 
 				clearMessages: sessionId => {
-					set(state => {
-						const sid = resolveTargetSessionId(state, sessionId);
-						if (!sid) {
-							warnMissingSession('clearMessages');
-							return state;
-						}
-						return updateSessionById(state, sid, s => ({
-							...s,
-							messages: [],
-							lastActive: Date.now(),
-						}));
-					});
+					set(
+						produce((state: ChatState) => {
+							const sid = resolveTargetSessionId(state, sessionId);
+							if (sid && state.sessionsById[sid]) {
+								state.sessionsById[sid].messages = [];
+								state.sessionsById[sid].lastActive = Date.now();
+							}
+						}),
+					);
 				},
 
 				updateMessage: (id, updates, sessionId) => {
-					set(state => {
-						const sid = resolveTargetSessionId(state, sessionId);
-						if (!sid) {
-							warnMissingSession('updateMessage');
-							return state;
-						}
-						const session = state.sessionsById[sid];
-						if (!session) return state;
-						const newMessages = session.messages.map(msg =>
-							msg.id === id ? ({ ...msg, ...updates } as Message) : msg,
-						);
-						return updateSessionById(state, sid, s => ({
-							...s,
-							messages: newMessages,
-							lastActive: Date.now(),
-						}));
-					});
+					set(
+						produce((state: ChatState) => {
+							const sid = resolveTargetSessionId(state, sessionId);
+							if (sid && state.sessionsById[sid]) {
+								const session = state.sessionsById[sid];
+								const msg = session.messages.find(m => m.id === id);
+								if (msg) Object.assign(msg, updates);
+								session.lastActive = Date.now();
+							}
+						}),
+					);
 				},
 
-				setEditingMessageId: (id: string | null) => set({ editingMessageId: id }),
+				setEditingMessageId: id => set({ editingMessageId: id }),
 
 				deleteMessagesFromId: (id, sessionId) => {
-					set(state => {
-						const sid = resolveTargetSessionId(state, sessionId);
-						if (!sid) {
-							warnMissingSession('deleteMessagesFromId');
-							return state;
-						}
-						const session = state.sessionsById[sid];
-						if (!session) return state;
-						const index = session.messages.findIndex(m => m.id === id);
-						if (index === -1) return state;
-						const newMessages = session.messages.slice(0, index);
-						return updateSessionById(state, sid, s => ({
-							...s,
-							messages: newMessages,
-							lastActive: Date.now(),
-						}));
-					});
+					set(
+						produce((state: ChatState) => {
+							const sid = resolveTargetSessionId(state, sessionId);
+							if (sid && state.sessionsById[sid]) {
+								const session = state.sessionsById[sid];
+								const idx = session.messages.findIndex(m => m.id === id);
+								if (idx !== -1) {
+									session.messages = session.messages.slice(0, idx);
+									session.lastActive = Date.now();
+								}
+							}
+						}),
+					);
 				},
 
 				removeMessageByPartId: (partId, sessionId) => {
-					set(state => {
-						const sid = resolveTargetSessionId(state, sessionId);
-						if (!sid) {
-							warnMissingSession('removeMessageByPartId');
-							return state;
-						}
-						const session = state.sessionsById[sid];
-						if (!session) return state;
-						const newMessages = session.messages.filter(m => {
-							if (m.id === partId) return false;
-							if ('partId' in m && m.partId === partId) return false;
-							if ('toolUseId' in m && m.toolUseId === partId) return false;
-							return true;
-						});
-						if (newMessages.length === session.messages.length) return state;
-						return updateSessionById(state, sid, s => ({
-							...s,
-							messages: newMessages,
-							lastActive: Date.now(),
-						}));
-					});
+					set(
+						produce((state: ChatState) => {
+							const sid = resolveTargetSessionId(state, sessionId);
+							if (sid && state.sessionsById[sid]) {
+								const session = state.sessionsById[sid];
+								session.messages = session.messages.filter(m => {
+									if (m.id === partId) return false;
+									const mPartId = 'partId' in m ? m.partId : undefined;
+									if (mPartId === partId) return false;
+									const mToolUseId = 'toolUseId' in m ? m.toolUseId : undefined;
+									if (mToolUseId === partId) return false;
+									return true;
+								});
+								session.lastActive = Date.now();
+							}
+						}),
+					);
 				},
 
 				markRevertedFromMessageId: id => {
-					set(state => {
-						const sid = state.activeSessionId;
-						if (!sid) {
-							warnMissingSession('markRevertedFromMessageId');
-							return state;
-						}
-						return updateSessionById(state, sid, s => ({ ...s, revertedFromMessageId: id }));
-					});
+					set(
+						produce((state: ChatState) => {
+							const sid = state.activeSessionId;
+							if (sid && state.sessionsById[sid]) {
+								state.sessionsById[sid].revertedFromMessageId = id;
+							}
+						}),
+					);
 				},
 
 				clearRevertedMessages: () => {
-					set(state => {
-						const sid = state.activeSessionId;
-						if (!sid) return state;
-						const session = state.sessionsById[sid];
-						if (!session?.revertedFromMessageId) return state;
-
-						const index = session.messages.findIndex(m => m.id === session.revertedFromMessageId);
-						if (index === -1) {
-							return updateSessionById(state, sid, s => ({ ...s, revertedFromMessageId: null }));
-						}
-						const newMessages = session.messages.slice(0, index);
-						return updateSessionById(state, sid, s => ({
-							...s,
-							messages: newMessages,
-							revertedFromMessageId: null,
-							lastActive: Date.now(),
-						}));
-					});
+					set(
+						produce((state: ChatState) => {
+							const sid = state.activeSessionId;
+							if (sid && state.sessionsById[sid]) {
+								const session = state.sessionsById[sid];
+								if (session.revertedFromMessageId) {
+									const idx = session.messages.findIndex(
+										m => m.id === session.revertedFromMessageId,
+									);
+									if (idx !== -1) {
+										session.messages = session.messages.slice(0, idx);
+									} else {
+										session.revertedFromMessageId = null;
+									}
+									session.lastActive = Date.now();
+								}
+							}
+						}),
+					);
 				},
 
-				requestCreateSession: () => {
-					// Handled via VS Code message passing
-				},
+				requestCreateSession: () => {}, // Handled by VSCode
 
 				handleSessionCreated: sessionId => {
-					set(state => {
-						if (state.sessionsById[sessionId]) return state;
-						const newSession = createEmptySession(sessionId);
-						const next = upsertSession(state, newSession);
-						return { ...next, activeSessionId: state.activeSessionId ?? sessionId };
-					});
+					set(
+						produce((state: ChatState) => {
+							if (!state.sessionsById[sessionId]) {
+								state.sessionsById[sessionId] = createEmptySession(sessionId);
+								if (!state.sessionOrder.includes(sessionId)) {
+									state.sessionOrder.push(sessionId);
+								}
+								if (!state.activeSessionId) {
+									state.activeSessionId = sessionId;
+								}
+							}
+						}),
+					);
 				},
 
 				switchSession: sessionId => {
-					set(state => {
-						// Auto-create session if it doesn't exist
-						if (!state.sessionsById[sessionId]) {
-							const newSession = createEmptySession(sessionId);
-							const next = upsertSession(state, newSession);
-							return { ...next, activeSessionId: sessionId, editingMessageId: null };
-						}
-						return { ...state, activeSessionId: sessionId, editingMessageId: null };
-					});
+					set(
+						produce((state: ChatState) => {
+							if (!state.sessionsById[sessionId]) {
+								state.sessionsById[sessionId] = createEmptySession(sessionId);
+								if (!state.sessionOrder.includes(sessionId)) {
+									state.sessionOrder.push(sessionId);
+								}
+							}
+							state.activeSessionId = sessionId;
+							state.editingMessageId = null;
+						}),
+					);
 				},
 
 				closeSession: sessionId => {
-					set(state => {
-						if (state.sessionOrder.length <= 1) return state;
-						const nextState = removeSession(state, sessionId);
-						const isActive = state.activeSessionId === sessionId;
-						const nextActive = isActive
-							? nextState.sessionOrder[nextState.sessionOrder.length - 1]
-							: nextState.activeSessionId;
-						return { ...nextState, activeSessionId: nextActive };
-					});
+					set(
+						produce((state: ChatState) => {
+							if (state.sessionOrder.length > 1) {
+								delete state.sessionsById[sessionId];
+								state.sessionOrder = state.sessionOrder.filter(id => id !== sessionId);
+								if (state.activeSessionId === sessionId) {
+									state.activeSessionId = state.sessionOrder[state.sessionOrder.length - 1];
+								}
+							}
+						}),
+					);
 				},
 
 				addChangedFile: file => {
-					set(state => {
-						const sid = state.activeSessionId;
-						if (!sid) {
-							warnMissingSession('addChangedFile');
-							return state;
-						}
-						const session = state.sessionsById[sid];
-						if (!session) return state;
-
-						const existingByToolUseId = session.changedFiles.findIndex(
-							f => f.toolUseId && f.toolUseId === file.toolUseId,
-						);
-						let newFiles: ChangedFile[];
-						if (existingByToolUseId >= 0) {
-							newFiles = session.changedFiles.map((f, i) =>
-								i === existingByToolUseId
-									? {
-											...f,
-											linesAdded: file.linesAdded,
-											linesRemoved: file.linesRemoved,
-											timestamp: file.timestamp,
-										}
-									: f,
-							);
-						} else {
-							newFiles = [...session.changedFiles, file];
-						}
-
-						return updateSessionById(state, sid, s => ({ ...s, changedFiles: newFiles }));
-					});
+					set(
+						produce((state: ChatState) => {
+							const sid = state.activeSessionId;
+							if (sid && state.sessionsById[sid]) {
+								const session = state.sessionsById[sid];
+								const idx = session.changedFiles.findIndex(f => f.toolUseId === file.toolUseId);
+								if (idx !== -1) {
+									session.changedFiles[idx] = { ...session.changedFiles[idx], ...file };
+								} else {
+									session.changedFiles.push(file);
+								}
+							}
+						}),
+					);
 				},
 
 				removeChangedFile: filePath => {
-					set(state => {
-						const sid = state.activeSessionId;
-						if (!sid) return state;
-						const session = state.sessionsById[sid];
-						if (!session) return state;
-						const newFiles = session.changedFiles.filter(f => f.filePath !== filePath);
-						return updateSessionById(state, sid, s => ({ ...s, changedFiles: newFiles }));
-					});
+					set(
+						produce((state: ChatState) => {
+							const sid = state.activeSessionId;
+							if (sid && state.sessionsById[sid]) {
+								state.sessionsById[sid].changedFiles = state.sessionsById[sid].changedFiles.filter(
+									f => f.filePath !== filePath,
+								);
+							}
+						}),
+					);
 				},
 
 				clearChangedFiles: () => {
-					set(state => {
-						const sid = state.activeSessionId;
-						if (!sid) return state;
-						return updateSessionById(state, sid, s => ({ ...s, changedFiles: [] }));
-					});
+					set(
+						produce((state: ChatState) => {
+							const sid = state.activeSessionId;
+							if (sid && state.sessionsById[sid]) {
+								state.sessionsById[sid].changedFiles = [];
+							}
+						}),
+					);
 				},
 
 				addRestoreCommit: (commit, sessionId) => {
-					set(state => {
-						const sid = resolveTargetSessionId(state, sessionId);
-						if (!sid) {
-							warnMissingSession('addRestoreCommit');
-							return state;
-						}
-						const session = state.sessionsById[sid];
-						if (!session) return state;
-						if (session.restoreCommits.some(c => c.sha === commit.sha)) return state;
-						return updateSessionById(state, sid, s => ({
-							...s,
-							restoreCommits: [...s.restoreCommits, commit],
-						}));
-					});
+					set(
+						produce((state: ChatState) => {
+							const sid = resolveTargetSessionId(state, sessionId);
+							if (sid && state.sessionsById[sid]) {
+								const session = state.sessionsById[sid];
+								if (!session.restoreCommits.some(c => c.sha === commit.sha)) {
+									session.restoreCommits.push(commit);
+								}
+							}
+						}),
+					);
 				},
 
 				clearRestoreCommits: sessionId => {
-					set(state => {
-						const sid = resolveTargetSessionId(state, sessionId);
-						if (!sid) return state;
-						return updateSessionById(state, sid, s => ({ ...s, restoreCommits: [] }));
-					});
+					set(
+						produce((state: ChatState) => {
+							const sid = resolveTargetSessionId(state, sessionId);
+							if (sid && state.sessionsById[sid]) {
+								state.sessionsById[sid].restoreCommits = [];
+							}
+						}),
+					);
 				},
 
 				setRestoreCommits: (commits, sessionId) => {
-					set(state => {
-						const sid = resolveTargetSessionId(state, sessionId);
-						if (!sid) return state;
-						return updateSessionById(state, sid, s => ({ ...s, restoreCommits: commits }));
-					});
+					set(
+						produce((state: ChatState) => {
+							const sid = resolveTargetSessionId(state, sessionId);
+							if (sid && state.sessionsById[sid]) {
+								state.sessionsById[sid].restoreCommits = commits;
+							}
+						}),
+					);
 				},
 
 				setUnrevertAvailable: (available, sessionId) => {
-					set(state => {
-						const sid = resolveTargetSessionId(state, sessionId);
-						if (!sid) return state;
-						return updateSessionById(state, sid, s => ({ ...s, unrevertAvailable: available }));
-					});
+					set(
+						produce((state: ChatState) => {
+							const sid = resolveTargetSessionId(state, sessionId);
+							if (sid && state.sessionsById[sid]) {
+								state.sessionsById[sid].unrevertAvailable = available;
+							}
+						}),
+					);
 				},
 
 				setTokenStats: (stats, sessionId) => {
-					set(state => {
-						const sid = resolveTargetSessionId(state, sessionId);
-						if (!sid) {
-							warnMissingSession('setTokenStats');
-							return state;
-						}
-						const session = state.sessionsById[sid];
-						if (!session) return state;
-						return updateSessionById(state, sid, s => ({
-							...s,
-							tokenStats: { ...session.tokenStats, ...stats },
-							lastActive: Date.now(),
-						}));
-					});
+					set(
+						produce((state: ChatState) => {
+							const sid = resolveTargetSessionId(state, sessionId);
+							if (sid && state.sessionsById[sid]) {
+								const session = state.sessionsById[sid];
+								Object.assign(session.tokenStats, stats);
+								session.lastActive = Date.now();
+							}
+						}),
+					);
 				},
 
 				setTotalStats: (stats, sessionId) => {
-					set(state => {
-						const sid = resolveTargetSessionId(state, sessionId);
-						if (!sid) {
-							warnMissingSession('setTotalStats');
-							return state;
-						}
-						const session = state.sessionsById[sid];
-						if (!session) return state;
-						return updateSessionById(state, sid, s => ({
-							...s,
-							totalStats: { ...session.totalStats, ...stats },
-							lastActive: Date.now(),
-						}));
-					});
+					set(
+						produce((state: ChatState) => {
+							const sid = resolveTargetSessionId(state, sessionId);
+							if (sid && state.sessionsById[sid]) {
+								const session = state.sessionsById[sid];
+								Object.assign(session.totalStats, stats);
+								session.lastActive = Date.now();
+							}
+						}),
+					);
 				},
 
 				startSubtask: subtask => {
-					set(state => {
-						const sid = state.activeSessionId;
-						if (!sid) return state;
-						const session = state.sessionsById[sid];
-						if (!session) return state;
-						if (session.messages.some(m => m.id === subtask.id)) return state;
-						return updateSessionById(state, sid, s => ({
-							...s,
-							messages: [...s.messages, subtask],
-							lastActive: Date.now(),
-						}));
-					});
+					set(
+						produce((state: ChatState) => {
+							const sid = state.activeSessionId;
+							if (sid && state.sessionsById[sid]) {
+								const session = state.sessionsById[sid];
+								if (!session.messages.some(m => m.id === subtask.id)) {
+									session.messages.push(subtask);
+									session.lastActive = Date.now();
+								}
+							}
+						}),
+					);
 				},
 
 				completeSubtask: (subtaskId, result) => {
-					set(state => {
-						const sid = state.activeSessionId;
-						if (!sid) return state;
-						const session = state.sessionsById[sid];
-						if (!session) return state;
-						const idx = session.messages.findIndex(m => m.id === subtaskId);
-						if (idx === -1) return state;
-						const msg = session.messages[idx];
-						if (msg.type !== 'subtask') return state;
+					set(
+						produce((state: ChatState) => {
+							const sid = state.activeSessionId;
+							if (sid && state.sessionsById[sid]) {
+								const session = state.sessionsById[sid];
+								const msg = session.messages.find(m => m.id === subtaskId);
+								if (msg && msg.type === 'subtask') {
+									msg.status = 'completed';
+									msg.result = result;
 
-						const updated = {
-							...msg,
-							status: 'completed' as const,
-							result,
-							transcript: msg.contextId
-								? (state.sessionsById[msg.contextId]?.messages ?? [])
-								: (msg as unknown as { transcript?: Message[] }).transcript,
-							// Child session is archived into transcript; clear it to avoid keeping references.
-							contextId: undefined,
-						};
-						const newMessages = [...session.messages];
-						newMessages[idx] = updated;
-
-						// Release context session memory after subtask completion.
-						// Messages are archived into transcript field.
-						const nextState = msg.contextId ? removeSession(state, msg.contextId) : state;
-						return updateSessionById(nextState, sid, s => ({ ...s, messages: newMessages }));
-					});
+									// Handle transcript/context archiving
+									const contextId = msg.contextId;
+									if (contextId && state.sessionsById[contextId]) {
+										msg.transcript = state.sessionsById[contextId].messages;
+										msg.contextId = undefined;
+										delete state.sessionsById[contextId];
+									}
+								}
+							}
+						}),
+					);
 				},
 
 				errorSubtask: (subtaskId, error) => {
-					set(state => {
-						const sid = state.activeSessionId;
-						if (!sid) return state;
-						const session = state.sessionsById[sid];
-						if (!session) return state;
-						const idx = session.messages.findIndex(m => m.id === subtaskId);
-						if (idx === -1) return state;
-						const msg = session.messages[idx];
-						if (msg.type !== 'subtask') return state;
+					set(
+						produce((state: ChatState) => {
+							const sid = state.activeSessionId;
+							if (sid && state.sessionsById[sid]) {
+								const session = state.sessionsById[sid];
+								const msg = session.messages.find(m => m.id === subtaskId);
+								if (msg && msg.type === 'subtask') {
+									msg.status = 'error';
+									msg.result = error;
 
-						const updated = {
-							...msg,
-							status: 'error' as const,
-							result: error,
-							transcript: msg.contextId
-								? (state.sessionsById[msg.contextId]?.messages ?? [])
-								: (msg as unknown as { transcript?: Message[] }).transcript,
-							// Child session is archived into transcript; clear it to avoid keeping references.
-							contextId: undefined,
-						};
-						const newMessages = [...session.messages];
-						newMessages[idx] = updated;
-
-						// Release context session memory after subtask error.
-						const nextState = msg.contextId ? removeSession(state, msg.contextId) : state;
-						return updateSessionById(nextState, sid, s => ({ ...s, messages: newMessages }));
-					});
+									const contextId = msg.contextId;
+									if (contextId && state.sessionsById[contextId]) {
+										msg.transcript = state.sessionsById[contextId].messages;
+										msg.contextId = undefined;
+										delete state.sessionsById[contextId];
+									}
+								}
+							}
+						}),
+					);
 				},
 
 				setImprovingPrompt: (isImproving, requestId = null) => {
@@ -1318,61 +1024,45 @@ export const useChatStore = create<ChatState>()(
 				},
 
 				setSessionMessages: (sessionId, messages) => {
-					set(state => {
-						if (!sessionId) {
-							warnMissingSession('setSessionMessages');
-							return state;
-						}
-						const session = state.sessionsById[sessionId];
-						if (!session) return state;
-						return updateSessionById(state, sessionId, s => ({
-							...s,
-							messages,
-							lastActive: Date.now(),
-						}));
-					});
+					set(
+						produce((state: ChatState) => {
+							if (sessionId && state.sessionsById[sessionId]) {
+								state.sessionsById[sessionId].messages = messages;
+								state.sessionsById[sessionId].lastActive = Date.now();
+							}
+						}),
+					);
 				},
 
 				deleteMessagesAfterMessageId: (sessionId, messageId) => {
-					set(state => {
-						if (!sessionId) {
-							warnMissingSession('deleteMessagesAfterMessageId');
-							return state;
-						}
-						const session = state.sessionsById[sessionId];
-						if (!session) return state;
-						const idx = session.messages.findIndex(m => m.id === messageId);
-						if (idx === -1) return state;
-						// Keep messages up to and including the target message
-						const newMessages = session.messages.slice(0, idx + 1);
-						return updateSessionById(state, sessionId, s => ({
-							...s,
-							messages: newMessages,
-							lastActive: Date.now(),
-						}));
-					});
+					set(
+						produce((state: ChatState) => {
+							if (sessionId && state.sessionsById[sessionId]) {
+								const session = state.sessionsById[sessionId];
+								const idx = session.messages.findIndex(m => m.id === messageId);
+								if (idx !== -1) {
+									session.messages = session.messages.slice(0, idx + 1);
+									session.lastActive = Date.now();
+								}
+							}
+						}),
+					);
 				},
 
 				setSessionModel: (model, sessionId) => {
-					set(state => {
-						const sid = resolveTargetSessionId(state, sessionId);
-						if (!sid) {
-							warnMissingSession('setSessionModel');
-							return state;
-						}
-						if (!state.sessionsById[sid]) {
-							return state;
-						}
-						return updateSessionById(state, sid, s => ({
-							...s,
-							model,
-							lastActive: Date.now(),
-						}));
-					});
+					set(
+						produce((state: ChatState) => {
+							const sid = resolveTargetSessionId(state, sessionId);
+							if (sid && state.sessionsById[sid]) {
+								state.sessionsById[sid].model = model;
+								state.sessionsById[sid].lastActive = Date.now();
+							}
+						}),
+					);
 				},
 
 				getSessionModel: (sessionId): string | undefined => {
-					const state = useChatStore.getState();
+					const state = get();
 					const sid = resolveTargetSessionId(state, sessionId);
 					if (!sid) return undefined;
 					return state.sessionsById[sid]?.model;
@@ -1389,8 +1079,6 @@ export const useChatStore = create<ChatState>()(
 			}),
 			version: 12,
 			migrate: (persistedState, version) => {
-				// Version 12: Introduce per-session model override (optional field).
-				// Ensure existing persisted sessions remain valid.
 				if (version < 9) {
 					return {
 						sessionsById: {},
@@ -1404,3 +1092,16 @@ export const useChatStore = create<ChatState>()(
 		},
 	),
 );
+
+function filterPersistedSessions(
+	sessionsById: Record<string, ChatSession>,
+	sessionOrder: string[],
+): Record<string, ChatSession> {
+	const filtered: Record<string, ChatSession> = {};
+	for (const sid of sessionOrder) {
+		if (sessionsById[sid]) {
+			filtered[sid] = sessionsById[sid];
+		}
+	}
+	return filtered;
+}
