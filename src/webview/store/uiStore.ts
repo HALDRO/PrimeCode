@@ -39,6 +39,7 @@ export interface UIActions {
 	setWorkspaceName: (name: string) => void;
 	setPlatformInfo: (info: PlatformInfo | null) => void;
 	setServerUrl: (url: string | null) => void;
+	setServerStatus: (status: 'connected' | 'disconnected' | 'error') => void;
 	setShowSlashCommands: (show: boolean) => void;
 	setSlashFilter: (filter: string) => void;
 	setShowFilePicker: (show: boolean) => void;
@@ -60,6 +61,7 @@ export interface UIState {
 	workspaceName: string;
 	platformInfo: PlatformInfo | null;
 	serverUrl: string | null;
+	serverStatus: 'connected' | 'disconnected' | 'error';
 
 	showSlashCommands: boolean;
 	slashFilter: string;
@@ -84,6 +86,7 @@ export const useUIStore = create<UIState>((set, get) => ({
 	workspaceName: '',
 	platformInfo: null,
 	serverUrl: null,
+	serverStatus: 'disconnected',
 
 	showSlashCommands: false,
 	slashFilter: '',
@@ -104,6 +107,7 @@ export const useUIStore = create<UIState>((set, get) => ({
 		setWorkspaceName: workspaceName => set({ workspaceName }),
 		setPlatformInfo: platformInfo => set({ platformInfo }),
 		setServerUrl: serverUrl => set({ serverUrl }),
+		setServerStatus: serverStatus => set({ serverStatus }),
 		setShowSlashCommands: showSlashCommands => set({ showSlashCommands }),
 		setSlashFilter: slashFilter => set({ slashFilter }),
 		setShowFilePicker: showFilePicker => set({ showFilePicker }),

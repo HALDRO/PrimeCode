@@ -9,7 +9,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 				await this.onReloadAllProviders();
 				break;
 			case 'checkOpenCodeStatus':
-				await this.onCheckOpenCodeStatus();
+				// Removed: Status is now handled by Webview SSE monitoring
 				break;
 			case 'loadOpenCodeProviders':
 				await this.onLoadOpenCodeProviders();
@@ -39,22 +39,8 @@ export class ProviderHandler implements WebviewMessageHandler {
 		await Promise.all([this.onLoadAvailableProviders(), this.onLoadOpenCodeProviders()]);
 	}
 
-	private async onCheckOpenCodeStatus(): Promise<void> {
-		const provider = (this.context.settings.get('provider') || 'claude') as 'claude' | 'opencode';
-		if (provider !== 'opencode') {
-			this.context.view.postMessage({
-				type: 'openCodeStatus',
-				data: { installed: false, version: null },
-			});
-			return;
-		}
-
-		// Best-effort: we do not probe the environment deeply here.
-		this.context.view.postMessage({
-			type: 'openCodeStatus',
-			data: { installed: true, version: null },
-		});
-	}
+	// Removed: Status is now handled by Webview SSE monitoring
+	// private async onCheckOpenCodeStatus(): Promise<void> { ... }
 
 	private async onLoadOpenCodeProviders(): Promise<void> {
 		this.context.view.postMessage({

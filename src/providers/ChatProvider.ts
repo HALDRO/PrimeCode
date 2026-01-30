@@ -13,6 +13,7 @@ import { McpHandler } from './handlers/McpHandler';
 import { ProviderHandler } from './handlers/ProviderHandler';
 import { SessionHandler } from './handlers/SessionHandler';
 import { SettingsHandler } from './handlers/SettingsHandler';
+import { SseHandler } from './handlers/SseHandler';
 import { ToolHandler } from './handlers/ToolHandler';
 import type { HandlerContext, WebviewMessage, WebviewMessageHandler } from './handlers/types';
 
@@ -43,6 +44,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private providerHandler: ProviderHandler;
 	private toolHandler: ToolHandler;
 	private fileHandler: FileHandler;
+	private sseHandler: SseHandler;
 
 	private handlers: Record<string, WebviewMessageHandler> = {};
 
@@ -71,6 +73,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.providerHandler = new ProviderHandler(handlerContext);
 		this.toolHandler = new ToolHandler(handlerContext);
 		this.fileHandler = new FileHandler(handlerContext);
+		this.sseHandler = new SseHandler(handlerContext);
 
 		// Proxy Fetch Handler
 		const proxyFetchHandler = {
@@ -283,6 +286,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		];
 		fileTypes.forEach(t => {
 			this.handlers[t] = this.fileHandler;
+		});
+
+		const sseTypes = ['sseSubscribe', 'sseClose'];
+		sseTypes.forEach(t => {
+			this.handlers[t] = this.sseHandler;
 		});
 	}
 
@@ -846,5 +854,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		}
 		this.cli.dispose();
 		this.mcpHandler.dispose();
+		this.sseHandler.dispose();
 	}
 }

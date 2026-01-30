@@ -6,7 +6,7 @@
  * in chatStore, so no manual clearing is needed on session switch.
  */
 
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo } from 'react';
 import { cn } from '../../lib/cn';
 import {
 	type ChatSession,
@@ -14,7 +14,9 @@ import {
 	useChatStore,
 	useHistoryDropdownState,
 	useUIActions,
+	useUIStore,
 } from '../../store';
+import { proxyEventSource } from '../../utils/proxyEventSource';
 import { useVSCode } from '../../utils/vscode';
 import { CloseIcon, FileIcon, HistoryIcon, PlusIcon, SettingsIcon } from '../icons';
 import { Button } from '../ui';
@@ -23,14 +25,39 @@ import { HistoryDropdown } from './HistoryDropdown';
 export const Header: React.FC = React.memo(() => {
 	// Optimized selectors
 	const { showHistoryDropdown, setShowHistoryDropdown } = useHistoryDropdownState();
-	const { setActiveModal } = useUIActions();
+	const { setActiveModal, setServerStatus } = useUIActions();
 	const { postMessage } = useVSCode();
 	const { switchSession, closeSession } = useChatActions();
 	const { sessionsById, sessionOrder, activeSessionId } = useChatStore();
+	const { serverUrl, serverStatus } = useUIStore();
+
 	const sessions = useMemo(
 		() => sessionOrder.map(id => sessionsById[id]).filter((s): s is ChatSession => !!s),
 		[sessionOrder, sessionsById],
 	);
+
+	// Subscribe to server events for connection status
+	useEffect(() => {
+		if (!serverUrl) {
+			setServerStatus('disconnected');
+			return;
+		}
+
+		const unsubscribe = proxyEventSource(
+			`${serverUrl}/event`,
+			() => {
+				// Any event means we are connected
+				setServerStatus('connected');
+			},
+			() => {
+				setServerStatus('error');
+			},
+		);
+
+		return () => {
+			unsubscribe();
+		};
+	}, [serverUrl, setServerStatus]);
 
 	const handleSwitchSession = useCallback(
 		(sessionId: string) => {
@@ -109,6 +136,21 @@ export const Header: React.FC = React.memo(() => {
 
 			{/* Right side - Order: New (Plus), History, Settings */}
 			<div className="flex items-center gap-(--header-gap)">
+				{/* Connection Status Indicator */}
+				{serverUrl && (
+					<div
+						className={cn(
+							'w-2 h-2 rounded-full mr-2 transition-colors duration-300',
+							serverStatus === 'connected'
+								? 'bg-green-500'
+								: serverStatus === 'error'
+									? 'bg-red-500'
+									: 'bg-gray-500',
+						)}
+						title={`OpenCode Server: ${serverStatus}`}
+					/>
+				)}
+
 				<Button
 					variant="icon"
 					size="icon"

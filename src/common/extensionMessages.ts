@@ -660,6 +660,14 @@ export type EditorSelectionMessage = BaseExtensionMessage<
 >;
 export type ServerInfoMessage = BaseExtensionMessage<'serverInfo', { url: string }>;
 
+// =============================================================================
+// SSE Proxy Messages (global)
+// =============================================================================
+
+export type SseEventMessage = BaseExtensionMessage<'sseEvent', { id: string; data: string }>;
+export type SseErrorMessage = BaseExtensionMessage<'sseError', { id: string; error: string }>;
+export type SseClosedMessage = BaseExtensionMessage<'sseClosed', { id: string }>;
+
 export type ExtensionMessage =
 	| SessionEventMessage
 	| SessionLifecycleMessage
@@ -718,4 +726,7 @@ export type ExtensionMessage =
 	| ImprovePromptErrorMessage
 	| ImprovePromptCancelledMessage
 	| EditorSelectionMessage
-	| ServerInfoMessage;
+	| ServerInfoMessage
+	| SseEventMessage
+	| SseErrorMessage
+	| SseClosedMessage;

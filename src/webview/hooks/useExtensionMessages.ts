@@ -50,7 +50,7 @@ export function useExtensionMessages(): void {
 			vscode.postMessage({ type: 'loadMCPServers' });
 			vscode.postMessage({ type: 'fetchMcpMarketplaceCatalog', data: { forceRefresh: false } });
 			vscode.postMessage({ type: 'loadProxyModels', data: { baseUrl: '' } });
-			vscode.postMessage({ type: 'checkOpenCodeStatus' });
+			// vscode.postMessage({ type: 'checkOpenCodeStatus' });
 			vscode.postMessage({ type: 'reloadAllProviders' });
 			vscode.postMessage({ type: 'checkDiscoveryStatus' });
 			vscode.postMessage({ type: 'getRules' });
