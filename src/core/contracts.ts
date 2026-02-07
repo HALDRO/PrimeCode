@@ -1,16 +1,13 @@
 /**
  * @file Contracts
- * @description Core interfaces for dependency injection and decoupling.
+ * @description Core DI interfaces for decoupling extension layers. Re-exports ISettings from
+ *              Settings.ts as single source of truth. ISessionState tracks active session ID
+ *              (now correctly typed as string | undefined) and started sessions set.
  */
 
-import type { PrimeCodeSettings } from './Settings';
+import type { CLIEvent } from './executor/types';
 
-export interface ISettings {
-	get<T>(key: keyof PrimeCodeSettings): T | undefined;
-	set<T>(key: keyof PrimeCodeSettings, value: T): Promise<void>;
-	getAll(): PrimeCodeSettings;
-	refresh(): void;
-}
+export type { ISettings } from './Settings';
 
 export interface ICLIConfig {
 	provider: 'claude' | 'opencode';
@@ -29,6 +26,8 @@ export interface ICLIRunner {
 	spawnFollowUp(prompt: string, config: ICLIConfig): Promise<unknown>;
 	spawnReview(prompt: string, config: ICLIConfig): Promise<unknown>;
 	createNewSession(prompt: string, config: ICLIConfig): Promise<unknown>;
+	/** Creates an empty session without sending a message. Returns the session ID. */
+	createEmptySession(config: ICLIConfig): Promise<string>;
 	respondToPermission(decision: {
 		requestId: string;
 		approved: boolean;
@@ -38,6 +37,19 @@ export interface ICLIRunner {
 	kill(): Promise<void>;
 	getSessionId(): string | null;
 	getOpenCodeServerInfo(): { baseUrl: string; directory: string } | null;
+	getProvider(): 'claude' | 'opencode';
+	listSessions(config: ICLIConfig): Promise<
+		Array<{
+			id: string;
+			title?: string;
+			lastModified?: number;
+			created?: number;
+			parentID?: string;
+		}>
+	>;
+	getHistory(sessionId: string, config: ICLIConfig): Promise<CLIEvent[]>;
+	deleteSession(sessionId: string, config: ICLIConfig): Promise<boolean>;
+	renameSession(sessionId: string, title: string, config: ICLIConfig): Promise<boolean>;
 	abort(): Promise<void>;
 	on(event: string, listener: (...args: unknown[]) => void): this;
 	off(event: string, listener: (...args: unknown[]) => void): this;
@@ -48,7 +60,6 @@ export interface IView {
 }
 
 export interface ISessionState {
-	activeSessionId: string;
+	activeSessionId: string | undefined;
 	startedSessions: Set<string>;
-	// Stats storage can be added here
 }

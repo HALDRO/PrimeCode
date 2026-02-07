@@ -26,7 +26,6 @@ export {
 	type CommitInfo,
 	type ConversationIndexEntry,
 	type ModalType,
-	type SessionInfo,
 	type TokenStats,
 	type TotalStats,
 	type UIState,

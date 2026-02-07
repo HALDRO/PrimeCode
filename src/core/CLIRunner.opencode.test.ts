@@ -8,12 +8,13 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CLIRunner } from './CLIRunner';
+import type { OpenCodeExecutor } from './executor/OpenCode';
 
 type FetchMock = ReturnType<typeof vi.fn>;
 
 function getOpenCodeExecutorForTest(): any {
 	const runner = new CLIRunner('opencode');
-	return (runner as unknown as { executor: unknown }).executor as any;
+	return (runner as unknown as { executor: OpenCodeExecutor }).executor as OpenCodeExecutor;
 }
 
 function asJsonBody(fetchCallArgs: unknown[]): unknown {
@@ -127,7 +128,7 @@ describe('OpenCode model parsing', () => {
 		});
 		vi.stubGlobal('fetch', fetchMock);
 
-		await exec.sendPrompt('http://127.0.0.1:1234', 'C:/repo', 's-1', 'hi', {
+		await exec.sendPrompt('C:/repo', 's-1', 'hi', {
 			provider: 'opencode',
 			workspaceRoot: 'C:/repo',
 			model: 'anthropic',

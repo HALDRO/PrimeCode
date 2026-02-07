@@ -26,16 +26,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 	private activeAssistantPartId: string | null = null;
 	private subSessionParentMap = new Map<string, string>();
-	/**
-	 * Tracks the currently active subtask (task tool) execution.
-	 * When set, all incoming messages are routed to this context bucket
-	 * until the corresponding tool_result is received.
-	 */
-	private activeSubtaskContext: {
-		toolUseId: string;
-		contextId: string;
-		parentSessionId: string;
-	} | null = null;
+	private openCodeInitTimer: ReturnType<typeof setInterval> | null = null;
 
 	// Handlers
 	private sessionHandler: SessionHandler;
@@ -133,8 +124,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			},
 		};
 
-		// Proactive start for OpenCode if configured
-		this.maybeStartOpenCode();
+		// Single-point OpenCode initialization with retry polling
+		this.scheduleOpenCodeInit();
 
 		this.registerHandlers();
 
@@ -166,18 +157,83 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				}),
 			),
 		);
+
+		// Keep services in sync when workspace folders change at runtime
+		this.disposables.push(
+			vscode.workspace.onDidChangeWorkspaceFolders(() => {
+				const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+				if (workspaceRoot) {
+					logger.info('[ChatProvider] Workspace folder changed, updating services');
+					this.services.setWorkspaceRoot(workspaceRoot);
+				}
+			}),
+		);
 	}
 
-	private async maybeStartOpenCode() {
-		const provider = this.cli.getProvider();
-		if (provider !== 'opencode') return;
+	/**
+	 * Single-point OpenCode initialization.
+	 * Polls for workspace root availability because VS Code may not populate
+	 * `workspaceFolders` synchronously at extension activation time.
+	 */
+	private scheduleOpenCodeInit(): void {
+		if (this.cli.getProvider() !== 'opencode') return;
 
-		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-		if (!workspaceRoot) return;
-
-		// Check if auto-start is disabled (default true)
 		const autoStart = this.settings.get('opencode.autoStart') !== false;
-		if (!autoStart) return;
+		if (!autoStart) {
+			logger.info('[ChatProvider] OpenCode autoStart is disabled');
+			return;
+		}
+
+		// Try immediately
+		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		if (root) {
+			void this.doStartOpenCode(root);
+			return;
+		}
+
+		// Workspace not ready yet — poll every 1s for up to 15s
+		logger.info('[ChatProvider] Workspace root not available, polling until ready...');
+		let attempts = 0;
+		const MAX_ATTEMPTS = 15;
+		const INTERVAL_MS = 1000;
+
+		this.openCodeInitTimer = setInterval(() => {
+			attempts++;
+			const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+			if (workspaceRoot) {
+				this.clearOpenCodeInitTimer();
+				logger.info(`[ChatProvider] Workspace root appeared after ${attempts}s, starting OpenCode`);
+				void this.doStartOpenCode(workspaceRoot);
+				return;
+			}
+
+			if (attempts >= MAX_ATTEMPTS) {
+				this.clearOpenCodeInitTimer();
+				logger.warn(
+					`[ChatProvider] Workspace root not available after ${MAX_ATTEMPTS}s, OpenCode not started`,
+				);
+			}
+		}, INTERVAL_MS);
+	}
+
+	private clearOpenCodeInitTimer(): void {
+		if (this.openCodeInitTimer) {
+			clearInterval(this.openCodeInitTimer);
+			this.openCodeInitTimer = null;
+		}
+	}
+
+	private async doStartOpenCode(workspaceRoot: string): Promise<void> {
+		// Update services that depend on workspace root
+		this.services.setWorkspaceRoot(workspaceRoot);
+
+		// Skip if server is already running
+		const serverInfo = this.cli.getOpenCodeServerInfo();
+		if (serverInfo?.baseUrl) {
+			logger.debug('[ChatProvider] OpenCode server already running');
+			return;
+		}
 
 		const opencodeAgent = this.settings.get('opencode.agent');
 		const opencodeServerTimeout = this.settings.get('opencode.serverTimeout');
@@ -199,10 +255,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		};
 
 		try {
-			logger.info('[ChatProvider] Proactively starting OpenCode server...');
+			logger.info('[ChatProvider] Starting OpenCode server...');
 			await this.cli.start(config);
+			logger.info('[ChatProvider] OpenCode server started successfully');
 		} catch (error) {
-			logger.warn('[ChatProvider] Failed to proactively start OpenCode:', error);
+			logger.warn('[ChatProvider] Failed to start OpenCode:', error);
 		}
 	}
 
@@ -217,6 +274,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			'stopRequest',
 			'improvePromptRequest',
 			'cancelImprovePrompt',
+			'getConversationList',
+			'loadConversation',
+			'deleteConversation',
+			'renameConversation',
 		];
 		sessionTypes.forEach(t => {
 			this.handlers[t] = this.sessionHandler;
@@ -309,10 +370,12 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		const styleUri = webviewView.webview
 			.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'out', 'webview.css'))
 			.toString();
+		const cspSource = webviewView.webview.cspSource;
 
 		webviewView.webview.html = getHtml(
 			scriptUri,
 			styleUri,
+			cspSource,
 			false,
 			vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '',
 		);
@@ -349,6 +412,13 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 	private handleCliEvent(event: CLIEvent): void {
 		const now = Date.now();
+		logger.debug(`[ChatProvider] handleCliEvent: ${event.type}`, event.data);
+
+		if (event.type === 'session_updated') {
+			this.sessionHandler.handleSessionUpdatedEvent(event.data, event.sessionId);
+			return;
+		}
+
 		let targetSessionId = event.sessionId || this.sessionState.activeSessionId;
 
 		// Check if this session is a sub-session mapped to a parent
@@ -356,10 +426,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			targetSessionId = this.subSessionParentMap.get(event.sessionId) ?? targetSessionId;
 		}
 
-		logger.debug(`[ChatProvider] handleCliEvent: ${event.type}`, event.data);
-
-		if (event.type === 'session_updated') {
-			this.sessionHandler.handleSessionUpdatedEvent(event.data);
+		if (!targetSessionId) {
+			logger.warn(`[ChatProvider] Dropping event ${event.type}: no active session`);
 			return;
 		}
 
@@ -371,28 +439,39 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				break;
 			}
 
+			case 'finished': {
+				if (this.activeAssistantPartId) {
+					this.sessionHandler.postComplete(
+						this.activeAssistantPartId,
+						this.activeAssistantPartId,
+						targetSessionId,
+					);
+					this.activeAssistantPartId = null;
+				}
+				this.sessionHandler.postStatus(targetSessionId, 'idle', 'Ready');
+				break;
+			}
+
 			case 'message': {
 				const e = event.data as { content?: string; partId?: string; isDelta?: boolean };
 				const partId = e.partId || this.activeAssistantPartId || `part-${now}`;
 				this.activeAssistantPartId = partId;
 
-				// Determine context: prefer event.sessionId mapping, fallback to activeSubtaskContext
+				// Determine context: prefer event.sessionId mapping
 				let contextId: string | undefined;
-				let messageTargetSessionId = targetSessionId;
+				const messageTargetSessionId = targetSessionId;
 
 				if (event.sessionId && this.subSessionParentMap.has(event.sessionId)) {
 					// Message from a known sub-session
 					contextId = event.sessionId;
-				} else if (this.activeSubtaskContext) {
-					// Message during active subtask - route to subtask context bucket
-					contextId = this.activeSubtaskContext.contextId;
-					// Keep target as parent session but messages will be stored in context bucket
-					messageTargetSessionId = this.activeSubtaskContext.parentSessionId;
 				}
+
+				// Ensure unique ID for assistant message distinct from thinking block with same partId
+				const messageId = partId.startsWith('msg-') ? partId : `msg-${partId}`;
 
 				this.sessionHandler.postSessionMessage(
 					{
-						id: partId,
+						id: messageId,
 						type: 'assistant',
 						partId,
 						content: e.content || '',
@@ -411,20 +490,20 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				const e = event.data as { content?: string; partId?: string; isDelta?: boolean };
 				const partId = e.partId || `thinking-${now}`;
 
-				// Determine context: prefer event.sessionId mapping, fallback to activeSubtaskContext
+				// Determine context: prefer event.sessionId mapping
 				let contextId: string | undefined;
-				let thinkingTargetSessionId = targetSessionId;
+				const thinkingTargetSessionId = targetSessionId;
 
 				if (event.sessionId && this.subSessionParentMap.has(event.sessionId)) {
 					contextId = event.sessionId;
-				} else if (this.activeSubtaskContext) {
-					contextId = this.activeSubtaskContext.contextId;
-					thinkingTargetSessionId = this.activeSubtaskContext.parentSessionId;
 				}
+
+				// Ensure unique ID for thinking block distinct from assistant message with same partId
+				const thinkingId = partId.startsWith('thinking-') ? partId : `thinking-${partId}`;
 
 				this.sessionHandler.postSessionMessage(
 					{
-						id: partId,
+						id: thinkingId,
 						type: 'thinking',
 						partId,
 						content: e.content || '',
@@ -467,19 +546,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					targetSessionId,
 				);
 				this.sessionHandler.postStatus(targetSessionId, 'error', 'Error');
-				break;
-			}
-
-			case 'finished': {
-				if (this.activeAssistantPartId) {
-					this.sessionHandler.postComplete(
-						this.activeAssistantPartId,
-						this.activeAssistantPartId,
-						targetSessionId,
-					);
-					this.activeAssistantPartId = null;
-				}
-				this.sessionHandler.postStatus(targetSessionId, 'idle', 'Ready');
 				break;
 			}
 
@@ -562,21 +628,13 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			// Register this sub-session to the current active session (Parent)
 			const parentSessionId = this.sessionState.activeSessionId;
 			// The event.sessionId here is likely the *Sub-Session* ID (allocated by OpenCode executor)
-			// Verify if event.sessionId is different from activeSessionId to confirm it's a sub-session
-			if (event.sessionId && event.sessionId !== parentSessionId) {
+			if (parentSessionId && event.sessionId && event.sessionId !== parentSessionId) {
 				this.subSessionParentMap.set(event.sessionId, parentSessionId);
 			}
 
-			// Use toolUseId as the contextId for this subtask's message bucket.
-			// This ensures all subagent messages are routed to this bucket.
-			const subtaskContextId = toolUseId;
-			this.activeSubtaskContext = {
-				toolUseId,
-				contextId: subtaskContextId,
-				parentSessionId,
-			};
-
 			const input = (e.input as Record<string, unknown>) || {};
+			const childSessionId = event.sessionId;
+
 			this.sessionHandler.postSessionMessage(
 				{
 					id: toolUseId,
@@ -593,24 +651,21 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					isRunning: true,
 					timestamp: new Date().toISOString(),
 					normalizedEntry: event.normalizedEntry,
-					// Link this card to the context bucket (using toolUseId)
-					contextId: subtaskContextId,
+					// Backend-first: contextId points to the REAL child session
+					contextId: childSessionId,
+					metadata: childSessionId ? { childSessionId } : undefined,
 				},
 				parentSessionId,
 			);
 			return;
 		}
 
-		// Check if this tool use belongs to a known sub-session or active subtask
+		// Check if this tool use belongs to a known sub-session
 		let contextId: string | undefined;
-		let toolUseTargetSessionId = targetSessionId;
+		const toolUseTargetSessionId = targetSessionId;
 
 		if (event.sessionId && this.subSessionParentMap.has(event.sessionId)) {
 			contextId = event.sessionId;
-		} else if (this.activeSubtaskContext) {
-			// Tool use during active subtask - route to subtask context bucket
-			contextId = this.activeSubtaskContext.contextId;
-			toolUseTargetSessionId = this.activeSubtaskContext.parentSessionId;
 		}
 
 		this.sessionHandler.postSessionMessage(
@@ -647,10 +702,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			const sessionIdMatch = content.match(
 				/<task_metadata>\s*session_id:\s*(.*?)\s*<\/task_metadata>/s,
 			);
-			const extractedContextId = sessionIdMatch ? sessionIdMatch[1].trim() : undefined;
+			const extractedChildSessionId = sessionIdMatch ? sessionIdMatch[1].trim() : undefined;
 
-			// Use the contextId from activeSubtaskContext (consistent with setup)
-			const subtaskContextId = this.activeSubtaskContext?.contextId ?? extractedContextId;
+			const childSessionId = event.sessionId ?? extractedChildSessionId;
 
 			this.sessionHandler.postSessionMessage(
 				{
@@ -659,29 +713,24 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					partId: toolUseId,
 					status: 'completed',
 					result: content,
-					contextId: subtaskContextId,
+					contextId: childSessionId,
+					metadata: childSessionId ? { childSessionId } : undefined,
 					timestamp: new Date().toISOString(),
 					normalizedEntry: event.normalizedEntry,
 				},
-				// Always route task FULL completion to the ACTIVE session (Parent) where the card lives
+				// Card lives in parent
 				this.sessionState.activeSessionId,
 			);
 			this.sessionHandler.postComplete(toolUseId, toolUseId, this.sessionState.activeSessionId);
-
-			// Clear activeSubtaskContext now that the subtask is complete
-			this.activeSubtaskContext = null;
 			return;
 		}
 
 		// Determine context for subagent tool results
 		let contextId: string | undefined;
-		let toolResultTargetSessionId = targetSessionId;
+		const toolResultTargetSessionId = targetSessionId;
 
 		if (event.sessionId && this.subSessionParentMap.has(event.sessionId)) {
 			contextId = event.sessionId;
-		} else if (this.activeSubtaskContext) {
-			contextId = this.activeSubtaskContext.contextId;
-			toolResultTargetSessionId = this.activeSubtaskContext.parentSessionId;
 		}
 
 		const toolInputRaw = e.input;
@@ -819,7 +868,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.registerHandlers();
 
 		this.postMessage({ type: 'configChanged' });
-		this.sessionHandler.postSessionInfo();
 	}
 
 	private sendInitialState(): void {
@@ -840,15 +888,27 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			return;
 		}
 
-		logger.debug('[ChatProvider] postMessage', {
-			type: (msg as { type?: string })?.type,
-			targetId: (msg as { targetId?: string })?.targetId,
-		});
+		const msgType = (msg as { type?: string })?.type;
+
+		// Extra diagnostics for conversation list
+		if (msgType === 'conversationList') {
+			const data = (msg as { data?: unknown })?.data;
+			logger.info('[ChatProvider] postMessage conversationList', {
+				isArray: Array.isArray(data),
+				count: Array.isArray(data) ? data.length : 'N/A',
+			});
+		} else {
+			logger.debug('[ChatProvider] postMessage', {
+				type: msgType,
+				targetId: (msg as { targetId?: string })?.targetId,
+			});
+		}
 
 		this.view.webview.postMessage(msg);
 	}
 
 	dispose(): void {
+		this.clearOpenCodeInitTimer();
 		for (const disposable of this.disposables) {
 			disposable.dispose();
 		}

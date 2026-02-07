@@ -95,6 +95,8 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 
 			// Persist workspace default (so next new session starts with last used model)
 			if (provider === 'opencode') {
+				// ModelDropdown uses composite ID "provider/model" for OpenCode.
+				// We pass this directly to setOpenCodeModel handler in ChatProvider.
 				postMessage('setOpenCodeModel', { model: model.id });
 			} else {
 				postMessage('selectModel', { model: model.id });

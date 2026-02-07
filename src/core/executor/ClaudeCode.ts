@@ -202,6 +202,13 @@ export class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 		throw new Error('ClaudeExecutor does not support creating new sessions');
 	}
 
+	async createEmptySession(_config: CLIConfig): Promise<string> {
+		// Claude doesn't have persistent sessions - generate a local ID
+		const sessionId = `claude-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+		this.sessionId = sessionId;
+		return sessionId;
+	}
+
 	parseStream(chunk: Buffer): CLIEvent[] {
 		this.stdoutBuffer += chunk.toString();
 
@@ -466,5 +473,28 @@ export class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 
 	getAdminInfo(): { baseUrl: string; directory: string } | null {
 		return null;
+	}
+
+	async listSessions(
+		_config: CLIConfig,
+	): Promise<Array<{ id: string; title?: string; lastModified?: number }>> {
+		// Claude executor does not support listing sessions via API
+		return [];
+	}
+
+	async getHistory(_sessionId: string, _config: CLIConfig): Promise<CLIEvent[]> {
+		// Claude executor does not support getting history via API
+		// History is loaded from local files by ConversationService
+		return [];
+	}
+
+	async deleteSession(_sessionId: string, _config: CLIConfig): Promise<boolean> {
+		// Claude CLI does not expose a session delete API
+		return false;
+	}
+
+	async renameSession(_sessionId: string, _title: string, _config: CLIConfig): Promise<boolean> {
+		// Claude CLI does not expose a session rename API
+		return false;
 	}
 }

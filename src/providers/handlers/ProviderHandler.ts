@@ -36,7 +36,25 @@ export class ProviderHandler implements WebviewMessageHandler {
 	}
 
 	private async onReloadAllProviders(): Promise<void> {
-		await Promise.all([this.onLoadAvailableProviders(), this.onLoadOpenCodeProviders()]);
+		await Promise.all([
+			this.onLoadAvailableProviders(),
+			this.onLoadOpenCodeProviders(),
+			this.restoreSelectedModel(),
+		]);
+	}
+
+	private async restoreSelectedModel(): Promise<void> {
+		const savedModel =
+			this.context.extensionContext.globalState.get<string>('primecode.selectedModel');
+		if (savedModel) {
+			const provider = (this.context.settings.get('provider') || 'claude') as 'claude' | 'opencode';
+
+			if (provider === 'opencode') {
+				this.context.view.postMessage({ type: 'openCodeModelSet', data: { model: savedModel } });
+			} else {
+				this.context.view.postMessage({ type: 'modelSelected', model: savedModel });
+			}
+		}
 	}
 
 	// Removed: Status is now handled by Webview SSE monitoring
@@ -206,7 +224,8 @@ export class ProviderHandler implements WebviewMessageHandler {
 	private async onSetOpenCodeModel(msg: WebviewMessage): Promise<void> {
 		const model = typeof msg.model === 'string' ? msg.model : undefined;
 		if (model) {
-			// Model is stored per-session in chatStore, not in workspace settings
+			// Persist selection in globalState (not VS Code settings - model is not a registered config)
+			await this.context.extensionContext.globalState.update('primecode.selectedModel', model);
 			this.context.view.postMessage({ type: 'openCodeModelSet', data: { model } });
 		}
 	}
@@ -214,25 +233,26 @@ export class ProviderHandler implements WebviewMessageHandler {
 	private async onSelectModel(msg: WebviewMessage): Promise<void> {
 		const model = typeof msg.model === 'string' ? msg.model : undefined;
 		if (model) {
-			// Model is stored per-session in chatStore, not in workspace settings
+			// Persist selection in globalState (not VS Code settings - model is not a registered config)
+			await this.context.extensionContext.globalState.update('primecode.selectedModel', model);
 			this.context.view.postMessage({ type: 'modelSelected', model });
 		}
 	}
 
 	private async onLoadProxyModels(msg: WebviewMessage): Promise<void> {
 		const data = (msg.data ?? {}) as { baseUrl?: unknown; apiKey?: unknown };
-		const baseUrlRaw =
-			typeof data.baseUrl === 'string'
-				? data.baseUrl
-				: typeof this.context.settings.get('proxy.baseUrl') === 'string'
-					? (this.context.settings.get('proxy.baseUrl') as string)
-					: '';
-		const apiKeyRaw =
-			typeof data.apiKey === 'string'
-				? data.apiKey
-				: typeof this.context.settings.get('proxy.apiKey') === 'string'
-					? (this.context.settings.get('proxy.apiKey') as string)
-					: '';
+
+		let baseUrlRaw = typeof data.baseUrl === 'string' ? data.baseUrl : '';
+		if (!baseUrlRaw.trim()) {
+			const setting = this.context.settings.get('proxy.baseUrl');
+			if (typeof setting === 'string') baseUrlRaw = setting;
+		}
+
+		let apiKeyRaw = typeof data.apiKey === 'string' ? data.apiKey : '';
+		if (!apiKeyRaw.trim()) {
+			const setting = this.context.settings.get('proxy.apiKey');
+			if (typeof setting === 'string') apiKeyRaw = setting;
+		}
 
 		const baseUrl = baseUrlRaw.trim().replace(/\/+$/g, '');
 		const apiKey = apiKeyRaw.trim();
@@ -245,13 +265,36 @@ export class ProviderHandler implements WebviewMessageHandler {
 			return;
 		}
 
+		const cacheKey = `proxyModelsCache:${baseUrl}`;
+
+		// Read-through: send cached models immediately if available
+		const cachedModels =
+			this.context.extensionContext.globalState.get<Array<{ id: string; name: string }>>(cacheKey);
+
+		if (cachedModels && cachedModels.length > 0) {
+			this.context.view.postMessage({
+				type: 'proxyModels',
+				data: {
+					enabled: true,
+					models: cachedModels,
+					baseUrl,
+					cached: true,
+				},
+			});
+		}
+
 		let url: URL;
 		try {
 			url = new URL(`${baseUrl}/v1/models`);
 		} catch {
 			this.context.view.postMessage({
 				type: 'proxyModels',
-				data: { enabled: false, models: [], baseUrl, error: 'Invalid proxy baseUrl' },
+				data: {
+					enabled: !!(cachedModels && cachedModels.length > 0),
+					models: cachedModels || [],
+					baseUrl,
+					error: 'Invalid proxy baseUrl',
+				},
 			});
 			return;
 		}
@@ -271,8 +314,8 @@ export class ProviderHandler implements WebviewMessageHandler {
 				this.context.view.postMessage({
 					type: 'proxyModels',
 					data: {
-						enabled: false,
-						models: [],
+						enabled: !!(cachedModels && cachedModels.length > 0),
+						models: cachedModels || [],
 						baseUrl,
 						error: `Proxy models request failed (${response.status})${detail}`,
 					},
@@ -300,6 +343,10 @@ export class ProviderHandler implements WebviewMessageHandler {
 				})
 				.filter(m => m.id.length > 0);
 
+			if (models.length > 0) {
+				await this.context.extensionContext.globalState.update(cacheKey, models);
+			}
+
 			this.context.view.postMessage({
 				type: 'proxyModels',
 				data: {
@@ -312,7 +359,12 @@ export class ProviderHandler implements WebviewMessageHandler {
 			const msg = error instanceof Error ? error.message : String(error);
 			this.context.view.postMessage({
 				type: 'proxyModels',
-				data: { enabled: false, models: [], baseUrl, error: `Proxy models fetch failed: ${msg}` },
+				data: {
+					enabled: !!(cachedModels && cachedModels.length > 0),
+					models: cachedModels || [],
+					baseUrl,
+					error: `Proxy models fetch failed: ${msg}`,
+				},
 			});
 		}
 	}

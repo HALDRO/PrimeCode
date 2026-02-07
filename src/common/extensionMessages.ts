@@ -246,8 +246,7 @@ export type SessionLifecycleAction = 'created' | 'closed' | 'switched' | 'cleare
 export interface SessionLifecycleMessage {
 	type: 'session_lifecycle';
 	action: SessionLifecycleAction;
-	sessionId: string;
-	parentId?: string;
+	sessionId?: string;
 	data?: {
 		isProcessing?: boolean;
 		totalStats?: TotalStats;

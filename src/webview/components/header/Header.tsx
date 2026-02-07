@@ -1,9 +1,8 @@
 /**
  * @file Header component - top navigation bar for PrimeCode
- * @description Compact header with consistent button styling. Contains title,
- * workspace info badge, and control buttons.
- * Session-specific data (changedFiles, restoreCommits) is now managed per-session
- * in chatStore, so no manual clearing is needed on session switch.
+ * @description Compact header with session tabs, connection status indicator, and control buttons.
+ * New session creation delegates entirely to the backend (via `createSession` message) which
+ * creates a real session and responds with lifecycle events — no client-side draft IDs.
  */
 
 import React, { useCallback, useEffect, useMemo } from 'react';
@@ -78,7 +77,7 @@ export const Header: React.FC = React.memo(() => {
 	);
 
 	const handleCreateSession = useCallback(() => {
-		postMessage('createSession');
+		postMessage('createSession', {});
 	}, [postMessage]);
 
 	const handleHistoryToggle = useCallback(() => {

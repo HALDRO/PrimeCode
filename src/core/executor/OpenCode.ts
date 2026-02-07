@@ -1,6 +1,8 @@
 /**
  * @file OpenCodeExecutor
- * @description Executor implementation for OpenCode CLI (SSE-based).
+ * @description Executor implementation for OpenCode CLI (SSE-based) using pure fetch API.
+ * Parses token stats from `message.updated` SSE events (properties.info.tokens: {input, output, cache.read})
+ * and emits `session_updated` with delta-based tokenStats compatible with SessionHandler aggregation.
  */
 
 import type { ChildProcess } from 'node:child_process';
@@ -10,32 +12,19 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-type OpencodeClient = import('@opencode-ai/sdk').OpencodeClient;
-
 import { logger } from '../../utils/logger';
 import { LogNormalizer } from './LogNormalizer';
 import type { CLIConfig, CLIEvent, CLIExecutor } from './types';
 
-// Extend CLIConfig to include autoApprove
+// =============================================================================
+// Types & Interfaces
+// =============================================================================
+
 declare module './types' {
 	interface CLIConfig {
 		autoApprove?: boolean;
 	}
 }
-
-type _OpencodeSdkEnvelope = {
-	type: string;
-	properties?: unknown;
-};
-
-type OpenCodePermissionAsked = {
-	id?: string;
-	permission?: string;
-	patterns?: string[];
-	metadata?: unknown;
-	tool?: { callID?: string };
-	toolInput?: unknown;
-};
 
 type OpenCodeSessionStatus =
 	| { type: 'idle' }
@@ -64,57 +53,44 @@ type OpenCodePart =
 				metadata?: unknown;
 			};
 	  }
-	| { type: 'other'; raw: unknown };
+	| { type: 'other'; raw: unknown; sessionID?: string };
 
-// Define types that might be missing in the SDK definitions we have
-interface ExtendedOpencodeClient {
-	command: {
-		list(params: {
-			query: { directory: string };
-		}): Promise<{ error?: unknown; data?: Array<{ name: string; description?: string }> }>;
-	};
-	config: {
-		providers(params: {
-			query: { directory: string };
-		}): Promise<{ error?: unknown; data?: unknown }>;
-	} & OpencodeClient['config'];
-	agent: {
-		list(params: { query: { directory: string } }): Promise<{ error?: unknown; data?: unknown }>;
-	} & OpencodeClient['app']; // 'app' in SDK seems to hold agents? useOpenCode uses client.app.agents() but here we map to REST likely
-	mcp: {
-		list(params: { query: { directory: string } }): Promise<{ error?: unknown; data?: unknown }>;
-	};
-	permission: {
-		reply(params: {
-			path: { id: string };
-			query: { directory: string };
-			body: { reply: 'once' | 'always' | 'reject'; message?: string };
-		}): Promise<{ error?: unknown }>;
-	};
-	session: OpencodeClient['session'] & {
-		summarize(params: {
-			path: { id: string };
-			query: { directory: string };
-			body: { providerID: string; modelID: string; auto: boolean };
-		}): Promise<{ error?: unknown }>;
-	};
-}
-
-interface OpencodeInstance {
-	client: OpencodeClient & ExtendedOpencodeClient;
-	server: {
-		url: string;
-		close(): void;
-	};
-}
+// =============================================================================
+// Executor Implementation
+// =============================================================================
 
 export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
-	// maintained for interface compatibility but managed by SDK instance
-	private opencode: OpencodeInstance | null = null;
 	private serverUrl: string | null = null;
 	private sessionId: string | null = null;
 	private directory: string | null = null;
-	private logNormalizer = new LogNormalizer();
+	private readonly logNormalizer = new LogNormalizer();
+
+	private eventAbort: AbortController | null = null;
+	private eventStreamRunning = false;
+	private lastEventId: string | null = null;
+	private reconnectAttempt = 0;
+
+	private readonly seenToolCalls = new Set<string>();
+	private readonly completedToolCalls = new Set<string>();
+	private readonly messageRoles = new Map<string, 'user' | 'assistant'>();
+	private lastEmittedStatus = new Map<string, string>();
+
+	// Token stats tracking for message.updated events (per-message cumulative → delta)
+	private readonly lastMessageTokens = new Map<
+		string,
+		{ input: number; output: number; cacheRead: number }
+	>();
+
+	private readonly CACHE_TTL = 5 * 60 * 1000;
+	private _cache: {
+		commands?: { data: Array<{ name: string; description?: string }>; time: number };
+		providers?: { data: unknown; time: number };
+		modes?: { data: unknown; time: number };
+		mcp?: { data: unknown; time: number };
+	} = {};
+
+	// Keep track of the server process wrapper to close it properly if needed
+	private serverInstance: { close(): void } | null = null;
 
 	constructor() {
 		super();
@@ -129,16 +105,9 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		return ['SessionFork'];
 	}
 
-	private eventAbort: AbortController | null = null;
-	private eventStreamRunning = false;
-
-	private lastEventId: string | null = null;
-	private reconnectAttempt = 0;
-
-	private seenToolCalls = new Set<string>();
-	private completedToolCalls = new Set<string>();
-
-	private messageRoles = new Map<string, 'user' | 'assistant'>();
+	// =========================================================================
+	// Server Management
+	// =========================================================================
 
 	private getPortFilePath(workspaceRoot: string): string {
 		const hash = crypto.createHash('md5').update(workspaceRoot).digest('hex');
@@ -146,9 +115,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	}
 
 	async ensureServer(config: CLIConfig): Promise<void> {
-		if (this.opencode && this.serverUrl) {
-			return;
-		}
+		if (this.serverUrl) return;
 
 		if (config.serverUrl) {
 			this.serverUrl = config.serverUrl;
@@ -157,119 +124,67 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			return;
 		}
 
-		// Port File Discovery: Check if a server is already running for this workspace
+		if (await this.tryConnectToExistingServer(config)) return;
+
+		await this.spawnServer(config.workspaceRoot, config);
+	}
+
+	private async tryConnectToExistingServer(config: CLIConfig): Promise<boolean> {
 		const portFile = this.getPortFilePath(config.workspaceRoot);
 		try {
-			if (fs.existsSync(portFile)) {
-				const content = await fs.promises.readFile(portFile, 'utf-8');
-				const port = parseInt(content.trim(), 10);
+			if (!fs.existsSync(portFile)) return false;
 
-				if (!Number.isNaN(port) && port > 0) {
-					const portUrl = `http://127.0.0.1:${port}`;
+			const content = await fs.promises.readFile(portFile, 'utf-8');
+			const port = parseInt(content.trim(), 10);
+			if (Number.isNaN(port) || port <= 0) return false;
 
-					// Health check to verify server is alive
-					try {
-						const controller = new AbortController();
-						const timeout = setTimeout(() => controller.abort(), 3000);
-						// OpenCode root often returns 404, but connection refused means it's dead
-						// /health or /version might be better if available, but root is enough to check TCP
-						await fetch(portUrl, {
-							method: 'HEAD',
-							signal: controller.signal,
-						});
-						clearTimeout(timeout);
+			const portUrl = `http://127.0.0.1:${port}`;
 
-						// If fetch didn't throw (even if 404), the port is open and listening
-						logger.info(`[OpenCode] Discovered existing server on port ${port}`);
-						this.serverUrl = portUrl;
-						this.directory = config.workspaceRoot;
-
-						// Ensure we have a client instance, even if dummy, to satisfy null checks elsewhere
-						// although most logic uses this.serverUrl.
-						if (!this.opencode) {
-							// Create a minimal mock instance so checks for this.opencode pass
-							this.opencode = {
-								client: {} as unknown as OpencodeInstance['client'],
-								server: { url: portUrl, close: () => {} },
-							};
-						}
-						return;
-					} catch (e) {
-						// Connection refused or timeout -> Server likely dead
-						const msg = e instanceof Error ? e.message : String(e);
-						logger.info(
-							`[OpenCode] Stale port file found (port ${port}): ${msg}. Starting new server.`,
-						);
-						// Clean up stale file
-						try {
-							await fs.promises.unlink(portFile);
-						} catch {}
-					}
-				}
-			}
-		} catch (error) {
-			logger.warn('[OpenCode] Error checking port file:', error);
-		}
-
-		await this.ensureOpenCodeServer(config.workspaceRoot, config);
-	}
-
-	private buildPermissionsEnv(autoApprove: boolean, env?: Record<string, string>): string {
-		if (env?.OPENCODE_PERMISSION) {
+			// Quick health check
+			const controller = new AbortController();
+			const timeout = setTimeout(() => controller.abort(), 2000);
 			try {
-				const existing = JSON.parse(env.OPENCODE_PERMISSION);
-				return JSON.stringify({ ...existing, question: 'deny' });
-			} catch {
-				// ignore invalid json
-			}
-		}
+				await fetch(portUrl, { method: 'HEAD', signal: controller.signal });
+				clearTimeout(timeout);
 
-		if (autoApprove) {
-			return JSON.stringify({ question: 'deny' });
+				logger.info(`[OpenCode] Discovered existing server on port ${port}`);
+				this.serverUrl = portUrl;
+				this.directory = config.workspaceRoot;
+				void this.preloadMetadata();
+				return true;
+			} catch (_e) {
+				clearTimeout(timeout);
+				logger.info(`[OpenCode] Stale port file (port ${port}). Starting new server.`);
+				try {
+					await fs.promises.unlink(portFile);
+				} catch {}
+				return false;
+			}
+		} catch (_error) {
+			return false;
 		}
-		return JSON.stringify({
-			edit: 'ask',
-			bash: 'ask',
-			webfetch: 'ask',
-			doom_loop: 'ask',
-			external_directory: 'ask',
-			question: 'deny',
-		});
 	}
 
-	private async ensureOpenCodeServer(workspaceRoot: string, config: CLIConfig): Promise<void> {
-		if (this.opencode && this.serverUrl) {
-			return;
-		}
+	private async spawnServer(workspaceRoot: string, config: CLIConfig): Promise<void> {
+		if (this.serverUrl) return;
 
 		const autoApprove = config.autoApprove ?? false;
 		const permissionsEnv = this.buildPermissionsEnv(autoApprove, config.env);
 
-		// Prepare environment variables
-		const processEnv: NodeJS.ProcessEnv & {
-			OPENCODE_PERMISSION?: string;
-			OPENCODE_CONFIG_CONTENT?: string;
-		} = {
+		const processEnv = {
 			...process.env,
 			...config.env,
 			NODE_NO_WARNINGS: '1',
 			NO_COLOR: '1',
 			NPM_CONFIG_LOGLEVEL: 'error',
 			OPENCODE_PERMISSION: permissionsEnv,
+			OPENCODE_CONFIG_CONTENT:
+				!process.env.OPENCODE_CONFIG_CONTENT && config.autoCompact !== false
+					? JSON.stringify({ compaction: { auto: true } })
+					: process.env.OPENCODE_CONFIG_CONTENT,
 		};
 
-		// Inject auto-compaction if not present and enabled
-		if (!processEnv.OPENCODE_CONFIG_CONTENT) {
-			const autoCompact = config.autoCompact ?? true;
-			if (autoCompact) {
-				processEnv.OPENCODE_CONFIG_CONTENT = JSON.stringify({
-					compaction: { auto: true },
-				});
-			}
-		}
-
 		logger.info('[OpenCodeExecutor] Starting OpenCode server via SDK...');
-
 		const prevCwd = process.cwd();
 		let changedCwd = false;
 
@@ -283,175 +198,364 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				}
 			}
 
-			// Save current cwd to restore later if needed, though we don't change process.cwd() here directly
-			// The SDK might spawn a process.
-			// The SDK createOpencode doesn't take 'env' directly in the typed options usually,
-			// but we can try to set process.env before calling it or assume it inherits.
-			// However, looking at the SDK, it spawns 'npx opencode-ai serve'.
-			// We'll set the environment variables on the current process temporarily or
-			// rely on the fact that spawned processes inherit process.env.
-
-			// We merge our config env into process.env for the spawn
 			Object.assign(process.env, processEnv);
 
+			// Dynamically import SDK to avoid load-time issues
 			const { createOpencode } = await import('@opencode-ai/sdk');
-			this.opencode = (await createOpencode({
+			const opencode = await createOpencode({
 				hostname: '127.0.0.1',
 				port: 0,
 				timeout: config.serverTimeoutMs ?? 15000,
-			})) as unknown as OpencodeInstance;
+			});
 
-			// Restore env? Usually better to leave it contaminated or manage it carefully.
-			// For now, we leave it as the extension process env might need these for other spawns.
-			// Or we can restore:
-			// process.env = originalEnv;
-			// But 'process.env' assignment is not safe in Node.
-			// Let's iterate and delete keys if we want to be clean, but for now it's fine.
-
-			this.serverUrl = this.opencode.server.url;
+			// We only need the URL and close method
+			this.serverInstance = { close: () => opencode.server.close() };
+			this.serverUrl = opencode.server.url;
 			this.directory = workspaceRoot;
 
-			// Extract port and save to port file for discovery
-			try {
-				const url = new URL(this.serverUrl);
-				const port = url.port;
-				if (port) {
-					const portFile = this.getPortFilePath(workspaceRoot);
-					await fs.promises.writeFile(portFile, port);
-					logger.info(`[OpenCode] Saved server port ${port} to ${portFile}`);
-				}
-			} catch (e) {
-				logger.warn('[OpenCode] Failed to save port file:', e);
-			}
-
+			await this.savePortFile(workspaceRoot);
 			logger.info(`[OpenCode] Server started at ${this.serverUrl}`);
-
-			// We don't have direct access to stdout/stderr stream from SDK instance usually,
-			// unless we attach to the underlying process if exposed.
-			// For now, we lose the direct stdout logging unless SDK exposes it.
+			void this.preloadMetadata();
 		} catch (error) {
 			logger.error('[OpenCodeExecutor] Failed to start server:', error);
-			this.emit('event', {
-				type: 'error',
-				data: { message: error instanceof Error ? error.message : String(error) },
-			});
+			this.emit('event', { type: 'error', data: { message: String(error) } });
 			throw error;
 		} finally {
 			if (changedCwd) {
 				try {
 					process.chdir(prevCwd);
-				} catch (e) {
-					logger.warn(`[OpenCode] Failed to restore CWD:`, e);
-				}
+				} catch {}
 			}
 		}
 	}
 
-	async executeCommand(
-		command: string,
-		_args: string[], // OpenCode commands are usually single strings like "status" or "models/anthropic"
+	private async savePortFile(workspaceRoot: string): Promise<void> {
+		if (!this.serverUrl) return;
+		try {
+			const port = new URL(this.serverUrl).port;
+			if (port) {
+				const portFile = this.getPortFilePath(workspaceRoot);
+				await fs.promises.writeFile(portFile, port);
+			}
+		} catch {}
+	}
+
+	private buildPermissionsEnv(autoApprove: boolean, env?: Record<string, string>): string {
+		if (env?.OPENCODE_PERMISSION) {
+			try {
+				const existing = JSON.parse(env.OPENCODE_PERMISSION);
+				return JSON.stringify({ ...existing, question: 'deny' });
+			} catch {}
+		}
+		if (autoApprove) return JSON.stringify({ question: 'deny' });
+
+		return JSON.stringify({
+			edit: 'ask',
+			bash: 'ask',
+			webfetch: 'ask',
+			doom_loop: 'ask',
+			external_directory: 'ask',
+			question: 'deny',
+		});
+	}
+
+	private isServerDownError(error: unknown): boolean {
+		if (error instanceof Error) {
+			const cause = (error as { cause?: { code?: string } }).cause;
+			if (cause?.code === 'ECONNREFUSED' || cause?.code === 'ECONNRESET') return true;
+			if (error.message.includes('fetch failed')) return true;
+		}
+		return false;
+	}
+
+	private resetServerState(): void {
+		logger.info('[OpenCode] Resetting server state for reconnection...');
+		if (this.serverInstance) {
+			try {
+				this.serverInstance.close();
+			} catch {}
+			this.serverInstance = null;
+		}
+		this.serverUrl = null;
+		this.directory = null;
+		this.lastEmittedStatus.clear();
+		this._cache = {};
+	}
+
+	private async fetchApi<T>(
+		endpoint: string,
+		directory: string,
+		options?: RequestInit,
+	): Promise<T> {
+		if (!this.serverUrl) throw new Error('OpenCode server not running');
+		const url = new URL(`${this.serverUrl}${endpoint}`);
+		if (directory) url.searchParams.append('directory', directory);
+
+		// If tests set executor.directory and forgot to pass directory arg, fall back.
+		if (!directory && this.directory) url.searchParams.append('directory', this.directory);
+
+		const resp = await fetch(url.toString(), options);
+		const text = await resp.text();
+		if (!resp.ok) {
+			throw new Error(`API Error ${endpoint}: ${resp.status} ${resp.statusText} - ${text}`);
+		}
+
+		// Empty body: return empty array for list endpoints, empty object otherwise.
+		if (!text) return [] as unknown as T;
+		return JSON.parse(text) as T;
+	}
+
+	// =========================================================================
+	// Session Management
+	// =========================================================================
+
+	async spawn(prompt: string, config: CLIConfig): Promise<ChildProcess> {
+		await this.ensureServer(config);
+		try {
+			await this.createNewSession(prompt, config);
+		} catch (error) {
+			if (this.isServerDownError(error)) {
+				logger.warn('[OpenCode] Server connection lost during spawn, reconnecting...');
+				this.resetServerState();
+				await this.ensureServer(config);
+				await this.createNewSession(prompt, config);
+			} else {
+				throw error;
+			}
+		}
+		return null as unknown as ChildProcess;
+	}
+
+	async spawnFollowUp(prompt: string, sessionId: string, config: CLIConfig): Promise<ChildProcess> {
+		if (!this.serverUrl) throw new Error('OpenCode server not running');
+
+		try {
+			// Continue the existing session (no fork) - just send a message
+			this.sessionId = sessionId;
+			this.startEventStream(this.serverUrl, config.workspaceRoot);
+			await this.sendPrompt(config.workspaceRoot, sessionId, prompt, config);
+		} catch (error) {
+			if (this.isServerDownError(error)) {
+				logger.warn('[OpenCode] Server connection lost during followUp, reconnecting...');
+				this.resetServerState();
+				// Fallback to creating new session since we lost the old one
+				await this.spawn(prompt, config);
+			} else {
+				throw error;
+			}
+		}
+		return null as unknown as ChildProcess;
+	}
+
+	async createNewSession(prompt: string, config: CLIConfig): Promise<ChildProcess> {
+		if (!this.serverUrl) throw new Error('OpenCode server not running');
+
+		logger.info('[OpenCodeExecutor] Creating new session on existing server...');
+		try {
+			this.sessionId = await this.createSession(config.workspaceRoot);
+			logger.info(`[OpenCodeExecutor] New session created: ${this.sessionId}`);
+			this.emit('event', { type: 'session_updated', data: { sessionId: this.sessionId } });
+
+			this.startEventStream(this.serverUrl, config.workspaceRoot);
+			await this.sendPrompt(config.workspaceRoot, this.sessionId, prompt, config);
+		} catch (error) {
+			if (this.isServerDownError(error)) {
+				logger.warn('[OpenCode] Server connection lost, reconnecting...');
+				this.resetServerState();
+				await this.ensureServer(config);
+				if (!this.serverUrl) throw new Error('OpenCode server not running after reconnect');
+
+				this.sessionId = await this.createSession(config.workspaceRoot);
+				this.emit('event', { type: 'session_updated', data: { sessionId: this.sessionId } });
+
+				this.startEventStream(this.serverUrl, config.workspaceRoot);
+				await this.sendPrompt(config.workspaceRoot, this.sessionId, prompt, config);
+			} else {
+				throw error;
+			}
+		}
+		return null as unknown as ChildProcess;
+	}
+
+	async listSessions(
 		config: CLIConfig,
-	): Promise<void> {
+	): Promise<Array<{ id: string; title?: string; lastModified?: number; parentID?: string }>> {
+		if (!this.serverUrl && config.workspaceRoot) {
+			try {
+				await this.ensureServer(config);
+			} catch (error) {
+				logger.warn('[OpenCode] listSessions: ensureServer failed', error);
+				return [];
+			}
+		}
 		if (!this.serverUrl) {
-			await this.ensureServer(config);
-		}
-		if (!this.serverUrl || !this.directory) {
-			throw new Error('OpenCode server not ready');
+			logger.warn('[OpenCode] listSessions: no serverUrl, returning empty');
+			return [];
 		}
 
-		// Map slash commands to OpenCode SDK calls
+		try {
+			const raw = await this.fetchApi<
+				Array<{
+					id: string;
+					title?: string;
+					parentID?: string;
+					time?: { updated?: number; created?: number };
+				}>
+			>('/session', config.workspaceRoot);
+
+			// Guard: ensure response is actually an array
+			const sessions = Array.isArray(raw) ? raw : [];
+
+			logger.info('[OpenCode] listSessions: API returned', {
+				rawCount: sessions.length,
+				directory: config.workspaceRoot,
+			});
+
+			return sessions.map(s => ({
+				id: s.id,
+				title: s.title || 'Untitled Session',
+				lastModified: s.time?.updated || s.time?.created || Date.now(),
+				created: s.time?.created,
+				parentID: s.parentID,
+			}));
+		} catch (error) {
+			logger.warn('[OpenCode] listSessions: API call failed', error);
+			return [];
+		}
+	}
+
+	async getHistory(sessionId: string, config: CLIConfig): Promise<CLIEvent[]> {
+		if (!this.serverUrl && config.workspaceRoot) {
+			try {
+				await this.ensureServer(config);
+			} catch {
+				return [];
+			}
+		}
+		if (!this.serverUrl) return [];
+
+		try {
+			const messages = await this.fetchApi<
+				Array<{
+					info?: { role?: string; id?: string };
+					parts?: unknown[];
+					time?: { created?: number };
+				}>
+			>(`/session/${sessionId}/message`, config.workspaceRoot);
+
+			return messages.flatMap(msg => {
+				const role = msg.info?.role;
+				const timestamp = msg.time?.created
+					? new Date(msg.time.created).toISOString()
+					: new Date().toISOString();
+
+				return (msg.parts || []).flatMap(rawPart => {
+					const part = this.normalizePart(rawPart as Record<string, unknown> | undefined);
+					const events: CLIEvent[] = [];
+
+					if (part.type === 'text' && part.text) {
+						if (role === 'assistant') {
+							events.push({
+								type: 'message' as const,
+								data: { content: part.text, partId: msg.info?.id, isDelta: false },
+								sessionId,
+							});
+						} else {
+							events.push({
+								type: 'normalized_log' as const,
+								data: { role: 'user', content: part.text, timestamp },
+								normalizedEntry: {
+									entryType: 'UserMessage' as const,
+									content: part.text || '',
+									timestamp,
+								},
+								sessionId,
+							});
+						}
+					} else if (part.type === 'reasoning' && part.text) {
+						events.push({
+							type: 'thinking' as const,
+							data: { content: part.text, partId: msg.info?.id, isDelta: false },
+							sessionId,
+						});
+					} else if (part.type === 'tool' && part.callID) {
+						const { callID, tool: name = 'unknown', state } = part;
+						const status = state?.status;
+						const input = (state?.input as Record<string, unknown>) || {};
+
+						// Always emit tool_use for history
+						events.push({
+							type: 'tool_use' as const,
+							data: {
+								tool: name,
+								input,
+								toolUseId: callID,
+								timestamp,
+							},
+							sessionId,
+						});
+
+						// If completed or error, emit tool_result
+						if (status === 'completed' || status === 'error') {
+							events.push({
+								type: 'tool_result' as const,
+								data: {
+									tool: name,
+									content: state?.output || '',
+									isError: status === 'error',
+									toolUseId: callID,
+									timestamp,
+								},
+								sessionId,
+							});
+						}
+					}
+
+					return events;
+				});
+			});
+		} catch (_error) {
+			return [];
+		}
+	}
+
+	// =========================================================================
+	// Metadata & Commands
+	// =========================================================================
+
+	private async preloadMetadata(): Promise<void> {
+		if (!this.directory) return;
+		logger.info('[OpenCode] Preloading metadata cache...');
+		await Promise.allSettled([
+			this.listCommands(this.directory).catch(() => {}),
+			this.listConfigProviders(this.directory).catch(() => {}),
+			this.listAgents(this.directory).catch(() => {}),
+			this.getMcpStatus(this.directory).catch(() => {}),
+		]);
+		logger.info('[OpenCode] Metadata cache preloaded');
+	}
+
+	async executeCommand(command: string, _args: string[], config: CLIConfig): Promise<void> {
+		if (!this.serverUrl) await this.ensureServer(config);
+		if (!this.directory) throw new Error('OpenCode server not ready');
+
+		const directory = this.directory;
 		const cmd = command.replace(/^\//, '');
-
-		// First try to check if it's a dynamic command supported by the server
-		// Reference: available_slash_commands/discover_slash_commands
-		// We can list commands and see if it exists, or just try to execute specific ones we know.
-		// Since executeCommand interface is generic, we can try to find if it matches known SDK commands.
-
-		// For now we keep hardcoded handling for critical ones, but fall back or check list.
-		// Reference implementation "run_slash_command" effectively handles discovery.
-		// Here we implement specific handlers for known commands that map to SDK endpoints.
 
 		switch (cmd) {
 			case 'compact':
-			case 'summarize': {
-				if (!this.sessionId) {
-					throw new Error('No active session to compact');
-				}
-
-				// Resolve model from configuration for summarization
-				const modelSpec = this.parseModel(config.model);
-				if (!modelSpec) {
-					this.emit('event', {
-						type: 'tool_result',
-						data: {
-							tool_use_id: 'system',
-							name: 'compact',
-							content: 'Error: No model configured for compaction.',
-							is_error: true,
-						},
-					});
-					break;
-				}
-
-				try {
-					await this.sessionSummarize(this.directory, this.sessionId, modelSpec);
-					this.emit('event', {
-						type: 'tool_result',
-						data: {
-							tool_use_id: 'system',
-							name: 'compact',
-							content: 'Session compacted successfully.',
-						},
-					});
-				} catch (error) {
-					this.emit('event', {
-						type: 'tool_result',
-						data: {
-							tool_use_id: 'system',
-							name: 'compact',
-							content: `Error compacting session: ${error instanceof Error ? error.message : String(error)}`,
-							is_error: true,
-						},
-					});
-				}
+			case 'summarize':
+				await this.handleCompactCommand(config);
 				break;
-			}
-			case 'commands': {
-				const commands = await this.listCommands(this.directory);
-				this.emit('event', {
-					type: 'tool_result',
-					data: {
-						tool_use_id: 'system',
-						name: 'commands',
-						content: JSON.stringify(commands, null, 2),
-					},
-				});
+			case 'commands':
+				await this.handleListCommand('commands', () => this.listCommands(directory));
 				break;
-			}
-			case 'models': {
-				const providers = await this.listConfigProviders(this.directory);
-				this.emit('event', {
-					type: 'tool_result',
-					data: {
-						tool_use_id: 'system',
-						name: 'models',
-						content: JSON.stringify(providers, null, 2),
-					},
-				});
+			case 'models':
+				await this.handleListCommand('models', () => this.listConfigProviders(directory));
 				break;
-			}
-			case 'agents': {
-				const agents = await this.listAgents(this.directory);
-				this.emit('event', {
-					type: 'tool_result',
-					data: {
-						tool_use_id: 'system',
-						name: 'agents',
-						content: JSON.stringify(agents, null, 2),
-					},
-				});
+			case 'agents':
+				await this.handleListCommand('agents', () => this.listAgents(directory));
 				break;
-			}
 			case 'status': {
 				const mcp = await this.getMcpStatus(this.directory);
 				this.emit('event', {
@@ -464,123 +568,104 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				});
 				break;
 			}
-			default: {
-				// Dynamic command handling
-				// Check if the command exists in the server
-				const commands = await this.listCommands(this.directory);
-				const targetCmd = commands.find(c => c.name === cmd);
-
-				if (targetCmd) {
-					// NOTE: To properly support arbitrary slash commands from the SDK, we would need
-					// a generic "run_slash_command" endpoint or mechanism in the OpenCode server/SDK logic
-					// which currently maps specific commands (like /compact) to tailored implementations.
-					// For now, we acknowledge it exists but explain limitation to the user.
-					logger.warn(`OpenCode command '${cmd}' found but generic execution not implemented.`);
-					this.emit('event', {
-						type: 'tool_result',
-						data: {
-							tool_use_id: 'system',
-							name: cmd,
-							content: `Command '/${cmd}' is recognized but generic execution is not yet supported in this client version.`,
-						},
-					});
-				} else {
-					logger.warn(`Unknown OpenCode command: ${command}`);
-					this.emit('event', {
-						type: 'error',
-						data: { message: `Unknown command: ${command}` },
-					});
-				}
+			default:
+				await this.handleDynamicCommand(cmd);
 				break;
-			}
 		}
 	}
+
+	private async handleCompactCommand(config: CLIConfig): Promise<void> {
+		if (!this.sessionId || !this.directory) throw new Error('No active session to compact');
+
+		const modelSpec = this.parseModel(config.model);
+		if (!modelSpec) {
+			this.emitToolResult('compact', 'Error: No model configured for compaction.', true);
+			return;
+		}
+
+		try {
+			await this.sessionSummarize(this.directory, this.sessionId, modelSpec);
+			this.emitToolResult('compact', 'Session compacted successfully.');
+		} catch (error) {
+			this.emitToolResult('compact', `Error compacting session: ${String(error)}`, true);
+		}
+	}
+
+	private async handleListCommand(name: string, fetcher: () => Promise<unknown>): Promise<void> {
+		const data = await fetcher();
+		this.emitToolResult(name, JSON.stringify(data, null, 2));
+	}
+
+	private emitToolResult(name: string, content: string, isError = false): void {
+		this.emit('event', {
+			type: 'tool_result',
+			data: { tool_use_id: 'system', name, content, is_error: isError },
+		});
+	}
+
+	private async handleDynamicCommand(cmd: string): Promise<void> {
+		if (!this.directory) return;
+		// Generic execution logic could go here
+		logger.warn(`Unknown OpenCode command: ${cmd}`);
+		this.emit('event', { type: 'error', data: { message: `Unknown command: ${cmd}` } });
+	}
+
+	// =========================================================================
+	// API Helpers (Fetch Only)
+	// =========================================================================
 
 	private async listCommands(
 		directory: string,
 	): Promise<Array<{ name: string; description?: string }>> {
-		if (!this.opencode) return [];
+		if (this._cache.commands && Date.now() - this._cache.commands.time < this.CACHE_TTL)
+			return this._cache.commands.data;
 		try {
-			const result = await this.opencode.client.command.list({
-				query: { directory },
-			});
-			if (result.error) throw result.error;
-			return result.data || [];
-		} catch (error) {
-			logger.warn('[OpenCode] Failed to list commands via SDK, falling back to fetch', error);
-			if (!this.serverUrl) return [];
-			// Fallback to manual fetch if SDK fails (e.g. method missing)
-			const resp = await fetch(
-				`${this.serverUrl}/command?directory=${encodeURIComponent(directory)}`,
-				{
-					headers: this.buildOpenCodeHeaders(directory),
-				},
+			// Try GET /command first, might fail if not supported
+			const data = await this.fetchApi<Array<{ name: string; description?: string }>>(
+				'/command',
+				directory,
 			);
-			if (!resp.ok) return [];
-			return (await resp.json()) as Array<{ name: string; description?: string }>;
+			this._cache.commands = { data, time: Date.now() };
+			return data;
+		} catch {
+			return [];
 		}
 	}
 
 	private async listConfigProviders(directory: string): Promise<unknown> {
-		if (!this.opencode) return {};
+		if (this._cache.providers && Date.now() - this._cache.providers.time < this.CACHE_TTL)
+			return this._cache.providers.data;
 		try {
-			const result = await this.opencode.client.config.providers({
-				query: { directory },
-			});
-			if (result.error) throw result.error;
-			return result.data || {};
-		} catch (error) {
-			logger.warn('[OpenCode] Failed to list providers via SDK, falling back to fetch', error);
-			if (!this.serverUrl) return {};
-			const resp = await fetch(
-				`${this.serverUrl}/config/providers?directory=${encodeURIComponent(directory)}`,
-				{
-					headers: this.buildOpenCodeHeaders(directory),
-				},
-			);
-			if (!resp.ok) return {};
-			return await resp.json();
+			const data = await this.fetchApi<unknown>('/config/providers', directory);
+			this._cache.providers = { data, time: Date.now() };
+			return data;
+		} catch {
+			return {};
 		}
 	}
 
 	private async listAgents(directory: string): Promise<unknown> {
-		if (!this.opencode) return [];
+		if (this._cache.modes && Date.now() - this._cache.modes.time < this.CACHE_TTL)
+			return this._cache.modes.data;
 		try {
-			const result = await this.opencode.client.agent.list({
-				query: { directory },
-			});
-			if (result.error) throw result.error;
-			return result.data || [];
-		} catch (error) {
-			logger.warn('[OpenCode] Failed to list agents via SDK, falling back to fetch', error);
-			if (!this.serverUrl) return [];
-			const resp = await fetch(
-				`${this.serverUrl}/agent?directory=${encodeURIComponent(directory)}`,
-				{
-					headers: this.buildOpenCodeHeaders(directory),
-				},
-			);
-			if (!resp.ok) return [];
-			return await resp.json();
+			const data = await this.fetchApi<unknown>('/mode', directory);
+			this._cache.modes = { data, time: Date.now() };
+			return data;
+		} catch {
+			return [];
 		}
 	}
 
 	private async getMcpStatus(directory: string): Promise<unknown> {
-		if (!this.opencode) return {};
+		if (this._cache.mcp && Date.now() - this._cache.mcp.time < 30 * 1000)
+			return this._cache.mcp.data;
 		try {
-			const result = await this.opencode.client.mcp.list({
-				query: { directory },
-			});
-			if (result.error) throw result.error;
-			return result.data || {};
-		} catch (error) {
-			logger.warn('[OpenCode] Failed to get MCP status via SDK, falling back to fetch', error);
-			if (!this.serverUrl) return {};
-			const resp = await fetch(`${this.serverUrl}/mcp?directory=${encodeURIComponent(directory)}`, {
-				headers: this.buildOpenCodeHeaders(directory),
-			});
-			if (!resp.ok) return {};
-			return await resp.json();
+			// Use /config as proxy for MCP status
+			const data = await this.fetchApi<unknown>('/config', directory);
+			this._cache.mcp = { data, time: Date.now() };
+			return data;
+		} catch {
+			return {};
 		}
 	}
 
@@ -589,136 +674,67 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		sessionId: string,
 		model: { providerID: string; modelID: string },
 	): Promise<void> {
-		if (!this.opencode) throw new Error('OpenCode client not initialized');
-
-		const req = {
-			providerID: model.providerID,
-			modelID: model.modelID,
-			auto: false,
-		};
-
-		const result = await this.opencode.client.session.summarize({
-			path: { id: sessionId },
-			query: { directory },
-			body: req,
+		await this.fetchApi(`/session/${sessionId}/summarize`, directory, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ providerID: model.providerID, modelID: model.modelID, auto: false }),
 		});
-
-		if (result.error) {
-			throw new Error(`OpenCode summarize failed: ${JSON.stringify(result.error)}`);
-		}
-	}
-
-	async spawn(prompt: string, config: CLIConfig): Promise<ChildProcess> {
-		logger.info('[OpenCodeExecutor] spawn called', {
-			prompt: prompt.slice(0, 50),
-			model: config.model,
-		});
-
-		await this.ensureServer(config);
-		await this.createNewSession(prompt, config);
-		return null as unknown as ChildProcess;
-	}
-
-	async spawnFollowUp(prompt: string, sessionId: string, config: CLIConfig): Promise<ChildProcess> {
-		if (!this.opencode || !this.serverUrl) {
-			throw new Error('OpenCode server not running');
-		}
-
-		const forkedSessionId = await this.forkSession(config.workspaceRoot, sessionId);
-		this.sessionId = forkedSessionId;
-		this.emit('event', { type: 'session_updated', data: { sessionId: forkedSessionId } });
-
-		this.startEventStream(this.serverUrl, config.workspaceRoot);
-		await this.sendPrompt(config.workspaceRoot, forkedSessionId, prompt, config);
-		return null as unknown as ChildProcess;
-	}
-
-	async spawnReview(prompt: string, config: CLIConfig): Promise<ChildProcess> {
-		logger.info('[OpenCodeExecutor] spawnReview called');
-		await this.ensureServer(config);
-		return await this.createNewSession(prompt, config);
-	}
-
-	async createNewSession(prompt: string, config: CLIConfig): Promise<ChildProcess> {
-		if (!this.opencode || !this.serverUrl) {
-			throw new Error('OpenCode server not running');
-		}
-
-		logger.info('[OpenCodeExecutor] Creating new session on existing server...');
-		this.sessionId = await this.createSession(config.workspaceRoot);
-		logger.info(`[OpenCodeExecutor] New session created: ${this.sessionId}`);
-		this.emit('event', { type: 'session_updated', data: { sessionId: this.sessionId } });
-
-		this.startEventStream(this.serverUrl, config.workspaceRoot);
-		await this.sendPrompt(config.workspaceRoot, this.sessionId, prompt, config);
-		logger.info('[OpenCodeExecutor] Prompt sent to new session');
-		return null as unknown as ChildProcess;
-	}
-
-	private buildOpenCodeHeaders(directory: string): Record<string, string> {
-		// When using SDK, we might not need the password header if we rely on the client.
-		// However, for manual fetch calls (like SSE), we do need headers.
-		// createOpencode likely configures the client with necessary auth.
-		// For manual fetch, we should see if SDK exposes auth headers or if we need to pass what we know.
-		// If SDK spawns with a generated password that we don't know, we might have trouble with manual fetch.
-		// Wait, createOpencode doesn't return the password. It returns a pre-configured client.
-		// BUT the 'server' object usually exposes URL. Does it expose the password or headers?
-		// Checking the SDK types via inference or assumption:
-		// If SDK manages the server, it probably handles auth internally for its client.
-		// For our manual `fetch` calls (SSE), we have a problem if we don't know the password.
-		// The `OpencodeInstance` likely exposes the password or we can use the `client` to make requests.
-		// ISSUE: SSE logic uses `fetch` and `headers`.
-		// If I cannot get the password from `createOpencode`, I cannot use manual fetch for SSE unless I use the SDK's way of streaming.
-		// Let's assume for now that I can get headers or the server doesn't enforce auth for localhost if spawned this way?
-		// No, `opencode-ai serve` generates a password usually.
-		// If `createOpencode` returns `client`, maybe `client` has `headers` property?
-		// Or `server` object has `password`?
-		// Ref: The `opencode-gui-main` uses `createOpencode`.
-		// In `OpenCodeViewProvider.ts`, it accesses `this._openCodeService.getServerUrl()`.
-		// It uses `fetch` for proxying.
-		// `_handleProxyFetch` uses `fetch` but doesn't seem to add Authorization header from a stored password.
-		// Maybe `createOpencode` starts the server WITHOUT password by default if not passed?
-		// The reference implementation `OpenCodeService.ts` does `createOpencode({ ... })`. It does NOT pass a password.
-		// So likely it starts without password or with a known default/no-auth for local.
-
-		const headers: Record<string, string> = {
-			'x-opencode-directory': directory,
-		};
-		// If we find we need auth, we'll need to check how SDK handles it.
-		// For now, assuming no-auth or SDK handles it transparently for its client,
-		// and manual fetch works without auth if started via SDK (maybe?).
-		return headers;
 	}
 
 	private async createSession(directory: string): Promise<string> {
-		if (!this.opencode) throw new Error('OpenCode client not initialized');
-
-		const result = await this.opencode.client.session.create({
-			query: { directory },
-			body: {},
+		const data = await this.fetchApi<{ id: string }>('/session', directory, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({}),
 		});
+		if (!data.id) throw new Error('OpenCode create session: missing id');
+		return data.id;
+	}
 
-		if (result.error) {
-			throw new Error(`OpenCode create session failed: ${JSON.stringify(result.error)}`);
-		}
+	/**
+	 * Creates an empty session without sending a message.
+	 * Used when user clicks "+" to create a new chat.
+	 */
+	async createEmptySession(config: CLIConfig): Promise<string> {
+		await this.ensureServer(config);
+		const sessionId = await this.createSession(config.workspaceRoot);
+		this.sessionId = sessionId;
+		logger.info(`[OpenCodeExecutor] Empty session created: ${sessionId}`);
+		return sessionId;
+	}
 
-		if (!result.data?.id) {
-			throw new Error('OpenCode create session: missing id');
+	async deleteSession(sessionId: string, config: CLIConfig): Promise<boolean> {
+		try {
+			await this.fetchApi(`/session/${sessionId}`, config.workspaceRoot, { method: 'DELETE' });
+			logger.info(`[OpenCodeExecutor] Session deleted: ${sessionId}`);
+			return true;
+		} catch (error) {
+			logger.error('[OpenCodeExecutor] Failed to delete session:', error);
+			return false;
 		}
-		return result.data.id;
+	}
+
+	async renameSession(sessionId: string, title: string, config: CLIConfig): Promise<boolean> {
+		try {
+			await this.fetchApi(`/session/${sessionId}`, config.workspaceRoot, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ title }),
+			});
+			logger.info(`[OpenCodeExecutor] Session renamed: ${sessionId} -> "${title}"`);
+			return true;
+		} catch (error) {
+			logger.error('[OpenCodeExecutor] Failed to rename session:', error);
+			return false;
+		}
 	}
 
 	private async sendAbort(directory: string, sessionId: string): Promise<void> {
-		if (!this.opencode) return;
-
-		try {
-			await this.opencode.client.session.abort({
-				path: { id: sessionId },
-				query: { directory },
-			});
-		} catch (error) {
-			logger.debug('[OpenCode] abort failed:', error);
-		}
+		await this.fetchApi(`/session/${sessionId}/abort`, directory, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({}),
+		});
 	}
 
 	private async sendPermissionReply(
@@ -726,83 +742,11 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		requestId: string,
 		payload: { reply: 'once' | 'always' | 'reject'; message?: string },
 	): Promise<void> {
-		if (!this.opencode) throw new Error('OpenCode client not initialized');
-
-		// Method name inferred from useOpenCode.ts (postSessionIdPermissionsPermissionId) or likely alias
-		// If SDK has better naming, we'd use it. For now assuming standard resource nesting if available,
-		// or raw fetch if we can't find it.
-		// Actually, useOpenCode.ts uses: client.postSessionIdPermissionsPermissionId
-		// That's ugly generated code. Let's see if we can use a cleaner path if available,
-		// or fallback to fetch for this one specific weird endpoint to be safe,
-		// OR try to map it to what we think it is.
-		// Given the uncertainty of the exact method name on the client object,
-		// and the fact that it's a critical permission path, I'll stick to fetch for this one
-		// UNLESS I'm sure.
-		// BUT I can try to access it dynamically.
-
-		try {
-			const result = await this.opencode.client.permission.reply({
-				path: { id: requestId },
-				query: { directory },
-				body: payload,
-			});
-			if (result.error) throw result.error;
-		} catch (error) {
-			// Fallback to fetch if the above SDK method doesn't exist
-			if (!this.serverUrl) throw new Error('OpenCode server not running');
-
-			logger.warn(
-				'[OpenCode] Failed to send permission reply via SDK, falling back to fetch',
-				error,
-			);
-
-			const resp = await fetch(
-				`${this.serverUrl}/permission/${encodeURIComponent(requestId)}/reply?directory=${encodeURIComponent(directory)}`,
-				{
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json', ...this.buildOpenCodeHeaders(directory) },
-					body: JSON.stringify(payload),
-				},
-			);
-
-			if (!resp.ok) {
-				const text = await resp.text();
-				throw new Error(
-					`OpenCode permission reply failed: ${resp.status} ${resp.statusText}: ${text}`,
-				);
-			}
-		}
-	}
-
-	private async forkSession(directory: string, sessionId: string): Promise<string> {
-		if (!this.opencode) throw new Error('OpenCode client not initialized');
-
-		const result = await this.opencode.client.session.fork({
-			path: { id: sessionId },
-			query: { directory },
-			body: {},
+		await this.fetchApi(`/permission/${encodeURIComponent(requestId)}/reply`, directory, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(payload),
 		});
-
-		if (result.error) {
-			throw new Error(`OpenCode fork session failed: ${JSON.stringify(result.error)}`);
-		}
-
-		if (!result.data?.id) {
-			throw new Error('OpenCode fork session: missing id');
-		}
-		return result.data.id;
-	}
-
-	private parseModel(model?: string): { providerID: string; modelID: string } | undefined {
-		if (!model) return undefined;
-		const trimmed = model.trim();
-		if (!trimmed) return undefined;
-
-		const [providerID, modelID] = trimmed.split('/', 2);
-		if (!providerID) return undefined;
-
-		// OpenCode accepts provider-only model IDs as { providerID, modelID: "" }.
-		return { providerID, modelID: modelID ?? '' };
 	}
 
 	private async sendPrompt(
@@ -811,27 +755,32 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		prompt: string,
 		config: CLIConfig,
 	): Promise<void> {
-		if (!this.opencode) throw new Error('OpenCode client not initialized');
-
-		const parts = [{ type: 'text' as const, text: prompt }];
 		const modelSpec = this.parseModel(config.model);
-
+		const modelProviderId =
+			modelSpec?.providerID || (typeof config.model === 'string' ? config.model.trim() : '') || '';
 		const body = {
-			parts,
-			...(modelSpec ? { model: modelSpec } : {}),
+			parts: [{ type: 'text' as const, text: prompt }],
+			model: { providerID: modelProviderId, modelID: modelSpec?.modelID || '' },
 			...(config.agent ? { agent: config.agent } : {}),
 		};
 
-		const result = await this.opencode.client.session.prompt({
-			path: { id: sessionId },
-			query: { directory },
-			body,
+		await this.fetchApi(`/session/${sessionId}/message`, directory, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(body),
 		});
-
-		if (result.error) {
-			throw new Error(`OpenCode message failed: ${JSON.stringify(result.error)}`);
-		}
 	}
+
+	private parseModel(model?: string): { providerID: string; modelID: string } | undefined {
+		if (!model || !model.trim()) return undefined;
+		const [providerID, modelID] = model.trim().split('/', 2);
+		if (!providerID) return undefined;
+		return { providerID, modelID: modelID ?? '' };
+	}
+
+	// =========================================================================
+	// Event Streaming
+	// =========================================================================
 
 	private async connectEventStream(
 		baseUrl: string,
@@ -839,13 +788,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		signal: AbortSignal,
 		lastEventId?: string,
 	): Promise<Response> {
-		const headers: Record<string, string> = {
-			Accept: 'text/event-stream',
-			...this.buildOpenCodeHeaders(directory),
-		};
-		if (lastEventId?.trim()) {
-			headers['Last-Event-ID'] = lastEventId.trim();
-		}
+		const headers: Record<string, string> = { Accept: 'text/event-stream' };
+		if (lastEventId?.trim()) headers['Last-Event-ID'] = lastEventId.trim();
 
 		const resp = await fetch(`${baseUrl}/event?directory=${encodeURIComponent(directory)}`, {
 			method: 'GET',
@@ -853,37 +797,25 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			signal,
 		});
 
-		if (!resp.ok || !resp.body) {
-			const text = await resp.text().catch(() => '');
-			const detail = text ? `: ${text.slice(0, 400)}` : '';
-			throw new Error(`OpenCode event stream failed: ${resp.status} ${resp.statusText}${detail}`);
-		}
-
+		if (!resp.ok || !resp.body) throw new Error(`OpenCode event stream failed: ${resp.status}`);
 		return resp;
 	}
 
 	private startEventStream(baseUrl: string, directory: string): void {
-		if (this.eventStreamRunning) {
-			return;
-		}
+		if (this.eventStreamRunning) return;
 		this.eventStreamRunning = true;
-
 		this.eventAbort = new AbortController();
 		const signal = this.eventAbort.signal;
-
-		const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
-		const backoffMs = (baseMs: number, attempt: number): number => {
-			const a = Math.max(1, Math.floor(attempt));
-			return Math.min(1500, baseMs * 2 ** (a - 1));
-		};
+		const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+		const backoffMs = (base: number, att: number) =>
+			Math.min(1500, base * 2 ** Math.max(0, att - 1));
 
 		void (async () => {
 			let baseRetryDelayMs = 250;
 			const maxAttempts = 6;
+			this.reconnectAttempt = 0;
 
 			try {
-				this.reconnectAttempt = 0;
-
 				while (!signal.aborted) {
 					let resp: Response;
 					try {
@@ -895,51 +827,34 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 						);
 						this.reconnectAttempt = 0;
 					} catch (error) {
-						if ((error as { name?: string }).name === 'AbortError' || signal.aborted) {
-							return;
-						}
-
-						this.reconnectAttempt += 1;
-						if (this.reconnectAttempt >= maxAttempts) {
-							throw error;
-						}
-
+						if (signal.aborted) return;
+						this.reconnectAttempt++;
+						if (this.reconnectAttempt >= maxAttempts) throw error;
 						await sleep(backoffMs(baseRetryDelayMs, this.reconnectAttempt));
 						continue;
 					}
 
-					for await (const evt of this.iterSseEvents(resp.body as ReadableStream<Uint8Array>)) {
-						if (signal.aborted) break;
-
-						if (evt.id?.trim()) {
-							this.lastEventId = evt.id.trim();
+					try {
+						for await (const evt of this.iterSseEvents(resp.body as ReadableStream<Uint8Array>)) {
+							if (signal.aborted) break;
+							if (evt.id?.trim()) this.lastEventId = evt.id.trim();
+							if (evt.retry && evt.retry > 0) baseRetryDelayMs = evt.retry;
+							this.handleSdkEvent(evt.data);
 						}
-						if (typeof evt.retry === 'number' && Number.isFinite(evt.retry) && evt.retry > 0) {
-							baseRetryDelayMs = evt.retry;
-						}
-
-						this.handleSdkEvent(evt.data);
+					} catch (_e) {
+						if (signal.aborted) return;
 					}
 
-					if (signal.aborted) {
-						break;
-					}
-
-					this.reconnectAttempt += 1;
-					if (this.reconnectAttempt >= maxAttempts) {
-						throw new Error('OpenCode event stream disconnected');
-					}
+					if (signal.aborted) break;
+					this.reconnectAttempt++;
+					if (this.reconnectAttempt >= maxAttempts) throw new Error('Stream disconnected');
 					await sleep(backoffMs(baseRetryDelayMs, this.reconnectAttempt));
 				}
 			} catch (error) {
-				if ((error as { name?: string }).name === 'AbortError') {
-					return;
+				if (!signal.aborted) {
+					logger.error('[OpenCode] Event stream error:', error);
+					this.emit('event', { type: 'error', data: { message: String(error) } });
 				}
-				logger.error('[OpenCode] Event stream error:', error);
-				this.emit('event', {
-					type: 'error',
-					data: { message: error instanceof Error ? error.message : String(error) },
-				});
 			} finally {
 				this.eventStreamRunning = false;
 				this.eventAbort = null;
@@ -951,169 +866,300 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		body: ReadableStream<Uint8Array>,
 	): AsyncGenerator<{ id?: string; retry?: number; data: unknown }, void, unknown> {
 		const reader = body.getReader();
-		const decoder = new TextDecoder('utf-8');
-
+		const decoder = new TextDecoder();
 		let buffer = '';
-		while (true) {
-			const { value, done } = await reader.read();
-			if (done) break;
-			buffer += decoder.decode(value, { stream: true });
 
+		try {
 			while (true) {
-				const idx = buffer.indexOf('\n\n');
-				if (idx === -1) break;
-				const rawEvent = buffer.slice(0, idx);
-				buffer = buffer.slice(idx + 2);
+				const { value, done } = await reader.read();
+				if (done) break;
+				buffer += decoder.decode(value, { stream: true });
 
-				let id: string | undefined;
-				let retry: number | undefined;
-				const dataLines: string[] = [];
+				while (true) {
+					const idx = buffer.indexOf('\n\n');
+					if (idx === -1) break;
+					const chunk = buffer.slice(0, idx);
+					buffer = buffer.slice(idx + 2);
 
-				for (const line of rawEvent.split(/\r?\n/)) {
-					const trimmed = line.trimEnd();
-					if (!trimmed) continue;
-					if (trimmed.startsWith('id:')) {
-						id = trimmed.slice('id:'.length).trimStart();
-						continue;
+					let id: string | undefined;
+					let retry: number | undefined;
+					const dataLines: string[] = [];
+
+					for (const line of chunk.split(/\r?\n/)) {
+						if (line.startsWith('id:')) id = line.slice(3).trim();
+						else if (line.startsWith('retry:')) retry = Number(line.slice(6).trim());
+						else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
 					}
-					if (trimmed.startsWith('retry:')) {
-						const n = Number(trimmed.slice('retry:'.length).trimStart());
-						if (Number.isFinite(n) && n > 0) {
-							retry = n;
-						}
-						continue;
-					}
-					if (trimmed.startsWith('data:')) {
-						dataLines.push(trimmed.slice('data:'.length).trimStart());
-					}
-				}
 
-				if (dataLines.length === 0) continue;
-				const dataText = dataLines.join('\n').trim();
-				if (!dataText) continue;
-
-				try {
-					yield { id, retry, data: JSON.parse(dataText) as unknown };
-				} catch {
-					// Ignore malformed events.
+					if (dataLines.length > 0) {
+						try {
+							yield { id, retry, data: JSON.parse(dataLines.join('\n')) };
+						} catch {}
+					}
 				}
 			}
+		} finally {
+			reader.releaseLock();
 		}
 	}
 
 	private handleSdkEvent(raw: unknown): void {
-		const envelope = raw as _OpencodeSdkEnvelope;
-		if (!envelope || typeof envelope.type !== 'string') {
-			return;
-		}
+		const envelope = raw as { type: string; properties?: unknown };
+		if (!envelope || typeof envelope.type !== 'string') return;
 
 		const eventType = envelope.type;
 		const props = (envelope.properties ?? {}) as Record<string, unknown>;
-
-		const extractSessionId = (): string | undefined => {
-			const direct = props.sessionID;
-			if (typeof direct === 'string') return direct;
-			const directAlt = props.sessionId;
-			if (typeof directAlt === 'string') return directAlt;
-
-			if (eventType === 'message.updated') {
-				const info = props.info;
-				if (info && typeof info === 'object') {
-					const record = info as Record<string, unknown>;
-					const sid = record.sessionID ?? record.sessionId;
-					if (typeof sid === 'string') return sid;
-				}
-			}
-
-			if (eventType === 'message.part.updated') {
-				const part = props.part;
-				if (part && typeof part === 'object') {
-					const record = part as Record<string, unknown>;
-					const sid = record.sessionID ?? record.sessionId;
-					if (typeof sid === 'string') return sid;
-				}
-			}
-
-			return undefined;
-		};
-
-		const sessionId = extractSessionId();
-		// Allow events from any session to flow through.
-		// We pass the sessionId to the event so the provider can route it.
+		const sessionId = this.extractSessionId(props, eventType);
 
 		switch (eventType) {
-			case 'message.updated': {
-				const info = props.info as Record<string, unknown> | undefined;
-				if (info) {
-					const messageId = typeof info.id === 'string' ? info.id : undefined;
-					const role = typeof info.role === 'string' ? info.role : undefined;
-					if (messageId && (role === 'user' || role === 'assistant')) {
-						this.messageRoles.set(messageId, role);
-					}
-				}
+			case 'message.updated':
+				this.handleMessageUpdated(props, sessionId);
 				break;
-			}
-
-			case 'message.part.updated': {
-				const partValue = props.part as Record<string, unknown> | undefined;
-				const part = this.normalizePart(partValue);
-				const delta = typeof props.delta === 'string' ? props.delta : undefined;
-				this.handlePartUpdated(part, sessionId, delta);
+			case 'message.part.updated':
+				this.handlePartUpdated(props, sessionId);
 				break;
-			}
-
-			case 'permission.asked': {
-				const p = props as OpenCodePermissionAsked;
-				this.emit('event', {
-					type: 'permission',
-					data: {
-						id: p.id,
-						permission: p.permission,
-						patterns: p.patterns ?? [],
-						toolCallId: p.tool?.callID,
-						toolInput: p.toolInput,
-						metadata: p.metadata,
-					},
-					sessionId,
-				});
+			case 'permission.asked':
+				this.handlePermissionAsked(props, sessionId);
 				break;
-			}
-
-			case 'session.status': {
-				const statusRaw = props.status as Record<string, unknown> | undefined;
-				const status = this.normalizeSessionStatus(statusRaw);
-				this.emit('event', { type: 'session_updated', data: { status }, sessionId });
+			case 'session.status':
+				this.handleSessionStatus(props, sessionId);
 				break;
-			}
-
-			case 'session.error': {
-				const errorRecord = props.error as Record<string, unknown> | undefined;
-				const errorData = (errorRecord?.data as Record<string, unknown> | undefined) ?? undefined;
-				const message =
-					(typeof errorData?.message === 'string' ? (errorData.message as string) : undefined) ??
-					(typeof errorRecord?.message === 'string'
-						? (errorRecord.message as string)
-						: undefined) ??
-					'OpenCode session error';
-				this.emit('event', { type: 'error', data: { message }, sessionId });
+			case 'session.error':
+				this.handleSessionError(props, sessionId);
 				break;
-			}
-
-			case 'session.idle': {
+			case 'session.idle':
 				this.emit('event', { type: 'finished', data: { reason: 'idle' }, sessionId });
-				break;
-			}
-
-			default:
 				break;
 		}
 	}
 
+	private extractSessionId(props: Record<string, unknown>, eventType: string): string | undefined {
+		if (typeof props.sessionID === 'string') return props.sessionID;
+		if (typeof props.sessionId === 'string') return props.sessionId;
+		if (['message.updated', 'message.part.updated'].includes(eventType)) {
+			const sub = (props.info || props.part) as Record<string, unknown>;
+			if (sub) {
+				if (typeof sub.sessionID === 'string') return sub.sessionID;
+				if (typeof sub.sessionId === 'string') return sub.sessionId;
+			}
+		}
+		return undefined;
+	}
+
+	private handleMessageUpdated(props: Record<string, unknown>, sessionId?: string): void {
+		const info = props.info as Record<string, unknown> | undefined;
+		if (!info) return;
+
+		const messageId = typeof info.id === 'string' ? info.id : undefined;
+		const role = typeof info.role === 'string' ? info.role : undefined;
+
+		if (messageId && (role === 'user' || role === 'assistant')) {
+			this.messageRoles.set(messageId, role);
+		}
+
+		// Extract token stats from assistant messages (OpenCode SSE format)
+		if (role === 'assistant' && messageId) {
+			const tokens = info.tokens as Record<string, unknown> | undefined;
+			if (tokens) {
+				const input = typeof tokens.input === 'number' ? tokens.input : 0;
+				const output = typeof tokens.output === 'number' ? tokens.output : 0;
+				const cache = tokens.cache as Record<string, unknown> | undefined;
+				const cacheRead = typeof cache?.read === 'number' ? cache.read : 0;
+
+				// Compute deltas from last known values (message.updated sends cumulative)
+				const prev = this.lastMessageTokens.get(messageId) ?? {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+				};
+				const deltaInput = Math.max(0, input - prev.input);
+				const deltaOutput = Math.max(0, output - prev.output);
+				const deltaCacheRead = Math.max(0, cacheRead - prev.cacheRead);
+
+				this.lastMessageTokens.set(messageId, { input, output, cacheRead });
+
+				// Only emit if there's actual token delta
+				if (deltaInput > 0 || deltaOutput > 0 || deltaCacheRead > 0) {
+					this.emit('event', {
+						type: 'session_updated',
+						data: {
+							tokenStats: {
+								currentInputTokens: deltaInput,
+								currentOutputTokens: deltaOutput,
+								cacheReadTokens: deltaCacheRead,
+								cacheCreationTokens: 0,
+								reasoningTokens: 0,
+								totalTokensInput: input,
+								totalTokensOutput: output,
+								totalReasoningTokens: 0,
+							},
+						},
+						sessionId,
+					});
+				}
+			}
+		}
+
+		// Fallback: if assistant message has a completed timestamp, emit finished with totalStats
+		const timeRecord = info.time as Record<string, unknown> | undefined;
+		if (role === 'assistant' && timeRecord && typeof timeRecord.completed === 'number') {
+			const started = typeof timeRecord.created === 'number' ? timeRecord.created : 0;
+			const completed = timeRecord.completed as number;
+			const durationMs = started > 0 ? completed - started : undefined;
+
+			this.emit('event', {
+				type: 'session_updated',
+				data: {
+					totalStats: {
+						requestCount: 1,
+						currentDuration: durationMs,
+						totalDuration: durationMs,
+					},
+				},
+				sessionId,
+			});
+
+			this.emit('event', {
+				type: 'finished',
+				data: { reason: 'message_completed' },
+				sessionId,
+			});
+		}
+	}
+
+	private handlePermissionAsked(props: Record<string, unknown>, sessionId?: string): void {
+		const toolRecord = props.tool as Record<string, unknown> | undefined;
+		this.emit('event', {
+			type: 'permission',
+			data: {
+				id: props.id,
+				permission: props.permission,
+				patterns: props.patterns ?? [],
+				toolCallId: typeof toolRecord?.callID === 'string' ? toolRecord.callID : undefined,
+				toolInput: props.toolInput,
+				metadata: props.metadata,
+			},
+			sessionId,
+		});
+	}
+
+	private handleSessionStatus(props: Record<string, unknown>, sessionId?: string): void {
+		const status = this.normalizeSessionStatus(props.status as Record<string, unknown> | undefined);
+		const statusKey = sessionId || '__global__';
+		if (this.lastEmittedStatus.get(statusKey) === status.type) return;
+
+		this.lastEmittedStatus.set(statusKey, status.type);
+		this.emit('event', { type: 'session_updated', data: { status }, sessionId });
+	}
+
+	private handleSessionError(props: Record<string, unknown>, sessionId?: string): void {
+		const errorRecord = props.error as Record<string, unknown> | undefined;
+		const errorData = errorRecord?.data as Record<string, unknown> | undefined;
+		const message =
+			(typeof errorData?.message === 'string' ? errorData.message : undefined) ??
+			(typeof errorRecord?.message === 'string' ? errorRecord.message : undefined) ??
+			'OpenCode session error';
+		this.emit('event', { type: 'error', data: { message }, sessionId });
+	}
+
+	private handlePartUpdated(props: Record<string, unknown>, sessionId?: string): void {
+		const part = this.normalizePart(props.part as Record<string, unknown> | undefined);
+		const delta = typeof props.delta === 'string' ? props.delta : undefined;
+		const sid = part.sessionID ?? sessionId;
+
+		if (part.type === 'text') this.handleTextPart(part, sid, delta);
+		else if (part.type === 'reasoning') this.handleReasoningPart(part, sid, delta);
+		else if (part.type === 'tool') this.handleToolPart(part, sid);
+	}
+
+	private handleTextPart(part: OpenCodePart, sessionId?: string, delta?: string): void {
+		if (part.type !== 'text') return;
+		if (part.messageID && this.messageRoles.get(part.messageID) === 'user') return;
+
+		if (delta) {
+			this.emit('event', {
+				type: 'message',
+				data: { content: delta, partId: part.messageID, isDelta: true },
+				sessionId,
+			});
+		} else if (part.text) {
+			const entry = this.logNormalizer.normalizeMessage(part.text, 'assistant');
+			const eventBase = {
+				data: { content: part.text, partId: part.messageID, isDelta: false },
+				normalizedEntry: entry,
+				sessionId,
+			};
+			this.emit('event', { type: 'message', ...eventBase });
+			this.emit('event', { type: 'normalized_log', ...eventBase });
+		}
+	}
+
+	private handleReasoningPart(part: OpenCodePart, sessionId?: string, delta?: string): void {
+		if (part.type !== 'reasoning') return;
+		if (delta) {
+			this.emit('event', {
+				type: 'thinking',
+				data: { content: delta, partId: part.messageID, isDelta: true },
+				sessionId,
+			});
+		} else if (part.text) {
+			this.emit('event', {
+				type: 'thinking',
+				data: { content: part.text, partId: part.messageID, isDelta: false },
+				sessionId,
+			});
+		}
+	}
+
+	private handleToolPart(part: OpenCodePart, sessionId?: string): void {
+		if (part.type !== 'tool' || !part.callID) return;
+		const { callID, tool: name = 'unknown', state } = part;
+		const status = state?.status;
+
+		if ((status === 'pending' || status === 'running') && !this.seenToolCalls.has(callID)) {
+			this.seenToolCalls.add(callID);
+			const normalized = this.logNormalizer.normalizeToolUse(
+				name,
+				(state?.input as Record<string, unknown>) || {},
+				callID,
+			);
+			const evt = {
+				data: {
+					id: callID,
+					name,
+					input: state?.input,
+					state: status,
+					title: state?.title,
+					metadata: state?.metadata,
+				},
+				normalizedEntry: normalized,
+				sessionId,
+			};
+			this.emit('event', { type: 'tool_use', ...evt });
+			this.emit('event', { type: 'normalized_log', ...evt });
+		}
+
+		if ((status === 'completed' || status === 'error') && !this.completedToolCalls.has(callID)) {
+			this.completedToolCalls.add(callID);
+			this.emit('event', {
+				type: 'tool_result',
+				data: {
+					tool_use_id: callID,
+					name,
+					content: state?.output ?? '',
+					is_error: status === 'error',
+					input: state?.input,
+					title: state?.title,
+					metadata: state?.metadata,
+				},
+				sessionId,
+			});
+		}
+	}
+
 	private normalizeSessionStatus(raw?: Record<string, unknown>): OpenCodeSessionStatus {
-		const t = raw?.type;
-		if (t === 'idle') return { type: 'idle' };
-		if (t === 'busy') return { type: 'busy' };
-		if (t === 'retry') {
+		const statusType = raw?.type;
+		if (statusType === 'retry') {
 			return {
 				type: 'retry',
 				attempt: typeof raw?.attempt === 'number' ? raw.attempt : undefined,
@@ -1121,32 +1167,27 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				next: typeof raw?.next === 'number' ? raw.next : undefined,
 			};
 		}
+		if (statusType === 'idle' || statusType === 'busy') return { type: statusType };
 		return { type: 'other', raw };
 	}
 
 	private normalizePart(raw: Record<string, unknown> | undefined): OpenCodePart {
 		if (!raw) return { type: 'other', raw: null };
+		const partType = raw.type;
 
-		const t = raw.type;
-		if (t === 'text' || t === 'reasoning') {
+		if (partType === 'text' || partType === 'reasoning') {
 			return {
-				type: t,
+				type: partType,
 				messageID: typeof raw.messageID === 'string' ? raw.messageID : undefined,
 				text: typeof raw.text === 'string' ? raw.text : undefined,
 				sessionID: typeof raw.sessionID === 'string' ? raw.sessionID : undefined,
 			};
 		}
-
-		if (t === 'tool') {
-			const stateRaw = (raw.state as Record<string, unknown> | undefined) ?? undefined;
-			const statusRaw = stateRaw?.status;
-			const status =
-				statusRaw === 'pending' ||
-				statusRaw === 'running' ||
-				statusRaw === 'completed' ||
-				statusRaw === 'error'
-					? statusRaw
-					: undefined;
+		if (partType === 'tool') {
+			const state = (raw.state ?? {}) as Record<string, unknown>;
+			const statusVal = state.status;
+			const validStatuses = ['pending', 'running', 'completed', 'error'] as const;
+			type ToolStatus = (typeof validStatuses)[number];
 
 			return {
 				type: 'tool',
@@ -1155,210 +1196,53 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				tool: typeof raw.tool === 'string' ? raw.tool : undefined,
 				sessionID: typeof raw.sessionID === 'string' ? raw.sessionID : undefined,
 				state: {
-					status,
-					input: stateRaw?.input,
-					output: typeof stateRaw?.output === 'string' ? (stateRaw.output as string) : undefined,
-					title: typeof stateRaw?.title === 'string' ? (stateRaw.title as string) : undefined,
-					metadata: stateRaw?.metadata,
+					status: validStatuses.includes(statusVal as ToolStatus)
+						? (statusVal as ToolStatus)
+						: undefined,
+					input: state.input,
+					output: typeof state.output === 'string' ? state.output : undefined,
+					title: typeof state.title === 'string' ? state.title : undefined,
+					metadata: state.metadata,
 				},
 			};
 		}
-
 		return { type: 'other', raw };
 	}
 
-	private handlePartUpdated(part: OpenCodePart, sessionId?: string, delta?: string): void {
-		if (part.type === 'text') {
-			// Skip user messages - they're already added by webview
-			const messageId = part.messageID;
-			if (messageId && this.messageRoles.get(messageId) === 'user') {
-				return;
-			}
-
-			// If delta is present, it's an incremental update
-			if (delta) {
-				this.emit('event', {
-					type: 'message',
-					data: {
-						content: delta,
-						partId: part.messageID,
-						isDelta: true,
-					},
-				});
-			}
-			// If no delta but has text, it's either initial message or final complete text
-			// We only emit it if it's not empty (to avoid redundant updates)
-			else if (part.text && part.text.length > 0) {
-				const content = part.text;
-				const entry = this.logNormalizer.normalizeMessage(content, 'assistant');
-				this.emit('event', {
-					type: 'message',
-					data: {
-						content,
-						partId: part.messageID,
-						isDelta: false,
-					},
-					normalizedEntry: entry,
-					sessionId: part.sessionID ?? sessionId,
-				});
-				this.emit('event', {
-					type: 'normalized_log',
-					data: entry,
-					normalizedEntry: entry,
-					sessionId: part.sessionID ?? sessionId,
-				});
-			}
-			return;
-		}
-
-		if (part.type === 'reasoning') {
-			// If delta is present, it's an incremental update
-			if (delta) {
-				this.emit('event', {
-					type: 'thinking',
-					data: {
-						content: delta,
-						partId: part.messageID,
-						isDelta: true,
-					},
-					sessionId: part.sessionID ?? sessionId,
-				});
-			}
-			// If no delta but has text, it's either initial message or final complete text
-			else if (part.text && part.text.length > 0) {
-				this.emit('event', {
-					type: 'thinking',
-					data: {
-						content: part.text,
-						partId: part.messageID,
-						isDelta: false,
-					},
-					sessionId: part.sessionID ?? sessionId,
-				});
-			}
-			return;
-		}
-
-		if (part.type === 'tool') {
-			const callId = part.callID;
-			if (!callId) return;
-
-			const status = part.state?.status;
-			const toolName = typeof part.tool === 'string' ? part.tool : 'unknown';
-			const input = part.state?.input;
-
-			if ((status === 'pending' || status === 'running') && !this.seenToolCalls.has(callId)) {
-				this.seenToolCalls.add(callId);
-
-				const normalized = this.logNormalizer.normalizeToolUse(
-					toolName,
-					(input as Record<string, unknown>) || {},
-					callId,
-				);
-
-				this.emit('event', {
-					type: 'tool_use',
-					data: {
-						id: callId,
-						name: toolName,
-						input,
-						state: status,
-						title: part.state?.title,
-						metadata: part.state?.metadata,
-					},
-					normalizedEntry: normalized,
-					sessionId: part.sessionID ?? sessionId,
-				});
-				this.emit('event', {
-					type: 'normalized_log',
-					data: normalized,
-					normalizedEntry: normalized,
-					sessionId: part.sessionID ?? sessionId,
-				});
-			}
-
-			if ((status === 'completed' || status === 'error') && !this.completedToolCalls.has(callId)) {
-				this.completedToolCalls.add(callId);
-				this.emit('event', {
-					type: 'tool_result',
-					data: {
-						tool_use_id: callId,
-						name: toolName,
-						content: part.state?.output ?? '',
-						is_error: status === 'error',
-						input,
-						title: part.state?.title,
-						metadata: part.state?.metadata,
-					},
-					sessionId: part.sessionID ?? sessionId,
-				});
-			}
-		}
-	}
-
 	parseStream(_chunk: Buffer): CLIEvent[] {
-		// OpenCode uses SSE (/event) not stdout streaming.
 		return [];
 	}
 
 	async abort(): Promise<void> {
-		const directory = this.directory;
-		const sessionId = this.sessionId;
-
-		if (directory && sessionId) {
+		if (this.directory && this.sessionId) {
 			try {
-				await this.sendAbort(directory, sessionId);
-			} catch (error) {
-				logger.debug('[OpenCode] abort failed:', error);
-			}
+				await this.sendAbort(this.directory, this.sessionId);
+			} catch {}
 		}
-
 		try {
 			this.eventAbort?.abort();
-		} catch {
-			// ignore
-		}
+		} catch {}
 	}
 
 	async kill(): Promise<void> {
-		// Only abort the current operation, do NOT kill the server process
-		// unless explicitly requested or during cleanup.
-		// For now, we assume kill() in CLIRunner is a "hard stop" of the session/process.
-		// But for OpenCode, the server should persist.
-		// So we just reset session state.
-
 		await this.abort();
-
-		// Do NOT close the server here.
-		// The server should only be closed if we are disposing the entire extension
-		// or switching providers.
-		// But CLIRunner calls this on dispose?
-		// And handleSettingsChange?
-
-		// If we want to support "Restart Server", we need a separate method or flag.
-		// For standard "Stop" or "Clear Session", we just clear session state.
-
 		this.sessionId = null;
 		this.eventStreamRunning = false;
 		this.eventAbort = null;
 		this.seenToolCalls.clear();
 		this.completedToolCalls.clear();
+		this.lastEmittedStatus.clear();
+		this.lastMessageTokens.clear();
 	}
 
 	async dispose(): Promise<void> {
-		// Only abort the current operation.
-		// We DO NOT close the server here to allow it to persist across window reloads.
-		// This enables the "Port File Discovery" mechanism to reconnect to the existing server.
-		// If the user wants to kill the server, they can kill the process manually or we need a specific command.
 		await this.abort();
-
-		// Note: The 'opencode' instance is left active.
-		// If the extension host process dies, the OS or Node.js might kill the child process
-		// depending on how it was spawned (attached vs detached).
-		// However, observations show opencode processes tend to persist (zombies).
-		// We rely on this persistence for reuse.
-
-		this.opencode = null;
+		if (this.serverInstance) {
+			try {
+				this.serverInstance.close();
+			} catch {}
+			this.serverInstance = null;
+		}
 		this.serverUrl = null;
 		this.directory = null;
 		this.sessionId = null;
@@ -1370,34 +1254,22 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		alwaysAllow?: boolean;
 		response?: 'once' | 'always' | 'reject';
 	}): Promise<void> {
-		const directory = this.directory;
-		if (!directory) {
-			throw new Error('OpenCode server not running');
-		}
-
-		const requestId = decision.requestId;
-		if (!requestId) {
-			throw new Error('OpenCode: missing requestId');
-		}
-
-		const response: 'once' | 'always' | 'reject' =
+		if (!this.directory) throw new Error('OpenCode server not running');
+		const reply =
 			decision.response ??
 			(decision.approved ? (decision.alwaysAllow ? 'always' : 'once') : 'reject');
-
-		await this.sendPermissionReply(directory, requestId, {
-			reply: response,
-			message: response === 'reject' ? 'User denied this request' : undefined,
+		await this.sendPermissionReply(this.directory, decision.requestId, {
+			reply,
+			message: reply === 'reject' ? 'User denied this request' : undefined,
 		});
 	}
 
 	getSessionId(): string | null {
 		return this.sessionId;
 	}
-
 	getAdminInfo(): { baseUrl: string; directory: string } | null {
-		const baseUrl = this.serverUrl;
-		const directory = this.directory;
-		if (!baseUrl || !directory) return null;
-		return { baseUrl, directory };
+		return this.serverUrl && this.directory
+			? { baseUrl: this.serverUrl, directory: this.directory }
+			: null;
 	}
 }

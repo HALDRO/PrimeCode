@@ -1,7 +1,8 @@
 /**
  * @file HTML template for the webview
- * @description Generates the HTML shell that loads the React application.
- *              Uses proper CSP directives for VS Code webview security.
+ * @description Generates the HTML shell that loads the React application inside VS Code webview.
+ *              Uses VS Code's cspSource for proper Content-Security-Policy integration, including
+ *              worker-src directive required by VS Code's internal ServiceWorker resource loader.
  *              Process polyfill is injected inline to ensure availability before any scripts run.
  *              The body class "vscode-dark" triggers VS Code to inject theme CSS variables.
  */
@@ -9,6 +10,7 @@
 export const getHtml = (
 	scriptUri: string,
 	styleUri: string,
+	cspSource: string,
 	isTelemetryEnabled: boolean,
 	workspaceRoot = '',
 ) => `<!DOCTYPE html>
@@ -16,11 +18,9 @@ export const getHtml = (
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https: vscode-webview: vscode-resource: file:; script-src 'unsafe-inline' 'unsafe-eval' https: vscode-webview: vscode-resource: file:; img-src data: https: blob: vscode-webview: vscode-resource: file:; font-src data: https: vscode-webview: vscode-resource: file:; connect-src https: wss: localhost:* http://localhost:*;">
+	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' ${cspSource}; script-src 'unsafe-inline' 'unsafe-eval' ${cspSource}; img-src data: https: blob: ${cspSource}; font-src data: https: ${cspSource}; worker-src 'self' blob: ${cspSource}; connect-src https: wss: localhost:* http://localhost:*;">
 	<title>PrimeCode</title>
 	<link href="${styleUri}" rel="stylesheet">
-	<!-- Preload codicon font to prevent flickering/loading issues -->
-	<link rel="preload" as="font" crossorigin="anonymous" href="https://vscode-webview-resource/codicon.ttf">
 </head>
 <body class="vscode-dark" data-vscode-theme-kind="vscode-dark" data-workspace-root="${workspaceRoot}">
 	<div id="root"></div>

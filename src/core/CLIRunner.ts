@@ -1,11 +1,11 @@
 /**
- * @file CLIRunner
+ * @file CLIRunner.ts
  * @description Unified CLI executor for Claude and OpenCode.
- * Re-exports from src/core/cli.
  */
 
 import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+
 import { ClaudeExecutor } from './executor/ClaudeCode';
 import { OpenCodeExecutor } from './executor/OpenCode';
 import type { CLIConfig, CLIEvent, CLIExecutor } from './executor/types';
@@ -19,7 +19,7 @@ export type { CLIConfig, CLIEvent, CLIExecutor };
 export class CLIRunner extends EventEmitter {
 	private executor: CLIExecutor;
 	private currentSessionId: string | null = null;
-	private provider: 'claude' | 'opencode';
+	private readonly provider: 'claude' | 'opencode';
 
 	constructor(provider: 'claude' | 'opencode') {
 		super();
@@ -35,27 +35,34 @@ export class CLIRunner extends EventEmitter {
 		this.executor.on('event', (event: CLIEvent) => {
 			if (event.type === 'session_updated') {
 				const data = event.data as Record<string, unknown>;
-				const sessionId =
-					typeof data.sessionId === 'string' ? (data.sessionId as string) : undefined;
-				if (sessionId) {
-					this.currentSessionId = sessionId;
+				if (typeof data.sessionId === 'string') {
+					this.currentSessionId = data.sessionId;
 				}
 			}
 			this.emit('event', event);
 		});
 	}
 
+	/**
+	 * Starts the CLI server if needed (OpenCode).
+	 */
 	async start(config: CLIConfig): Promise<void> {
 		if (this.executor instanceof OpenCodeExecutor) {
 			await this.executor.ensureServer(config);
 		}
 	}
 
+	/**
+	 * Spawns a new CLI process/session with a prompt.
+	 */
 	async spawn(prompt: string, config: CLIConfig): Promise<ChildProcess | null> {
 		await this.executor.spawn(prompt, config);
 		return null;
 	}
 
+	/**
+	 * Sends a follow-up message to the active session.
+	 */
 	async spawnFollowUp(prompt: string, config: CLIConfig): Promise<ChildProcess | null> {
 		if (!this.currentSessionId) {
 			throw new Error('No active session');
@@ -64,6 +71,9 @@ export class CLIRunner extends EventEmitter {
 		return null;
 	}
 
+	/**
+	 * Spawns a code review session.
+	 */
 	async spawnReview(prompt: string, config: CLIConfig): Promise<ChildProcess | null> {
 		if (this.executor.spawnReview) {
 			await this.executor.spawnReview(prompt, config);
@@ -74,11 +84,26 @@ export class CLIRunner extends EventEmitter {
 		return null;
 	}
 
+	/**
+	 * Creates a new session explicitly.
+	 */
 	async createNewSession(prompt: string, config: CLIConfig): Promise<ChildProcess | null> {
 		await this.executor.createNewSession(prompt, config);
 		return null;
 	}
 
+	/**
+	 * Creates an empty session without sending a message. Returns the session ID.
+	 */
+	async createEmptySession(config: CLIConfig): Promise<string> {
+		const sessionId = await this.executor.createEmptySession(config);
+		this.currentSessionId = sessionId;
+		return sessionId;
+	}
+
+	/**
+	 * Responds to a permission request.
+	 */
 	async respondToPermission(decision: {
 		requestId: string;
 		approved: boolean;
@@ -111,6 +136,36 @@ export class CLIRunner extends EventEmitter {
 
 	getOpenCodeServerInfo(): { baseUrl: string; directory: string } | null {
 		return this.executor.getAdminInfo();
+	}
+
+	/**
+	 * Lists available sessions from the provider.
+	 */
+	async listSessions(config: CLIConfig): Promise<
+		Array<{
+			id: string;
+			title?: string;
+			lastModified?: number;
+			created?: number;
+			parentID?: string;
+		}>
+	> {
+		return this.executor.listSessions(config);
+	}
+
+	/**
+	 * Retrieves history for a specific session.
+	 */
+	async getHistory(sessionId: string, config: CLIConfig): Promise<CLIEvent[]> {
+		return this.executor.getHistory(sessionId, config);
+	}
+
+	async deleteSession(sessionId: string, config: CLIConfig): Promise<boolean> {
+		return this.executor.deleteSession(sessionId, config);
+	}
+
+	async renameSession(sessionId: string, title: string, config: CLIConfig): Promise<boolean> {
+		return this.executor.renameSession(sessionId, title, config);
 	}
 
 	getProvider(): 'claude' | 'opencode' {

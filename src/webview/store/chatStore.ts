@@ -1,10 +1,10 @@
 /**
  * @file chatStore.ts
- * @description High-performance single source of truth for chat state keyed by session.
- * Stores all per-chat UI state (messages, input, status, streaming/tool state, stats) in `sessionsById`.
- * Uses `sessionOrder` to preserve tab ordering without O(n) lookups.
- * This design prevents cross-session leaks and enables fully parallel independent sessions.
- * Supports unified session event protocol for simplified message routing.
+ * @description Session-keyed chat state with `mutateSession` helper to eliminate per-action boilerplate.
+ * All per-session fields (messages, input, status, stats, restore, changed files) live in `sessionsById`.
+ * `updateSession(partial, sessionId?)` is the universal setter; named wrappers delegate to it.
+ * `dispatch` routes unified session_event payloads from the extension into the correct session.
+ * `sessionOrder` preserves tab ordering without O(n) lookups.
  */
 
 import { produce } from 'immer';
@@ -111,7 +111,8 @@ export interface ChatActions {
 	removeMessageByPartId: (partId: string, sessionId?: string) => void;
 	setEditingMessageId: (id: string | null) => void;
 
-	// Per-session UI state
+	// Per-session UI state — universal setter + convenience wrappers
+	updateSession: (updates: Partial<ChatSession>, sessionId?: string) => void;
 	setProcessing: (isProcessing: boolean, sessionId?: string) => void;
 	setAutoRetrying: (
 		isRetrying: boolean,
@@ -125,7 +126,6 @@ export interface ChatActions {
 	setStreamingToolId: (toolId: string | null, sessionId?: string) => void;
 
 	// Session lifecycle
-	requestCreateSession: () => void;
 	handleSessionCreated: (sessionId: string) => void;
 	switchSession: (sessionId: string) => void;
 	closeSession: (sessionId: string) => void;
@@ -145,8 +145,7 @@ export interface ChatActions {
 
 	// Subtask actions (active session)
 	startSubtask: (subtask: SubtaskMessage) => void;
-	completeSubtask: (subtaskId: string, result?: string) => void;
-	errorSubtask: (subtaskId: string, error: string) => void;
+	updateSubtask: (subtaskId: string, status: 'completed' | 'error', result?: string) => void;
 
 	// Active session revert marker
 	markRevertedFromMessageId: (id: string | null) => void;
@@ -215,6 +214,30 @@ function resolveTargetSessionId(state: ChatState, sessionId?: string): string | 
 }
 
 // =============================================================================
+// Helpers — eliminate per-action boilerplate
+// =============================================================================
+
+type ZustandSet = (
+	partial: ChatState | Partial<ChatState> | ((state: ChatState) => ChatState | Partial<ChatState>),
+) => void;
+
+/** Mutate a target session inside produce(). Resolves sessionId, guards null, updates lastActive. */
+function mutateSession(
+	set: ZustandSet,
+	sessionId: string | undefined,
+	mutator: (session: ChatSession, state: ChatState) => void,
+): void {
+	set(
+		produce((state: ChatState) => {
+			const sid = resolveTargetSessionId(state, sessionId);
+			if (!sid || !state.sessionsById[sid]) return;
+			mutator(state.sessionsById[sid], state);
+			state.sessionsById[sid].lastActive = Date.now();
+		}),
+	);
+}
+
+// =============================================================================
 // Store
 // =============================================================================
 
@@ -237,28 +260,36 @@ export const useChatStore = create<ChatState>()(
 
 						switch (lifecycle.action) {
 							case 'created':
-								actions.handleSessionCreated(lifecycle.sessionId);
+								if (lifecycle.sessionId) {
+									actions.handleSessionCreated(lifecycle.sessionId);
+								}
 								break;
 							case 'closed':
-								actions.closeSession(lifecycle.sessionId);
+								if (lifecycle.sessionId) {
+									actions.closeSession(lifecycle.sessionId);
+								}
 								break;
 							case 'switched':
-								actions.switchSession(lifecycle.sessionId);
-								if (lifecycle.data?.messages) {
-									actions.setSessionMessages(
-										lifecycle.sessionId,
-										lifecycle.data.messages as Message[],
-									);
-								}
-								if (lifecycle.data?.isProcessing !== undefined) {
-									actions.setProcessing(lifecycle.data.isProcessing, lifecycle.sessionId);
-								}
-								if (lifecycle.data?.totalStats) {
-									actions.setTotalStats(lifecycle.data.totalStats, lifecycle.sessionId);
+								if (lifecycle.sessionId) {
+									actions.switchSession(lifecycle.sessionId);
+									if (lifecycle.data?.messages) {
+										actions.setSessionMessages(
+											lifecycle.sessionId,
+											lifecycle.data.messages as Message[],
+										);
+									}
+									if (lifecycle.data?.isProcessing !== undefined) {
+										actions.setProcessing(lifecycle.data.isProcessing, lifecycle.sessionId);
+									}
+									if (lifecycle.data?.totalStats) {
+										actions.setTotalStats(lifecycle.data.totalStats, lifecycle.sessionId);
+									}
 								}
 								break;
 							case 'cleared':
-								actions.clearMessages(lifecycle.sessionId);
+								if (lifecycle.sessionId) {
+									actions.clearMessages(lifecycle.sessionId);
+								}
 								break;
 						}
 						return;
@@ -267,12 +298,6 @@ export const useChatStore = create<ChatState>()(
 					// Handle unified session events
 					if (message.type === 'session_event') {
 						const event = message as SessionEventMessage;
-						// Handle sessionInfo locally if possible, or delegate
-						if (event.eventType === 'session_info') {
-							// session_info is typically UI state, but if we need it here...
-							// For now, let's just delegate everything to dispatch
-						}
-
 						get().actions.dispatch(event.targetId, event.eventType, event.payload);
 						return;
 					}
@@ -281,16 +306,10 @@ export const useChatStore = create<ChatState>()(
 				dispatch: (targetId, eventType, payload) => {
 					set(
 						produce((state: ChatState) => {
-							// Auto-create session if it doesn't exist
+							// Auto-create session if it doesn't exist (for sub-sessions receiving events).
+							// Sessions intended for the tab bar are created via handleSessionCreated.
 							if (!state.sessionsById[targetId]) {
-								const newSession = createEmptySession(targetId);
-								state.sessionsById[targetId] = newSession;
-								if (!state.sessionOrder.includes(targetId)) {
-									state.sessionOrder.push(targetId);
-								}
-								if (!state.activeSessionId) {
-									state.activeSessionId = targetId;
-								}
+								state.sessionsById[targetId] = createEmptySession(targetId);
 							}
 
 							const targetSession = state.sessionsById[targetId];
@@ -298,67 +317,15 @@ export const useChatStore = create<ChatState>()(
 
 							switch (eventType) {
 								case 'message': {
-									const msgPayload = payload as SessionMessagePayload;
-									const msgData = msgPayload.message;
+									const msgData = (payload as SessionMessagePayload).message;
 
-									// Build message
 									const message: Message = {
+										...msgData,
 										id: msgData.id || `msg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-										type: msgData.type,
-										content: msgData.content,
 										timestamp: msgData.timestamp || new Date().toISOString(),
-										partId: msgData.partId,
-										isStreaming: msgData.isStreaming,
-										isDelta: msgData.isDelta,
-										hidden: msgData.hidden,
-										toolName: msgData.toolName,
-										toolUseId: msgData.toolUseId,
-										toolInput: msgData.toolInput,
-										rawInput: msgData.rawInput,
-										filePath: msgData.filePath,
-										isError: msgData.isError,
-										isRunning: msgData.isRunning,
-										streamingOutput: msgData.streamingOutput,
-										estimatedTokens: msgData.estimatedTokens,
-										title: msgData.title,
-										durationMs: msgData.durationMs,
-										agent: msgData.agent,
-										prompt: msgData.prompt,
-										description: msgData.description,
-										command: msgData.command,
-										status: msgData.status,
-										result: msgData.result,
-										messageID: msgData.messageID,
-										contextId: msgData.contextId,
-										startTime: msgData.startTime,
-										reasoningTokens: msgData.reasoningTokens,
-										requestId: msgData.requestId,
-										tool: msgData.tool,
-										input: msgData.input,
-										pattern: msgData.pattern,
-										resolved: msgData.resolved,
-										approved: msgData.approved,
-										reason: msgData.reason,
-										model: msgData.model,
-										attachments: msgData.attachments,
-										metadata: msgData.metadata,
-										normalizedEntry: msgData.normalizedEntry,
 									} as Message;
 
-									const isSubtaskMessage = message.type === 'subtask';
-									const hasContext = !!msgData.contextId && !isSubtaskMessage;
-
-									// Determine storage target
-									let storageSession = targetSession;
-									if (hasContext) {
-										const ctxId = msgData.contextId as string;
-										if (!state.sessionsById[ctxId]) {
-											state.sessionsById[ctxId] = createEmptySession(ctxId);
-											// Hidden context buckets are not added to sessionOrder
-										}
-										storageSession = state.sessionsById[ctxId];
-										storageSession.lastActive = Date.now();
-									}
+									const storageSession = targetSession;
 
 									// Merge or append
 									const existingIdx = storageSession.messages.findIndex(m => {
@@ -387,24 +354,6 @@ export const useChatStore = create<ChatState>()(
 										}
 									} else {
 										storageSession.messages.push(message);
-									}
-
-									// Handle subtask completion/archiving
-									if (
-										isSubtaskMessage &&
-										(message.status === 'completed' || message.status === 'error')
-									) {
-										const subtaskContextId = msgData.contextId as string | undefined;
-										if (subtaskContextId && state.sessionsById[subtaskContextId]) {
-											const contextMessages = state.sessionsById[subtaskContextId].messages;
-											const subtaskMsg = storageSession.messages.find(m => m.id === message.id);
-											if (subtaskMsg && subtaskMsg.type === 'subtask') {
-												subtaskMsg.transcript = contextMessages;
-												subtaskMsg.contextId = undefined;
-											}
-											delete state.sessionsById[subtaskContextId];
-											// No need to update sessionOrder as context buckets aren't in it
-										}
 									}
 
 									// Clear retry info on success
@@ -585,218 +534,95 @@ export const useChatStore = create<ChatState>()(
 					);
 				},
 
-				addMessage: (msgInput, sessionId) => {
-					set(
-						produce((state: ChatState) => {
-							const sid = resolveTargetSessionId(state, sessionId);
-							if (!sid || !state.sessionsById[sid]) return;
-							const session = state.sessionsById[sid];
-							session.lastActive = Date.now();
+				addMessage: (msgInput, sessionId) =>
+					mutateSession(set, sessionId, s => {
+						const message = {
+							...msgInput,
+							id: msgInput.id || `msg-${Date.now()}-${Math.random()}`,
+							timestamp:
+								typeof msgInput.timestamp === 'string'
+									? msgInput.timestamp
+									: new Date(msgInput.timestamp || Date.now()).toISOString(),
+						} as Message;
+						const idx = s.messages.findIndex(m => m.id === message.id);
+						if (idx !== -1) {
+							Object.assign(s.messages[idx], message);
+						} else {
+							s.messages.push(message);
+						}
+					}),
 
-							const messageId = msgInput.id || `msg-${Date.now()}-${Math.random()}`;
-							const message = {
-								...msgInput,
-								id: messageId,
-								timestamp:
-									typeof msgInput.timestamp === 'string'
-										? msgInput.timestamp
-										: new Date(msgInput.timestamp || Date.now()).toISOString(),
-							} as Message;
+				updateSession: (updates, sessionId) =>
+					mutateSession(set, sessionId, s => Object.assign(s, updates)),
 
-							const idx = session.messages.findIndex(m => m.id === message.id);
-							if (idx !== -1) {
-								Object.assign(session.messages[idx], message);
-							} else {
-								session.messages.push(message);
-							}
-						}),
-					);
-				},
+				setProcessing: (isProcessing, sessionId) =>
+					get().actions.updateSession({ isProcessing }, sessionId),
 
-				setProcessing: (isProcessing, sessionId) => {
-					set(
-						produce((state: ChatState) => {
-							const sid = resolveTargetSessionId(state, sessionId);
-							if (sid && state.sessionsById[sid]) {
-								state.sessionsById[sid].isProcessing = isProcessing;
-								state.sessionsById[sid].lastActive = Date.now();
-							}
-						}),
-					);
-				},
+				setAutoRetrying: (isRetrying, retryInfo, sessionId) =>
+					get().actions.updateSession(
+						{ isAutoRetrying: isRetrying, retryInfo: isRetrying && retryInfo ? retryInfo : null },
+						sessionId,
+					),
 
-				setAutoRetrying: (isRetrying, retryInfo, sessionId) => {
-					set(
-						produce((state: ChatState) => {
-							const sid = resolveTargetSessionId(state, sessionId);
-							if (sid && state.sessionsById[sid]) {
-								const s = state.sessionsById[sid];
-								s.isAutoRetrying = isRetrying;
-								s.retryInfo = isRetrying && retryInfo ? retryInfo : null;
-								s.lastActive = Date.now();
-							}
-						}),
-					);
-				},
+				setLoading: (isLoading, sessionId) => get().actions.updateSession({ isLoading }, sessionId),
 
-				setLoading: (isLoading, sessionId) => {
-					set(
-						produce((state: ChatState) => {
-							const sid = resolveTargetSessionId(state, sessionId);
-							if (sid && state.sessionsById[sid]) {
-								state.sessionsById[sid].isLoading = isLoading;
-								state.sessionsById[sid].lastActive = Date.now();
-							}
-						}),
-					);
-				},
+				setInput: (input, sessionId) => get().actions.updateSession({ input }, sessionId),
 
-				setInput: (input, sessionId) => {
-					set(
-						produce((state: ChatState) => {
-							const sid = resolveTargetSessionId(state, sessionId);
-							if (sid && state.sessionsById[sid]) {
-								state.sessionsById[sid].input = input;
-								state.sessionsById[sid].lastActive = Date.now();
-							}
-						}),
-					);
-				},
+				appendInput: (text, sessionId) =>
+					mutateSession(set, sessionId, s => {
+						s.input += text;
+					}),
 
-				appendInput: (text, sessionId) => {
-					set(
-						produce((state: ChatState) => {
-							const sid = resolveTargetSessionId(state, sessionId);
-							if (sid && state.sessionsById[sid]) {
-								state.sessionsById[sid].input += text;
-								state.sessionsById[sid].lastActive = Date.now();
-							}
-						}),
-					);
-				},
+				setStatus: (status, sessionId) => get().actions.updateSession({ status }, sessionId),
 
-				setStatus: (status, sessionId) => {
-					set(
-						produce((state: ChatState) => {
-							const sid = resolveTargetSessionId(state, sessionId);
-							if (sid && state.sessionsById[sid]) {
-								state.sessionsById[sid].status = status;
-								state.sessionsById[sid].lastActive = Date.now();
-							}
-						}),
-					);
-				},
+				setStreamingToolId: (toolId, sessionId) =>
+					get().actions.updateSession({ streamingToolId: toolId }, sessionId),
 
-				setStreamingToolId: (toolId, sessionId) => {
-					set(
-						produce((state: ChatState) => {
-							const sid = resolveTargetSessionId(state, sessionId);
-							if (sid && state.sessionsById[sid]) {
-								state.sessionsById[sid].streamingToolId = toolId;
-								state.sessionsById[sid].lastActive = Date.now();
-							}
-						}),
-					);
-				},
+				clearMessages: sessionId =>
+					mutateSession(set, sessionId, s => {
+						s.messages = [];
+					}),
 
-				clearMessages: sessionId => {
-					set(
-						produce((state: ChatState) => {
-							const sid = resolveTargetSessionId(state, sessionId);
-							if (sid && state.sessionsById[sid]) {
-								state.sessionsById[sid].messages = [];
-								state.sessionsById[sid].lastActive = Date.now();
-							}
-						}),
-					);
-				},
-
-				updateMessage: (id, updates, sessionId) => {
-					set(
-						produce((state: ChatState) => {
-							const sid = resolveTargetSessionId(state, sessionId);
-							if (sid && state.sessionsById[sid]) {
-								const session = state.sessionsById[sid];
-								const msg = session.messages.find(m => m.id === id);
-								if (msg) Object.assign(msg, updates);
-								session.lastActive = Date.now();
-							}
-						}),
-					);
-				},
+				updateMessage: (id, updates, sessionId) =>
+					mutateSession(set, sessionId, s => {
+						const msg = s.messages.find(m => m.id === id);
+						if (msg) Object.assign(msg, updates);
+					}),
 
 				setEditingMessageId: id => set({ editingMessageId: id }),
 
-				deleteMessagesFromId: (id, sessionId) => {
-					set(
-						produce((state: ChatState) => {
-							const sid = resolveTargetSessionId(state, sessionId);
-							if (sid && state.sessionsById[sid]) {
-								const session = state.sessionsById[sid];
-								const idx = session.messages.findIndex(m => m.id === id);
-								if (idx !== -1) {
-									session.messages = session.messages.slice(0, idx);
-									session.lastActive = Date.now();
-								}
-							}
-						}),
-					);
-				},
+				deleteMessagesFromId: (id, sessionId) =>
+					mutateSession(set, sessionId, s => {
+						const idx = s.messages.findIndex(m => m.id === id);
+						if (idx !== -1) s.messages = s.messages.slice(0, idx);
+					}),
 
-				removeMessageByPartId: (partId, sessionId) => {
-					set(
-						produce((state: ChatState) => {
-							const sid = resolveTargetSessionId(state, sessionId);
-							if (sid && state.sessionsById[sid]) {
-								const session = state.sessionsById[sid];
-								session.messages = session.messages.filter(m => {
-									if (m.id === partId) return false;
-									const mPartId = 'partId' in m ? m.partId : undefined;
-									if (mPartId === partId) return false;
-									const mToolUseId = 'toolUseId' in m ? m.toolUseId : undefined;
-									if (mToolUseId === partId) return false;
-									return true;
-								});
-								session.lastActive = Date.now();
-							}
-						}),
-					);
-				},
+				removeMessageByPartId: (partId, sessionId) =>
+					mutateSession(set, sessionId, s => {
+						s.messages = s.messages.filter(m => {
+							if (m.id === partId) return false;
+							const mPartId = 'partId' in m ? m.partId : undefined;
+							if (mPartId === partId) return false;
+							const mToolUseId = 'toolUseId' in m ? m.toolUseId : undefined;
+							return mToolUseId !== partId;
+						});
+					}),
 
-				markRevertedFromMessageId: id => {
-					set(
-						produce((state: ChatState) => {
-							const sid = state.activeSessionId;
-							if (sid && state.sessionsById[sid]) {
-								state.sessionsById[sid].revertedFromMessageId = id;
-							}
-						}),
-					);
-				},
+				markRevertedFromMessageId: id =>
+					mutateSession(set, undefined, s => {
+						s.revertedFromMessageId = id;
+					}),
 
-				clearRevertedMessages: () => {
-					set(
-						produce((state: ChatState) => {
-							const sid = state.activeSessionId;
-							if (sid && state.sessionsById[sid]) {
-								const session = state.sessionsById[sid];
-								if (session.revertedFromMessageId) {
-									const idx = session.messages.findIndex(
-										m => m.id === session.revertedFromMessageId,
-									);
-									if (idx !== -1) {
-										session.messages = session.messages.slice(0, idx);
-									} else {
-										session.revertedFromMessageId = null;
-									}
-									session.lastActive = Date.now();
-								}
-							}
-						}),
-					);
-				},
-
-				requestCreateSession: () => {}, // Handled by VSCode
+				clearRevertedMessages: () =>
+					mutateSession(set, undefined, s => {
+						if (!s.revertedFromMessageId) return;
+						const idx = s.messages.findIndex(m => m.id === s.revertedFromMessageId);
+						if (idx !== -1) {
+							s.messages = s.messages.slice(0, idx);
+						} else {
+							s.revertedFromMessageId = null;
+						}
+					}),
 
 				handleSessionCreated: sessionId => {
 					set(
@@ -806,9 +632,8 @@ export const useChatStore = create<ChatState>()(
 								if (!state.sessionOrder.includes(sessionId)) {
 									state.sessionOrder.push(sessionId);
 								}
-								if (!state.activeSessionId) {
-									state.activeSessionId = sessionId;
-								}
+								// Auto-switch to new session
+								state.activeSessionId = sessionId;
 							}
 						}),
 					);
@@ -843,178 +668,68 @@ export const useChatStore = create<ChatState>()(
 					);
 				},
 
-				addChangedFile: file => {
+				addChangedFile: file =>
+					mutateSession(set, undefined, s => {
+						const idx = s.changedFiles.findIndex(f => f.toolUseId === file.toolUseId);
+						if (idx !== -1) {
+							s.changedFiles[idx] = { ...s.changedFiles[idx], ...file };
+						} else {
+							s.changedFiles.push(file);
+						}
+					}),
+
+				removeChangedFile: filePath =>
+					mutateSession(set, undefined, s => {
+						s.changedFiles = s.changedFiles.filter(f => f.filePath !== filePath);
+					}),
+
+				clearChangedFiles: () =>
+					mutateSession(set, undefined, s => {
+						s.changedFiles = [];
+					}),
+
+				addRestoreCommit: (commit, sessionId) =>
+					mutateSession(set, sessionId, s => {
+						if (!s.restoreCommits.some(c => c.sha === commit.sha)) s.restoreCommits.push(commit);
+					}),
+
+				clearRestoreCommits: sessionId =>
+					get().actions.updateSession({ restoreCommits: [] }, sessionId),
+
+				setRestoreCommits: (commits, sessionId) =>
+					get().actions.updateSession({ restoreCommits: commits }, sessionId),
+
+				setUnrevertAvailable: (available, sessionId) =>
+					get().actions.updateSession({ unrevertAvailable: available }, sessionId),
+
+				setTokenStats: (stats, sessionId) =>
+					mutateSession(set, sessionId, s => Object.assign(s.tokenStats, stats)),
+
+				setTotalStats: (stats, sessionId) =>
+					mutateSession(set, sessionId, s => Object.assign(s.totalStats, stats)),
+
+				startSubtask: subtask =>
+					mutateSession(set, undefined, s => {
+						if (!s.messages.some(m => m.id === subtask.id)) s.messages.push(subtask);
+					}),
+
+				updateSubtask: (subtaskId, status, result) => {
 					set(
 						produce((state: ChatState) => {
 							const sid = state.activeSessionId;
-							if (sid && state.sessionsById[sid]) {
-								const session = state.sessionsById[sid];
-								const idx = session.changedFiles.findIndex(f => f.toolUseId === file.toolUseId);
-								if (idx !== -1) {
-									session.changedFiles[idx] = { ...session.changedFiles[idx], ...file };
-								} else {
-									session.changedFiles.push(file);
-								}
+							if (!sid || !state.sessionsById[sid]) return;
+							const msg = state.sessionsById[sid].messages.find(m => m.id === subtaskId);
+							if (!msg || msg.type !== 'subtask') return;
+							msg.status = status;
+							msg.result = result;
+							// Archive context transcript
+							const contextId = msg.contextId;
+							if (contextId && state.sessionsById[contextId]) {
+								msg.transcript = state.sessionsById[contextId].messages;
+								msg.contextId = undefined;
+								delete state.sessionsById[contextId];
 							}
-						}),
-					);
-				},
-
-				removeChangedFile: filePath => {
-					set(
-						produce((state: ChatState) => {
-							const sid = state.activeSessionId;
-							if (sid && state.sessionsById[sid]) {
-								state.sessionsById[sid].changedFiles = state.sessionsById[sid].changedFiles.filter(
-									f => f.filePath !== filePath,
-								);
-							}
-						}),
-					);
-				},
-
-				clearChangedFiles: () => {
-					set(
-						produce((state: ChatState) => {
-							const sid = state.activeSessionId;
-							if (sid && state.sessionsById[sid]) {
-								state.sessionsById[sid].changedFiles = [];
-							}
-						}),
-					);
-				},
-
-				addRestoreCommit: (commit, sessionId) => {
-					set(
-						produce((state: ChatState) => {
-							const sid = resolveTargetSessionId(state, sessionId);
-							if (sid && state.sessionsById[sid]) {
-								const session = state.sessionsById[sid];
-								if (!session.restoreCommits.some(c => c.sha === commit.sha)) {
-									session.restoreCommits.push(commit);
-								}
-							}
-						}),
-					);
-				},
-
-				clearRestoreCommits: sessionId => {
-					set(
-						produce((state: ChatState) => {
-							const sid = resolveTargetSessionId(state, sessionId);
-							if (sid && state.sessionsById[sid]) {
-								state.sessionsById[sid].restoreCommits = [];
-							}
-						}),
-					);
-				},
-
-				setRestoreCommits: (commits, sessionId) => {
-					set(
-						produce((state: ChatState) => {
-							const sid = resolveTargetSessionId(state, sessionId);
-							if (sid && state.sessionsById[sid]) {
-								state.sessionsById[sid].restoreCommits = commits;
-							}
-						}),
-					);
-				},
-
-				setUnrevertAvailable: (available, sessionId) => {
-					set(
-						produce((state: ChatState) => {
-							const sid = resolveTargetSessionId(state, sessionId);
-							if (sid && state.sessionsById[sid]) {
-								state.sessionsById[sid].unrevertAvailable = available;
-							}
-						}),
-					);
-				},
-
-				setTokenStats: (stats, sessionId) => {
-					set(
-						produce((state: ChatState) => {
-							const sid = resolveTargetSessionId(state, sessionId);
-							if (sid && state.sessionsById[sid]) {
-								const session = state.sessionsById[sid];
-								Object.assign(session.tokenStats, stats);
-								session.lastActive = Date.now();
-							}
-						}),
-					);
-				},
-
-				setTotalStats: (stats, sessionId) => {
-					set(
-						produce((state: ChatState) => {
-							const sid = resolveTargetSessionId(state, sessionId);
-							if (sid && state.sessionsById[sid]) {
-								const session = state.sessionsById[sid];
-								Object.assign(session.totalStats, stats);
-								session.lastActive = Date.now();
-							}
-						}),
-					);
-				},
-
-				startSubtask: subtask => {
-					set(
-						produce((state: ChatState) => {
-							const sid = state.activeSessionId;
-							if (sid && state.sessionsById[sid]) {
-								const session = state.sessionsById[sid];
-								if (!session.messages.some(m => m.id === subtask.id)) {
-									session.messages.push(subtask);
-									session.lastActive = Date.now();
-								}
-							}
-						}),
-					);
-				},
-
-				completeSubtask: (subtaskId, result) => {
-					set(
-						produce((state: ChatState) => {
-							const sid = state.activeSessionId;
-							if (sid && state.sessionsById[sid]) {
-								const session = state.sessionsById[sid];
-								const msg = session.messages.find(m => m.id === subtaskId);
-								if (msg && msg.type === 'subtask') {
-									msg.status = 'completed';
-									msg.result = result;
-
-									// Handle transcript/context archiving
-									const contextId = msg.contextId;
-									if (contextId && state.sessionsById[contextId]) {
-										msg.transcript = state.sessionsById[contextId].messages;
-										msg.contextId = undefined;
-										delete state.sessionsById[contextId];
-									}
-								}
-							}
-						}),
-					);
-				},
-
-				errorSubtask: (subtaskId, error) => {
-					set(
-						produce((state: ChatState) => {
-							const sid = state.activeSessionId;
-							if (sid && state.sessionsById[sid]) {
-								const session = state.sessionsById[sid];
-								const msg = session.messages.find(m => m.id === subtaskId);
-								if (msg && msg.type === 'subtask') {
-									msg.status = 'error';
-									msg.result = error;
-
-									const contextId = msg.contextId;
-									if (contextId && state.sessionsById[contextId]) {
-										msg.transcript = state.sessionsById[contextId].messages;
-										msg.contextId = undefined;
-										delete state.sessionsById[contextId];
-									}
-								}
-							}
+							state.sessionsById[sid].lastActive = Date.now();
 						}),
 					);
 				},
@@ -1023,43 +738,18 @@ export const useChatStore = create<ChatState>()(
 					set({ isImprovingPrompt: isImproving, improvingPromptRequestId: requestId });
 				},
 
-				setSessionMessages: (sessionId, messages) => {
-					set(
-						produce((state: ChatState) => {
-							if (sessionId && state.sessionsById[sessionId]) {
-								state.sessionsById[sessionId].messages = messages;
-								state.sessionsById[sessionId].lastActive = Date.now();
-							}
-						}),
-					);
-				},
+				setSessionMessages: (sessionId, messages) =>
+					mutateSession(set, sessionId, s => {
+						s.messages = messages;
+					}),
 
-				deleteMessagesAfterMessageId: (sessionId, messageId) => {
-					set(
-						produce((state: ChatState) => {
-							if (sessionId && state.sessionsById[sessionId]) {
-								const session = state.sessionsById[sessionId];
-								const idx = session.messages.findIndex(m => m.id === messageId);
-								if (idx !== -1) {
-									session.messages = session.messages.slice(0, idx + 1);
-									session.lastActive = Date.now();
-								}
-							}
-						}),
-					);
-				},
+				deleteMessagesAfterMessageId: (sessionId, messageId) =>
+					mutateSession(set, sessionId, s => {
+						const idx = s.messages.findIndex(m => m.id === messageId);
+						if (idx !== -1) s.messages = s.messages.slice(0, idx + 1);
+					}),
 
-				setSessionModel: (model, sessionId) => {
-					set(
-						produce((state: ChatState) => {
-							const sid = resolveTargetSessionId(state, sessionId);
-							if (sid && state.sessionsById[sid]) {
-								state.sessionsById[sid].model = model;
-								state.sessionsById[sid].lastActive = Date.now();
-							}
-						}),
-					);
-				},
+				setSessionModel: (model, sessionId) => get().actions.updateSession({ model }, sessionId),
 
 				getSessionModel: (sessionId): string | undefined => {
 					const state = get();
@@ -1100,7 +790,17 @@ function filterPersistedSessions(
 	const filtered: Record<string, ChatSession> = {};
 	for (const sid of sessionOrder) {
 		if (sessionsById[sid]) {
-			filtered[sid] = sessionsById[sid];
+			// Reset runtime state before persisting
+			// These fields should NOT be persisted as they represent transient processing state
+			filtered[sid] = {
+				...sessionsById[sid],
+				isProcessing: false,
+				isAutoRetrying: false,
+				isLoading: false,
+				retryInfo: null,
+				status: 'Ready',
+				streamingToolId: null,
+			};
 		}
 	}
 	return filtered;

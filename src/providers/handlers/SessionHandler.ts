@@ -6,6 +6,7 @@ import type {
 	TokenStats,
 	TotalStats,
 } from '../../common';
+import type { CLIEvent } from '../../core/executor/types';
 import { logger } from '../../utils/logger';
 import type { HandlerContext, WebviewMessage, WebviewMessageHandler } from './types';
 
@@ -26,7 +27,12 @@ export class SessionHandler implements WebviewMessageHandler {
 	private improvePromptController: AbortController | null = null;
 	private improvePromptActiveRequestId: string | null = null;
 
-	constructor(private context: HandlerContext) {}
+	constructor(private context: HandlerContext) {
+		// Inject CLI runner into ConversationService
+		if (this.context.services.conversationService) {
+			this.context.services.conversationService.setCLIRunner(this.context.cli);
+		}
+	}
 
 	async handleMessage(msg: WebviewMessage): Promise<void> {
 		switch (msg.type) {
@@ -54,6 +60,18 @@ export class SessionHandler implements WebviewMessageHandler {
 			case 'cancelImprovePrompt':
 				await this.onCancelImprovePrompt(msg);
 				break;
+			case 'getConversationList':
+				await this.onGetConversationList();
+				break;
+			case 'loadConversation':
+				await this.onLoadConversation(msg);
+				break;
+			case 'deleteConversation':
+				await this.onDeleteConversation(msg);
+				break;
+			case 'renameConversation':
+				await this.onRenameConversation(msg);
+				break;
 		}
 	}
 
@@ -63,6 +81,8 @@ export class SessionHandler implements WebviewMessageHandler {
 
 	public postSessionMessage(message: SessionMessageData, sessionId?: string): void {
 		const targetId = sessionId || this.context.sessionState.activeSessionId;
+		if (!targetId) return;
+
 		logger.debug('[SessionHandler] postSessionMessage', {
 			messageType: message.type,
 			messageId: message.id,
@@ -81,10 +101,12 @@ export class SessionHandler implements WebviewMessageHandler {
 	}
 
 	public postStatus(
-		sessionId: string,
+		sessionId: string | undefined,
 		status: import('../../common').SessionStatus,
 		statusText?: string,
 	): void {
+		if (!sessionId) return;
+
 		this.context.view.postMessage({
 			type: 'session_event',
 			targetId: sessionId,
@@ -97,6 +119,8 @@ export class SessionHandler implements WebviewMessageHandler {
 
 	public postComplete(partId: string, toolUseId?: string, sessionId?: string): void {
 		const targetId = sessionId || this.context.sessionState.activeSessionId;
+		if (!targetId) return;
+
 		this.context.view.postMessage({
 			type: 'session_event',
 			targetId,
@@ -107,64 +131,35 @@ export class SessionHandler implements WebviewMessageHandler {
 		} satisfies SessionEventMessage);
 	}
 
-	public postSessionInfo(sessionId?: string): void {
-		const targetId = sessionId || this.context.sessionState.activeSessionId;
-		this.context.view.postMessage({
-			type: 'session_event',
-			targetId,
-			eventType: 'session_info',
-			payload: {
-				eventType: 'session_info',
-				data: {
-					sessionId: targetId,
-					tools: [],
-					mcpServers: [],
-				},
-			},
-			timestamp: Date.now(),
-			sessionId: targetId,
-		} satisfies SessionEventMessage);
-	}
-
-	public handleSessionUpdatedEvent(data: unknown): void {
+	public handleSessionUpdatedEvent(data: unknown, eventSessionId?: string): void {
 		const record = (
 			data && typeof data === 'object' ? (data as Record<string, unknown>) : {}
 		) as Record<string, unknown>;
 
-		const sessionId =
-			typeof record.sessionId === 'string'
-				? (record.sessionId as string)
-				: this.context.cli.getSessionId();
-		if (!sessionId) {
-			return;
-		}
+		// Resolve target session: event-level sessionId > data.sessionId > activeSessionId
+		const backendSessionId =
+			eventSessionId ||
+			(typeof record.sessionId === 'string' ? (record.sessionId as string) : undefined);
+		const targetSessionId = backendSessionId || this.context.sessionState.activeSessionId;
+		if (!targetSessionId) return;
 
-		// Update active session stats if matched
-		const activeId = sessionId;
-		const isActiveSession = activeId === this.context.sessionState.activeSessionId;
-
-		// Only broadcast status updates for the PRIMARY active session.
-		// Sub-session statuses (e.g., from subagents) are handled within their
-		// respective Subtask cards, not as top-level session status changes.
-		// Broadcasting them would cause the frontend to auto-create UI sessions
-		// for backend-only sub-sessions, leading to empty chat tabs in the header.
-		if (!isActiveSession) {
-			return;
+		// Ensure session is tracked as started
+		if (!this.context.sessionState.startedSessions.has(targetSessionId)) {
+			this.context.sessionState.startedSessions.add(targetSessionId);
 		}
 
 		const status = record.status as
 			| { type?: string; attempt?: number; message?: string; next?: number }
 			| undefined;
 
-		// Always broadcast status for the active (main) session
 		if (status?.type === 'busy') {
-			this.postStatus(activeId, 'busy', 'Working...');
+			this.postStatus(targetSessionId, 'busy', 'Working...');
 		} else if (status?.type === 'idle') {
-			this.postStatus(activeId, 'idle', 'Ready');
+			this.postStatus(targetSessionId, 'idle', 'Ready');
 		} else if (status?.type === 'retry') {
 			this.context.view.postMessage({
 				type: 'session_event',
-				targetId: activeId,
+				targetId: targetSessionId,
 				eventType: 'status',
 				payload: {
 					eventType: 'status',
@@ -178,19 +173,17 @@ export class SessionHandler implements WebviewMessageHandler {
 					},
 				},
 				timestamp: Date.now(),
-				sessionId: activeId,
+				sessionId: targetSessionId,
 			} satisfies SessionEventMessage);
 		}
 
 		const tokenStats = record.tokenStats as Partial<TokenStats> | undefined;
 		const totalStatsPatch = record.totalStats as Partial<TotalStats> | undefined;
 
-		// Aggregate per-UI-session totals
-		this.initializeSessionStats(activeId);
-		const totals = this.sessionTotalsByUiSession.get(activeId);
-		if (!totals) {
-			return;
-		}
+		// Aggregate per-session totals
+		this.initializeSessionStats(targetSessionId);
+		const totals = this.sessionTotalsByUiSession.get(targetSessionId);
+		if (!totals) return;
 
 		let totalTokensPatch: Partial<TotalStats> | undefined;
 		if (tokenStats) {
@@ -215,7 +208,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			totals.requestCount += totalStatsPatch.requestCount;
 		}
 
-		this.postStats(activeId, {
+		this.postStats(targetSessionId, {
 			tokenStats,
 			totalStats: {
 				...(totalStatsPatch ?? {}),
@@ -225,17 +218,16 @@ export class SessionHandler implements WebviewMessageHandler {
 			},
 		});
 
-		// Reflect provider session id in UI session lifecycle
 		this.context.view.postMessage({
 			type: 'session_event',
-			targetId: activeId,
+			targetId: targetSessionId,
 			eventType: 'session_info',
 			payload: {
 				eventType: 'session_info',
-				data: { sessionId: activeId, tools: [], mcpServers: [] },
+				data: { sessionId: targetSessionId, tools: [], mcpServers: [] },
 			},
 			timestamp: Date.now(),
-			sessionId: activeId,
+			sessionId: targetSessionId,
 		} satisfies SessionEventMessage);
 	}
 
@@ -252,7 +244,6 @@ export class SessionHandler implements WebviewMessageHandler {
 			this.postLifecycle('created', restoredSessionId);
 			this.postLifecycle('switched', restoredSessionId, { isProcessing: false });
 			this.postStatus(restoredSessionId, 'idle', 'Ready');
-			this.postSessionInfo();
 			this.initializeSessionStats(restoredSessionId);
 		} else {
 			logger.info('[SessionHandler] No active session to restore');
@@ -261,13 +252,23 @@ export class SessionHandler implements WebviewMessageHandler {
 	}
 
 	private async onCreateSession(): Promise<void> {
-		const newSessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-		logger.info('[SessionHandler] Creating new session', { sessionId: newSessionId });
-		this.context.sessionState.activeSessionId = newSessionId; // Update backend state
-		this.postLifecycle('created', newSessionId);
-		// Force switch to the new session
-		this.postLifecycle('switched', newSessionId, { isProcessing: false });
-		this.initializeSessionStats(newSessionId);
+		logger.info('[SessionHandler] Creating new real session');
+
+		try {
+			const config = this.buildBaseConfig();
+			const newSessionId = await this.context.cli.createEmptySession(config);
+
+			this.context.sessionState.activeSessionId = newSessionId;
+			this.context.sessionState.startedSessions.add(newSessionId);
+
+			this.postLifecycle('created', newSessionId);
+			this.postLifecycle('switched', newSessionId, { isProcessing: false });
+			this.postStatus(newSessionId, 'idle', 'Ready');
+			this.initializeSessionStats(newSessionId);
+		} catch (error) {
+			logger.error('[SessionHandler] Failed to create session:', error);
+			this.context.sessionState.activeSessionId = undefined;
+		}
 	}
 
 	private async onSwitchSession(msg: WebviewMessage): Promise<void> {
@@ -280,7 +281,6 @@ export class SessionHandler implements WebviewMessageHandler {
 		this.context.sessionState.activeSessionId = sessionId;
 		this.postLifecycle('switched', sessionId, { isProcessing: false });
 		this.postStatus(sessionId, 'idle', 'Ready');
-		this.postSessionInfo();
 		this.initializeSessionStats(sessionId);
 	}
 
@@ -294,7 +294,7 @@ export class SessionHandler implements WebviewMessageHandler {
 
 		// If closing active session, clear backend reference
 		if (this.context.sessionState.activeSessionId === sessionId) {
-			this.context.sessionState.activeSessionId = undefined as unknown as string; // Allow undefined
+			this.context.sessionState.activeSessionId = undefined;
 		}
 
 		this.postLifecycle('closed', sessionId);
@@ -303,124 +303,418 @@ export class SessionHandler implements WebviewMessageHandler {
 	private async onSendMessage(msg: WebviewMessage): Promise<void> {
 		const text = msg.text as string;
 		const uiModel = typeof msg.model === 'string' ? (msg.model as string) : undefined;
-		await this.handleSendMessage(text, uiModel);
+		const sessionId = typeof msg.sessionId === 'string' ? msg.sessionId : undefined;
+		await this.handleSendMessage(text, uiModel, sessionId);
 	}
 
 	private async onStopRequest(_msg: WebviewMessage): Promise<void> {
-		await this.context.cli.abort();
-		this.postSessionMessage({
-			id: `interrupted-${Date.now()}`,
-			type: 'interrupted',
-			content: 'Stopped by user',
-			timestamp: new Date().toISOString(),
-		});
-		// activeSessionId check
-		if (this.context.sessionState.activeSessionId) {
-			this.postStatus(this.context.sessionState.activeSessionId, 'idle', 'Stopped');
+		const activeId = this.context.sessionState.activeSessionId;
+
+		// Only process stop request if there's an active session
+		if (!activeId) {
+			logger.warn('[SessionHandler] Stop request ignored - no active session');
+			return;
 		}
-		this.postSessionInfo();
+
+		await this.context.cli.abort();
+		this.postSessionMessage(
+			{
+				id: `interrupted-${Date.now()}`,
+				type: 'interrupted',
+				content: 'Stopped by user',
+				timestamp: new Date().toISOString(),
+			},
+			activeId,
+		);
+		this.postStatus(activeId, 'idle', 'Stopped');
 	}
 
-	private async handleSendMessage(text: string, uiModel?: string): Promise<void> {
-		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-		if (!workspaceRoot) {
-			throw new Error('No workspace root');
-		}
+	private async handleSendMessage(
+		text: string,
+		uiModel?: string,
+		explicitSessionId?: string,
+	): Promise<void> {
+		const config = this.buildSendConfig(uiModel);
 
-		const settingsModel = this.context.settings.get('model');
-		const model =
-			uiModel ?? (typeof settingsModel === 'string' ? (settingsModel as string) : undefined);
+		// Resolve active session
+		let activeId = this.context.sessionState.activeSessionId;
 
-		const opencodeAgent = this.context.settings.get('opencode.agent');
-		const opencodeServerTimeout = this.context.settings.get('opencode.serverTimeout');
-
-		const config = {
-			provider: (this.context.settings.get('provider') || 'claude') as 'claude' | 'opencode',
-			model,
-			workspaceRoot,
-			yoloMode: Boolean(this.context.settings.get('yoloMode') || false),
-			agent: typeof opencodeAgent === 'string' ? opencodeAgent : undefined,
-			autoApprove: Boolean(this.context.settings.get('autoApprove') || false),
-			serverTimeoutMs:
-				typeof opencodeServerTimeout === 'number' && Number.isFinite(opencodeServerTimeout)
-					? Math.max(0, opencodeServerTimeout) * 1000
-					: undefined,
-		};
-
-		// Lazy creation: If no active session, create one now
-		if (!this.context.sessionState.activeSessionId) {
-			const newSessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-			logger.info('[SessionHandler] Lazy creating session for message', {
-				sessionId: newSessionId,
+		if (explicitSessionId && explicitSessionId !== activeId) {
+			logger.info('[SessionHandler] Switching context to explicit session', {
+				from: activeId,
+				to: explicitSessionId,
 			});
-			this.context.sessionState.activeSessionId = newSessionId;
-			this.postLifecycle('created', newSessionId);
-			this.postLifecycle('switched', newSessionId, { isProcessing: false });
-			this.initializeSessionStats(newSessionId);
+			activeId = explicitSessionId;
+			this.context.sessionState.activeSessionId = activeId;
 		}
 
-		const activeId = this.context.sessionState.activeSessionId;
-		const isNewSession = !this.context.sessionState.startedSessions.has(activeId);
+		const isNewSession = !activeId || !this.context.sessionState.startedSessions.has(activeId);
 
-		logger.info('[SessionHandler] handleSendMessage called', {
+		logger.info('[SessionHandler] handleSendMessage', {
 			text: text.slice(0, 50),
-			model,
+			model: config.model,
 			provider: config.provider,
-			sessionId: activeId,
+			sessionId: activeId || 'none',
 			isNewSession,
-			hasCliSession: !!this.context.cli.getSessionId(),
 		});
-
-		// CRITICAL: Post user message to UI immediately
-		// Frontend does NOT optimistically add user messages (ChatInput.tsx:522-523)
-		// It expects backend to echo the message back via session_event
-		this.postSessionMessage({
-			id: `user-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-			type: 'user',
-			content: text,
-			model: model,
-			timestamp: new Date().toISOString(),
-		});
-
-		this.postStatus(activeId, 'busy', 'Working...');
 
 		try {
 			if (isNewSession) {
-				logger.info('[SessionHandler] Spawning new session');
-				this.initializeSessionStats(activeId);
+				// No active session — create one on the backend first
+				const newSessionId = await this.context.cli.createEmptySession(config);
+				this.context.sessionState.activeSessionId = newSessionId;
+				this.context.sessionState.startedSessions.add(newSessionId);
 
-				if (config.provider === 'opencode' && this.context.cli.getSessionId()) {
-					logger.info('[SessionHandler] OpenCode server already running, creating new session');
-					await this.context.cli.createNewSession(text, config);
-				} else {
-					await this.context.cli.spawn(text, config);
-				}
+				this.postLifecycle('created', newSessionId);
+				this.postLifecycle('switched', newSessionId, { isProcessing: true });
+				this.initializeSessionStats(newSessionId);
 
-				this.context.sessionState.startedSessions.add(activeId);
-			} else {
-				logger.info('[SessionHandler] Spawning follow-up message');
-				this.initializeSessionStats(activeId);
-				await this.context.cli.spawnFollowUp(text, config);
+				activeId = newSessionId;
 			}
+
+			// Post user message and send to CLI
+			const userMessage = {
+				id: `user-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+				type: 'user' as const,
+				content: text,
+				model: config.model,
+				timestamp: new Date().toISOString(),
+			};
+			this.postSessionMessage(userMessage, activeId);
+			this.postStatus(activeId, 'busy', 'Working...');
+			this.initializeSessionStats(activeId);
+
+			await this.context.cli.spawnFollowUp(text, config);
 		} catch (error) {
 			logger.error('[SessionHandler] Failed to spawn CLI:', error);
 
-			this.context.sessionState.startedSessions.delete(activeId);
-			this.sessionTotalsByUiSession.delete(activeId);
+			if (activeId) {
+				this.context.sessionState.startedSessions.delete(activeId);
+				this.sessionTotalsByUiSession.delete(activeId);
 
-			this.postSessionMessage({
-				id: `error-${Date.now()}`,
-				type: 'error',
-				content: error instanceof Error ? error.message : 'Failed to start CLI',
-				isError: true,
-				timestamp: new Date().toISOString(),
-			});
-			this.postStatus(activeId, 'error', 'Failed to start');
+				this.postSessionMessage({
+					id: `error-${Date.now()}`,
+					type: 'error',
+					content: error instanceof Error ? error.message : 'Failed to start CLI',
+					isError: true,
+					timestamp: new Date().toISOString(),
+				});
+				this.postStatus(activeId, 'error', 'Failed to start');
+			}
 		}
 	}
 
 	// =============================================================================
+	// Conversation History
+	// =============================================================================
+
+	private async onGetConversationList(): Promise<void> {
+		try {
+			const conversations = await this.context.services.conversationService.listConversations();
+			logger.info('[SessionHandler] Sending conversation list to webview', {
+				count: conversations.length,
+				titles: conversations.slice(0, 5).map(c => c.customTitle || c.firstUserMessage),
+			});
+			this.context.view.postMessage({
+				type: 'conversationList',
+				data: conversations,
+			});
+		} catch (error) {
+			logger.error('[SessionHandler] Failed to get conversation list:', error);
+			this.context.view.postMessage({
+				type: 'conversationList',
+				data: [],
+			});
+		}
+	}
+
+	private async onLoadConversation(msg: WebviewMessage): Promise<void> {
+		const filename = typeof msg.filename === 'string' ? msg.filename : undefined;
+		if (!filename) return;
+
+		// For OpenCode, filename IS the sessionId
+		const sessionId = filename;
+
+		logger.info('[SessionHandler] Loading conversation', { sessionId });
+
+		// Set active session
+		this.context.sessionState.activeSessionId = sessionId;
+		this.postLifecycle('created', sessionId); // Ensure UI knows about it
+		this.postLifecycle('switched', sessionId, { isProcessing: false });
+		this.initializeSessionStats(sessionId);
+
+		// Initialize connection to this session in OpenCode
+		try {
+			const config = {
+				provider: 'opencode' as const,
+				workspaceRoot: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '',
+			};
+
+			// Load child subagent sessions (parentID === sessionId) and preload their messages.
+			const allSessions = await this.context.cli.listSessions(config);
+			logger.info('[SessionHandler] Found child sessions', {
+				parentSessionId: sessionId,
+				childCount: allSessions.filter(s => s.parentID === sessionId).length,
+			});
+			const childSessions = allSessions
+				.filter(s => s.parentID === sessionId)
+				.sort((a, b) => (a.created || 0) - (b.created || 0)); // Sort by creation time
+			const childSessionIds = childSessions.map(s => s.id);
+
+			// Map task toolUseId -> child session id (best-effort: order match)
+			const parentHistory = await this.context.cli.getHistory(sessionId, config);
+			const taskToolUseIds: string[] = [];
+			for (const ev of parentHistory) {
+				if (ev.type === 'tool_use') {
+					const d = ev.data as { tool?: string; toolUseId?: string };
+					if (d.tool === 'task' && typeof d.toolUseId === 'string') {
+						taskToolUseIds.push(d.toolUseId);
+					}
+				}
+			}
+			const taskToChildSessionId = new Map<string, string>();
+			for (let i = 0; i < taskToolUseIds.length; i++) {
+				const childId = childSessionIds[i];
+				if (childId) taskToChildSessionId.set(taskToolUseIds[i], childId);
+			}
+
+			for (const child of childSessions) {
+				// Preload child messages as a normal session_event stream.
+				// Do NOT send 'created' lifecycle event, otherwise it will appear in the session tabs.
+				// It will be auto-created in store by dispatch() when the first message arrives.
+				const childHistory = await this.context.cli.getHistory(child.id, config);
+				this.replayHistoryIntoSession(child.id, childHistory);
+			}
+
+			// If parent history is compacted (no task tool_use), still surface child sessions as subtask cards.
+			if (taskToolUseIds.length === 0 && childSessions.length > 0) {
+				for (const child of childSessions) {
+					this.postSessionMessage(
+						{
+							id: `hist-subtask-${child.id}`,
+							type: 'subtask',
+							agent: 'subagent',
+							description: child.title || 'Subtask',
+							status: 'completed',
+							contextId: child.id,
+							metadata: { childSessionId: child.id },
+							timestamp: new Date().toISOString(),
+						},
+						sessionId,
+					);
+				}
+			}
+
+			// Replay parent history (create subtask cards for task tool_use)
+			if (parentHistory && parentHistory.length > 0) {
+				logger.info(
+					`[SessionHandler] Replaying ${parentHistory.length} events for session ${sessionId}`,
+				);
+				this.replayHistoryIntoSession(sessionId, parentHistory, {
+					mode: 'parent',
+					taskToChildSessionId,
+				});
+			} else {
+				logger.info('[SessionHandler] No history found for session', { sessionId });
+			}
+		} catch (error) {
+			logger.error('[SessionHandler] Failed to load conversation:', error);
+			this.postStatus(sessionId, 'error', 'Failed to load');
+		}
+	}
+
+	private replayHistoryIntoSession(
+		sessionId: string,
+		history: CLIEvent[],
+		options?: {
+			mode?: 'default' | 'parent';
+			taskToChildSessionId?: Map<string, string>;
+		},
+	): void {
+		for (const event of history) {
+			if (event.type === 'message') {
+				const data = event.data as { content?: string; partId?: string; isDelta?: boolean };
+				this.postSessionMessage(
+					{
+						id: data.partId ? `msg-${data.partId}` : `hist-msg-${Math.random()}`,
+						type: 'assistant',
+						content: data.content || '',
+						isDelta: false,
+						timestamp: new Date().toISOString(),
+					},
+					sessionId,
+				);
+				continue;
+			}
+
+			if (event.type === 'normalized_log') {
+				const data = event.data as { role?: string; content?: string; timestamp?: string };
+				if (data.role === 'user') {
+					this.postSessionMessage(
+						{
+							id: `user-hist-${Math.random()}`,
+							type: 'user',
+							content: data.content || '',
+							timestamp: data.timestamp || new Date().toISOString(),
+						},
+						sessionId,
+					);
+				}
+				continue;
+			}
+
+			if (event.type === 'thinking') {
+				const data = event.data as { content?: string; partId?: string; timestamp?: string };
+				this.postSessionMessage(
+					{
+						id: data.partId ? `thinking-${data.partId}` : `hist-thinking-${Math.random()}`,
+						type: 'thinking',
+						content: data.content || '',
+						isDelta: false,
+						timestamp: data.timestamp || new Date().toISOString(),
+					},
+					sessionId,
+				);
+				continue;
+			}
+
+			if (event.type === 'tool_use') {
+				const data = event.data as {
+					tool?: string;
+					input?: unknown;
+					toolUseId?: string;
+					timestamp?: string;
+				};
+				const toolName = data.tool || 'unknown';
+				const input = (data.input as Record<string, unknown>) || {};
+				const toolUseId = data.toolUseId || `hist-tool-${Math.random()}`;
+
+				if (options?.mode === 'parent' && toolName === 'task') {
+					const childSessionId = options.taskToChildSessionId?.get(toolUseId);
+					this.postSessionMessage(
+						{
+							id: toolUseId,
+							type: 'subtask',
+							agent: typeof input.subagent_type === 'string' ? input.subagent_type : 'subagent',
+							prompt: typeof input.prompt === 'string' ? input.prompt : '',
+							description: typeof input.description === 'string' ? input.description : 'Subtask',
+							status: 'running',
+							contextId: childSessionId,
+							metadata: childSessionId ? { childSessionId } : undefined,
+							timestamp: data.timestamp || new Date().toISOString(),
+						},
+						sessionId,
+					);
+					continue;
+				}
+
+				this.postSessionMessage(
+					{
+						id: toolUseId,
+						type: 'tool_use',
+						toolName,
+						toolUseId,
+						rawInput: input,
+						timestamp: data.timestamp || new Date().toISOString(),
+					},
+					sessionId,
+				);
+				continue;
+			}
+
+			if (event.type === 'tool_result') {
+				const data = event.data as {
+					tool?: string;
+					content?: string;
+					isError?: boolean;
+					toolUseId?: string;
+					timestamp?: string;
+				};
+				const toolName = data.tool || 'unknown';
+				const toolUseId = data.toolUseId || `hist-tool-${Math.random()}`;
+
+				if (options?.mode === 'parent' && toolName === 'task') {
+					const childSessionId = options.taskToChildSessionId?.get(toolUseId);
+					this.postSessionMessage(
+						{
+							id: toolUseId,
+							type: 'subtask',
+							status: data.isError ? 'error' : 'completed',
+							result: data.content || '',
+							contextId: childSessionId,
+							metadata: childSessionId ? { childSessionId } : undefined,
+							timestamp: data.timestamp || new Date().toISOString(),
+						},
+						sessionId,
+					);
+					continue;
+				}
+
+				this.postSessionMessage(
+					{
+						id: `res-${toolUseId || Math.random()}`,
+						type: 'tool_result',
+						toolName,
+						toolUseId,
+						content: data.content || '',
+						isError: Boolean(data.isError),
+						timestamp: data.timestamp || new Date().toISOString(),
+					},
+					sessionId,
+				);
+			}
+		}
+	}
+
+	private async onDeleteConversation(msg: WebviewMessage): Promise<void> {
+		const sessionId = typeof msg.filename === 'string' ? msg.filename : undefined;
+		if (!sessionId) return;
+
+		logger.info('[SessionHandler] Deleting conversation', { sessionId });
+
+		try {
+			const config = this.buildBaseConfig();
+			const success = await this.context.cli.deleteSession(sessionId, config);
+
+			if (success) {
+				// Clean up local state if this was the active session
+				this.context.sessionState.startedSessions.delete(sessionId);
+				this.clearSessionStats(sessionId);
+
+				if (this.context.sessionState.activeSessionId === sessionId) {
+					this.context.sessionState.activeSessionId = undefined;
+				}
+
+				this.postLifecycle('closed', sessionId);
+			}
+		} catch (error) {
+			logger.error('[SessionHandler] Failed to delete conversation:', error);
+		}
+
+		await this.onGetConversationList();
+	}
+
+	private async onRenameConversation(msg: WebviewMessage): Promise<void> {
+		const sessionId = typeof msg.filename === 'string' ? msg.filename : undefined;
+		const newTitle = typeof msg.newTitle === 'string' ? msg.newTitle : undefined;
+		if (!sessionId || !newTitle) return;
+
+		logger.info('[SessionHandler] Renaming conversation', { sessionId, newTitle });
+
+		try {
+			const config = this.buildBaseConfig();
+			await this.context.cli.renameSession(sessionId, newTitle, config);
+		} catch (error) {
+			logger.error('[SessionHandler] Failed to rename conversation:', error);
+		}
+
+		await this.onGetConversationList();
+	}
+
+	// =============================================================================
 	// Prompt Improvement
+	// =============================================================================
+
 	private async onImprovePromptRequest(msg: WebviewMessage): Promise<void> {
 		const data = (msg.data ?? {}) as {
 			text?: unknown;
@@ -593,8 +887,43 @@ export class SessionHandler implements WebviewMessageHandler {
 	// Utils
 	// =============================================================================
 
-	private initializeSessionStats(sessionId: string): void {
-		if (this.sessionTotalsByUiSession.has(sessionId)) {
+	private buildBaseConfig(): { provider: 'claude' | 'opencode'; workspaceRoot: string } {
+		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		if (!workspaceRoot) {
+			throw new Error('No workspace root');
+		}
+		return {
+			provider: (this.context.settings.get('provider') || 'claude') as 'claude' | 'opencode',
+			workspaceRoot,
+		};
+	}
+
+	private buildSendConfig(uiModel?: string) {
+		const { provider, workspaceRoot } = this.buildBaseConfig();
+
+		const savedModel =
+			this.context.extensionContext.globalState.get<string>('primecode.selectedModel');
+		const model = uiModel ?? savedModel;
+
+		const opencodeAgent = this.context.settings.get('opencode.agent');
+		const opencodeServerTimeout = this.context.settings.get('opencode.serverTimeout');
+
+		return {
+			provider,
+			model,
+			workspaceRoot,
+			yoloMode: Boolean(this.context.settings.get('yoloMode') || false),
+			agent: typeof opencodeAgent === 'string' ? opencodeAgent : undefined,
+			autoApprove: Boolean(this.context.settings.get('autoApprove') || false),
+			serverTimeoutMs:
+				typeof opencodeServerTimeout === 'number' && Number.isFinite(opencodeServerTimeout)
+					? Math.max(0, opencodeServerTimeout) * 1000
+					: undefined,
+		};
+	}
+
+	private initializeSessionStats(sessionId: string | undefined): void {
+		if (!sessionId || this.sessionTotalsByUiSession.has(sessionId)) {
 			return;
 		}
 		this.sessionTotalsByUiSession.set(sessionId, {
@@ -646,7 +975,6 @@ export class SessionHandler implements WebviewMessageHandler {
 			type: 'session_lifecycle',
 			action,
 			sessionId,
-			parentId: undefined,
 			data,
 		} satisfies SessionLifecycleMessage);
 	}

@@ -48,6 +48,8 @@ export interface CLIExecutor extends EventEmitter {
 	/** Spawn a process specifically for code review. */
 	spawnReview?(prompt: string, config: CLIConfig): Promise<ChildProcess | null>;
 	createNewSession(prompt: string, config: CLIConfig): Promise<ChildProcess | null>;
+	/** Creates an empty session without sending a message. Returns the session ID. */
+	createEmptySession(config: CLIConfig): Promise<string>;
 	kill(): Promise<void>;
 	abort(): Promise<void>;
 	parseStream(chunk: Buffer): CLIEvent[];
@@ -60,6 +62,21 @@ export interface CLIExecutor extends EventEmitter {
 	}): Promise<void>;
 
 	getAdminInfo(): { baseUrl: string; directory: string } | null;
+	listSessions(config: CLIConfig): Promise<
+		Array<{
+			id: string;
+			title?: string;
+			lastModified?: number;
+			created?: number;
+			parentID?: string;
+		}>
+	>;
+	getHistory(sessionId: string, config: CLIConfig): Promise<CLIEvent[]>;
+
+	/** Deletes a session by ID. Returns true if successful. */
+	deleteSession(sessionId: string, config: CLIConfig): Promise<boolean>;
+	/** Updates a session's title. Returns true if successful. */
+	renameSession(sessionId: string, title: string, config: CLIConfig): Promise<boolean>;
 
 	// Kanban-style forward compatibility: feature flags
 	getCapabilities?(): ReadonlyArray<'SessionFork' | 'SetupHelper'>;

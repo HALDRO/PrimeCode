@@ -55,10 +55,23 @@ export interface McpConfig {
 }
 
 // =============================================================================
-// Settings Manager
+// Settings Manager Interface
 // =============================================================================
 
-export class Settings {
+export interface ISettings {
+	get<T>(key: keyof PrimeCodeSettings): T | undefined;
+	set<T>(key: keyof PrimeCodeSettings, value: T): Promise<void>;
+	update<T>(key: keyof PrimeCodeSettings, value: T): Promise<void>;
+	getAll(): PrimeCodeSettings;
+	refresh(): void;
+	getWorkspaceRoot(): string | undefined;
+}
+
+// =============================================================================
+// Settings Manager Implementation
+// =============================================================================
+
+export class Settings implements ISettings {
 	private config: vscode.WorkspaceConfiguration;
 	private workspaceRoot: string | undefined;
 
@@ -75,8 +88,14 @@ export class Settings {
 		return this.config.get<T>(key);
 	}
 
-	async set<T>(key: keyof PrimeCodeSettings, value: T): Promise<void> {
+	async update<T>(key: keyof PrimeCodeSettings, value: T): Promise<void> {
 		await this.config.update(key, value, vscode.ConfigurationTarget.Workspace);
+		// Refresh cached config to reflect the update immediately
+		this.config = vscode.workspace.getConfiguration('primeCode');
+	}
+
+	async set<T>(key: keyof PrimeCodeSettings, value: T): Promise<void> {
+		await this.update(key, value);
 	}
 
 	getAll(): PrimeCodeSettings {

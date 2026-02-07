@@ -112,7 +112,6 @@ export interface SettingsActions {
 	setMcpMarketplaceState: (state: Partial<SettingsState['mcpMarketplace']>) => void;
 	setAccess: (access: Access[]) => void;
 	setCLIDiagnostics: (diagnostics: Partial<CLIDiagnostics>) => void;
-	setProvider: (provider: CLIProviderType) => void;
 	setOpenCodeProviders: (providers: OpenCodeProviderData[]) => void;
 	removeOpenCodeProvider: (providerId: string) => void;
 	clearSessionDisconnectedProvider: (providerId: string) => void;
@@ -122,15 +121,11 @@ export interface SettingsActions {
 	setAvailableProviders: (providers: AvailableProviderData[]) => void;
 	addAvailableProvider: (provider: AvailableProviderData) => void;
 	setProviderAuthState: (state: ProviderAuthState | null) => void;
-	setCustomProviderForm: (form: Partial<CustomProviderFormData>) => void;
-	resetCustomProviderForm: () => void;
 	// Model selection for OpenCode
 	setEnabledOpenCodeModels: (models: string[]) => void;
-	toggleOpenCodeModel: (modelId: string) => void;
 	// Unified provider visibility (disabled = hidden from dropdown but keeps model selection)
 	// Works for all providers: OpenAI Compatible (__openai_compatible__) and OpenCode providers
 	setDisabledProviders: (providers: string[]) => void;
-	toggleProviderDisabled: (providerId: string) => void;
 	// Discovery
 	setDiscoveryStatus: (status: DiscoveryStatus) => void;
 	// Rules
@@ -183,15 +178,6 @@ export interface ProviderAuthState {
 	error?: string;
 }
 
-// Custom provider form state
-export interface CustomProviderFormData {
-	id: string;
-	name: string;
-	baseURL: string;
-	apiKey: string;
-	models: string; // Comma-separated model IDs
-}
-
 export interface SettingsState {
 	workspaceName: string;
 
@@ -226,7 +212,6 @@ export interface SettingsState {
 	// Provider management
 	availableProviders: AvailableProviderData[];
 	providerAuthState: ProviderAuthState | null;
-	customProviderForm: CustomProviderFormData;
 	// Enabled models for chat dropdown (format: "providerId/modelId")
 	enabledOpenCodeModels: string[];
 	// Unified disabled providers (hidden from dropdown but keeps model selection)
@@ -366,13 +351,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 	},
 	availableProviders: [],
 	providerAuthState: null,
-	customProviderForm: {
-		id: '',
-		name: '',
-		baseURL: '',
-		apiKey: '',
-		models: '',
-	},
 	enabledOpenCodeModels: [],
 	disabledProviders: [],
 	sessionDisconnectedProviders: [],
@@ -505,7 +483,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 			set(state => ({
 				cliDiagnostics: { ...state.cliDiagnostics, ...diagnostics },
 			})),
-		setProvider: provider => set({ provider }),
 		setOpenCodeProviders: opencodeProviders =>
 			set(state => ({
 				// Filter out providers that were disconnected in this session (CLI cache may be stale)
@@ -547,36 +524,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 					: [...state.availableProviders, provider],
 			})),
 		setProviderAuthState: providerAuthState => set({ providerAuthState }),
-		setCustomProviderForm: form =>
-			set(state => ({
-				customProviderForm: { ...state.customProviderForm, ...form },
-			})),
-		resetCustomProviderForm: () =>
-			set({
-				customProviderForm: {
-					id: '',
-					name: '',
-					baseURL: '',
-					apiKey: '',
-					models: '',
-				},
-			}),
 		// Model selection for OpenCode
 		setEnabledOpenCodeModels: enabledOpenCodeModels => set({ enabledOpenCodeModels }),
-		toggleOpenCodeModel: modelId =>
-			set(state => ({
-				enabledOpenCodeModels: state.enabledOpenCodeModels.includes(modelId)
-					? state.enabledOpenCodeModels.filter(id => id !== modelId)
-					: [...state.enabledOpenCodeModels, modelId],
-			})),
 		// Unified provider visibility (disabled = hidden from dropdown but keeps model selection)
 		setDisabledProviders: disabledProviders => set({ disabledProviders }),
-		toggleProviderDisabled: providerId =>
-			set(state => ({
-				disabledProviders: state.disabledProviders.includes(providerId)
-					? state.disabledProviders.filter(id => id !== providerId)
-					: [...state.disabledProviders, providerId],
-			})),
 		setDiscoveryStatus: discoveryStatus => set({ discoveryStatus }),
 
 		setRules: rules => set({ rules }),
@@ -660,6 +611,24 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 				case 'settingsData':
 					if (message.data) {
 						handleSettingsData(message.data as Record<string, unknown>, actions);
+					}
+					break;
+
+				case 'workspaceInfo':
+					if (message.data?.name) {
+						actions.setSettings({ workspaceName: message.data.name });
+					}
+					break;
+
+				case 'projectUpdated':
+					if (message.data?.project?.name) {
+						actions.setSettings({ workspaceName: message.data.project.name });
+					}
+					break;
+
+				case 'platformInfo':
+					if (message.data) {
+						actions.setSettings({ platformInfo: message.data as PlatformInfo });
 					}
 					break;
 

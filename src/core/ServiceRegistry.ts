@@ -5,6 +5,7 @@ import { AgentsHooksService } from '../services/AgentsHooksService';
 import { AgentsSkillsService } from '../services/AgentsSkillsService';
 import { AgentsSubagentsService } from '../services/AgentsSubagentsService';
 import { AgentsSyncService } from '../services/AgentsSyncService';
+import { ConversationService } from '../services/ConversationService';
 import { McpConfigWatcherService } from '../services/McpConfigWatcherService';
 import { McpManagementService } from '../services/mcp/McpManagementService';
 import { McpMarketplaceService } from '../services/mcp/McpMarketplaceService';
@@ -24,6 +25,7 @@ export class ServiceRegistry implements vscode.Disposable {
 	public readonly mcpMarketplace: McpMarketplaceService;
 	public readonly mcpMetadata: McpMetadataService;
 	public readonly openCodeClient: OpenCodeClientService;
+	public readonly conversationService: ConversationService;
 	public rules: RulesService | null = null; // RulesService depends on workspace root
 
 	private disposables: vscode.Disposable[] = [];
@@ -37,6 +39,8 @@ export class ServiceRegistry implements vscode.Disposable {
 
 		this.agentsSync = new AgentsSyncService(this.agentsConfig);
 		this.mcpConfigWatcher = new McpConfigWatcherService(this.agentsConfig, this.agentsSync);
+
+		this.conversationService = new ConversationService();
 
 		this.mcpMarketplace = new McpMarketplaceService(context);
 		this.mcpMetadata = new McpMetadataService(context);
@@ -81,7 +85,11 @@ export class ServiceRegistry implements vscode.Disposable {
 		this.agentsSkills.setWorkspaceRoot(root);
 		this.agentsHooks.setWorkspaceRoot(root);
 		this.agentsSubagents.setWorkspaceRoot(root);
+		this.conversationService.setWorkspaceRoot(root);
 		this.rules = new RulesService(root);
+
+		// Restart MCP config watcher if it wasn't started (workspace was missing at init)
+		this.mcpConfigWatcher.start();
 	}
 
 	dispose() {

@@ -1,8 +1,8 @@
 /**
- * @file Zustand store selectors with shallow comparison optimization
- * @description High-performance selectors that derive active chat state from `sessionsById`.
- * Uses `sessionOrder` for stable session lists without scanning maps.
- * IMPORTANT: All fallback arrays must use stable references to prevent infinite re-renders.
+ * @file Zustand store selectors — chat, UI, and settings
+ * @description Optimized selectors for deriving per-session chat state, UI dropdowns, and settings.
+ * Only selectors actually consumed by components are exported here (dead code removed).
+ * Uses stable empty-array refs (EMPTY_MESSAGES, etc.) to prevent infinite re-renders with useShallow.
  */
 
 import { useShallow } from 'zustand/react/shallow';
@@ -50,24 +50,8 @@ export const useIsAutoRetrying = () =>
 export const useRetryInfo = () =>
 	useChatStore((state: ChatState) => getActiveSession(state)?.retryInfo ?? null);
 
-/** Select loading state for active session */
-export const useIsLoading = () =>
-	useChatStore((state: ChatState) => getActiveSession(state)?.isLoading ?? false);
-
 /** Select active session ID */
 export const useActiveSessionId = () => useChatStore((state: ChatState) => state.activeSessionId);
-
-/** Select sessions list with stable order */
-export const useSessions = () =>
-	useChatStore(
-		useShallow((state: ChatState) =>
-			state.sessionOrder.map(id => state.sessionsById[id]).filter((s): s is ChatSession => !!s),
-		),
-	);
-
-/** Select input value for active session */
-export const useChatInput = () =>
-	useChatStore((state: ChatState) => getActiveSession(state)?.input ?? '');
 
 /** Select status for active session */
 export const useChatStatus = () =>
@@ -89,28 +73,6 @@ export const useChatInputState = () =>
 		})),
 	);
 
-/** Select chat processing state (active session) */
-export const useChatProcessingState = () =>
-	useChatStore(
-		useShallow((state: ChatState) => ({
-			isProcessing: getActiveSession(state)?.isProcessing ?? false,
-			isLoading: getActiveSession(state)?.isLoading ?? false,
-			status: getActiveSession(state)?.status ?? 'Ready',
-		})),
-	);
-
-/** Select message editing state (active session) */
-export const useMessageEditingState = () =>
-	useChatStore(
-		useShallow((state: ChatState) => ({
-			editingMessageId: state.editingMessageId,
-			setEditingMessageId: state.actions.setEditingMessageId,
-			deleteMessagesFromId: state.actions.deleteMessagesFromId,
-			isProcessing: getActiveSession(state)?.isProcessing ?? false,
-			messages: getActiveSession(state)?.messages ?? EMPTY_MESSAGES,
-		})),
-	);
-
 /** Select chat actions only (stable references) */
 export const useChatActions = () => useChatStore((state: ChatState) => state.actions);
 
@@ -129,10 +91,6 @@ export const useTotalStats = () =>
 /** Select restore commits for active session */
 export const useRestoreCommits = () =>
 	useChatStore(state => getActiveSession(state)?.restoreCommits ?? EMPTY_COMMITS);
-
-/** Select changed files for active session */
-export const useChangedFiles = () =>
-	useChatStore((state: ChatState) => getActiveSession(state)?.changedFiles ?? EMPTY_CHANGED_FILES);
 
 /** Select unrevert available state for active session */
 export const useUnrevertAvailable = () =>
@@ -184,30 +142,9 @@ export const useTodoState = () =>
 		}),
 	);
 
-/** Select last user message index (active session) */
-export const useLastUserMessageIndex = () =>
-	useChatStore((state: ChatState) => {
-		const messages = getActiveSession(state)?.messages ?? EMPTY_MESSAGES;
-		for (let i = messages.length - 1; i >= 0; i--) {
-			if (messages[i].type === 'user') return i;
-		}
-		return -1;
-	});
-
 // ============================================
 // Tool-specific Selectors (active session)
 // ============================================
-
-export const useAccessRequestByToolId = (toolUseId: string | undefined) =>
-	useChatStore((state: ChatState) => {
-		if (!toolUseId) return undefined;
-		const messages = getActiveSession(state)?.messages ?? EMPTY_MESSAGES;
-		return messages.find(
-			m => m.type === 'access_request' && !m.resolved && m.toolUseId === toolUseId,
-		) as
-			| Extract<ChatState['sessionsById'][string]['messages'][number], { type: 'access_request' }>
-			| undefined;
-	});
 
 export const useToolResultByToolId = (toolUseId: string | undefined) =>
 	useChatStore((state: ChatState) => {
@@ -218,60 +155,14 @@ export const useToolResultByToolId = (toolUseId: string | undefined) =>
 			| undefined;
 	});
 
-export const useToolResults = (toolUseIds: string[]) =>
-	useChatStore(
-		useShallow((state: ChatState) => {
-			const messages = getActiveSession(state)?.messages ?? EMPTY_MESSAGES;
-			const results: Record<
-				string,
-				| Extract<ChatState['sessionsById'][string]['messages'][number], { type: 'tool_result' }>
-				| undefined
-			> = {};
-			for (const id of toolUseIds) {
-				results[id] = messages.find(m => m.type === 'tool_result' && m.toolUseId === id) as
-					| Extract<ChatState['sessionsById'][string]['messages'][number], { type: 'tool_result' }>
-					| undefined;
-			}
-			return results;
-		}),
-	);
-
-export const useToolUseByToolId = (toolUseId: string | undefined) =>
-	useChatStore((state: ChatState) => {
-		if (!toolUseId) return undefined;
-		const messages = getActiveSession(state)?.messages ?? EMPTY_MESSAGES;
-		return messages.find(m => m.type === 'tool_use' && m.toolUseId === toolUseId) as
-			| Extract<ChatState['sessionsById'][string]['messages'][number], { type: 'tool_use' }>
-			| undefined;
-	});
-
-/** Select session stats for display (stats from chatStore, sessionInfo from uiStore) */
-export const useSessionStats = () => {
-	const chatStats = useChatStore(
-		useShallow((state: ChatState) => ({
-			tokenStats: getActiveSession(state)?.tokenStats,
-			totalStats: getActiveSession(state)?.totalStats,
-		})),
-	);
-	const sessionInfo = useUIStore((state: UIState) => state.sessionInfo);
-	return { ...chatStats, sessionInfo };
-};
-
 // ============================================
 // UI Store Selectors
 // ============================================
 
 export const useActiveModal = () => useUIStore((state: UIState) => state.activeModal);
 
-export const useModalActions = () => useUIStore(state => state.actions);
-
 export const useWorkspaceFiles = () =>
 	useUIStore(useShallow((state: UIState) => state.workspaceFiles));
-
-export const useConversationList = () =>
-	useUIStore(useShallow((state: UIState) => state.conversationList));
-
-export const useSessionInfo = () => useUIStore((state: UIState) => state.sessionInfo);
 
 export const useFilePickerState = () =>
 	useUIStore(
@@ -316,23 +207,6 @@ export const useUIActions = () => useUIStore(state => state.actions);
 // ============================================
 // Settings Store Selectors
 // ============================================
-
-export const useWorkspaceName = () =>
-	useSettingsStore((state: SettingsState) => state.workspaceName);
-
-export const useSelectedModel = () =>
-	useSettingsStore((state: SettingsState) => state.selectedModel);
-
-export const usePlatformInfo = () =>
-	useSettingsStore(useShallow((state: SettingsState) => state.platformInfo));
-
-export const useProxyModels = () =>
-	useSettingsStore(useShallow((state: SettingsState) => state.proxyModels));
-
-export const useAccess = () => useSettingsStore(useShallow((state: SettingsState) => state.access));
-
-export const useCommands = () =>
-	useSettingsStore(useShallow((state: SettingsState) => state.commands));
 
 export const useMcpServers = () =>
 	useSettingsStore(useShallow((state: SettingsState) => state.mcpServers));

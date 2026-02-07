@@ -277,7 +277,21 @@ export const App: React.FC = () => {
 				<div ref={headerHeight.ref}>
 					<Header />
 				</div>
-				<EmptyState />
+				<div className="flex-1 relative">
+					<EmptyState />
+				</div>
+				<div
+					className="shrink-0 z-20"
+					style={{
+						backgroundColor: 'var(--surface-base)',
+					}}
+				>
+					<ChatInput />
+				</div>
+
+				{activeModal === 'filePicker' && <FilePicker />}
+				{activeModal === 'settings' && <SettingsPage />}
+				<ConfirmDialog />
 			</div>
 		);
 	}

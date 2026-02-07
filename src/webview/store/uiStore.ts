@@ -1,20 +1,14 @@
 /**
- * @file UI store - Zustand state management for UI state
- * @description Centralized state for modals, dropdowns, and other UI elements.
- * Session-specific data (changedFiles, restoreCommits, stats) has been moved to chatStore.
+ * @file UI store - Zustand state management for transient UI state
+ * @description Manages modals, dropdowns, file picker, slash commands, conversation list,
+ * confirm dialogs and server connectivity. Persistent data (workspaceName, platformInfo,
+ * sessionInfo, stats) has been moved to settingsStore/chatStore respectively.
  */
 
 import { create } from 'zustand';
-import type {
-	ConversationIndexEntry,
-	ExtensionMessage,
-	PlatformInfo,
-	SessionEventMessage,
-	SessionInfo,
-	WorkspaceFile,
-} from '../../common';
+import type { ConversationIndexEntry, ExtensionMessage, WorkspaceFile } from '../../common';
 
-export type { ConversationIndexEntry, SessionInfo, WorkspaceFile };
+export type { ConversationIndexEntry, WorkspaceFile };
 
 // Re-export types from chatStore for backward compatibility
 export type { ChangedFile, CommitInfo, TokenStats, TotalStats } from './chatStore';
@@ -32,12 +26,8 @@ export interface ConfirmDialogData {
 
 export interface UIActions {
 	setActiveModal: (modal: ModalType) => void;
-	setFilePickerSearch: (search: string) => void;
 	setWorkspaceFiles: (files: WorkspaceFile[]) => void;
 	setConversationList: (list: ConversationIndexEntry[]) => void;
-	setSessionInfo: (info: SessionInfo | null) => void;
-	setWorkspaceName: (name: string) => void;
-	setPlatformInfo: (info: PlatformInfo | null) => void;
 	setServerUrl: (url: string | null) => void;
 	setServerStatus: (status: 'connected' | 'disconnected' | 'error') => void;
 	setShowSlashCommands: (show: boolean) => void;
@@ -53,13 +43,9 @@ export interface UIActions {
 
 export interface UIState {
 	activeModal: ModalType;
-	filePickerSearch: string;
 	workspaceFiles: WorkspaceFile[];
 	conversationList: ConversationIndexEntry[];
 
-	sessionInfo: SessionInfo | null;
-	workspaceName: string;
-	platformInfo: PlatformInfo | null;
 	serverUrl: string | null;
 	serverStatus: 'connected' | 'disconnected' | 'error';
 
@@ -78,13 +64,9 @@ export interface UIState {
 
 export const useUIStore = create<UIState>((set, get) => ({
 	activeModal: null,
-	filePickerSearch: '',
 	workspaceFiles: [],
 	conversationList: [],
 
-	sessionInfo: null,
-	workspaceName: '',
-	platformInfo: null,
 	serverUrl: null,
 	serverStatus: 'disconnected',
 
@@ -100,12 +82,8 @@ export const useUIStore = create<UIState>((set, get) => ({
 
 	actions: {
 		setActiveModal: activeModal => set({ activeModal }),
-		setFilePickerSearch: filePickerSearch => set({ filePickerSearch }),
 		setWorkspaceFiles: workspaceFiles => set({ workspaceFiles }),
 		setConversationList: conversationList => set({ conversationList }),
-		setSessionInfo: sessionInfo => set({ sessionInfo }),
-		setWorkspaceName: workspaceName => set({ workspaceName }),
-		setPlatformInfo: platformInfo => set({ platformInfo }),
 		setServerUrl: serverUrl => set({ serverUrl }),
 		setServerStatus: serverStatus => set({ serverStatus }),
 		setShowSlashCommands: showSlashCommands => set({ showSlashCommands }),
@@ -122,38 +100,6 @@ export const useUIStore = create<UIState>((set, get) => ({
 			const actions = get().actions;
 
 			switch (message.type) {
-				case 'session_event': {
-					const event = message as SessionEventMessage;
-					if (event.eventType === 'session_info') {
-						const info = (
-							event.payload as {
-								data: { sessionId: string; tools: string[]; mcpServers: string[] };
-							}
-						).data;
-						actions.setSessionInfo({
-							sessionId: info.sessionId,
-							tools: info.tools || [],
-							mcpServers: info.mcpServers || [],
-						});
-					}
-					break;
-				}
-
-				case 'workspaceInfo':
-					if (message.data?.name) {
-						actions.setWorkspaceName(message.data.name);
-					}
-					break;
-
-				case 'projectUpdated':
-					if (message.data?.project) {
-						const { name } = message.data.project;
-						if (name) {
-							actions.setWorkspaceName(name);
-						}
-					}
-					break;
-
 				case 'workspaceFiles':
 					if (Array.isArray(message.data)) {
 						actions.setWorkspaceFiles(message.data as WorkspaceFile[]);
@@ -175,12 +121,6 @@ export const useUIStore = create<UIState>((set, get) => ({
 
 				case 'allConversationsCleared':
 					actions.setConversationList([]);
-					break;
-
-				case 'platformInfo':
-					if (message.data) {
-						actions.setPlatformInfo(message.data);
-					}
 					break;
 
 				case 'serverInfo':
