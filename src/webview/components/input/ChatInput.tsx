@@ -35,7 +35,7 @@ import {
 	PlanIcon,
 	TerminalIcon,
 } from '../icons';
-import { type AnchorRectLike, Badge, Button, IconButton, TextArea } from '../ui';
+import { type AnchorRectLike, Button, IconButton, PathChip, TextArea } from '../ui';
 import { FilePickerDropdown } from './FilePickerDropdown';
 import { ModelDropdown } from './ModelDropdown';
 import { SendButton } from './SendButton';
@@ -746,10 +746,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 							))}
 							{/* Files */}
 							{attachedFiles.map(filePath => (
-								<Badge
+								<PathChip
 									key={filePath}
-									label={getShortFileName(filePath)}
-									iconName={getShortFileName(filePath)}
+									path={filePath}
 									onRemove={() => removeFile(filePath)}
 									onClick={() => postMessage('openFile', { filePath })}
 									title={filePath}
@@ -757,10 +756,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 							))}
 							{/* Code snippets */}
 							{codeSnippets.map(snippet => (
-								<Badge
+								<PathChip
 									key={snippet.id}
+									path={snippet.filePath}
 									label={`${getShortFileName(snippet.filePath)} (${snippet.startLine}-${snippet.endLine})`}
-									iconName={getShortFileName(snippet.filePath)}
+									iconName={snippet.filePath}
 									onRemove={() => removeCodeSnippet(snippet.id)}
 									onClick={() =>
 										postMessage('openFile', {

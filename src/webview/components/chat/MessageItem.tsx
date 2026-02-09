@@ -7,23 +7,27 @@
  */
 
 import type React from 'react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSubtaskThread } from '../../hooks/useSubtaskChildren';
 import type { Message } from '../../store/chatStore';
 import { useMcpServers } from '../../store/selectors';
-import { formatDuration } from '../../utils/format';
+import { formatDuration, formatToolName } from '../../utils/format';
 import { Markdown } from '../../utils/markdown';
-import { TimerIcon, TodoCheckIcon, TodoPendingIcon, TodoProgressIcon } from '../icons';
+import {
+	ChevronDownIcon,
+	ListIcon,
+	TimerIcon,
+	TodoCheckIcon,
+	TodoPendingIcon,
+	TodoProgressIcon,
+} from '../icons';
 import { AccessRequestMessage } from './AccessRequestMessage';
-import { NotificationMessage } from './NotificationMessage';
-import { InlineToolLine, ToolCard, ToolCardGroup, ToolCardMessage } from './ToolCard';
+import { SimpleTool, shouldCollapseGroupedItem, ThinkingMessage } from './SimpleTool';
+import { ToolCard, ToolCardMessage } from './ToolCard';
 
 export interface MessageItemContext {
-	onErrorResume: () => void;
-	onErrorDismiss: (messageId: string) => void;
-	canResume: boolean;
-	isAutoRetrying: boolean;
-	retryInfo: { attempt: number; message: string; nextRetryAt?: string } | null;
+	isProcessing: boolean;
+	totalSections: number;
 }
 
 const subtaskStatusIcon = (status: Extract<Message, { type: 'subtask' }>['status']) => {
@@ -87,7 +91,14 @@ const SubtaskItem: React.FC<{
 							const key = Array.isArray(child)
 								? (child[0]?.id ?? `tool-group-${idx}`)
 								: (child.id ?? `message-${idx}`);
-							return <MessageItem key={key} item={child} ctx={ctx} />;
+							return (
+								<MessageItem
+									key={key}
+									item={child}
+									ctx={ctx}
+									collapseGroupedTools={shouldCollapseGroupedItem(groupedChildren, idx)}
+								/>
+							);
 						})}
 					</div>
 				) : undefined
@@ -96,16 +107,89 @@ const SubtaskItem: React.FC<{
 	);
 };
 
-export const MessageItem: React.FC<{ item: Message | Message[]; ctx: MessageItemContext }> = ({
-	item,
-	ctx,
+const SimpleToolGroup: React.FC<{ messages: Message[]; shouldCollapse: boolean }> = ({
+	messages,
+	shouldCollapse,
 }) => {
-	if (Array.isArray(item)) {
-		return (
-			<div className="mb-(--tool-block-margin)">
-				<ToolCardGroup messages={item} />
+	const toolUseMessages = useMemo(
+		() =>
+			messages.filter((m): m is Extract<Message, { type: 'tool_use' }> => m.type === 'tool_use'),
+		[messages],
+	);
+	const localToolResults = useMemo(() => {
+		const results: Record<string, Extract<Message, { type: 'tool_result' }> | undefined> = {};
+		for (const msg of messages) {
+			if (msg.type === 'tool_result' && msg.toolUseId) {
+				results[msg.toolUseId] = msg;
+			}
+		}
+		return results;
+	}, [messages]);
+
+	const toolCountsLabel = useMemo(() => {
+		const counts = new Map<string, number>();
+		const order: string[] = [];
+
+		for (const msg of toolUseMessages) {
+			const name = formatToolName(msg.toolName || 'Tool');
+			if (!counts.has(name)) {
+				counts.set(name, 0);
+				order.push(name);
+			}
+			counts.set(name, (counts.get(name) ?? 0) + 1);
+		}
+
+		return order.map(name => `${name} x${counts.get(name) ?? 0}`).join(', ');
+	}, [toolUseMessages]);
+
+	const [expanded, setExpanded] = useState(!shouldCollapse);
+	const prevShouldCollapseRef = useRef(shouldCollapse);
+
+	useEffect(() => {
+		if (shouldCollapse && !prevShouldCollapseRef.current) {
+			setExpanded(false);
+		}
+		prevShouldCollapseRef.current = shouldCollapse;
+	}, [shouldCollapse]);
+
+	if (toolUseMessages.length === 0) return null;
+
+	return (
+		<SimpleTool
+			icon={<ListIcon size={18} />}
+			label={`Tools · ${toolUseMessages.length}`}
+			meta={toolCountsLabel}
+			expanded={expanded}
+			onToggle={() => setExpanded(prev => !prev)}
+			contentClassName="pl-0 ml-0 border-none mt-1 py-0 overflow-x-visible"
+			rightContent={
+				<ChevronDownIcon
+					size={14}
+					className={expanded ? 'rotate-180 transition-transform' : 'transition-transform'}
+				/>
+			}
+			className="mb-(--tool-block-margin)"
+		>
+			<div className="pl-2 border-l border-(--border-subtle)">
+				{toolUseMessages.map(msg => (
+					<ToolCardMessage
+						key={msg.id}
+						message={msg}
+						toolResult={msg.toolUseId ? localToolResults[msg.toolUseId] : undefined}
+					/>
+				))}
 			</div>
-		);
+		</SimpleTool>
+	);
+};
+
+export const MessageItem: React.FC<{
+	item: Message | Message[];
+	ctx: MessageItemContext;
+	collapseGroupedTools?: boolean;
+}> = ({ item, ctx, collapseGroupedTools = false }) => {
+	if (Array.isArray(item)) {
+		return <SimpleToolGroup messages={item} shouldCollapse={collapseGroupedTools} />;
 	}
 
 	switch (item.type) {
@@ -139,30 +223,11 @@ export const MessageItem: React.FC<{ item: Message | Message[]; ctx: MessageItem
 			);
 		case 'thinking':
 			return (
-				<div className="mb-(--message-gap)">
-					<InlineToolLine
-						toolName="Thinking"
-						rawInput={{ durationMs: (item as Extract<Message, { type: 'thinking' }>).durationMs }}
-						content={(item as Extract<Message, { type: 'thinking' }>).content || ''}
-						isError={false}
-						defaultExpanded={(item as Extract<Message, { type: 'thinking' }>).isStreaming}
-					/>
-				</div>
-			);
-		case 'system_notice':
-		case 'error':
-		case 'interrupted':
-			return (
-				<div className="mb-(--tool-block-margin)">
-					<NotificationMessage
-						message={item as Extract<Message, { type: 'system_notice' | 'error' | 'interrupted' }>}
-						onResume={ctx.onErrorResume}
-						onDismiss={ctx.onErrorDismiss}
-						canResume={ctx.canResume}
-						isAutoRetrying={ctx.isAutoRetrying}
-						retryInfo={ctx.retryInfo}
-					/>
-				</div>
+				<ThinkingMessage
+					content={(item as Extract<Message, { type: 'thinking' }>).content || ''}
+					durationMs={(item as Extract<Message, { type: 'thinking' }>).durationMs}
+					isStreaming={(item as Extract<Message, { type: 'thinking' }>).isStreaming}
+				/>
 			);
 		default:
 			return null;

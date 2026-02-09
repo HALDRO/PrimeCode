@@ -28,6 +28,8 @@ export {
 	type ModalType,
 	type TokenStats,
 	type TotalStats,
+	type TransientNotification,
+	type TransientNotificationInput,
 	type UIState,
 	useUIStore,
 	type WorkspaceFile,

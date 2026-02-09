@@ -139,11 +139,13 @@ export const NON_GROUPABLE_TOOLS = [
 	'Edit',
 	'Write',
 	'MultiEdit',
+	'Patch',
 	'bash',
 	'todowrite',
 	'edit',
 	'write',
 	'multiedit',
+	'patch',
 ] as const;
 
 /**
@@ -154,9 +156,11 @@ export const FILE_EDIT_TOOLS = [
 	'Edit',
 	'Write',
 	'MultiEdit',
+	'Patch',
 	'edit',
 	'write',
 	'multiedit',
+	'patch',
 ] as const;
 
 /**

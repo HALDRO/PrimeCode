@@ -17,12 +17,14 @@ import {
 	useChatStore,
 } from './chatStore';
 import { type SettingsState, useSettingsStore } from './settingsStore';
+import type { TransientNotification } from './uiStore';
 import { type UIState, useUIStore } from './uiStore';
 
 // Stable empty array references to prevent infinite re-renders with useShallow
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_COMMITS: CommitInfo[] = [];
 const EMPTY_CHANGED_FILES: ChangedFile[] = [];
+const EMPTY_NOTIFICATIONS: TransientNotification[] = [];
 
 function getActiveSession(state: ChatState): ChatSession | undefined {
 	const sid = state.activeSessionId;
@@ -155,6 +157,22 @@ export const useToolResultByToolId = (toolUseId: string | undefined) =>
 			| undefined;
 	});
 
+export const useAccessRequestByToolUseId = (toolUseId: string | undefined) =>
+	useChatStore((state: ChatState) => {
+		if (!toolUseId) return undefined;
+		const messages = getActiveSession(state)?.messages ?? EMPTY_MESSAGES;
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const message = messages[i];
+			if (message.type === 'access_request' && message.toolUseId === toolUseId) {
+				return message as Extract<
+					ChatState['sessionsById'][string]['messages'][number],
+					{ type: 'access_request' }
+				>;
+			}
+		}
+		return undefined;
+	});
+
 // ============================================
 // UI Store Selectors
 // ============================================
@@ -273,3 +291,11 @@ export const useModelContextWindow = () =>
 		if (STANDARD_MODEL_CONTEXT[selectedModel]) return STANDARD_MODEL_CONTEXT[selectedModel];
 		return DEFAULT_CONTEXT_WINDOW;
 	});
+
+/** Latest transient notification (top overlay) */
+export const useLatestNotification = () =>
+	useUIStore((state: UIState) => state.notifications[0] ?? null);
+
+/** All transient notifications (top overlay) */
+export const useTransientNotifications = () =>
+	useUIStore((state: UIState) => state.notifications ?? EMPTY_NOTIFICATIONS);

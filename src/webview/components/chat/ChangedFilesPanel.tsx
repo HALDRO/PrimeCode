@@ -27,8 +27,8 @@ import {
 } from '../icons';
 import {
 	DropdownMenu,
-	FileLink,
 	IconButton,
+	PathChip,
 	ScrollContainer,
 	SessionStatsDisplay,
 	Tooltip,
@@ -175,7 +175,12 @@ const FileRow = React.memo<{
 		</span>
 
 		<div className="flex-1 min-w-0">
-			<FileLink path={file.filePath} onClick={onOpenDiff} compact />
+			<PathChip
+				path={file.filePath}
+				onClick={onOpenDiff}
+				title={file.filePath}
+				className="max-w-full"
+			/>
 		</div>
 
 		<Tooltip content="Accept changes" position="top" delay={200}>

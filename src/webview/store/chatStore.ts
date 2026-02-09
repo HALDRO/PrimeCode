@@ -27,7 +27,6 @@ import type {
 	SessionRestorePayload,
 	SessionStatsPayload,
 	SessionStatusPayload,
-	SessionTerminalPayload,
 	SubtaskMessage,
 	TokenStats,
 	TotalStats,
@@ -325,6 +324,16 @@ export const useChatStore = create<ChatState>()(
 										timestamp: msgData.timestamp || new Date().toISOString(),
 									} as Message;
 
+									// Notification-like messages are transient UI overlays,
+									// and should not be stored in chat history/persistence.
+									if (
+										message.type === 'error' ||
+										message.type === 'interrupted' ||
+										message.type === 'system_notice'
+									) {
+										break;
+									}
+
 									const storageSession = targetSession;
 
 									// Merge or append
@@ -518,15 +527,7 @@ export const useChatStore = create<ChatState>()(
 								}
 
 								case 'terminal': {
-									const t = payload as SessionTerminalPayload;
-									if (t.action === 'opened' && t.content) {
-										targetSession.messages.push({
-											id: `sys-${Date.now()}-${Math.random()}`,
-											type: 'system_notice',
-											content: t.content,
-											timestamp: new Date().toISOString(),
-										});
-									}
+									// Terminal notifications are transient UI overlays; ignore in chat history.
 									break;
 								}
 							}

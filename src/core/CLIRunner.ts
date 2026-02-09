@@ -1,6 +1,8 @@
 /**
  * @file CLIRunner.ts
- * @description Unified CLI executor for Claude and OpenCode.
+ * @description Stateless facade over CLI executors (Claude / OpenCode).
+ * All session-ID tracking lives in SessionState (single source of truth);
+ * CLIRunner passes sessionId explicitly via method parameters.
  */
 
 import type { ChildProcess } from 'node:child_process';
@@ -18,7 +20,6 @@ export type { CLIConfig, CLIEvent, CLIExecutor };
 
 export class CLIRunner extends EventEmitter {
 	private executor: CLIExecutor;
-	private currentSessionId: string | null = null;
 	private readonly provider: 'claude' | 'opencode';
 
 	constructor(provider: 'claude' | 'opencode') {
@@ -31,16 +32,7 @@ export class CLIRunner extends EventEmitter {
 			this.executor = new OpenCodeExecutor();
 		}
 
-		// Forward events from executor
-		this.executor.on('event', (event: CLIEvent) => {
-			if (event.type === 'session_updated') {
-				const data = event.data as Record<string, unknown>;
-				if (typeof data.sessionId === 'string') {
-					this.currentSessionId = data.sessionId;
-				}
-			}
-			this.emit('event', event);
-		});
+		this.executor.on('event', (event: CLIEvent) => this.emit('event', event));
 	}
 
 	/**
@@ -61,13 +53,14 @@ export class CLIRunner extends EventEmitter {
 	}
 
 	/**
-	 * Sends a follow-up message to the active session.
+	 * Sends a follow-up message to the specified session.
 	 */
-	async spawnFollowUp(prompt: string, config: CLIConfig): Promise<ChildProcess | null> {
-		if (!this.currentSessionId) {
-			throw new Error('No active session');
-		}
-		await this.executor.spawnFollowUp(prompt, this.currentSessionId, config);
+	async spawnFollowUp(
+		prompt: string,
+		sessionId: string,
+		config: CLIConfig,
+	): Promise<ChildProcess | null> {
+		await this.executor.spawnFollowUp(prompt, sessionId, config);
 		return null;
 	}
 
@@ -96,9 +89,7 @@ export class CLIRunner extends EventEmitter {
 	 * Creates an empty session without sending a message. Returns the session ID.
 	 */
 	async createEmptySession(config: CLIConfig): Promise<string> {
-		const sessionId = await this.executor.createEmptySession(config);
-		this.currentSessionId = sessionId;
-		return sessionId;
+		return this.executor.createEmptySession(config);
 	}
 
 	/**
@@ -115,7 +106,6 @@ export class CLIRunner extends EventEmitter {
 
 	async kill(): Promise<void> {
 		await this.executor.kill();
-		this.currentSessionId = null;
 	}
 
 	async dispose(): Promise<void> {
@@ -128,10 +118,6 @@ export class CLIRunner extends EventEmitter {
 
 	async abort(): Promise<void> {
 		await this.executor.abort();
-	}
-
-	getSessionId(): string | null {
-		return this.currentSessionId;
 	}
 
 	getOpenCodeServerInfo(): { baseUrl: string; directory: string } | null {

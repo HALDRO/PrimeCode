@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
+import { groupToolMessages } from '../components/chat/SimpleTool';
 import { type Message, useChatStore } from '../store/chatStore';
-import { groupToolMessages } from '../utils/messageGrouping';
 
 // Stable empty array reference to prevent infinite re-renders
 const EMPTY_MESSAGES: Message[] = [];

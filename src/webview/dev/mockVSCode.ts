@@ -363,6 +363,206 @@ const SCENARIO_1_RESEARCHER: MockMessage[] = (() => {
 			timestamp: Date.now(),
 			delay: 300,
 		},
+		// Grep tool_use
+		{
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('tool'),
+					type: 'tool_use',
+					toolName: 'Grep',
+					toolUseId: 'grep-1',
+					rawInput: { pattern: 'useState', path: 'src' },
+					timestamp: new Date().toISOString(),
+				},
+			},
+			timestamp: Date.now(),
+			delay: 500,
+		},
+		// Grep tool_result
+		{
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('result'),
+					type: 'tool_result',
+					toolName: 'Grep',
+					toolUseId: 'grep-1',
+					content:
+						'src/App.tsx:1:import { useState } from "react";\nsrc/App.tsx:5:const [count, setCount] = useState(0);',
+					isError: false,
+					timestamp: new Date().toISOString(),
+				},
+			},
+			timestamp: Date.now(),
+			delay: 400,
+		},
+		// Glob tool_use
+		{
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('tool'),
+					type: 'tool_use',
+					toolName: 'Glob',
+					toolUseId: 'glob-1',
+					rawInput: { pattern: 'src/**/*.tsx' },
+					timestamp: new Date().toISOString(),
+				},
+			},
+			timestamp: Date.now(),
+			delay: 400,
+		},
+		// Glob tool_result
+		{
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('result'),
+					type: 'tool_result',
+					toolName: 'Glob',
+					toolUseId: 'glob-1',
+					content: 'src/App.tsx\nsrc/components/Header.tsx\nsrc/components/Footer.tsx',
+					isError: false,
+					timestamp: new Date().toISOString(),
+				},
+			},
+			timestamp: Date.now(),
+			delay: 300,
+		},
+		// Read logger.ts tool_use
+		{
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('tool'),
+					type: 'tool_use',
+					toolName: 'Read',
+					toolUseId: 'read-1',
+					filePath: 'src/utils/logger.ts',
+					rawInput: { path: 'src/utils/logger.ts' },
+					timestamp: new Date().toISOString(),
+				},
+			},
+			timestamp: Date.now(),
+			delay: 600,
+		},
+		// Read logger.ts tool_result
+		{
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('result'),
+					type: 'tool_result',
+					toolName: 'Read',
+					toolUseId: 'read-1',
+					content: 'export const logger = { info: console.log, error: console.error };',
+					isError: false,
+					timestamp: new Date().toISOString(),
+				},
+			},
+			timestamp: Date.now(),
+			delay: 200,
+		},
+		// Read package.json tool_use
+		{
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('tool'),
+					type: 'tool_use',
+					toolName: 'Read',
+					toolUseId: 'read-2',
+					filePath: 'package.json',
+					rawInput: { path: 'package.json' },
+					timestamp: new Date().toISOString(),
+				},
+			},
+			timestamp: Date.now(),
+			delay: 400,
+		},
+		// Read package.json tool_result
+		{
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('result'),
+					type: 'tool_result',
+					toolName: 'Read',
+					toolUseId: 'read-2',
+					content:
+						'{\n  "name": "demo-app",\n  "version": "1.0.0",\n  "dependencies": {\n    "react": "^18.2.0"\n  }\n}',
+					isError: false,
+					timestamp: new Date().toISOString(),
+				},
+			},
+			timestamp: Date.now(),
+			delay: 300,
+		},
+		// LS components tool_use
+		{
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('tool'),
+					type: 'tool_use',
+					toolName: 'LS',
+					toolUseId: 'ls-2',
+					filePath: 'src/components',
+					rawInput: { path: 'src/components' },
+					timestamp: new Date().toISOString(),
+				},
+			},
+			timestamp: Date.now(),
+			delay: 500,
+		},
+		// LS components tool_result
+		{
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('result'),
+					type: 'tool_result',
+					toolName: 'LS',
+					toolUseId: 'ls-2',
+					content: 'Header.tsx\nFooter.tsx\nButton.tsx',
+					isError: false,
+					timestamp: new Date().toISOString(),
+				},
+			},
+			timestamp: Date.now(),
+			delay: 300,
+		},
 		// File changed event
 		{
 			type: 'session_event',

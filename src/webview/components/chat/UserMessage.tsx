@@ -32,7 +32,7 @@ import { STANDARD_MODELS } from '../../utils/models';
 import { useSessionMessage, useVSCode } from '../../utils/vscode';
 import { ClockIcon, TimerIcon, TokensIcon, Undo2Icon } from '../icons';
 import { ChatInput } from '../input/ChatInput';
-import { Badge, type StatItem, StatsDisplay, Tooltip } from '../ui';
+import { PathChip, type StatItem, StatsDisplay, Tooltip } from '../ui';
 
 // Stable empty array references to prevent infinite re-renders with useShallow
 const EMPTY_MESSAGES: Message[] = [];
@@ -875,20 +875,19 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(({ message }) 
 							<span className="inline-flex flex-wrap gap-(--gap-1-5) align-middle mr-1">
 								{/* Images */}
 								{attachedImages.map(img => (
-									<Badge
+									<PathChip
 										key={img.id}
+										path={img.path || img.name}
 										label={img.name}
-										iconName={img.name}
 										title={img.name}
 										backgroundColor="rgba(64, 165, 255, 0.15)"
 									/>
 								))}
 								{/* Files */}
 								{attachedFiles.map(filePath => (
-									<Badge
+									<PathChip
 										key={filePath}
-										label={getShortFileName(filePath)}
-										iconName={getShortFileName(filePath)}
+										path={filePath}
 										onClick={() => {
 											postMessage('openFile', { filePath });
 										}}
@@ -897,10 +896,11 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(({ message }) 
 								))}
 								{/* Code snippets */}
 								{attachedSnippets.map(snippet => (
-									<Badge
+									<PathChip
 										key={`${snippet.filePath}:${snippet.startLine}-${snippet.endLine}`}
+										path={snippet.filePath}
 										label={`${getShortFileName(snippet.filePath)} (${snippet.startLine}-${snippet.endLine})`}
-										iconName={getShortFileName(snippet.filePath)}
+										iconName={snippet.filePath}
 										onClick={() => {
 											postMessage('openFile', {
 												filePath: snippet.filePath,

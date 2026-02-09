@@ -6,11 +6,13 @@ import type {
 	TokenStats,
 	TotalStats,
 } from '../../common';
+import { LogNormalizer } from '../../core/executor/LogNormalizer';
 import type { CLIEvent } from '../../core/executor/types';
 import { logger } from '../../utils/logger';
 import type { HandlerContext, WebviewMessage, WebviewMessageHandler } from './types';
 
 export class SessionHandler implements WebviewMessageHandler {
+	private readonly logNormalizer = new LogNormalizer();
 	private sessionTotalsByUiSession = new Map<
 		string,
 		{
@@ -240,6 +242,7 @@ export class SessionHandler implements WebviewMessageHandler {
 
 		if (restoredSessionId) {
 			this.context.sessionState.activeSessionId = restoredSessionId;
+			this.context.sessionState.startedSessions.add(restoredSessionId);
 			logger.info('[SessionHandler] Restoring session', { sessionId: restoredSessionId });
 			this.postLifecycle('created', restoredSessionId);
 			this.postLifecycle('switched', restoredSessionId, { isProcessing: false });
@@ -279,6 +282,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			to: sessionId,
 		});
 		this.context.sessionState.activeSessionId = sessionId;
+		this.context.sessionState.startedSessions.add(sessionId);
 		this.postLifecycle('switched', sessionId, { isProcessing: false });
 		this.postStatus(sessionId, 'idle', 'Ready');
 		this.initializeSessionStats(sessionId);
@@ -346,9 +350,13 @@ export class SessionHandler implements WebviewMessageHandler {
 			});
 			activeId = explicitSessionId;
 			this.context.sessionState.activeSessionId = activeId;
+			this.context.sessionState.startedSessions.add(activeId);
 		}
 
-		const isNewSession = !activeId || !this.context.sessionState.startedSessions.has(activeId);
+		// Explicitly targeted session must never be treated as "new":
+		// otherwise messages sent from history can incorrectly create a fresh chat.
+		const isNewSession =
+			!activeId || (!explicitSessionId && !this.context.sessionState.startedSessions.has(activeId));
 
 		logger.info('[SessionHandler] handleSendMessage', {
 			text: text.slice(0, 50),
@@ -379,12 +387,14 @@ export class SessionHandler implements WebviewMessageHandler {
 				content: text,
 				model: config.model,
 				timestamp: new Date().toISOString(),
+				normalizedEntry: this.logNormalizer.normalizeMessage(text, 'user'),
 			};
 			this.postSessionMessage(userMessage, activeId);
 			this.postStatus(activeId, 'busy', 'Working...');
 			this.initializeSessionStats(activeId);
 
-			await this.context.cli.spawnFollowUp(text, config);
+			if (!activeId) throw new Error('No active session after initialization');
+			await this.context.cli.spawnFollowUp(text, activeId, config);
 		} catch (error) {
 			logger.error('[SessionHandler] Failed to spawn CLI:', error);
 
@@ -437,8 +447,9 @@ export class SessionHandler implements WebviewMessageHandler {
 
 		logger.info('[SessionHandler] Loading conversation', { sessionId });
 
-		// Set active session
+		// Set active session and mark as started so follow-up messages reuse it
 		this.context.sessionState.activeSessionId = sessionId;
+		this.context.sessionState.startedSessions.add(sessionId);
 		this.postLifecycle('created', sessionId); // Ensure UI knows about it
 		this.postLifecycle('switched', sessionId, { isProcessing: false });
 		this.initializeSessionStats(sessionId);
@@ -541,6 +552,7 @@ export class SessionHandler implements WebviewMessageHandler {
 						content: data.content || '',
 						isDelta: false,
 						timestamp: new Date().toISOString(),
+						normalizedEntry: event.normalizedEntry,
 					},
 					sessionId,
 				);
@@ -556,6 +568,7 @@ export class SessionHandler implements WebviewMessageHandler {
 							type: 'user',
 							content: data.content || '',
 							timestamp: data.timestamp || new Date().toISOString(),
+							normalizedEntry: event.normalizedEntry,
 						},
 						sessionId,
 					);
@@ -616,6 +629,7 @@ export class SessionHandler implements WebviewMessageHandler {
 						toolUseId,
 						rawInput: input,
 						timestamp: data.timestamp || new Date().toISOString(),
+						normalizedEntry: event.normalizedEntry,
 					},
 					sessionId,
 				);
@@ -659,9 +673,16 @@ export class SessionHandler implements WebviewMessageHandler {
 						content: data.content || '',
 						isError: Boolean(data.isError),
 						timestamp: data.timestamp || new Date().toISOString(),
+						normalizedEntry: event.normalizedEntry,
 					},
 					sessionId,
 				);
+				continue;
+			}
+
+			// Restore aggregated token stats from history
+			if (event.type === 'session_updated') {
+				this.handleSessionUpdatedEvent(event.data, sessionId);
 			}
 		}
 	}

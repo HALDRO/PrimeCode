@@ -23,7 +23,7 @@ export interface ICLIConfig {
 
 export interface ICLIRunner {
 	spawn(prompt: string, config: ICLIConfig): Promise<unknown>;
-	spawnFollowUp(prompt: string, config: ICLIConfig): Promise<unknown>;
+	spawnFollowUp(prompt: string, sessionId: string, config: ICLIConfig): Promise<unknown>;
 	spawnReview(prompt: string, config: ICLIConfig): Promise<unknown>;
 	createNewSession(prompt: string, config: ICLIConfig): Promise<unknown>;
 	/** Creates an empty session without sending a message. Returns the session ID. */
@@ -35,7 +35,6 @@ export interface ICLIRunner {
 		response?: 'once' | 'always' | 'reject';
 	}): Promise<void>;
 	kill(): Promise<void>;
-	getSessionId(): string | null;
 	getOpenCodeServerInfo(): { baseUrl: string; directory: string } | null;
 	getProvider(): 'claude' | 'opencode';
 	listSessions(config: ICLIConfig): Promise<

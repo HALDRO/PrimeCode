@@ -11,6 +11,8 @@ import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { ChangedFilesPanel } from './components/chat/ChangedFilesPanel';
 import { GenerationStatus } from './components/chat/GenerationStatus';
 import { MessageItem } from './components/chat/MessageItem';
+import { NotificationOverlay } from './components/chat/NotificationOverlay.tsx';
+import { groupToolMessages, shouldCollapseGroupedItem } from './components/chat/SimpleTool';
 import { UserMessage } from './components/chat/UserMessage';
 import { Header } from './components/header/Header';
 import { ChatInput } from './components/input/ChatInput';
@@ -23,14 +25,10 @@ import {
 	type Message,
 	useActiveModal,
 	useActiveSessionId,
-	useIsAutoRetrying,
 	useIsProcessing,
 	useMcpServers,
 	useMessages,
-	useRetryInfo,
 } from './store';
-import { groupToolMessages } from './utils/messageGrouping';
-import { vscode } from './utils/vscode';
 
 /**
  * Section represents a user message and all subsequent messages until the next user message.
@@ -82,11 +80,6 @@ interface MessageSectionProps {
 }
 
 interface VirtuosoContext {
-	onErrorResume: () => void;
-	onErrorDismiss: (messageId: string) => void;
-	canResume: boolean;
-	isAutoRetrying: boolean;
-	retryInfo: { attempt: number; message: string; nextRetryAt?: string } | null;
 	isProcessing: boolean;
 	totalSections: number;
 }
@@ -109,7 +102,14 @@ const MessageSectionComponent = React.memo<MessageSectionProps>(
 							? (responseItem[0]?.id ?? `tool-group-${idx}`)
 							: (responseItem.id ?? `message-${idx}`);
 
-						return <MessageItem key={key} item={responseItem} ctx={context} />;
+						return (
+							<MessageItem
+								key={key}
+								item={responseItem}
+								ctx={context}
+								collapseGroupedTools={shouldCollapseGroupedItem(section.responses, idx)}
+							/>
+						);
 					})}
 					{isLastSection && context.isProcessing && <GenerationStatus />}
 				</div>
@@ -200,8 +200,6 @@ export const App: React.FC = () => {
 	const activeModal = useActiveModal();
 	const mcpServers = useMcpServers();
 	const isProcessing = useIsProcessing();
-	const isAutoRetrying = useIsAutoRetrying();
-	const retryInfo = useRetryInfo();
 
 	const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
 
@@ -210,47 +208,12 @@ export const App: React.FC = () => {
 		[messages, mcpServerNames],
 	);
 
-	const handleErrorResume = useCallback(() => {
-		if (activeSessionId) {
-			vscode.postMessage({
-				type: 'resumeAfterError',
-				sessionId: activeSessionId,
-			});
-		}
-	}, [activeSessionId]);
-
-	const handleErrorDismiss = useCallback(
-		(messageId: string) => {
-			if (activeSessionId) {
-				vscode.postMessage({
-					type: 'dismissError',
-					messageId,
-					sessionId: activeSessionId,
-				});
-			}
-		},
-		[activeSessionId],
-	);
-
 	const virtuosoContext: VirtuosoContext = useMemo(
 		() => ({
-			onErrorResume: handleErrorResume,
-			onErrorDismiss: handleErrorDismiss,
-			canResume: Boolean(activeSessionId) && !isProcessing,
-			isAutoRetrying,
-			retryInfo,
 			isProcessing,
 			totalSections: sections.length,
 		}),
-		[
-			handleErrorResume,
-			handleErrorDismiss,
-			activeSessionId,
-			isProcessing,
-			isAutoRetrying,
-			retryInfo,
-			sections.length,
-		],
+		[isProcessing, sections.length],
 	);
 
 	const virtuosoComponents = useMemo(
@@ -286,6 +249,7 @@ export const App: React.FC = () => {
 						backgroundColor: 'var(--surface-base)',
 					}}
 				>
+					<NotificationOverlay />
 					<ChatInput />
 				</div>
 
@@ -341,6 +305,7 @@ export const App: React.FC = () => {
 					backgroundColor: 'var(--surface-base)',
 				}}
 			>
+				<NotificationOverlay />
 				<div className="px-(--content-padding-x)">
 					<ChangedFilesPanel />
 				</div>

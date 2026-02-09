@@ -437,31 +437,50 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		try {
 			const messages = await this.fetchApi<
 				Array<{
-					info?: { role?: string; id?: string };
+					info?: {
+						role?: string;
+						id?: string;
+						tokens?: { input?: number; output?: number; cache?: { read?: number } };
+					};
 					parts?: unknown[];
-					time?: { created?: number };
+					time?: { created?: number; completed?: number };
 				}>
 			>(`/session/${sessionId}/message`, config.workspaceRoot);
 
-			return messages.flatMap(msg => {
+			// Aggregate token totals across all assistant messages for history restore
+			let totalInput = 0;
+			let totalOutput = 0;
+			let totalCacheRead = 0;
+			let assistantCount = 0;
+
+			const events = messages.flatMap(msg => {
 				const role = msg.info?.role;
 				const timestamp = msg.time?.created
 					? new Date(msg.time.created).toISOString()
 					: new Date().toISOString();
 
+				// Aggregate tokens from assistant messages
+				if (role === 'assistant' && msg.info?.tokens) {
+					const t = msg.info.tokens;
+					totalInput += typeof t.input === 'number' ? t.input : 0;
+					totalOutput += typeof t.output === 'number' ? t.output : 0;
+					totalCacheRead += typeof t.cache?.read === 'number' ? t.cache.read : 0;
+					assistantCount++;
+				}
+
 				return (msg.parts || []).flatMap(rawPart => {
 					const part = this.normalizePart(rawPart as Record<string, unknown> | undefined);
-					const events: CLIEvent[] = [];
+					const partEvents: CLIEvent[] = [];
 
 					if (part.type === 'text' && part.text) {
 						if (role === 'assistant') {
-							events.push({
+							partEvents.push({
 								type: 'message' as const,
 								data: { content: part.text, partId: msg.info?.id, isDelta: false },
 								sessionId,
 							});
 						} else {
-							events.push({
+							partEvents.push({
 								type: 'normalized_log' as const,
 								data: { role: 'user', content: part.text, timestamp },
 								normalizedEntry: {
@@ -473,7 +492,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 							});
 						}
 					} else if (part.type === 'reasoning' && part.text) {
-						events.push({
+						partEvents.push({
 							type: 'thinking' as const,
 							data: { content: part.text, partId: msg.info?.id, isDelta: false },
 							sessionId,
@@ -484,7 +503,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 						const input = (state?.input as Record<string, unknown>) || {};
 
 						// Always emit tool_use for history
-						events.push({
+						const normalized = this.logNormalizer.normalizeToolUse(name, input, callID);
+						partEvents.push({
 							type: 'tool_use' as const,
 							data: {
 								tool: name,
@@ -492,12 +512,13 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 								toolUseId: callID,
 								timestamp,
 							},
+							normalizedEntry: normalized,
 							sessionId,
 						});
 
 						// If completed or error, emit tool_result
 						if (status === 'completed' || status === 'error') {
-							events.push({
+							partEvents.push({
 								type: 'tool_result' as const,
 								data: {
 									tool: name,
@@ -511,9 +532,34 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 						}
 					}
 
-					return events;
+					return partEvents;
 				});
 			});
+
+			// Append aggregated token stats so they can be restored during history replay
+			if (totalInput > 0 || totalOutput > 0 || totalCacheRead > 0) {
+				events.push({
+					type: 'session_updated' as const,
+					data: {
+						tokenStats: {
+							currentInputTokens: totalInput,
+							currentOutputTokens: totalOutput,
+							cacheReadTokens: totalCacheRead,
+							cacheCreationTokens: 0,
+							reasoningTokens: 0,
+							totalTokensInput: totalInput,
+							totalTokensOutput: totalOutput,
+							totalReasoningTokens: 0,
+						},
+						totalStats: {
+							requestCount: assistantCount,
+						},
+					},
+					sessionId,
+				});
+			}
+
+			return events;
 		} catch (_error) {
 			return [];
 		}

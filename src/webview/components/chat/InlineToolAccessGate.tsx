@@ -6,7 +6,6 @@
  */
 
 import type React from 'react';
-import { isToolInList } from '../../constants';
 import { cn } from '../../lib/cn';
 import { useVSCode } from '../../utils/vscode';
 import { CheckIcon, CloseIcon, ShieldIcon } from '../icons';
@@ -18,36 +17,24 @@ export interface InlineToolAccessGateProps {
 	input: Record<string, unknown> | unknown;
 	pattern?: string;
 	className?: string;
+	/** If true, input details are hidden (e.g. for file edits where diff is shown, or bash commands shown in header) */
+	hideDetails?: boolean;
 }
-
-/** Tools that write/edit files - content shown in diff viewer */
-const FILE_EDIT_TOOLS = ['Write', 'Edit', 'write', 'edit', 'patch', 'multiedit'] as const;
-
-/** Tools where command/details are shown in the parent container header */
-const HEADER_DISPLAY_TOOLS = ['Bash', 'bash'] as const;
 
 /**
  * Extract display-friendly details from tool input.
- * For file operations, returns null (content is in diff viewer).
- * For bash, returns null (command is shown in parent header).
- * For others, show minimal info.
+ * Returns null if hideDetails is true or if input is empty.
  */
-function getDisplayDetails(tool: string, input: unknown): string | null {
+function getDisplayDetails(input: unknown, hideDetails?: boolean): string | null {
+	if (hideDetails) {
+		return null;
+	}
+
 	if (!input || typeof input !== 'object') {
 		return null;
 	}
 
 	const inputObj = input as Record<string, unknown>;
-
-	// Bash tool - command is already shown in parent container header
-	if (isToolInList(tool, HEADER_DISPLAY_TOOLS)) {
-		return null;
-	}
-
-	// File write/edit tools - content is already shown in diff viewer
-	if (isToolInList(tool, FILE_EDIT_TOOLS)) {
-		return null;
-	}
 
 	// For other tools, show compact JSON without large content fields
 	const filtered = Object.fromEntries(
@@ -62,12 +49,8 @@ function getDisplayDetails(tool: string, input: unknown): string | null {
 	return JSON.stringify(filtered, null, 2);
 }
 
-export const InlineToolAccessGate: React.FC<InlineToolAccessGateProps> = ({
-	requestId,
-	tool,
-	input,
-	className,
-}) => {
+export const InlineToolAccessGate: React.FC<InlineToolAccessGateProps> = props => {
+	const { requestId, tool, input, className } = props;
 	const { postMessage } = useVSCode();
 
 	const handleResponse = (isApproved: boolean, alwaysAllow = false) => {
@@ -80,7 +63,7 @@ export const InlineToolAccessGate: React.FC<InlineToolAccessGateProps> = ({
 		});
 	};
 
-	const details = getDisplayDetails(tool, input);
+	const details = getDisplayDetails(input, props.hideDetails);
 
 	return (
 		<div className={cn('py-1', className)}>

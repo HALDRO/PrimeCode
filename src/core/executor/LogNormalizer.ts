@@ -86,7 +86,9 @@ export class LogNormalizer extends EventEmitter {
 				break;
 
 			case 'WriteFile':
-			case 'write_file': {
+			case 'write_file':
+			case 'Write':
+			case 'write': {
 				const path = (input.path as string) || (input.file_path as string) || '';
 				const content = (input.content as string) || (input.contents as string) || '';
 				actionType = {
@@ -99,7 +101,12 @@ export class LogNormalizer extends EventEmitter {
 
 			case 'Edit': // Handle generic "Edit" tool used in mocks and Claude
 			case 'EditFile':
-			case 'edit_file': {
+			case 'edit_file':
+			case 'edit':
+			case 'Patch':
+			case 'patch':
+			case 'MultiEdit':
+			case 'multiedit': {
 				const path = (input.path as string) || (input.file_path as string) || '';
 				const diff = (input.diff as string) || '';
 				const oldString =
@@ -151,6 +158,34 @@ export class LogNormalizer extends EventEmitter {
 				actionType = {
 					type: 'Search',
 					query: (input.query as string) || (input.pattern as string) || '',
+				};
+				break;
+
+			case 'SemanticSearch':
+			case 'semanticsearch':
+			case 'Glob':
+			case 'glob':
+				actionType = {
+					type: 'Search',
+					query:
+						(input.query as string) ||
+						(input.glob_pattern as string) ||
+						(input.glob as string) ||
+						(input.pattern as string) ||
+						'',
+				};
+				break;
+
+			case 'ls':
+			case 'list_dir':
+			case 'serena_list_dir':
+				// Map to Tool, preserving the name so UI can handle list rendering logic if needed,
+				// or we could map to CommandRun if we just want to show the command.
+				// For now, explicit Tool with 'ls' allows specific UI handling.
+				actionType = {
+					type: 'Tool',
+					toolName: 'ls', // Normalize name
+					arguments: input,
 				};
 				break;
 

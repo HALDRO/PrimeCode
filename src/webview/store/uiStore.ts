@@ -6,7 +6,13 @@
  */
 
 import { create } from 'zustand';
-import type { ConversationIndexEntry, ExtensionMessage, WorkspaceFile } from '../../common';
+import type {
+	ConversationIndexEntry,
+	ExtensionMessage,
+	SessionEventMessage,
+	SessionMessageData,
+	WorkspaceFile,
+} from '../../common';
 
 export type { ConversationIndexEntry, WorkspaceFile };
 
@@ -38,8 +44,30 @@ export interface UIActions {
 	setShowHistoryDropdown: (show: boolean) => void;
 	showConfirmDialog: (data: ConfirmDialogData) => void;
 	hideConfirmDialog: () => void;
+
+	// Transient notifications (overlay)
+	pushNotification: (notification: TransientNotificationInput) => void;
+	dismissNotification: (id?: string) => void;
+	clearNotifications: () => void;
+
 	handleExtensionMessage: (message: ExtensionMessage) => void;
 }
+
+export interface TransientNotification {
+	id: string;
+	type: SessionMessageData['type'] & ('error' | 'interrupted' | 'system_notice');
+	content: string;
+	reason?: string;
+	timestamp: string;
+	createdAt: number;
+	/** Auto-dismiss after this many ms (undefined => no auto-dismiss) */
+	autoDismissMs?: number;
+}
+
+export type TransientNotificationInput = Omit<TransientNotification, 'id' | 'createdAt'> & {
+	id?: string;
+	createdAt?: number;
+};
 
 export interface UIState {
 	activeModal: ModalType;
@@ -55,6 +83,9 @@ export interface UIState {
 	fileFilter: string;
 	showModelDropdown: boolean;
 	showHistoryDropdown: boolean;
+
+	// Transient notifications (top overlay)
+	notifications: TransientNotification[];
 
 	// Confirm dialog
 	confirmDialog: ConfirmDialogData | null;
@@ -77,6 +108,9 @@ export const useUIStore = create<UIState>((set, get) => ({
 	showModelDropdown: false,
 	showHistoryDropdown: false,
 
+	// Transient notifications
+	notifications: [],
+
 	// Confirm dialog
 	confirmDialog: null,
 
@@ -95,6 +129,33 @@ export const useUIStore = create<UIState>((set, get) => ({
 
 		showConfirmDialog: data => set({ confirmDialog: data }),
 		hideConfirmDialog: () => set({ confirmDialog: null }),
+
+		pushNotification: notification => {
+			const id = notification.id || `notif-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+			const createdAt = notification.createdAt ?? Date.now();
+			set(state => ({
+				notifications: [
+					{
+						id,
+						type: notification.type,
+						content: notification.content,
+						reason: notification.reason,
+						timestamp: notification.timestamp,
+						createdAt,
+						autoDismissMs: notification.autoDismissMs,
+					},
+					...state.notifications,
+				],
+			}));
+		},
+
+		dismissNotification: id =>
+			set(state => {
+				if (!id) return { notifications: state.notifications.slice(1) };
+				return { notifications: state.notifications.filter(n => n.id !== id) };
+			}),
+
+		clearNotifications: () => set({ notifications: [] }),
 
 		handleExtensionMessage: (message: ExtensionMessage) => {
 			const actions = get().actions;
@@ -131,6 +192,37 @@ export const useUIStore = create<UIState>((set, get) => ({
 						}
 					}
 					break;
+
+				case 'session_event': {
+					const event = message as unknown as SessionEventMessage;
+					if (event.type !== 'session_event') break;
+					if (event.eventType !== 'message') break;
+					const msg = (event.payload as { eventType?: unknown; message?: unknown }).message as
+						| {
+								type?: unknown;
+								content?: unknown;
+								reason?: unknown;
+								timestamp?: unknown;
+								id?: unknown;
+						  }
+						| undefined;
+					if (!msg) break;
+					const t = msg.type;
+					if (t === 'error' || t === 'interrupted' || t === 'system_notice') {
+						const content = typeof msg.content === 'string' ? msg.content : '';
+						if (!content.trim()) break;
+						actions.pushNotification({
+							id: typeof msg.id === 'string' ? msg.id : undefined,
+							type: t,
+							content,
+							reason: typeof msg.reason === 'string' ? msg.reason : undefined,
+							timestamp:
+								typeof msg.timestamp === 'string' ? msg.timestamp : new Date().toISOString(),
+							autoDismissMs: t === 'system_notice' ? 6000 : undefined,
+						});
+					}
+					break;
+				}
 			}
 		},
 	},
