@@ -115,7 +115,7 @@ describe('OpenCode model parsing', () => {
 		vi.unstubAllGlobals();
 	});
 
-	it('accepts provider-only model and sends empty modelID', async () => {
+	it('omits model override when provider-only model is passed', async () => {
 		const exec = getOpenCodeExecutorForTest();
 		exec.serverUrl = 'http://127.0.0.1:1234';
 		exec.directory = 'C:/repo';
@@ -135,7 +135,33 @@ describe('OpenCode model parsing', () => {
 		});
 
 		const body = asJsonBody(fetchMock.mock.calls[0] as unknown[]) as any;
-		expect(body.model).toEqual({ providerID: 'anthropic', modelID: '' });
+		expect(body.model).toBeUndefined();
+	});
+
+	it('sends model override when provider/model is passed', async () => {
+		const exec = getOpenCodeExecutorForTest();
+		exec.serverUrl = 'http://127.0.0.1:1234';
+		exec.directory = 'C:/repo';
+
+		const fetchMock = vi.fn().mockResolvedValue({
+			ok: true,
+			status: 200,
+			statusText: 'OK',
+			text: vi.fn().mockResolvedValue('{"info":{},"parts":[]}'),
+		});
+		vi.stubGlobal('fetch', fetchMock);
+
+		await exec.sendPrompt('C:/repo', 's-1', 'hi', {
+			provider: 'opencode',
+			workspaceRoot: 'C:/repo',
+			model: 'anthropic/claude-3-5-sonnet-20241022',
+		});
+
+		const body = asJsonBody(fetchMock.mock.calls[0] as unknown[]) as any;
+		expect(body.model).toEqual({
+			providerID: 'anthropic',
+			modelID: 'claude-3-5-sonnet-20241022',
+		});
 	});
 });
 

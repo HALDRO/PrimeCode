@@ -76,7 +76,7 @@ export const ProviderManager: React.FC = () => {
 
 	useEffect(() => {
 		if (isOpenCodeCLI) {
-			postMessage('reloadAllProviders');
+			postMessage('syncAll');
 		}
 	}, [postMessage, isOpenCodeCLI]);
 
@@ -89,7 +89,7 @@ export const ProviderManager: React.FC = () => {
 				setEditingApiKey(null);
 				setEditApiKeyInput('');
 				setProviderAuthState(null);
-				postMessage('reloadAllProviders');
+				postMessage('syncAll');
 			}, 1000);
 			return () => clearTimeout(timer);
 		}
@@ -178,7 +178,7 @@ export const ProviderManager: React.FC = () => {
 	const canDisconnect = (providerId: string) => !isNonDisconnectableProviderId(providerId);
 
 	const handleRefresh = () => {
-		postMessage('reloadAllProviders');
+		postMessage('syncAll');
 	};
 
 	const saveProxySettings = () => {

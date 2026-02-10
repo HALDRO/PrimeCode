@@ -1,7 +1,37 @@
+import type { OpenCodeProviderData } from '../../common';
 import type { HandlerContext, WebviewMessage, WebviewMessageHandler } from './types';
 
 export class ProviderHandler implements WebviewMessageHandler {
 	constructor(private context: HandlerContext) {}
+
+	private static readonly LEGACY_SELECTED_MODEL_KEY = 'primecode.selectedModel';
+
+	private getSelectedModelKey(provider: 'claude' | 'opencode'): string {
+		return provider === 'opencode'
+			? 'primecode.selectedModel.opencode'
+			: 'primecode.selectedModel.claude';
+	}
+
+	private async readSelectedModel(provider: 'claude' | 'opencode'): Promise<string | undefined> {
+		const key = this.getSelectedModelKey(provider);
+		const fromNew = this.context.extensionContext.globalState.get<string>(key);
+		if (fromNew) return fromNew;
+
+		// Backward-compat: attempt to migrate from the legacy key.
+		const legacy = this.context.extensionContext.globalState.get<string>(
+			ProviderHandler.LEGACY_SELECTED_MODEL_KEY,
+		);
+		if (!legacy) return undefined;
+
+		// Guard against cross-provider contamination.
+		// OpenCode models are composite IDs: "provider/model".
+		if (provider === 'opencode' && !legacy.includes('/')) return undefined;
+		// Claude models are simple IDs without '/'.
+		if (provider === 'claude' && legacy.includes('/')) return undefined;
+
+		await this.context.extensionContext.globalState.update(key, legacy);
+		return legacy;
+	}
 
 	async handleMessage(msg: WebviewMessage): Promise<void> {
 		switch (msg.type) {
@@ -9,7 +39,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 				await this.onReloadAllProviders();
 				break;
 			case 'checkOpenCodeStatus':
-				// Removed: Status is now handled by Webview SSE monitoring
+				await this.onCheckOpenCodeStatus();
 				break;
 			case 'loadOpenCodeProviders':
 				await this.onLoadOpenCodeProviders();
@@ -37,6 +67,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 
 	private async onReloadAllProviders(): Promise<void> {
 		await Promise.all([
+			this.onCheckOpenCodeStatus(),
 			this.onLoadAvailableProviders(),
 			this.onLoadOpenCodeProviders(),
 			this.restoreSelectedModel(),
@@ -44,28 +75,44 @@ export class ProviderHandler implements WebviewMessageHandler {
 	}
 
 	private async restoreSelectedModel(): Promise<void> {
-		const savedModel =
-			this.context.extensionContext.globalState.get<string>('primecode.selectedModel');
-		if (savedModel) {
-			const provider = (this.context.settings.get('provider') || 'claude') as 'claude' | 'opencode';
+		const provider = (this.context.settings.get('provider') || 'claude') as 'claude' | 'opencode';
+		const savedModel = await this.readSelectedModel(provider);
+		if (!savedModel) return;
 
-			if (provider === 'opencode') {
-				this.context.view.postMessage({ type: 'openCodeModelSet', data: { model: savedModel } });
-			} else {
-				this.context.view.postMessage({ type: 'modelSelected', model: savedModel });
-			}
+		if (provider === 'opencode') {
+			this.context.view.postMessage({ type: 'openCodeModelSet', data: { model: savedModel } });
+		} else {
+			this.context.view.postMessage({ type: 'modelSelected', model: savedModel });
 		}
 	}
 
-	// Removed: Status is now handled by Webview SSE monitoring
-	// private async onCheckOpenCodeStatus(): Promise<void> { ... }
+	private async onCheckOpenCodeStatus(): Promise<void> {
+		const provider = (this.context.settings.get('provider') || 'claude') as 'claude' | 'opencode';
+		if (provider !== 'opencode') {
+			this.context.view.postMessage({
+				type: 'openCodeStatus',
+				data: { installed: false, version: null },
+			});
+			return;
+		}
+
+		const info = this.context.cli.getOpenCodeServerInfo();
+		if (!info) {
+			this.context.view.postMessage({
+				type: 'openCodeStatus',
+				data: { installed: false, version: null, error: 'OpenCode server not running' },
+			});
+			return;
+		}
+
+		// Version detection is intentionally omitted (depends on CLI/server implementation).
+		this.context.view.postMessage({
+			type: 'openCodeStatus',
+			data: { installed: true, version: null },
+		});
+	}
 
 	private async onLoadOpenCodeProviders(): Promise<void> {
-		this.context.view.postMessage({
-			type: 'openCodeProviders',
-			data: { providers: [], config: { isLoading: true } },
-		});
-
 		try {
 			const provider = (this.context.settings.get('provider') || 'claude') as 'claude' | 'opencode';
 			if (provider !== 'opencode') {
@@ -88,10 +135,10 @@ export class ProviderHandler implements WebviewMessageHandler {
 				return;
 			}
 
-			const providers = await this.context.services.openCodeClient.getConnectedProviders(
+			const providers = (await this.context.services.openCodeClient.getConnectedProviders(
 				info.baseUrl,
 				info.directory,
-			);
+			)) as OpenCodeProviderData[];
 
 			this.context.view.postMessage({
 				type: 'openCodeProviders',
@@ -224,8 +271,10 @@ export class ProviderHandler implements WebviewMessageHandler {
 	private async onSetOpenCodeModel(msg: WebviewMessage): Promise<void> {
 		const model = typeof msg.model === 'string' ? msg.model : undefined;
 		if (model) {
-			// Persist selection in globalState (not VS Code settings - model is not a registered config)
-			await this.context.extensionContext.globalState.update('primecode.selectedModel', model);
+			await this.context.extensionContext.globalState.update(
+				this.getSelectedModelKey('opencode'),
+				model,
+			);
 			this.context.view.postMessage({ type: 'openCodeModelSet', data: { model } });
 		}
 	}
@@ -233,8 +282,10 @@ export class ProviderHandler implements WebviewMessageHandler {
 	private async onSelectModel(msg: WebviewMessage): Promise<void> {
 		const model = typeof msg.model === 'string' ? msg.model : undefined;
 		if (model) {
-			// Persist selection in globalState (not VS Code settings - model is not a registered config)
-			await this.context.extensionContext.globalState.update('primecode.selectedModel', model);
+			await this.context.extensionContext.globalState.update(
+				this.getSelectedModelKey('claude'),
+				model,
+			);
 			this.context.view.postMessage({ type: 'modelSelected', model });
 		}
 	}
@@ -265,23 +316,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 			return;
 		}
 
-		const cacheKey = `proxyModelsCache:${baseUrl}`;
-
-		// Read-through: send cached models immediately if available
-		const cachedModels =
-			this.context.extensionContext.globalState.get<Array<{ id: string; name: string }>>(cacheKey);
-
-		if (cachedModels && cachedModels.length > 0) {
-			this.context.view.postMessage({
-				type: 'proxyModels',
-				data: {
-					enabled: true,
-					models: cachedModels,
-					baseUrl,
-					cached: true,
-				},
-			});
-		}
+		// Live fetch (no caching)
 
 		let url: URL;
 		try {
@@ -290,8 +325,8 @@ export class ProviderHandler implements WebviewMessageHandler {
 			this.context.view.postMessage({
 				type: 'proxyModels',
 				data: {
-					enabled: !!(cachedModels && cachedModels.length > 0),
-					models: cachedModels || [],
+					enabled: false,
+					models: [],
 					baseUrl,
 					error: 'Invalid proxy baseUrl',
 				},
@@ -314,8 +349,8 @@ export class ProviderHandler implements WebviewMessageHandler {
 				this.context.view.postMessage({
 					type: 'proxyModels',
 					data: {
-						enabled: !!(cachedModels && cachedModels.length > 0),
-						models: cachedModels || [],
+						enabled: false,
+						models: [],
 						baseUrl,
 						error: `Proxy models request failed (${response.status})${detail}`,
 					},
@@ -343,14 +378,23 @@ export class ProviderHandler implements WebviewMessageHandler {
 				})
 				.filter(m => m.id.length > 0);
 
-			if (models.length > 0) {
-				await this.context.extensionContext.globalState.update(cacheKey, models);
+			if (models.length === 0) {
+				this.context.view.postMessage({
+					type: 'proxyModels',
+					data: {
+						enabled: false,
+						models: [],
+						baseUrl,
+						error: 'No models returned by proxy',
+					},
+				});
+				return;
 			}
 
 			this.context.view.postMessage({
 				type: 'proxyModels',
 				data: {
-					enabled: models.length > 0,
+					enabled: true,
 					models,
 					baseUrl,
 				},
@@ -360,8 +404,8 @@ export class ProviderHandler implements WebviewMessageHandler {
 			this.context.view.postMessage({
 				type: 'proxyModels',
 				data: {
-					enabled: !!(cachedModels && cachedModels.length > 0),
-					models: cachedModels || [],
+					enabled: false,
+					models: [],
 					baseUrl,
 					error: `Proxy models fetch failed: ${msg}`,
 				},

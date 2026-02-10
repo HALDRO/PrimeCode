@@ -89,7 +89,8 @@ export class Settings implements ISettings {
 	}
 
 	async update<T>(key: keyof PrimeCodeSettings, value: T): Promise<void> {
-		await this.config.update(key, value, vscode.ConfigurationTarget.Workspace);
+		// Always write to Global settings to avoid polluting project-specific .vscode/settings.json
+		await this.config.update(key, value, vscode.ConfigurationTarget.Global);
 		// Refresh cached config to reflect the update immediately
 		this.config = vscode.workspace.getConfiguration('primeCode');
 	}

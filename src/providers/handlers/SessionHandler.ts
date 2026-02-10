@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import type {
+	OpenCodeProviderData,
 	SessionEventMessage,
 	SessionLifecycleMessage,
 	SessionMessageData,
@@ -339,6 +340,36 @@ export class SessionHandler implements WebviewMessageHandler {
 		explicitSessionId?: string,
 	): Promise<void> {
 		const config = this.buildSendConfig(uiModel);
+		let modelNotice: string | undefined;
+
+		if (config.provider === 'opencode' && typeof config.model === 'string' && config.model.trim()) {
+			const selectedModel = config.model.trim();
+			// OpenCode model must be "provider/model".
+			if (!selectedModel.includes('/')) {
+				// Drop the override to avoid silent invalid routing.
+				config.model = undefined;
+				modelNotice = `Invalid OpenCode model selection: "${selectedModel}". Expected "provider/model". Please reselect a model in Settings.`;
+			} else {
+				const [providerId, modelId] = selectedModel.split('/', 2);
+				const info = this.context.cli.getOpenCodeServerInfo();
+				if (info) {
+					try {
+						const providers = (await this.context.services.openCodeClient.getConnectedProviders(
+							info.baseUrl,
+							info.directory,
+						)) as OpenCodeProviderData[];
+						const provider = providers.find(p => p.id === providerId);
+						const exists = provider?.models?.some(m => m.id === modelId) ?? false;
+						if (!exists) {
+							config.model = undefined;
+							modelNotice = `Selected model "${selectedModel}" is unavailable. Please reconnect provider or choose another model in Settings.`;
+						}
+					} catch {
+						// Do not block send if live model sync check fails; send path will report runtime errors.
+					}
+				}
+			}
+		}
 
 		// Resolve active session
 		let activeId = this.context.sessionState.activeSessionId;
@@ -378,6 +409,18 @@ export class SessionHandler implements WebviewMessageHandler {
 				this.initializeSessionStats(newSessionId);
 
 				activeId = newSessionId;
+			}
+
+			if (modelNotice && activeId) {
+				this.postSessionMessage(
+					{
+						id: `system_notice-${Date.now()}`,
+						type: 'system_notice',
+						content: modelNotice,
+						timestamp: new Date().toISOString(),
+					},
+					activeId,
+				);
 			}
 
 			// Post user message and send to CLI
@@ -908,6 +951,12 @@ export class SessionHandler implements WebviewMessageHandler {
 	// Utils
 	// =============================================================================
 
+	private getSelectedModelKey(provider: 'claude' | 'opencode'): string {
+		return provider === 'opencode'
+			? 'primecode.selectedModel.opencode'
+			: 'primecode.selectedModel.claude';
+	}
+
 	private buildBaseConfig(): { provider: 'claude' | 'opencode'; workspaceRoot: string } {
 		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 		if (!workspaceRoot) {
@@ -922,8 +971,9 @@ export class SessionHandler implements WebviewMessageHandler {
 	private buildSendConfig(uiModel?: string) {
 		const { provider, workspaceRoot } = this.buildBaseConfig();
 
-		const savedModel =
-			this.context.extensionContext.globalState.get<string>('primecode.selectedModel');
+		const savedModel = this.context.extensionContext.globalState.get<string>(
+			this.getSelectedModelKey(provider),
+		);
 		const model = uiModel ?? savedModel;
 
 		const opencodeAgent = this.context.settings.get('opencode.agent');

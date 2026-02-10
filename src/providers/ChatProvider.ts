@@ -37,6 +37,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private fileHandler: FileHandler;
 	private sseHandler: SseHandler;
 
+	private pendingSyncAll = false;
+
 	private handlers: Record<string, WebviewMessageHandler> = {};
 
 	constructor(
@@ -258,8 +260,18 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			logger.info('[ChatProvider] Starting OpenCode server...');
 			await this.cli.start(config);
 			logger.info('[ChatProvider] OpenCode server started successfully');
+
+			// Hydrate all UI-visible state after server connection (providers, proxy models, MCP, etc.)
+			await this.syncAllOrDefer('opencode-start');
 		} catch (error) {
 			logger.warn('[ChatProvider] Failed to start OpenCode:', error);
+			this.sessionHandler.postSessionMessage({
+				id: `system_notice-${Date.now()}`,
+				type: 'system_notice',
+				content:
+					'Failed to start OpenCode server. Models/providers may be unavailable until it is running. See extension logs for details.',
+				timestamp: new Date().toISOString(),
+			});
 		}
 	}
 
@@ -349,9 +361,57 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			this.handlers[t] = this.fileHandler;
 		});
 
-		const sseTypes = ['sseSubscribe', 'sseClose'];
-		sseTypes.forEach(t => {
-			this.handlers[t] = this.sseHandler;
+		// syncAll is an orchestration message handled by ChatProvider itself
+		this.handlers.syncAll = {
+			handleMessage: async () => {
+				await this.syncAllOrDefer('webview-syncAll');
+			},
+		};
+	}
+
+	private async syncAllOrDefer(source: string): Promise<void> {
+		// When called from OpenCode startup, webview might not be ready yet.
+		if (!this.view) {
+			logger.info('[ChatProvider] syncAll deferred: webview not ready', { source });
+			this.pendingSyncAll = true;
+			return;
+		}
+		logger.info('[ChatProvider] syncAll started', { source });
+		this.pendingSyncAll = false;
+		await this.syncAll();
+		logger.info('[ChatProvider] syncAll finished', { source });
+	}
+
+	private async syncAll(): Promise<void> {
+		// Pull everything the UI can display. This keeps startup and reconnect logic simple.
+		const startedAt = Date.now();
+		const requests: Promise<unknown>[] = [
+			this.settingsHandler.handleMessage({ type: 'getSettings' }),
+			this.toolHandler.handleMessage({ type: 'getAccess' }),
+			this.settingsHandler.handleMessage({ type: 'getCommands' }),
+			this.settingsHandler.handleMessage({ type: 'getSkills' }),
+			this.settingsHandler.handleMessage({ type: 'getHooks' }),
+			this.settingsHandler.handleMessage({ type: 'getSubagents' }),
+			this.mcpHandler.handleMessage({ type: 'loadMCPServers' }),
+			this.mcpHandler.handleMessage({
+				type: 'fetchMcpMarketplaceCatalog',
+				data: { forceRefresh: false },
+			}),
+			this.providerHandler.handleMessage({
+				type: 'loadProxyModels',
+				data: { baseUrl: '', apiKey: '' },
+			}),
+			this.providerHandler.handleMessage({ type: 'reloadAllProviders' }),
+			this.toolHandler.handleMessage({ type: 'checkDiscoveryStatus' }),
+			this.settingsHandler.handleMessage({ type: 'getRules' }),
+		];
+
+		const results = await Promise.allSettled(requests);
+		const rejected = results.filter(r => r.status === 'rejected').length;
+		logger.info('[ChatProvider] syncAll requests complete', {
+			total: results.length,
+			rejected,
+			durationMs: Date.now() - startedAt,
 		});
 	}
 
@@ -386,6 +446,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 		this.sendInitialState();
 		this.postMessage({ type: 'accessData', data: [] });
+
+		// If OpenCode started before the webview mounted, run the deferred sync now.
+		if (this.pendingSyncAll) {
+			void this.syncAllOrDefer('deferred-after-view-ready');
+		}
 	}
 
 	private async handleWebviewMessage(msg: WebviewMessage): Promise<void> {

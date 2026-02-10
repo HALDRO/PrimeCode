@@ -146,8 +146,7 @@ const OpenCodeCLIStatus: React.FC = () => {
 		}
 		initialLoadDone.current = true;
 
-		postMessage('checkOpenCodeStatus');
-		postMessage('loadOpenCodeProviders');
+		postMessage('syncAll');
 		startTimeout();
 
 		return () => {
@@ -160,8 +159,7 @@ const OpenCodeCLIStatus: React.FC = () => {
 	const handleRefresh = () => {
 		setOpenCodeStatus({ isChecking: true, error: undefined });
 		setOpenCodeConfig({ isLoading: true, error: undefined });
-		postMessage('checkOpenCodeStatus');
-		postMessage('loadOpenCodeProviders');
+		postMessage('syncAll');
 		startTimeout();
 	};
 
@@ -330,7 +328,7 @@ const MainSettings: React.FC = () => {
 		setTimeout(() => postMessage('getPermissions'), 100);
 		// Load OpenCode providers when switching to OpenCode CLI
 		if (newProvider === 'opencode') {
-			postMessage('reloadAllProviders');
+			postMessage('syncAll');
 		}
 	};
 

@@ -41,19 +41,7 @@ export function useExtensionMessages(): void {
 			didSendInitialRequests = true;
 			// Request initial data from extension
 			vscode.postMessage({ type: 'webviewDidLaunch' });
-			vscode.postMessage({ type: 'getSettings' });
-			vscode.postMessage({ type: 'getAccess' });
-			vscode.postMessage({ type: 'getCommands' });
-			vscode.postMessage({ type: 'getSkills' });
-			vscode.postMessage({ type: 'getHooks' });
-			vscode.postMessage({ type: 'getSubagents' });
-			vscode.postMessage({ type: 'loadMCPServers' });
-			vscode.postMessage({ type: 'fetchMcpMarketplaceCatalog', data: { forceRefresh: false } });
-			vscode.postMessage({ type: 'loadProxyModels', data: { baseUrl: '' } });
-			// vscode.postMessage({ type: 'checkOpenCodeStatus' });
-			vscode.postMessage({ type: 'reloadAllProviders' });
-			vscode.postMessage({ type: 'checkDiscoveryStatus' });
-			vscode.postMessage({ type: 'getRules' });
+			vscode.postMessage({ type: 'syncAll' });
 		}
 
 		return () => window.removeEventListener('message', handleMessage);

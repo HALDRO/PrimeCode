@@ -802,11 +802,22 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		config: CLIConfig,
 	): Promise<void> {
 		const modelSpec = this.parseModel(config.model);
-		const modelProviderId =
-			modelSpec?.providerID || (typeof config.model === 'string' ? config.model.trim() : '') || '';
+		const modelProviderId = modelSpec?.providerID || '';
+
+		// OpenCode model override is optional. If we don't have a valid provider/model,
+		// omit the `model` field entirely so the server falls back to its configured default.
+		const modelOverride = modelProviderId
+			? {
+					model: {
+						providerID: modelProviderId,
+						modelID: modelSpec?.modelID || '',
+					},
+				}
+			: {};
+
 		const body = {
 			parts: [{ type: 'text' as const, text: prompt }],
-			model: { providerID: modelProviderId, modelID: modelSpec?.modelID || '' },
+			...modelOverride,
 			...(config.agent ? { agent: config.agent } : {}),
 		};
 
@@ -819,9 +830,15 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 	private parseModel(model?: string): { providerID: string; modelID: string } | undefined {
 		if (!model || !model.trim()) return undefined;
-		const [providerID, modelID] = model.trim().split('/', 2);
-		if (!providerID) return undefined;
-		return { providerID, modelID: modelID ?? '' };
+		const trimmed = model.trim();
+		const slash = trimmed.indexOf('/');
+		if (slash <= 0 || slash === trimmed.length - 1) return undefined;
+
+		const providerID = trimmed.slice(0, slash).trim();
+		const modelID = trimmed.slice(slash + 1).trim();
+		if (!providerID || !modelID) return undefined;
+
+		return { providerID, modelID };
 	}
 
 	// =========================================================================
