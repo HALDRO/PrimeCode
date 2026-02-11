@@ -14,11 +14,11 @@ import { useAccessRequestByToolUseId, useMcpServers, useToolResultByToolId } fro
 import type { Message as WebviewMessage } from '../../store/chatStore';
 import { formatToolName, getShortFileName } from '../../utils/format';
 import { useVSCode } from '../../utils/vscode';
-import { ChevronDownIcon, CopyIcon, McpIcon, TerminalIcon } from '../icons';
+import { ChevronDownIcon, CopyIcon, McpIcon, TerminalIcon, WandIcon } from '../icons';
 import { FileTypeIcon } from '../icons/FileTypeIcon';
 import { Button, IconButton, Tooltip } from '../ui';
 import { InlineToolAccessGate } from './InlineToolAccessGate';
-import { getDiffContentHeight, SimpleDiff } from './SimpleDiff';
+import { getDiffContentHeight, parseUnifiedDiffSnapshots, SimpleDiff } from './SimpleDiff';
 import { InlineToolLine } from './SimpleTool';
 
 export const TOOL_CARD_CLASSES =
@@ -31,11 +31,187 @@ const DEFAULT_TEXT_PREVIEW_LINES = 6;
 
 type ToolUse = Extract<WebviewMessage, { type: 'tool_use' }>;
 type ToolResult = Extract<WebviewMessage, { type: 'tool_result' }>;
+type AccessRequestMessage = Extract<WebviewMessage, { type: 'access_request' }>;
+
+type FileEditChange = {
+	type?: string;
+	content?: string;
+	unifiedDiff?: string;
+	oldContent?: string;
+	newContent?: string;
+};
+
+type FileEditAction = {
+	type: 'FileEdit';
+	path?: string;
+	changes?: FileEditChange[];
+};
+
+type ResolvedDiffData = {
+	oldContent: string;
+	newContent: string;
+	effectiveFilePath: string;
+	name: string;
+	hasDeleteChange: boolean;
+};
 
 const inlinePreview = (text: string, maxLines: number) => {
 	const lines = text.split('\n');
 	if (lines.length <= maxLines) return { preview: text, needsExpand: false };
 	return { preview: lines.slice(-maxLines).join('\n'), needsExpand: true };
+};
+
+const asRecord = (value: unknown): Record<string, unknown> | undefined =>
+	value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
+
+const getStringFromRecord = (
+	record: Record<string, unknown> | undefined,
+	keys: string[],
+): string | undefined => {
+	if (!record) return undefined;
+	for (const key of keys) {
+		const value = record[key];
+		if (typeof value === 'string' && value.length > 0) {
+			return value;
+		}
+	}
+	return undefined;
+};
+
+const resolveFileEditAction = (actionType: unknown): FileEditAction | null => {
+	const record = asRecord(actionType);
+	if (!record || record.type !== 'FileEdit') return null;
+
+	const changesRaw = record.changes;
+	const changes = Array.isArray(changesRaw)
+		? changesRaw.map(change => asRecord(change) as FileEditChange).filter(Boolean)
+		: [];
+
+	return {
+		type: 'FileEdit',
+		path: typeof record.path === 'string' ? record.path : undefined,
+		changes,
+	};
+};
+
+const resolveDiffFromAccessMetadata = (
+	accessRequest: AccessRequestMessage | undefined,
+): { oldContent: string; newContent: string; filePath?: string } | null => {
+	const accessRequestRecord = asRecord(accessRequest as unknown);
+	const metadata = asRecord(accessRequestRecord?.metadata);
+	const diffText = getStringFromRecord(metadata, ['diff']);
+	if (!diffText) return null;
+
+	const parsedSnapshots = parseUnifiedDiffSnapshots(diffText);
+	const filePath = getStringFromRecord(metadata, ['filepath', 'filePath', 'path']);
+	if (parsedSnapshots) {
+		return {
+			oldContent: parsedSnapshots.oldContent,
+			newContent: parsedSnapshots.newContent,
+			filePath,
+		};
+	}
+
+	return {
+		oldContent: '',
+		newContent: diffText,
+		filePath,
+	};
+};
+
+const resolveDiffData = (params: {
+	actionType: unknown;
+	toolResult: ToolResult | undefined;
+	accessRequest: AccessRequestMessage | undefined;
+	fallbackFilePath?: string;
+}): ResolvedDiffData => {
+	let oldContent = '';
+	let newContent = '';
+	let effectiveFilePath = '';
+	let hasDeleteChange = false;
+
+	const fileEditAction = resolveFileEditAction(params.actionType);
+
+	if (fileEditAction) {
+		effectiveFilePath = fileEditAction.path ?? '';
+		const primaryChange = fileEditAction.changes?.[0];
+		if (primaryChange) {
+			hasDeleteChange = primaryChange.type === 'Delete';
+			if (primaryChange.type === 'Write' && typeof primaryChange.content === 'string') {
+				newContent = primaryChange.content;
+			} else if (primaryChange.type === 'Edit' && typeof primaryChange.unifiedDiff === 'string') {
+				newContent = primaryChange.unifiedDiff;
+			} else if (primaryChange.type === 'Replace') {
+				oldContent = primaryChange.oldContent ?? '';
+				newContent = primaryChange.newContent ?? '';
+			}
+		}
+	}
+
+	const toolResultMetadata = asRecord(params.toolResult?.metadata);
+	const metadataFilePath = getStringFromRecord(toolResultMetadata, [
+		'filepath',
+		'filePath',
+		'path',
+	]);
+
+	const metadataFileDiffRaw = toolResultMetadata?.filediff;
+	const metadataFileDiff = Array.isArray(metadataFileDiffRaw)
+		? asRecord(metadataFileDiffRaw.find(item => item && typeof item === 'object'))
+		: asRecord(metadataFileDiffRaw);
+
+	if (metadataFileDiff) {
+		const before = getStringFromRecord(metadataFileDiff, ['before']);
+		const after = getStringFromRecord(metadataFileDiff, ['after']);
+		if (before !== undefined || after !== undefined) {
+			oldContent = before ?? '';
+			newContent = after ?? '';
+		}
+
+		const filediffPath = getStringFromRecord(metadataFileDiff, ['filepath', 'filePath', 'path']);
+		if (!effectiveFilePath && filediffPath) {
+			effectiveFilePath = filediffPath;
+		}
+	}
+
+	if (!newContent && !oldContent) {
+		const metadataUnifiedDiff = getStringFromRecord(toolResultMetadata, ['diff']);
+		if (metadataUnifiedDiff) {
+			const parsedSnapshots = parseUnifiedDiffSnapshots(metadataUnifiedDiff);
+			if (parsedSnapshots) {
+				oldContent = parsedSnapshots.oldContent;
+				newContent = parsedSnapshots.newContent;
+			} else {
+				newContent = metadataUnifiedDiff;
+			}
+		}
+	}
+
+	if (!newContent && !oldContent) {
+		const accessDiff = resolveDiffFromAccessMetadata(params.accessRequest);
+		if (accessDiff) {
+			oldContent = accessDiff.oldContent;
+			newContent = accessDiff.newContent;
+			if (!effectiveFilePath && accessDiff.filePath) {
+				effectiveFilePath = accessDiff.filePath;
+			}
+		}
+	}
+
+	if (!effectiveFilePath && metadataFilePath) {
+		effectiveFilePath = metadataFilePath;
+	}
+	if (!effectiveFilePath && params.fallbackFilePath) {
+		effectiveFilePath = params.fallbackFilePath;
+	}
+
+	return {
+		oldContent,
+		newContent,
+		effectiveFilePath,
+		name: effectiveFilePath ? getShortFileName(effectiveFilePath) : 'unknown',
+		hasDeleteChange,
+	};
 };
 
 const ToolCardLeadingIcon: React.FC<{ children: ReactNode; className?: string }> = ({
@@ -165,8 +341,9 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 
 		if (!toolName) return null;
 
-		// Inline Card: Default for everything except MCP, Bash, and File Edits
-		if (!isMcp && !isBash && !isFileEdit) {
+		// Inline Card: Default for everything except MCP, Bash, File Edits, and tools with Access Requests
+		const hasAccessRequest = Boolean(accessRequest);
+		if (!isMcp && !isBash && !isFileEdit && !hasAccessRequest) {
 			return (
 				<InlineToolLine
 					toolName={toolName}
@@ -181,32 +358,28 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 
 		// 1) Diff Card (File Edits)
 		if (isFileEdit) {
-			let oldContent = '';
-			let newContent = '';
-			let effectiveFilePath = '';
-			let name = 'unknown';
+			const resolved = resolveDiffData({
+				actionType,
+				toolResult,
+				accessRequest: accessRequest as AccessRequestMessage | undefined,
+				fallbackFilePath: filePath,
+			});
 
-			if (isFileEdit && actionType?.type === 'FileEdit') {
-				effectiveFilePath = actionType.path;
-				const change = actionType.changes[0];
-				if (change) {
-					if (change.type === 'Write') newContent = change.content;
-					else if (change.type === 'Edit') newContent = change.unifiedDiff;
-					else if (change.type === 'Replace') {
-						oldContent = change.oldContent;
-						newContent = change.newContent;
-					}
-				}
-			}
+			const oldContent = resolved.oldContent;
+			const newContent = resolved.newContent;
+			const effectiveFilePath = resolved.effectiveFilePath;
+			const name = resolved.name;
 
-			// Path fallback
-			if (!effectiveFilePath && filePath) effectiveFilePath = filePath;
-			name = effectiveFilePath ? getShortFileName(effectiveFilePath) : 'unknown';
+			const hasContent = newContent || oldContent || resolved.hasDeleteChange;
 
-			if (newContent || oldContent) {
+			if (hasContent) {
 				const stats = computeDiffStats(oldContent, newContent);
 				const maxHeight = 120;
-				const needsExpand = getDiffContentHeight(oldContent, newContent) > maxHeight;
+				const needsExpand =
+					getDiffContentHeight(oldContent, newContent, {
+						collapseUnchanged: false,
+					}) > maxHeight;
+				const showAccessGate = accessRequest && !accessRequest.resolved && accessRequest.requestId;
 
 				return (
 					<ToolCard
@@ -252,31 +425,35 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 								Diff
 							</Button>
 						}
-						isCollapsible={needsExpand}
-						expanded={diffExpanded}
+						isCollapsible={needsExpand || Boolean(showAccessGate)}
+						expanded={diffExpanded || Boolean(showAccessGate)}
 						onToggle={() => setDiffExpanded(prev => !prev)}
 						body={
 							<div className="relative">
-								{accessRequest && !accessRequest.resolved && accessRequest.requestId && (
-									<InlineToolAccessGate
-										requestId={accessRequest.requestId}
-										tool={accessRequest.tool || toolName}
-										input={accessRequest.input || rawInput || {}}
-										pattern={accessRequest.pattern}
-										className="px-(--tool-content-padding) pt-2"
-										hideDetails={true}
-									/>
-								)}
-								<div className={cn(accessRequest?.resolved === false ? 'pt-2' : undefined)}>
+								<div className={cn(accessRequest?.resolved === false ? 'pb-2' : undefined)}>
 									<SimpleDiff
 										original={oldContent}
 										modified={newContent}
 										maxHeight={maxHeight}
 										expanded={diffExpanded}
+										collapseUnchanged={!diffExpanded}
 									/>
 								</div>
+								{showAccessGate && (
+									<div className="px-(--tool-content-padding) py-2 border-t border-(--border-subtle)">
+										<InlineToolAccessGate
+											requestId={accessRequest?.requestId}
+											messageId={accessRequest?.id}
+											tool={accessRequest?.tool || toolName}
+											input={accessRequest?.input || rawInput || {}}
+											pattern={accessRequest?.pattern}
+											className="py-1"
+											hideDetails={true}
+										/>
+									</div>
+								)}
 								{accessRequest?.resolved && (
-									<div className="px-(--tool-content-padding) py-1">
+									<div className="px-(--tool-content-padding) py-1 border-t border-(--border-subtle)">
 										<span className="text-xs text-vscode-foreground opacity-60">
 											{accessRequest.approved ? 'Approved' : 'Denied'}
 										</span>
@@ -306,14 +483,18 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 			}
 		}
 
-		// 2) MCP / Bash Card
+		// 2) MCP / Bash / Generic Card
 		const icon = isMcp ? (
 			<ToolCardLeadingIcon>
 				<McpIcon size={14} className="text-[#3b82f6] shrink-0" />
 			</ToolCardLeadingIcon>
-		) : (
+		) : isBash ? (
 			<ToolCardLeadingIcon>
 				<TerminalIcon size={14} className="shrink-0" />
+			</ToolCardLeadingIcon>
+		) : (
+			<ToolCardLeadingIcon>
+				<WandIcon size={14} className="shrink-0" />
 			</ToolCardLeadingIcon>
 		);
 		const label = isMcp ? 'MCP' : formatToolName(toolName);
@@ -328,6 +509,8 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		const { preview, needsExpand } = inlinePreview(fullText, DEFAULT_TEXT_PREVIEW_LINES);
 		const shownText = expanded || !needsExpand ? fullText : preview;
 		const hasBody = shownText.trim().length > 0;
+		const showAccessGate = accessRequest && !accessRequest.resolved && accessRequest.requestId;
+		const showAccessStatus = accessRequest?.resolved;
 
 		return (
 			<ToolCard
@@ -362,20 +545,45 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 						</div>
 					) : undefined
 				}
-				isCollapsible={needsExpand && hasBody}
-				expanded={expanded}
+				isCollapsible={
+					(needsExpand && hasBody) || Boolean(showAccessGate) || Boolean(showAccessStatus)
+				}
+				expanded={expanded || Boolean(showAccessGate)}
 				onToggle={() => setExpanded(prev => !prev)}
 				body={
-					hasBody ? (
-						<div className="p-(--tool-content-padding) bg-(--tool-bg-header)">
-							<pre
-								className={cn(
-									'm-0 text-sm leading-(--line-height-code) whitespace-pre',
-									isError ? 'text-error opacity-100' : 'text-vscode-foreground opacity-90',
-								)}
-							>
-								{shownText}
-							</pre>
+					hasBody || showAccessGate || showAccessStatus ? (
+						<div className="flex flex-col">
+							{hasBody && (
+								<div className="p-(--tool-content-padding) bg-(--tool-bg-header)">
+									<pre
+										className={cn(
+											'm-0 text-sm leading-(--line-height-code) whitespace-pre',
+											isError ? 'text-error opacity-100' : 'text-vscode-foreground opacity-90',
+										)}
+									>
+										{shownText}
+									</pre>
+								</div>
+							)}
+							{showAccessGate && (
+								<div className="px-(--tool-content-padding) py-2 border-t border-(--border-subtle)">
+									<InlineToolAccessGate
+										requestId={accessRequest?.requestId}
+										messageId={accessRequest?.id}
+										tool={accessRequest?.tool || toolName}
+										input={accessRequest?.input || rawInput || {}}
+										pattern={accessRequest?.pattern}
+										hideDetails={true}
+									/>
+								</div>
+							)}
+							{showAccessStatus && (
+								<div className="px-(--tool-content-padding) py-1 border-t border-(--border-subtle)">
+									<span className="text-xs text-vscode-foreground opacity-60">
+										{accessRequest?.approved ? 'Approved' : 'Denied'}
+									</span>
+								</div>
+							)}
 						</div>
 					) : undefined
 				}

@@ -65,6 +65,15 @@ export class CLIRunner extends EventEmitter {
 	}
 
 	/**
+	 * Truncates session history at the specified message ID (OpenCode only).
+	 */
+	async truncateSession(sessionId: string, messageId: string, config: CLIConfig): Promise<void> {
+		if (this.executor.truncateSession) {
+			await this.executor.truncateSession(sessionId, messageId, config);
+		}
+	}
+
+	/**
 	 * Spawns a code review session.
 	 */
 	async spawnReview(prompt: string, config: CLIConfig): Promise<ChildProcess | null> {

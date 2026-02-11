@@ -7,6 +7,7 @@ import type {
 	TokenStats,
 	TotalStats,
 } from '../../common';
+import { generateId } from '../../common';
 import { LogNormalizer } from '../../core/executor/LogNormalizer';
 import type { CLIEvent } from '../../core/executor/types';
 import { logger } from '../../utils/logger';
@@ -309,7 +310,8 @@ export class SessionHandler implements WebviewMessageHandler {
 		const text = msg.text as string;
 		const uiModel = typeof msg.model === 'string' ? (msg.model as string) : undefined;
 		const sessionId = typeof msg.sessionId === 'string' ? msg.sessionId : undefined;
-		await this.handleSendMessage(text, uiModel, sessionId);
+		const messageID = typeof msg.messageID === 'string' ? msg.messageID : undefined;
+		await this.handleSendMessage(text, uiModel, sessionId, messageID);
 	}
 
 	private async onStopRequest(_msg: WebviewMessage): Promise<void> {
@@ -338,6 +340,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		text: string,
 		uiModel?: string,
 		explicitSessionId?: string,
+		messageIdToTruncate?: string,
 	): Promise<void> {
 		const config = this.buildSendConfig(uiModel);
 		let modelNotice: string | undefined;
@@ -424,20 +427,37 @@ export class SessionHandler implements WebviewMessageHandler {
 			}
 
 			// Post user message and send to CLI
-			const userMessage = {
-				id: `user-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-				type: 'user' as const,
-				content: text,
-				model: config.model,
-				timestamp: new Date().toISOString(),
-				normalizedEntry: this.logNormalizer.normalizeMessage(text, 'user'),
-			};
-			this.postSessionMessage(userMessage, activeId);
+			const isOpenCode = config.provider === 'opencode';
+			const prefix = isOpenCode ? 'msg' : 'user';
+			// Reuse edited message ID for UI merge (prevents duplicate user bubble after edit).
+			const userMessageId = messageIdToTruncate || generateId(prefix);
+			this.postSessionMessage(
+				{
+					id: userMessageId,
+					type: 'user' as const,
+					content: text,
+					model: config.model,
+					timestamp: new Date().toISOString(),
+					normalizedEntry: this.logNormalizer.normalizeMessage(text, 'user'),
+				},
+				activeId,
+			);
 			this.postStatus(activeId, 'busy', 'Working...');
 			this.initializeSessionStats(activeId);
 
 			if (!activeId) throw new Error('No active session after initialization');
-			await this.context.cli.spawnFollowUp(text, activeId, config);
+
+			// OpenCode edit/revert: truncate history at the edited message, then resend with messageID.
+			let requestConfig = config;
+			if (isOpenCode && messageIdToTruncate) {
+				requestConfig = { ...config, messageID: messageIdToTruncate } as typeof config;
+				logger.info('[SessionHandler] Requesting OpenCode revert', {
+					messageId: messageIdToTruncate,
+				});
+				await this.context.cli.truncateSession(activeId, messageIdToTruncate, requestConfig);
+			}
+
+			await this.context.cli.spawnFollowUp(text, activeId, requestConfig);
 		} catch (error) {
 			logger.error('[SessionHandler] Failed to spawn CLI:', error);
 
@@ -603,11 +623,20 @@ export class SessionHandler implements WebviewMessageHandler {
 			}
 
 			if (event.type === 'normalized_log') {
-				const data = event.data as { role?: string; content?: string; timestamp?: string };
+				const data = event.data as {
+					role?: string;
+					content?: string;
+					timestamp?: string;
+					messageId?: string;
+				};
 				if (data.role === 'user') {
+					const stableId =
+						typeof data.messageId === 'string' && data.messageId.trim()
+							? data.messageId
+							: undefined;
 					this.postSessionMessage(
 						{
-							id: `user-hist-${Math.random()}`,
+							id: stableId ?? `msg-local-${Math.random().toString(36).slice(2, 9)}`,
 							type: 'user',
 							content: data.content || '',
 							timestamp: data.timestamp || new Date().toISOString(),
@@ -644,6 +673,14 @@ export class SessionHandler implements WebviewMessageHandler {
 				const toolName = data.tool || 'unknown';
 				const input = (data.input as Record<string, unknown>) || {};
 				const toolUseId = data.toolUseId || `hist-tool-${Math.random()}`;
+				const filePathFromInput =
+					typeof input.filePath === 'string'
+						? input.filePath
+						: typeof input.file_path === 'string'
+							? input.file_path
+							: typeof input.path === 'string'
+								? input.path
+								: undefined;
 
 				if (options?.mode === 'parent' && toolName === 'task') {
 					const childSessionId = options.taskToChildSessionId?.get(toolUseId);
@@ -671,6 +708,8 @@ export class SessionHandler implements WebviewMessageHandler {
 						toolName,
 						toolUseId,
 						rawInput: input,
+						toolInput: JSON.stringify(input),
+						filePath: filePathFromInput,
 						timestamp: data.timestamp || new Date().toISOString(),
 						normalizedEntry: event.normalizedEntry,
 					},
@@ -686,9 +725,15 @@ export class SessionHandler implements WebviewMessageHandler {
 					isError?: boolean;
 					toolUseId?: string;
 					timestamp?: string;
+					metadata?: unknown;
+					title?: unknown;
 				};
 				const toolName = data.tool || 'unknown';
 				const toolUseId = data.toolUseId || `hist-tool-${Math.random()}`;
+				const metadata =
+					data.metadata && typeof data.metadata === 'object'
+						? (data.metadata as Record<string, unknown>)
+						: undefined;
 
 				if (options?.mode === 'parent' && toolName === 'task') {
 					const childSessionId = options.taskToChildSessionId?.get(toolUseId);
@@ -715,6 +760,8 @@ export class SessionHandler implements WebviewMessageHandler {
 						toolUseId,
 						content: data.content || '',
 						isError: Boolean(data.isError),
+						title: typeof data.title === 'string' ? data.title : undefined,
+						metadata,
 						timestamp: data.timestamp || new Date().toISOString(),
 						normalizedEntry: event.normalizedEntry,
 					},

@@ -398,9 +398,12 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(({ message }) 
 				}
 			}
 
+			const isFirst = msgIndex === 0;
+
 			if (msgIndex === -1) {
 				return {
 					isLastUserMessage: false,
+					isFirstMessage: false,
 					nextUserMessageTs: null as number | null,
 					lastAssistantMessageTs: null as number | null,
 					fileAddedCount: 0,
@@ -507,6 +510,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(({ message }) 
 				filesChangedCount: fCount,
 				tokenCount: tCount,
 				hasTokenCount: hasTCount,
+				isFirstMessage: isFirst,
 			};
 		}),
 	);
@@ -525,6 +529,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(({ message }) 
 
 	const tokenStats = stats.hasTokenCount ? stats.tokenCount : null;
 	const isLastUserMessage = stats.isLastUserMessage;
+	const isFirstMessage = stats.isFirstMessage;
 
 	// Calculate processing time locally
 	const processingTime = useMemo(() => {
@@ -660,7 +665,8 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(({ message }) 
 			}
 			// When editing and sending, delete messages immediately (not just mark as reverted)
 			if (message.id) {
-				chatActions.deleteMessagesFromId(message.id);
+				// This will keep the current message but remove everything after it
+				chatActions.deleteMessagesAfterId(message.id);
 			}
 			// Clear unrevert state - user is sending a new message, unrevert no longer makes sense
 			chatActions.setUnrevertAvailable(false);
@@ -694,6 +700,8 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(({ message }) 
 				text,
 				planMode: false,
 				attachments: hasAttachments ? editAttachments : undefined,
+				// Pass the ID of the message being edited so the backend knows to replace/truncate history
+				messageID: message.id,
 			});
 			setEditingMessageId(null);
 		},
@@ -773,7 +781,8 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(({ message }) 
 	// BUT don't show both restore and unrevert at the same time - unrevert takes priority
 	const showUnrevert = isLastUserMessage && unrevertAvailable;
 	// Show restore only if unrevert is not available (they are mutually exclusive)
-	const showRestore = restoreCommit && !showUnrevert;
+	// AND only if it's NOT the first message (can't restore to before the start)
+	const showRestore = restoreCommit && !showUnrevert && !isFirstMessage;
 
 	const [isSticky, setIsSticky] = useState(false);
 	const containerRef = useRef<HTMLDivElement>(null);

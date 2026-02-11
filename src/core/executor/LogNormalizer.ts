@@ -81,7 +81,11 @@ export class LogNormalizer extends EventEmitter {
 			case 'read_file':
 				actionType = {
 					type: 'FileRead',
-					path: (input.path as string) || (input.file_path as string) || '',
+					path:
+						(input.path as string) ||
+						(input.file_path as string) ||
+						(input.filePath as string) ||
+						'',
 				};
 				break;
 
@@ -89,7 +93,8 @@ export class LogNormalizer extends EventEmitter {
 			case 'write_file':
 			case 'Write':
 			case 'write': {
-				const path = (input.path as string) || (input.file_path as string) || '';
+				const path =
+					(input.path as string) || (input.file_path as string) || (input.filePath as string) || '';
 				const content = (input.content as string) || (input.contents as string) || '';
 				actionType = {
 					type: 'FileEdit',
@@ -107,7 +112,8 @@ export class LogNormalizer extends EventEmitter {
 			case 'patch':
 			case 'MultiEdit':
 			case 'multiedit': {
-				const path = (input.path as string) || (input.file_path as string) || '';
+				const path =
+					(input.path as string) || (input.file_path as string) || (input.filePath as string) || '';
 				const diff = (input.diff as string) || '';
 				const oldString =
 					(input.old_string as string) ||

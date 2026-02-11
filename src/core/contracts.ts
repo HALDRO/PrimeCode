@@ -24,6 +24,8 @@ export interface ICLIConfig {
 export interface ICLIRunner {
 	spawn(prompt: string, config: ICLIConfig): Promise<unknown>;
 	spawnFollowUp(prompt: string, sessionId: string, config: ICLIConfig): Promise<unknown>;
+	/** Truncate session history at a specific message ID (OpenCode only; no-op for other providers). */
+	truncateSession(sessionId: string, messageId: string, config: ICLIConfig): Promise<void>;
 	spawnReview(prompt: string, config: ICLIConfig): Promise<unknown>;
 	createNewSession(prompt: string, config: ICLIConfig): Promise<unknown>;
 	/** Creates an empty session without sending a message. Returns the session ID. */

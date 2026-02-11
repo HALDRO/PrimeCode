@@ -13,6 +13,7 @@ import { computeDiff } from '../../../common/diffStats';
 import { cn } from '../../lib/cn';
 
 const LINE_HEIGHT = 19;
+const DEFAULT_HUNK_CONTEXT_LINES = 2;
 
 interface SimpleDiffProps {
 	original: string;
@@ -20,22 +21,73 @@ interface SimpleDiffProps {
 	maxHeight?: number;
 	expanded?: boolean;
 	showLineNumbers?: boolean;
+	/**
+	 * When true (default), collapse large unchanged regions and keep only hunks
+	 * around changed lines.
+	 */
+	collapseUnchanged?: boolean;
+	/** Number of unchanged context lines to keep around each changed line (only when collapsing). */
+	contextLines?: number;
 }
 
-interface DiffLine {
-	type: 'added' | 'removed' | 'unchanged';
-	content: string;
-	oldLineNumber?: number;
-	newLineNumber?: number;
+type BaseDiffLine = ReturnType<typeof computeDiff>[number];
+
+type DisplayDiffLine = BaseDiffLine & {
 	/** If present, render a separator before this line showing skipped unchanged lines */
 	separatorBefore?: number;
-}
+};
 
 /**
- * Group diff lines into hunks with context (±1 line around changes)
- * Returns only the lines that should be displayed, with separatorBefore markers
+ * Best-effort parse for unified diff hunks ("@@ ... @@") into old/new content snapshots.
+ * Returns null when input does not look like a valid unified diff with hunks.
  */
-function groupIntoHunks(diffLines: DiffLine[], contextLines = 1): DiffLine[] {
+export function parseUnifiedDiffSnapshots(
+	diffText: string,
+): { oldContent: string; newContent: string } | null {
+	const lines = diffText.split('\n');
+	let inHunk = false;
+	let sawChange = false;
+	const oldLines: string[] = [];
+	const newLines: string[] = [];
+
+	for (const line of lines) {
+		if (line.startsWith('@@')) {
+			inHunk = true;
+			continue;
+		}
+		if (!inHunk) continue;
+
+		// Skip headers if they appear inside parsed chunk
+		if (line.startsWith('+++') || line.startsWith('---')) continue;
+		if (line.startsWith('\\')) continue; // e.g. "\\ No newline at end of file"
+
+		if (line.startsWith('+')) {
+			newLines.push(line.slice(1));
+			sawChange = true;
+			continue;
+		}
+		if (line.startsWith('-')) {
+			oldLines.push(line.slice(1));
+			sawChange = true;
+			continue;
+		}
+		if (line.startsWith(' ')) {
+			const ctx = line.slice(1);
+			oldLines.push(ctx);
+			newLines.push(ctx);
+		}
+	}
+
+	if (!inHunk) return null;
+	if (!sawChange && oldLines.length === 0 && newLines.length === 0) return null;
+
+	return {
+		oldContent: oldLines.join('\n'),
+		newContent: newLines.join('\n'),
+	};
+}
+
+function groupIntoHunks(diffLines: BaseDiffLine[], contextLines = 1): DisplayDiffLine[] {
 	if (diffLines.length === 0) return [];
 
 	// Find indices of all changed lines
@@ -71,12 +123,12 @@ function groupIntoHunks(diffLines: DiffLine[], contextLines = 1): DiffLine[] {
 	}
 
 	// Build the display lines with separatorBefore markers
-	const result: DiffLine[] = [];
+	const result: DisplayDiffLine[] = [];
 	let lastEnd = -1;
 
 	for (const range of includedRanges) {
 		for (let i = range.start; i <= range.end; i++) {
-			const line = { ...diffLines[i] };
+			const line: DisplayDiffLine = { ...diffLines[i] };
 
 			// Add separator marker on first line of hunk if there's a gap
 			// Skip separator for the very first hunk - no need to show "hidden lines" at the top
@@ -99,9 +151,17 @@ function groupIntoHunks(diffLines: DiffLine[], contextLines = 1): DiffLine[] {
 /**
  * Calculate content height based on displayed lines count (hunks with context)
  */
-export function getDiffContentHeight(original: string, modified: string): number {
+export function getDiffContentHeight(
+	original: string,
+	modified: string,
+	options?: { collapseUnchanged?: boolean; contextLines?: number },
+): number {
 	const diffLines = computeDiff(original, modified);
-	const displayLines = groupIntoHunks(diffLines, 1);
+	const collapseUnchanged = options?.collapseUnchanged ?? true;
+	const contextLines = options?.contextLines ?? DEFAULT_HUNK_CONTEXT_LINES;
+	const displayLines: DisplayDiffLine[] = collapseUnchanged
+		? groupIntoHunks(diffLines, contextLines)
+		: diffLines.map(l => ({ ...l }));
 	// Count separators (lines with separatorBefore) as additional height
 	const separatorCount = displayLines.filter(l => l.separatorBefore !== undefined).length;
 	return (displayLines.length + separatorCount) * LINE_HEIGHT;
@@ -120,8 +180,8 @@ export function formatAsUnifiedDiff(original: string, modified: string, fileName
 	}
 
 	// Group changes into hunks
-	const hunks: Array<{ start: number; lines: DiffLine[] }> = [];
-	let currentHunk: DiffLine[] = [];
+	const hunks: Array<{ start: number; lines: BaseDiffLine[] }> = [];
+	let currentHunk: BaseDiffLine[] = [];
 	let hunkStart = 0;
 	let contextBefore = 0;
 
@@ -182,9 +242,15 @@ export const SimpleDiff: React.FC<SimpleDiffProps> = ({
 	maxHeight = 120,
 	expanded = false,
 	showLineNumbers = false,
+	collapseUnchanged = true,
+	contextLines = DEFAULT_HUNK_CONTEXT_LINES,
 }) => {
 	const diffLines = useMemo(() => computeDiff(original, modified), [original, modified]);
-	const displayLines = useMemo(() => groupIntoHunks(diffLines, 1), [diffLines]);
+	const displayLines = useMemo(
+		(): DisplayDiffLine[] =>
+			collapseUnchanged ? groupIntoHunks(diffLines, contextLines) : diffLines.map(l => ({ ...l })),
+		[diffLines, collapseUnchanged, contextLines],
+	);
 
 	const maxHeightStyle = expanded ? undefined : `${maxHeight}px`;
 

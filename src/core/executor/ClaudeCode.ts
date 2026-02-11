@@ -5,7 +5,7 @@
 
 import { type ChildProcess, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { apiTokensToStats, type TokenUsageAPI } from '../../common';
+import { apiTokensToStats, generateId, type TokenUsageAPI } from '../../common';
 import { logger } from '../../utils/logger';
 import { LogNormalizer } from './LogNormalizer';
 import type { CLIConfig, CLIEvent, CLIExecutor } from './types';
@@ -204,7 +204,7 @@ export class ClaudeExecutor extends EventEmitter implements CLIExecutor {
 
 	async createEmptySession(_config: CLIConfig): Promise<string> {
 		// Claude doesn't have persistent sessions - generate a local ID
-		const sessionId = `claude-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+		const sessionId = generateId('claude');
 		this.sessionId = sessionId;
 		return sessionId;
 	}

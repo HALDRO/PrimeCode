@@ -10,6 +10,8 @@ import type { NormalizedEntry } from '../../common/normalizedEvents';
 export interface CLIConfig {
 	provider: 'claude' | 'opencode';
 	model?: string;
+	/** Optional stable message ID for OpenCode prompts (used for edit/revert flows). */
+	messageID?: string;
 	workspaceRoot: string;
 	yoloMode?: boolean;
 	agent?: string;
@@ -45,6 +47,8 @@ export interface CLIExecutor extends EventEmitter {
 	ensureServer(config: CLIConfig): Promise<void>;
 	spawn(prompt: string, config: CLIConfig): Promise<ChildProcess | null>;
 	spawnFollowUp(prompt: string, sessionId: string, config: CLIConfig): Promise<ChildProcess | null>;
+	/** Truncate session history at a specific message ID (OpenCode only). */
+	truncateSession?(sessionId: string, messageId: string, config: CLIConfig): Promise<void>;
 	/** Spawn a process specifically for code review. */
 	spawnReview?(prompt: string, config: CLIConfig): Promise<ChildProcess | null>;
 	createNewSession(prompt: string, config: CLIConfig): Promise<ChildProcess | null>;

@@ -34,4 +34,5 @@ export type {
 	ToolResultData,
 	ToolUseData,
 } from './extensionMessages';
+export { generateId } from './generateId';
 export * from './schemas';

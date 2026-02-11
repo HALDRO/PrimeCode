@@ -623,7 +623,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					break;
 				}
 
-				const toolUseId = typeof e.toolUseId === 'string' ? (e.toolUseId as string) : undefined;
+				const toolUseId =
+					(typeof e.toolUseId === 'string' ? (e.toolUseId as string) : undefined) ??
+					(typeof e.toolCallId === 'string' ? (e.toolCallId as string) : undefined);
 
 				const tool =
 					(typeof e.tool === 'string' ? (e.tool as string) : undefined) ??
@@ -660,6 +662,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				}
 
 				const patterns = Array.isArray(e.patterns) ? (e.patterns as string[]) : undefined;
+				const metadata = e.metadata as Record<string, unknown> | undefined;
 
 				this.sessionHandler.postSessionMessage(
 					{
@@ -672,6 +675,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 						pattern: patterns?.[0],
 						resolved: false,
 						timestamp: new Date().toISOString(),
+						metadata,
 					},
 					targetSessionId,
 				);
@@ -882,6 +886,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				toolName,
 				content,
 				isError: Boolean(e.is_error),
+				title: typeof e.title === 'string' ? e.title : undefined,
+				metadata:
+					e.metadata && typeof e.metadata === 'object'
+						? (e.metadata as Record<string, unknown>)
+						: undefined,
 				timestamp: new Date().toISOString(),
 				normalizedEntry: event.normalizedEntry,
 				contextId,
@@ -931,6 +940,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		}
 
 		this.registerHandlers();
+
+		// If switching TO opencode, start the server (mirrors constructor logic)
+		this.scheduleOpenCodeInit();
 
 		this.postMessage({ type: 'configChanged' });
 	}

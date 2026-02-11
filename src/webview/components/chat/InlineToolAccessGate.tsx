@@ -7,12 +7,14 @@
 
 import type React from 'react';
 import { cn } from '../../lib/cn';
-import { useVSCode } from '../../utils/vscode';
+import { useChatActions } from '../../store';
+import { useSessionMessage } from '../../utils/vscode';
 import { CheckIcon, CloseIcon, ShieldIcon } from '../icons';
 import { Tooltip } from '../ui';
 
 export interface InlineToolAccessGateProps {
 	requestId: string;
+	messageId?: string;
 	tool: string;
 	input: Record<string, unknown> | unknown;
 	pattern?: string;
@@ -50,25 +52,31 @@ function getDisplayDetails(input: unknown, hideDetails?: boolean): string | null
 }
 
 export const InlineToolAccessGate: React.FC<InlineToolAccessGateProps> = props => {
-	const { requestId, tool, input, className } = props;
-	const { postMessage } = useVSCode();
+	const { requestId, tool, input, className, messageId } = props;
+	const { postSessionMessage } = useSessionMessage();
+	const { updateMessage } = useChatActions();
 
 	const handleResponse = (isApproved: boolean, alwaysAllow = false) => {
-		postMessage('accessResponse', {
+		postSessionMessage('accessResponse', {
 			id: requestId,
 			toolName: tool,
 			approved: isApproved,
 			alwaysAllow,
 			response: isApproved ? (alwaysAllow ? 'always' : 'once') : 'reject',
 		});
+
+		// Optimistically resolve to hide the gate immediately (backend will also emit session_event(access)).
+		if (messageId) {
+			updateMessage(messageId, { resolved: true, approved: isApproved });
+		}
 	};
 
 	const details = getDisplayDetails(input, props.hideDetails);
 
 	return (
-		<div className={cn('py-1', className)}>
-			{/* Single row: label left, buttons centered */}
-			<div className="flex items-center gap-2">
+		<div className={cn('py-0', className)}>
+			{/* Single row: label left, buttons next to it */}
+			<div className="flex items-center gap-3">
 				{/* Left: icon + label */}
 				<div className="flex items-center gap-1.5 shrink-0">
 					<div className="flex items-center justify-center w-5 h-5 rounded bg-warning/15">
@@ -79,8 +87,8 @@ export const InlineToolAccessGate: React.FC<InlineToolAccessGateProps> = props =
 					</span>
 				</div>
 
-				{/* Center: action buttons */}
-				<div className="flex-1 flex items-center justify-center gap-2">
+				{/* Right: action buttons */}
+				<div className="flex items-center gap-2">
 					<Tooltip content="Allow once" position="top" delay={150}>
 						<button
 							type="button"

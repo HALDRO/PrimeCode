@@ -1,3 +1,4 @@
+import type { SessionEventMessage } from '../../common';
 import type { HandlerContext, WebviewMessage, WebviewMessageHandler } from './types';
 
 export class ToolHandler implements WebviewMessageHandler {
@@ -45,6 +46,8 @@ export class ToolHandler implements WebviewMessageHandler {
 			msg.response === 'once' || msg.response === 'always' || msg.response === 'reject'
 				? msg.response
 				: undefined;
+		const targetSessionId =
+			typeof msg.sessionId === 'string' ? msg.sessionId : this.context.sessionState.activeSessionId;
 
 		if (!requestId) {
 			throw new Error('Missing accessResponse.id');
@@ -73,6 +76,23 @@ export class ToolHandler implements WebviewMessageHandler {
 			alwaysAllow,
 			response,
 		});
+
+		if (targetSessionId) {
+			this.context.view.postMessage({
+				type: 'session_event',
+				targetId: targetSessionId,
+				eventType: 'access',
+				payload: {
+					eventType: 'access',
+					action: 'response',
+					requestId,
+					approved,
+					alwaysAllow,
+				},
+				timestamp: Date.now(),
+				sessionId: targetSessionId,
+			} satisfies SessionEventMessage);
+		}
 	}
 
 	private async onGetPermissions(): Promise<void> {

@@ -31,6 +31,7 @@ import type {
 	TokenStats,
 	TotalStats,
 } from '../../common';
+import { generateId } from '../../common';
 import { computeDiffStats } from '../../common/diffStats';
 
 export type { CommitInfo, ConversationMessage, SubtaskMessage, TokenStats, TotalStats };
@@ -106,7 +107,8 @@ export interface ChatActions {
 	addMessage: (msg: MessageInput, sessionId?: string) => void;
 	clearMessages: (sessionId?: string) => void;
 	updateMessage: (id: string, updates: Partial<Message>, sessionId?: string) => void;
-	deleteMessagesFromId: (id: string, sessionId?: string) => void;
+	/** Deletes all messages AFTER the given id, keeping the message itself. */
+	deleteMessagesAfterId: (id: string, sessionId?: string) => void;
 	removeMessageByPartId: (partId: string, sessionId?: string) => void;
 	setEditingMessageId: (id: string | null) => void;
 
@@ -320,7 +322,7 @@ export const useChatStore = create<ChatState>()(
 
 									const message: Message = {
 										...msgData,
-										id: msgData.id || `msg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+										id: msgData.id || generateId('msg'),
 										timestamp: msgData.timestamp || new Date().toISOString(),
 									} as Message;
 
@@ -497,7 +499,7 @@ export const useChatStore = create<ChatState>()(
 									const r = payload as SessionMessagesReloadPayload;
 									targetSession.messages = (r.messages || []).map(m => ({
 										...m,
-										id: m.id || `msg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+										id: m.id || generateId('msg'),
 										timestamp: m.timestamp || new Date().toISOString(),
 									})) as Message[];
 									break;
@@ -592,10 +594,15 @@ export const useChatStore = create<ChatState>()(
 
 				setEditingMessageId: id => set({ editingMessageId: id }),
 
-				deleteMessagesFromId: (id, sessionId) =>
+				deleteMessagesAfterId: (id, sessionId) =>
 					mutateSession(set, sessionId, s => {
 						const idx = s.messages.findIndex(m => m.id === id);
-						if (idx !== -1) s.messages = s.messages.slice(0, idx);
+						if (idx !== -1) {
+							// Keep the message itself, delete everything AFTER it
+							s.messages = s.messages.slice(0, idx + 1);
+							// Also clear any revertedFromMessageId since we are actively editing
+							s.revertedFromMessageId = null;
+						}
 					}),
 
 				removeMessageByPartId: (partId, sessionId) =>

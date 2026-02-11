@@ -347,6 +347,29 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		return null as unknown as ChildProcess;
 	}
 
+	async truncateSession(sessionId: string, messageId: string, config: CLIConfig): Promise<void> {
+		if (!this.serverUrl) throw new Error('OpenCode server not running');
+
+		// OpenCode supports native revert semantics:
+		// POST /session/:id/revert { messageID }
+		// This effectively "cuts" the session state to before/at that message (depending on server semantics).
+		logger.info('[OpenCode] Reverting session history to message', {
+			sessionId,
+			messageId,
+		});
+
+		try {
+			await this.fetchApi(`/session/${sessionId}/revert`, config.workspaceRoot, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ messageID: messageId }),
+			});
+		} catch (e) {
+			// Non-fatal: don't block the send path, but warn so we notice conflicts.
+			logger.warn('[OpenCode] Revert endpoint failed (non-fatal)', e);
+		}
+	}
+
 	async createNewSession(prompt: string, config: CLIConfig): Promise<ChildProcess> {
 		if (!this.serverUrl) throw new Error('OpenCode server not running');
 
@@ -482,7 +505,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 						} else {
 							partEvents.push({
 								type: 'normalized_log' as const,
-								data: { role: 'user', content: part.text, timestamp },
+								data: { role: 'user', content: part.text, timestamp, messageId: msg.info?.id },
 								normalizedEntry: {
 									entryType: 'UserMessage' as const,
 									content: part.text || '',
@@ -526,6 +549,9 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 									isError: status === 'error',
 									toolUseId: callID,
 									timestamp,
+									title: state?.title,
+									metadata: state?.metadata,
+									input: state?.input,
 								},
 								sessionId,
 							});
@@ -817,6 +843,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 		const body = {
 			parts: [{ type: 'text' as const, text: prompt }],
+			...(config.messageID ? { messageID: config.messageID } : {}),
 			...modelOverride,
 			...(config.agent ? { agent: config.agent } : {}),
 		};

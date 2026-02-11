@@ -13,6 +13,7 @@ import type {
 	SessionMessageData,
 	WorkspaceFile,
 } from '../../common';
+import { generateId } from '../../common';
 
 export type { ConversationIndexEntry, WorkspaceFile };
 
@@ -131,7 +132,7 @@ export const useUIStore = create<UIState>((set, get) => ({
 		hideConfirmDialog: () => set({ confirmDialog: null }),
 
 		pushNotification: notification => {
-			const id = notification.id || `notif-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+			const id = notification.id || generateId('notif');
 			const createdAt = notification.createdAt ?? Date.now();
 			set(state => ({
 				notifications: [
