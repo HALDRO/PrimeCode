@@ -98,6 +98,10 @@ export const useRestoreCommits = () =>
 export const useUnrevertAvailable = () =>
 	useChatStore((state: ChatState) => getActiveSession(state)?.unrevertAvailable ?? false);
 
+/** Select the message ID from which subsequent messages are reverted (dimmed) */
+export const useRevertedFromMessageId = () =>
+	useChatStore((state: ChatState) => getActiveSession(state)?.revertedFromMessageId ?? null);
+
 /** Select prompt improver loading state */
 export const useIsImprovingPrompt = () =>
 	useChatStore((state: ChatState) => state.isImprovingPrompt);

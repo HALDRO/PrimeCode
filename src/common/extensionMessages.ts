@@ -158,6 +158,8 @@ export interface SessionRestorePayload {
 	canUnrevert?: boolean;
 	available?: boolean;
 	text?: string;
+	/** The user message ID from which messages should be dimmed (reverted) */
+	revertedFromMessageId?: string;
 }
 
 export interface SessionFilePayload {

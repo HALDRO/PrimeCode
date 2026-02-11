@@ -14,6 +14,16 @@ export interface HandlerContext {
 	view: IView;
 	sessionState: ISessionState;
 	services: ServiceRegistry;
+	/** Register a checkpoint on the backend so the frontend can restore by commitId alone. */
+	registerCheckpoint?: (
+		commitId: string,
+		record: {
+			sessionId: string;
+			messageId: string;
+			associatedMessageId: string;
+			isOpenCode: boolean;
+		},
+	) => void;
 }
 
 export interface WebviewMessageHandler {

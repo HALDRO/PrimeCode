@@ -11,6 +11,7 @@ import { getHtml } from '../utils/webviewHtml';
 import { FileHandler } from './handlers/FileHandler';
 import { McpHandler } from './handlers/McpHandler';
 import { ProviderHandler } from './handlers/ProviderHandler';
+import { RestoreHandler } from './handlers/RestoreHandler';
 import { SessionHandler } from './handlers/SessionHandler';
 import { SettingsHandler } from './handlers/SettingsHandler';
 import { SseHandler } from './handlers/SseHandler';
@@ -36,6 +37,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private toolHandler: ToolHandler;
 	private fileHandler: FileHandler;
 	private sseHandler: SseHandler;
+	private restoreHandler: RestoreHandler;
 
 	private pendingSyncAll = false;
 
@@ -51,6 +53,16 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.cli = new CLIRunner(provider);
 
 		// Initialize Handlers
+		// RestoreHandler is created first so its registerCheckpoint can be wired into the context
+		this.restoreHandler = new RestoreHandler({
+			extensionContext: this.context,
+			settings: this.settings,
+			cli: this.cli,
+			view: { postMessage: msg => this.postMessage(msg) },
+			sessionState: this.sessionState,
+			services: this.services,
+		});
+
 		const handlerContext: HandlerContext = {
 			extensionContext: this.context,
 			settings: this.settings,
@@ -58,6 +70,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			view: { postMessage: msg => this.postMessage(msg) },
 			sessionState: this.sessionState,
 			services: this.services,
+			registerCheckpoint: (commitId, record) =>
+				this.restoreHandler.registerCheckpoint(commitId, record),
 		};
 
 		this.sessionHandler = new SessionHandler(handlerContext);
@@ -359,6 +373,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		];
 		fileTypes.forEach(t => {
 			this.handlers[t] = this.fileHandler;
+		});
+
+		const restoreTypes = ['restoreCommit', 'unrevert'];
+		restoreTypes.forEach(t => {
+			this.handlers[t] = this.restoreHandler;
 		});
 
 		// syncAll is an orchestration message handled by ChatProvider itself

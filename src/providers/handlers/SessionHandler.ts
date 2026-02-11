@@ -239,20 +239,113 @@ export class SessionHandler implements WebviewMessageHandler {
 	// Private Handlers
 	// =============================================================================
 
-	private async onWebviewDidLaunch(msg: WebviewMessage): Promise<void> {
-		const restoredSessionId = typeof msg.sessionId === 'string' ? msg.sessionId : undefined;
+	private async onWebviewDidLaunch(_msg: WebviewMessage): Promise<void> {
+		// Always load the most recent session from CLI (source of truth).
+		// No webview cache — CLI is the only authority for session history.
+		try {
+			const config = this.buildBaseConfig();
+			const allSessions = await this.context.cli.listSessions(config);
 
-		if (restoredSessionId) {
-			this.context.sessionState.activeSessionId = restoredSessionId;
-			this.context.sessionState.startedSessions.add(restoredSessionId);
-			logger.info('[SessionHandler] Restoring session', { sessionId: restoredSessionId });
-			this.postLifecycle('created', restoredSessionId);
-			this.postLifecycle('switched', restoredSessionId, { isProcessing: false });
-			this.postStatus(restoredSessionId, 'idle', 'Ready');
-			this.initializeSessionStats(restoredSessionId);
-		} else {
-			logger.info('[SessionHandler] No active session to restore');
-			// Do NOT auto-create logic here. Let the UI stay in EmptyState until user interaction.
+			// Find the most recent top-level session (no parentID)
+			const topLevelSessions = allSessions
+				.filter(s => !s.parentID)
+				.sort((a, b) => (b.lastModified || 0) - (a.lastModified || 0));
+
+			if (topLevelSessions.length === 0) {
+				logger.info('[SessionHandler] No sessions found in CLI, staying in EmptyState');
+				return;
+			}
+
+			const lastSession = topLevelSessions[0];
+			const sessionId = lastSession.id;
+
+			logger.info('[SessionHandler] Restoring last session from CLI', {
+				sessionId,
+				title: lastSession.title,
+			});
+
+			// Register session on extension side
+			this.context.sessionState.activeSessionId = sessionId;
+			this.context.sessionState.startedSessions.add(sessionId);
+			this.postLifecycle('created', sessionId);
+			this.postLifecycle('switched', sessionId, { isProcessing: false });
+			this.initializeSessionStats(sessionId);
+
+			// Load and replay history from CLI
+			await this.replaySessionFromCLI(sessionId, config);
+
+			this.postStatus(sessionId, 'idle', 'Ready');
+		} catch (error) {
+			logger.error('[SessionHandler] Failed to restore session from CLI:', error);
+			// Stay in EmptyState on failure
+		}
+	}
+
+	/**
+	 * Loads a session's full history (including child subagent sessions) from CLI
+	 * and replays it into the webview. Reused by both onWebviewDidLaunch and onLoadConversation.
+	 */
+	private async replaySessionFromCLI(
+		sessionId: string,
+		config: { provider: 'claude' | 'opencode'; workspaceRoot: string },
+	): Promise<void> {
+		const allSessions = await this.context.cli.listSessions(config);
+		const childSessions = allSessions
+			.filter(s => s.parentID === sessionId)
+			.sort((a, b) => (a.created || 0) - (b.created || 0));
+		const childSessionIds = childSessions.map(s => s.id);
+
+		// Map task toolUseId -> child session id
+		const parentHistory = await this.context.cli.getHistory(sessionId, config);
+		const taskToolUseIds: string[] = [];
+		for (const ev of parentHistory) {
+			if (ev.type === 'tool_use') {
+				const d = ev.data as { tool?: string; toolUseId?: string };
+				if (d.tool === 'task' && typeof d.toolUseId === 'string') {
+					taskToolUseIds.push(d.toolUseId);
+				}
+			}
+		}
+		const taskToChildSessionId = new Map<string, string>();
+		for (let i = 0; i < taskToolUseIds.length; i++) {
+			const childId = childSessionIds[i];
+			if (childId) taskToChildSessionId.set(taskToolUseIds[i], childId);
+		}
+
+		// Replay child sessions
+		for (const child of childSessions) {
+			const childHistory = await this.context.cli.getHistory(child.id, config);
+			this.replayHistoryIntoSession(child.id, childHistory);
+		}
+
+		// Surface child sessions as subtask cards if parent history is compacted
+		if (taskToolUseIds.length === 0 && childSessions.length > 0) {
+			for (const child of childSessions) {
+				this.postSessionMessage(
+					{
+						id: `hist-subtask-${child.id}`,
+						type: 'subtask',
+						agent: 'subagent',
+						description: child.title || 'Subtask',
+						status: 'completed',
+						contextId: child.id,
+						metadata: { childSessionId: child.id },
+						timestamp: new Date().toISOString(),
+					},
+					sessionId,
+				);
+			}
+		}
+
+		// Replay parent history
+		if (parentHistory.length > 0) {
+			logger.info(
+				`[SessionHandler] Replaying ${parentHistory.length} events for session ${sessionId}`,
+			);
+			this.replayHistoryIntoSession(sessionId, parentHistory, {
+				mode: 'parent',
+				taskToChildSessionId,
+			});
 		}
 	}
 
@@ -442,22 +535,56 @@ export class SessionHandler implements WebviewMessageHandler {
 				},
 				activeId,
 			);
+
+			// Emit checkpoint so the "Restore to Checkpoint" button appears on this user message
+			if (activeId) {
+				const commitId = generateId('checkpoint');
+				// Register on backend so RestoreHandler can resolve commitId → API params
+				this.context.registerCheckpoint?.(commitId, {
+					sessionId: activeId,
+					messageId: userMessageId,
+					associatedMessageId: userMessageId,
+					isOpenCode,
+				});
+
+				this.context.view.postMessage({
+					type: 'session_event',
+					targetId: activeId,
+					eventType: 'restore',
+					payload: {
+						eventType: 'restore',
+						action: 'add_commit',
+						commit: {
+							id: commitId,
+							sha: commitId,
+							message: `Checkpoint before message`,
+							timestamp: new Date().toISOString(),
+							associatedMessageId: userMessageId,
+						},
+					},
+					timestamp: Date.now(),
+					sessionId: activeId,
+				} satisfies SessionEventMessage);
+			}
+
 			this.postStatus(activeId, 'busy', 'Working...');
 			this.initializeSessionStats(activeId);
 
 			if (!activeId) throw new Error('No active session after initialization');
 
-			// OpenCode edit/revert: truncate history at the edited message, then resend with messageID.
-			let requestConfig = config;
+			// OpenCode edit flow (matches opencode-gui reference):
+			// 1. Revert session to the edited message (truncates history on server)
+			// 2. Send a clean prompt WITHOUT messageID (server treats it as a new message)
+			// File restore is handled separately by RestoreHandler when the user
+			// explicitly confirms via the "Restore & Send" dialog.
 			if (isOpenCode && messageIdToTruncate) {
-				requestConfig = { ...config, messageID: messageIdToTruncate } as typeof config;
-				logger.info('[SessionHandler] Requesting OpenCode revert', {
+				logger.info('[SessionHandler] Editing message: revert then resend', {
 					messageId: messageIdToTruncate,
 				});
-				await this.context.cli.truncateSession(activeId, messageIdToTruncate, requestConfig);
+				await this.context.cli.truncateSession(activeId, messageIdToTruncate, config);
 			}
 
-			await this.context.cli.spawnFollowUp(text, activeId, requestConfig);
+			await this.context.cli.spawnFollowUp(text, activeId, config);
 		} catch (error) {
 			logger.error('[SessionHandler] Failed to spawn CLI:', error);
 
@@ -513,84 +640,14 @@ export class SessionHandler implements WebviewMessageHandler {
 		// Set active session and mark as started so follow-up messages reuse it
 		this.context.sessionState.activeSessionId = sessionId;
 		this.context.sessionState.startedSessions.add(sessionId);
-		this.postLifecycle('created', sessionId); // Ensure UI knows about it
+		this.postLifecycle('created', sessionId);
 		this.postLifecycle('switched', sessionId, { isProcessing: false });
 		this.initializeSessionStats(sessionId);
 
-		// Initialize connection to this session in OpenCode
 		try {
-			const config = {
-				provider: 'opencode' as const,
-				workspaceRoot: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '',
-			};
-
-			// Load child subagent sessions (parentID === sessionId) and preload their messages.
-			const allSessions = await this.context.cli.listSessions(config);
-			logger.info('[SessionHandler] Found child sessions', {
-				parentSessionId: sessionId,
-				childCount: allSessions.filter(s => s.parentID === sessionId).length,
-			});
-			const childSessions = allSessions
-				.filter(s => s.parentID === sessionId)
-				.sort((a, b) => (a.created || 0) - (b.created || 0)); // Sort by creation time
-			const childSessionIds = childSessions.map(s => s.id);
-
-			// Map task toolUseId -> child session id (best-effort: order match)
-			const parentHistory = await this.context.cli.getHistory(sessionId, config);
-			const taskToolUseIds: string[] = [];
-			for (const ev of parentHistory) {
-				if (ev.type === 'tool_use') {
-					const d = ev.data as { tool?: string; toolUseId?: string };
-					if (d.tool === 'task' && typeof d.toolUseId === 'string') {
-						taskToolUseIds.push(d.toolUseId);
-					}
-				}
-			}
-			const taskToChildSessionId = new Map<string, string>();
-			for (let i = 0; i < taskToolUseIds.length; i++) {
-				const childId = childSessionIds[i];
-				if (childId) taskToChildSessionId.set(taskToolUseIds[i], childId);
-			}
-
-			for (const child of childSessions) {
-				// Preload child messages as a normal session_event stream.
-				// Do NOT send 'created' lifecycle event, otherwise it will appear in the session tabs.
-				// It will be auto-created in store by dispatch() when the first message arrives.
-				const childHistory = await this.context.cli.getHistory(child.id, config);
-				this.replayHistoryIntoSession(child.id, childHistory);
-			}
-
-			// If parent history is compacted (no task tool_use), still surface child sessions as subtask cards.
-			if (taskToolUseIds.length === 0 && childSessions.length > 0) {
-				for (const child of childSessions) {
-					this.postSessionMessage(
-						{
-							id: `hist-subtask-${child.id}`,
-							type: 'subtask',
-							agent: 'subagent',
-							description: child.title || 'Subtask',
-							status: 'completed',
-							contextId: child.id,
-							metadata: { childSessionId: child.id },
-							timestamp: new Date().toISOString(),
-						},
-						sessionId,
-					);
-				}
-			}
-
-			// Replay parent history (create subtask cards for task tool_use)
-			if (parentHistory && parentHistory.length > 0) {
-				logger.info(
-					`[SessionHandler] Replaying ${parentHistory.length} events for session ${sessionId}`,
-				);
-				this.replayHistoryIntoSession(sessionId, parentHistory, {
-					mode: 'parent',
-					taskToChildSessionId,
-				});
-			} else {
-				logger.info('[SessionHandler] No history found for session', { sessionId });
-			}
+			const config = this.buildBaseConfig();
+			await this.replaySessionFromCLI(sessionId, config);
+			this.postStatus(sessionId, 'idle', 'Ready');
 		} catch (error) {
 			logger.error('[SessionHandler] Failed to load conversation:', error);
 			this.postStatus(sessionId, 'error', 'Failed to load');
@@ -634,9 +691,10 @@ export class SessionHandler implements WebviewMessageHandler {
 						typeof data.messageId === 'string' && data.messageId.trim()
 							? data.messageId
 							: undefined;
+					const userMsgId = stableId ?? `msg-local-${Math.random().toString(36).slice(2, 9)}`;
 					this.postSessionMessage(
 						{
-							id: stableId ?? `msg-local-${Math.random().toString(36).slice(2, 9)}`,
+							id: userMsgId,
 							type: 'user',
 							content: data.content || '',
 							timestamp: data.timestamp || new Date().toISOString(),
@@ -644,6 +702,34 @@ export class SessionHandler implements WebviewMessageHandler {
 						},
 						sessionId,
 					);
+
+					// Emit checkpoint so the restore button appears for replayed user messages
+					const replayCommitId = generateId('checkpoint');
+					this.context.registerCheckpoint?.(replayCommitId, {
+						sessionId,
+						messageId: userMsgId,
+						associatedMessageId: userMsgId,
+						isOpenCode: true,
+					});
+
+					this.context.view.postMessage({
+						type: 'session_event',
+						targetId: sessionId,
+						eventType: 'restore',
+						payload: {
+							eventType: 'restore',
+							action: 'add_commit',
+							commit: {
+								id: replayCommitId,
+								sha: replayCommitId,
+								message: 'Checkpoint before message',
+								timestamp: data.timestamp || new Date().toISOString(),
+								associatedMessageId: userMsgId,
+							},
+						},
+						timestamp: Date.now(),
+						sessionId,
+					} satisfies SessionEventMessage);
 				}
 				continue;
 			}

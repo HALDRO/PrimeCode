@@ -12,7 +12,7 @@ import { ChangedFilesPanel } from './components/chat/ChangedFilesPanel';
 import { GenerationStatus } from './components/chat/GenerationStatus';
 import { MessageItem } from './components/chat/MessageItem';
 import { NotificationOverlay } from './components/chat/NotificationOverlay.tsx';
-import { groupToolMessages, shouldCollapseGroupedItem } from './components/chat/SimpleTool';
+import { shouldCollapseGroupedItem } from './components/chat/SimpleTool';
 import { UserMessage } from './components/chat/UserMessage';
 import { Header } from './components/header/Header';
 import { ChatInput } from './components/input/ChatInput';
@@ -22,57 +22,16 @@ import { ConfirmDialog } from './components/ui';
 import { useElementHeight } from './hooks/useElementHeight';
 import { useExtensionMessages } from './hooks/useExtensionMessages';
 import {
-	type Message,
 	useActiveModal,
 	useActiveSessionId,
 	useIsProcessing,
 	useMcpServers,
 	useMessages,
+	useRevertedFromMessageId,
 } from './store';
+import { groupMessagesIntoSections, type MessageSection } from './utils/groupSections';
 
-/**
- * Section represents a user message and all subsequent messages until the next user message.
- */
-interface MessageSection {
-	userMessage: Message & { type: 'user' };
-	responses: (Message | Message[])[];
-	sectionIndex: number;
-}
-
-/**
- * Group messages into sections.
- */
-const groupMessagesIntoSections = (msgs: Message[], mcpServerNames: string[]): MessageSection[] => {
-	const visibleMsgs = msgs.filter(m => !('hidden' in m && m.hidden));
-	const sections: MessageSection[] = [];
-	let currentSection: MessageSection | null = null;
-	let currentResponses: Message[] = [];
-	let sectionIndex = 0;
-
-	for (const msg of visibleMsgs) {
-		if (msg.type === 'user') {
-			if (currentSection) {
-				currentSection.responses = groupToolMessages(currentResponses, mcpServerNames);
-				sections.push(currentSection);
-				currentResponses = [];
-			}
-			currentSection = {
-				userMessage: msg as Message & { type: 'user' },
-				responses: [],
-				sectionIndex: sectionIndex++,
-			};
-		} else if (currentSection) {
-			currentResponses.push(msg);
-		}
-	}
-
-	if (currentSection) {
-		currentSection.responses = groupToolMessages(currentResponses, mcpServerNames);
-		sections.push(currentSection);
-	}
-
-	return sections;
-};
+// MessageSection type and groupMessagesIntoSections are imported from ./utils/groupSections
 
 interface MessageSectionProps {
 	section: MessageSection;
@@ -94,9 +53,12 @@ const MessageSectionComponent = React.memo<MessageSectionProps>(
 					className="sticky top-0 z-40 px-(--layout-padding-x)"
 					style={{ backgroundColor: 'var(--surface-base)' }}
 				>
-					<UserMessage message={section.userMessage} />
+					<UserMessage message={section.userMessage} isRevertPoint={section.isRevertPoint} />
 				</div>
-				<div className="px-(--content-padding-x)">
+				<div
+					className="px-(--content-padding-x)"
+					style={section.isReverted ? { opacity: 0.4, pointerEvents: 'none' } : undefined}
+				>
 					{section.responses.map((responseItem, idx) => {
 						const key = Array.isArray(responseItem)
 							? (responseItem[0]?.id ?? `tool-group-${idx}`)
@@ -200,12 +162,13 @@ export const App: React.FC = () => {
 	const activeModal = useActiveModal();
 	const mcpServers = useMcpServers();
 	const isProcessing = useIsProcessing();
+	const revertedFromMessageId = useRevertedFromMessageId();
 
 	const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
 
 	const sections = useMemo(
-		() => groupMessagesIntoSections(messages, mcpServerNames),
-		[messages, mcpServerNames],
+		() => groupMessagesIntoSections(messages, mcpServerNames, revertedFromMessageId),
+		[messages, mcpServerNames, revertedFromMessageId],
 	);
 
 	const virtuosoContext: VirtuosoContext = useMemo(

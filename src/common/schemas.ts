@@ -270,9 +270,6 @@ export const CommitInfoSchema = Type.Object({
 	message: Type.String(),
 	timestamp: Type.String(),
 	associatedMessageId: Type.Optional(Type.String()),
-	// OpenCode checkpoint metadata (optional; git-based commits won't have these)
-	sessionId: Type.Optional(Type.String()),
-	isOpenCodeCheckpoint: Type.Optional(Type.Boolean()),
 	// When using OpenCode-native revert, we may also keep a git checkpoint SHA to restore workspace files.
 	workspaceCommitSha: Type.Optional(Type.String()),
 });
