@@ -9,15 +9,12 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useShallow } from 'zustand/react/shallow';
 import { CLI_COMMANDS, OPENCODE_COMMANDS } from '../../constants';
 import { cn } from '../../lib/cn';
 import {
-	type ChangedFile,
 	type CommitInfo,
 	type Message,
 	useChatActions,
-	useChatStore,
 	useEditingMessageId,
 	useIsProcessing,
 	useRestoreCommits,
@@ -26,6 +23,7 @@ import {
 import { useSettingsStore } from '../../store/settingsStore';
 import { useUIActions } from '../../store/uiStore';
 import { formatDuration, formatTime, formatTokens, getShortFileName } from '../../utils/format';
+import type { SectionStats } from '../../utils/groupSections';
 import { parseMessageSegments } from '../../utils/messageParser';
 import { STANDARD_MODELS } from '../../utils/models';
 import { useSessionMessage, useVSCode } from '../../utils/vscode';
@@ -33,14 +31,12 @@ import { ClockIcon, TimerIcon, TokensIcon, Undo2Icon } from '../icons';
 import { ChatInput } from '../input/ChatInput';
 import { PathChip, type StatItem, StatsDisplay, Tooltip } from '../ui';
 
-// Stable empty array references to prevent infinite re-renders with useShallow
-const EMPTY_MESSAGES: Message[] = [];
-const EMPTY_CHANGED_FILES: ChangedFile[] = [];
-
 interface UserMessageProps {
 	message: Message & { type: 'user' };
 	/** True when this section is the exact revert point (for Unrevert button placement) */
 	isRevertPoint?: boolean;
+	/** Pre-computed section stats from groupMessagesIntoSections */
+	stats: SectionStats;
 }
 
 /**
@@ -351,7 +347,7 @@ const MessageTextWithCommands: React.FC<{
 MessageTextWithCommands.displayName = 'MessageTextWithCommands';
 
 export const UserMessage: React.FC<UserMessageProps> = React.memo(
-	({ message, isRevertPoint = false }) => {
+	({ message, isRevertPoint = false, stats }) => {
 		const { postMessage } = useVSCode();
 		const { postSessionMessage } = useSessionMessage();
 
@@ -381,155 +377,10 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 			return new Set(subagents.items.map(a => a.name.toLowerCase()));
 		}, [subagents.items]);
 
-		// Derived state selector - calculates all primitive stats in one go using stable values
-		const stats = useChatStore(
-			useShallow(state => {
-				const sid = state.activeSessionId;
-				const session = sid ? state.sessionsById[sid] : undefined;
-				const messages = session?.messages ?? EMPTY_MESSAGES;
-				const changedFiles = session?.changedFiles ?? EMPTY_CHANGED_FILES;
-				const msgIndex = messages.findIndex(m => m.id === message.id);
-
-				// 1. Check if last user message
-				let isLast = false;
-				for (let i = messages.length - 1; i >= 0; i--) {
-					if (messages[i].type === 'user') {
-						isLast = messages[i].id === message.id;
-						break;
-					}
-				}
-
-				const isFirst = msgIndex === 0;
-
-				if (msgIndex === -1) {
-					return {
-						isLastUserMessage: false,
-						isFirstMessage: false,
-						nextUserMessageTs: null as number | null,
-						lastAssistantMessageTs: null as number | null,
-						fileAddedCount: 0,
-						fileRemovedCount: 0,
-						filesChangedCount: 0,
-						tokenCount: null as number | null,
-						hasTokenCount: false,
-					};
-				}
-
-				// 3. Stats timestamps
-				// We DO NOT calculate duration/time strings here to avoid unstable returns or Date.now() dependency
-				let nextUserTs: number | null = null;
-				let lastAsstTs: number | null = null;
-
-				// Check next user message for duration
-				for (let i = msgIndex + 1; i < messages.length; i++) {
-					if (messages[i].type === 'user') {
-						nextUserTs = new Date(messages[i].timestamp).getTime();
-						break;
-					}
-				}
-
-				if (!nextUserTs) {
-					// Find last assistant timestamp if no next user msg
-					let lastMsgTimestamp = new Date(message.timestamp).getTime();
-					for (let i = msgIndex + 1; i < messages.length; i++) {
-						if (messages[i].type === 'user') {
-							break;
-						}
-						const t = new Date(messages[i].timestamp).getTime();
-						if (t > lastMsgTimestamp) {
-							lastMsgTimestamp = t;
-						}
-					}
-					if (lastMsgTimestamp > new Date(message.timestamp).getTime()) {
-						lastAsstTs = lastMsgTimestamp;
-					}
-				}
-
-				// 4. File Changes (Counts only)
-				// Returning objects here ({added: 1, removed: 1}) causes ref instability if not careful.
-				// Returning primitive counts is safer.
-				let fAdded = 0;
-				let fRemoved = 0;
-				let fCount = 0;
-
-				const toolUseIds: string[] = [];
-				for (let i = msgIndex + 1; i < messages.length; i++) {
-					if (messages[i].type === 'user') {
-						break;
-					}
-					const msg = messages[i];
-					if (msg.type === 'tool_use' && 'toolUseId' in msg) {
-						toolUseIds.push(msg.toolUseId);
-					}
-				}
-
-				if (toolUseIds.length > 0) {
-					const filesChanged = new Set<string>();
-					for (const file of changedFiles) {
-						if (toolUseIds.includes(file.toolUseId)) {
-							fAdded += file.linesAdded;
-							fRemoved += file.linesRemoved;
-							filesChanged.add(file.filePath);
-						}
-					}
-					fCount = filesChanged.size;
-				}
-
-				// 5. Token Stats
-				let tCount: number | null = null;
-				let hasTCount = false;
-
-				if ('tokenCount' in message && message.tokenCount) {
-					tCount = message.tokenCount as number;
-					hasTCount = true;
-				} else {
-					let totalTokens = 0;
-					for (let i = msgIndex + 1; i < messages.length; i++) {
-						if (messages[i].type === 'user') {
-							break;
-						}
-						const msg = messages[i];
-						if (msg.type === 'tool_result' && 'estimatedTokens' in msg && msg.estimatedTokens) {
-							totalTokens += msg.estimatedTokens;
-						}
-						if (msg.type === 'assistant' && 'content' in msg && msg.content) {
-							totalTokens += Math.ceil(msg.content.length / 4);
-						}
-					}
-					if (totalTokens > 0) {
-						tCount = totalTokens;
-						hasTCount = true;
-					}
-				}
-
-				return {
-					isLastUserMessage: isLast,
-					nextUserMessageTs: nextUserTs,
-					lastAssistantMessageTs: lastAsstTs,
-					fileAddedCount: fAdded,
-					fileRemovedCount: fRemoved,
-					filesChangedCount: fCount,
-					tokenCount: tCount,
-					hasTokenCount: hasTCount,
-					isFirstMessage: isFirst,
-				};
-			}),
-		);
-
-		// Reconstruct complex objects in component to maintain stability
-		const fileChangesStats = useMemo(() => {
-			if (stats.filesChangedCount === 0) {
-				return null;
-			}
-			return {
-				added: stats.fileAddedCount,
-				removed: stats.fileRemovedCount,
-				files: stats.filesChangedCount,
-			};
-		}, [stats.fileAddedCount, stats.fileRemovedCount, stats.filesChangedCount]);
-
-		const tokenStats = stats.hasTokenCount ? stats.tokenCount : null;
-		const isLastUserMessage = stats.isLastUserMessage;
+		// Stats come from props (pre-computed in groupMessagesIntoSections)
+		const isLastUserMessage = stats.isLast;
+		const fileChangesStats = stats.fileChanges;
+		const tokenStats = stats.tokenCount;
 
 		// Calculate processing time locally
 		const processingTime = useMemo(() => {
@@ -539,23 +390,21 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 				return formatDuration(stats.nextUserMessageTs - messageTimestamp);
 			}
 
-			if (stats.lastAssistantMessageTs) {
-				return formatDuration(stats.lastAssistantMessageTs - messageTimestamp);
+			if (stats.lastResponseTs) {
+				return formatDuration(stats.lastResponseTs - messageTimestamp);
 			}
 
 			if (isProcessing && isLastUserMessage) {
-				// This will be updated by the forceUpdate interval
 				return formatDuration(Date.now() - messageTimestamp);
 			}
 
 			return null;
 		}, [
 			stats.nextUserMessageTs,
-			stats.lastAssistantMessageTs,
+			stats.lastResponseTs,
 			isProcessing,
 			isLastUserMessage,
 			message.timestamp,
-			// forceUpdate is triggered externally by interval, ensuring re-render for live timer
 		]);
 
 		// Parse attachments (prop-based, stable)

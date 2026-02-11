@@ -24,6 +24,7 @@ import { useExtensionMessages } from './hooks/useExtensionMessages';
 import {
 	useActiveModal,
 	useActiveSessionId,
+	useChangedFilesState,
 	useIsProcessing,
 	useMcpServers,
 	useMessages,
@@ -53,7 +54,11 @@ const MessageSectionComponent = React.memo<MessageSectionProps>(
 					className="sticky top-0 z-40 px-(--layout-padding-x)"
 					style={{ backgroundColor: 'var(--surface-base)' }}
 				>
-					<UserMessage message={section.userMessage} isRevertPoint={section.isRevertPoint} />
+					<UserMessage
+						message={section.userMessage}
+						isRevertPoint={section.isRevertPoint}
+						stats={section.stats}
+					/>
 				</div>
 				<div
 					className="px-(--content-padding-x)"
@@ -165,10 +170,11 @@ export const App: React.FC = () => {
 	const revertedFromMessageId = useRevertedFromMessageId();
 
 	const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
+	const { changedFiles } = useChangedFilesState();
 
 	const sections = useMemo(
-		() => groupMessagesIntoSections(messages, mcpServerNames, revertedFromMessageId),
-		[messages, mcpServerNames, revertedFromMessageId],
+		() => groupMessagesIntoSections(messages, mcpServerNames, revertedFromMessageId, changedFiles),
+		[messages, mcpServerNames, revertedFromMessageId, changedFiles],
 	);
 
 	const virtuosoContext: VirtuosoContext = useMemo(
