@@ -1,6 +1,6 @@
 /**
  * @file OpenCodeExecutor
- * @description Executor implementation for OpenCode CLI (SSE-based) using pure fetch API.
+ * @description Executor implementation for OpenCode CLI (SSE-based) using @opencode-ai/sdk.
  * Parses token stats from `message.updated` SSE events (properties.info.tokens: {input, output, cache.read})
  * and emits `session_updated` with delta-based tokenStats compatible with SessionHandler aggregation.
  */
@@ -11,6 +11,19 @@ import { EventEmitter } from 'node:events';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import type {
+	EventMessagePartUpdated,
+	EventMessageUpdated,
+	EventSessionError,
+	EventSessionStatus,
+	Message,
+	Part,
+	Event as SdkEvent,
+	SessionStatus as SdkSessionStatus,
+	TextPart,
+	ToolPart,
+} from '@opencode-ai/sdk';
+import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk';
 
 import { logger } from '../../utils/logger';
 import { LogNormalizer } from './LogNormalizer';
@@ -26,12 +39,19 @@ declare module './types' {
 	}
 }
 
-type OpenCodeSessionStatus =
-	| { type: 'idle' }
-	| { type: 'busy' }
-	| { type: 'retry'; attempt?: number; message?: string; next?: number }
-	| { type: 'other'; raw?: unknown };
+/** Single entry from `client.session.messages()` response. */
+type SessionMessageEntry = { info: Message; parts: Part[] };
 
+/**
+ * Extended session status that includes an 'other' fallback for unknown status types.
+ * Mirrors SDK `SessionStatus` but adds graceful degradation.
+ */
+type OpenCodeSessionStatus = SdkSessionStatus | { type: 'other'; raw?: unknown };
+
+/**
+ * Normalized part type used internally.
+ * SDK `Part` is the source of truth, but we keep a simplified view for event handling.
+ */
 type OpenCodePart =
 	| {
 			type: 'text' | 'reasoning';
@@ -63,12 +83,12 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	private serverUrl: string | null = null;
 	private sessionId: string | null = null;
 	private directory: string | null = null;
+	/** SDK client for typed API calls. Initialized after server is ready. */
+	private sdkClient: OpencodeClient | null = null;
 	private readonly logNormalizer = new LogNormalizer();
 
 	private eventAbort: AbortController | null = null;
 	private eventStreamRunning = false;
-	private lastEventId: string | null = null;
-	private reconnectAttempt = 0;
 
 	private readonly seenToolCalls = new Set<string>();
 	private readonly completedToolCalls = new Set<string>();
@@ -123,6 +143,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (config.serverUrl) {
 			this.serverUrl = config.serverUrl;
 			this.directory = config.workspaceRoot;
+			this.initSdkClient();
 			logger.info(`[OpenCode] Connected to existing server at ${this.serverUrl}`);
 			return;
 		}
@@ -153,6 +174,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				logger.info(`[OpenCode] Discovered existing server on port ${port}`);
 				this.serverUrl = portUrl;
 				this.directory = config.workspaceRoot;
+				this.initSdkClient();
 				void this.preloadMetadata();
 				return true;
 			} catch (_e) {
@@ -217,6 +239,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			this.directory = workspaceRoot;
 
 			await this.savePortFile(workspaceRoot);
+			this.initSdkClient();
 			logger.info(`[OpenCode] Server started at ${this.serverUrl}`);
 			void this.preloadMetadata();
 		} catch (error) {
@@ -262,6 +285,24 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		});
 	}
 
+	/**
+	 * Initialize the SDK client after server URL is known.
+	 * Uses createOpencodeClient from @opencode-ai/sdk with directory header support.
+	 */
+	private initSdkClient(): void {
+		if (!this.serverUrl) return;
+		try {
+			this.sdkClient = createOpencodeClient({
+				baseUrl: this.serverUrl,
+				...(this.directory ? { directory: this.directory } : {}),
+			});
+			logger.info('[OpenCode] SDK client initialized');
+		} catch (e) {
+			logger.warn('[OpenCode] Failed to init SDK client, falling back to fetch:', e);
+			this.sdkClient = null;
+		}
+	}
+
 	private isServerDownError(error: unknown): boolean {
 		if (error instanceof Error) {
 			const cause = (error as { cause?: { code?: string } }).cause;
@@ -281,31 +322,15 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 		this.serverUrl = null;
 		this.directory = null;
+		this.sdkClient = null;
 		this.lastEmittedStatus.clear();
 		this._cache = {};
 	}
 
-	private async fetchApi<T>(
-		endpoint: string,
-		directory: string,
-		options?: RequestInit,
-	): Promise<T> {
-		if (!this.serverUrl) throw new Error('OpenCode server not running');
-		const url = new URL(`${this.serverUrl}${endpoint}`);
-		if (directory) url.searchParams.append('directory', directory);
-
-		// If tests set executor.directory and forgot to pass directory arg, fall back.
-		if (!directory && this.directory) url.searchParams.append('directory', this.directory);
-
-		const resp = await fetch(url.toString(), options);
-		const text = await resp.text();
-		if (!resp.ok) {
-			throw new Error(`API Error ${endpoint}: ${resp.status} ${resp.statusText} - ${text}`);
-		}
-
-		// Empty body: return empty array for list endpoints, empty object otherwise.
-		if (!text) return [] as unknown as T;
-		return JSON.parse(text) as T;
+	/** Returns the SDK client or throws if not initialized. */
+	private requireSdk(): OpencodeClient {
+		if (!this.sdkClient) throw new Error('OpenCode SDK client not initialized');
+		return this.sdkClient;
 	}
 
 	// =========================================================================
@@ -353,22 +378,16 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	async truncateSession(sessionId: string, messageId: string, config: CLIConfig): Promise<void> {
 		if (!this.serverUrl) throw new Error('OpenCode server not running');
 
-		// OpenCode supports native revert semantics:
-		// POST /session/:id/revert { messageID }
-		// This effectively "cuts" the session state to before/at that message (depending on server semantics).
-		logger.info('[OpenCode] Reverting session history to message', {
-			sessionId,
-			messageId,
-		});
+		logger.info('[OpenCode] Reverting session history to message', { sessionId, messageId });
 
 		try {
-			await this.fetchApi(`/session/${sessionId}/revert`, config.workspaceRoot, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ messageID: messageId }),
+			const client = this.requireSdk();
+			await client.session.revert({
+				path: { id: sessionId },
+				body: { messageID: messageId },
+				query: { directory: config.workspaceRoot },
 			});
 		} catch (e) {
-			// Non-fatal: don't block the send path, but warn so we notice conflicts.
 			logger.warn('[OpenCode] Revert endpoint failed (non-fatal)', e);
 		}
 	}
@@ -423,26 +442,25 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		directory: string,
 	): Promise<string | undefined> {
 		try {
-			const messages = await this.fetchApi<
-				Array<{
-					info?: { role?: string; summary?: { title?: string } };
-					parts?: Array<{ type?: string; text?: string; synthetic?: boolean }>;
-				}>
-			>(`/session/${sessionId}/message?limit=3`, directory);
+			const client = this.requireSdk();
+			const { data: messages } = await client.session.messages({
+				path: { id: sessionId },
+				query: { directory, limit: 3 },
+			});
 
 			if (!Array.isArray(messages)) return undefined;
 
-			// Find first user message
-			const userMsg = messages.find(m => m.info?.role === 'user');
+			const userMsg = messages.find((m: SessionMessageEntry) => m.info?.role === 'user');
 			if (!userMsg) return undefined;
 
-			// Try message-level summary title first
-			if (userMsg.info?.summary?.title) {
-				return userMsg.info.summary.title;
+			const { info } = userMsg;
+			if (info.role === 'user' && info.summary?.title) {
+				return info.summary.title;
 			}
 
-			// Fall back to first non-synthetic text part, truncated
-			const textPart = userMsg.parts?.find(p => p.type === 'text' && !p.synthetic && p.text);
+			const textPart = userMsg.parts.find(
+				(p): p is TextPart => p.type === 'text' && !p.synthetic && !!p.text,
+			);
 			if (textPart?.text) {
 				const cleaned = textPart.text.trim().split('\n')[0];
 				return cleaned.length > 80 ? `${cleaned.substring(0, 77)}...` : cleaned;
@@ -471,17 +489,11 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 
 		try {
-			// Use roots=true to filter out child/subagent sessions server-side
-			const raw = await this.fetchApi<
-				Array<{
-					id: string;
-					title?: string;
-					parentID?: string;
-					time?: { updated?: number; created?: number };
-				}>
-			>('/session?roots=true', config.workspaceRoot);
+			const client = this.requireSdk();
+			const { data: raw } = await client.session.list({
+				query: { directory: config.workspaceRoot },
+			});
 
-			// Guard: ensure response is actually an array
 			const sessions = Array.isArray(raw) ? raw : [];
 
 			logger.info('[OpenCode] listSessions: API returned', {
@@ -489,26 +501,26 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				directory: config.workspaceRoot,
 			});
 
-			// Resolve titles for sessions that still have the default "New session - <timestamp>" title.
-			// For these, fetch the first user message to get a meaningful display title.
 			const resolved = await Promise.all(
-				sessions.map(async s => {
-					const rawTitle = s.title || '';
-					let displayTitle = rawTitle;
+				sessions
+					.filter(s => !s.parentID)
+					.map(async s => {
+						const rawTitle = s.title || '';
+						let displayTitle = rawTitle;
 
-					if (!rawTitle || OpenCodeExecutor.isDefaultTitle(rawTitle)) {
-						const msgTitle = await this.getSessionDisplayTitle(s.id, config.workspaceRoot);
-						displayTitle = msgTitle || '';
-					}
+						if (!rawTitle || OpenCodeExecutor.isDefaultTitle(rawTitle)) {
+							const msgTitle = await this.getSessionDisplayTitle(s.id, config.workspaceRoot);
+							displayTitle = msgTitle || '';
+						}
 
-					return {
-						id: s.id,
-						title: displayTitle || undefined,
-						lastModified: s.time?.updated || s.time?.created || Date.now(),
-						created: s.time?.created,
-						parentID: s.parentID,
-					};
-				}),
+						return {
+							id: s.id,
+							title: displayTitle || undefined,
+							lastModified: s.time?.updated || s.time?.created || Date.now(),
+							created: s.time?.created,
+							parentID: s.parentID,
+						};
+					}),
 			);
 
 			return resolved;
@@ -529,17 +541,13 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (!this.serverUrl) return [];
 
 		try {
-			const messages = await this.fetchApi<
-				Array<{
-					info?: {
-						role?: string;
-						id?: string;
-						tokens?: { input?: number; output?: number; cache?: { read?: number } };
-					};
-					parts?: unknown[];
-					time?: { created?: number; completed?: number };
-				}>
-			>(`/session/${sessionId}/message`, config.workspaceRoot);
+			const client = this.requireSdk();
+			const { data: messages } = await client.session.messages({
+				path: { id: sessionId },
+				query: { directory: config.workspaceRoot },
+			});
+
+			if (!Array.isArray(messages)) return [];
 
 			// Aggregate token totals across all assistant messages for history restore
 			let totalInput = 0;
@@ -547,36 +555,37 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			let totalCacheRead = 0;
 			let assistantCount = 0;
 
-			const events = messages.flatMap(msg => {
-				const role = msg.info?.role;
-				const timestamp = msg.time?.created
-					? new Date(msg.time.created).toISOString()
+			const events = messages.flatMap((msg: SessionMessageEntry) => {
+				const { info, parts } = msg;
+				const role = info.role;
+				const timestamp = info.time?.created
+					? new Date(info.time.created).toISOString()
 					: new Date().toISOString();
 
 				// Aggregate tokens from assistant messages
-				if (role === 'assistant' && msg.info?.tokens) {
-					const t = msg.info.tokens;
-					totalInput += typeof t.input === 'number' ? t.input : 0;
-					totalOutput += typeof t.output === 'number' ? t.output : 0;
-					totalCacheRead += typeof t.cache?.read === 'number' ? t.cache.read : 0;
+				if (info.role === 'assistant') {
+					const { tokens } = info;
+					totalInput += tokens.input;
+					totalOutput += tokens.output;
+					totalCacheRead += tokens.cache.read;
 					assistantCount++;
 				}
 
-				return (msg.parts || []).flatMap(rawPart => {
-					const part = this.normalizePart(rawPart as Record<string, unknown> | undefined);
+				return parts.flatMap((sdkPart: Part) => {
+					const part = this.normalizePart(sdkPart);
 					const partEvents: CLIEvent[] = [];
 
 					if (part.type === 'text' && part.text) {
 						if (role === 'assistant') {
 							partEvents.push({
 								type: 'message' as const,
-								data: { content: part.text, partId: msg.info?.id, isDelta: false },
+								data: { content: part.text, partId: info.id, isDelta: false },
 								sessionId,
 							});
 						} else {
 							partEvents.push({
 								type: 'normalized_log' as const,
-								data: { role: 'user', content: part.text, timestamp, messageId: msg.info?.id },
+								data: { role: 'user', content: part.text, timestamp, messageId: info.id },
 								normalizedEntry: {
 									entryType: 'UserMessage' as const,
 									content: part.text || '',
@@ -588,13 +597,13 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 					} else if (part.type === 'reasoning' && part.text) {
 						partEvents.push({
 							type: 'thinking' as const,
-							data: { content: part.text, partId: msg.info?.id, isDelta: false },
+							data: { content: part.text, partId: info.id, isDelta: false },
 							sessionId,
 						});
 					} else if (part.type === 'tool' && part.callID) {
 						const { callID, tool: name = 'unknown', state } = part;
 						const status = state?.status;
-						const input = (state?.input as Record<string, unknown>) || {};
+						const input = (state?.input ?? {}) as Record<string, unknown>;
 
 						// Always emit tool_use for history
 						const normalized = this.logNormalizer.normalizeToolUse(name, input, callID);
@@ -763,13 +772,11 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (this._cache.commands && Date.now() - this._cache.commands.time < this.CACHE_TTL)
 			return this._cache.commands.data;
 		try {
-			// Try GET /command first, might fail if not supported
-			const data = await this.fetchApi<Array<{ name: string; description?: string }>>(
-				'/command',
-				directory,
-			);
-			this._cache.commands = { data, time: Date.now() };
-			return data;
+			const client = this.requireSdk();
+			const { data } = await client.command.list({ query: { directory } });
+			const commands = (data ?? []) as Array<{ name: string; description?: string }>;
+			this._cache.commands = { data: commands, time: Date.now() };
+			return commands;
 		} catch {
 			return [];
 		}
@@ -779,7 +786,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (this._cache.providers && Date.now() - this._cache.providers.time < this.CACHE_TTL)
 			return this._cache.providers.data;
 		try {
-			const data = await this.fetchApi<unknown>('/config/providers', directory);
+			const client = this.requireSdk();
+			const { data } = await client.config.providers({ query: { directory } });
 			this._cache.providers = { data, time: Date.now() };
 			return data;
 		} catch {
@@ -791,7 +799,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (this._cache.modes && Date.now() - this._cache.modes.time < this.CACHE_TTL)
 			return this._cache.modes.data;
 		try {
-			const data = await this.fetchApi<unknown>('/mode', directory);
+			const client = this.requireSdk();
+			const { data } = await client.app.agents({ query: { directory } });
 			this._cache.modes = { data, time: Date.now() };
 			return data;
 		} catch {
@@ -803,8 +812,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (this._cache.mcp && Date.now() - this._cache.mcp.time < 30 * 1000)
 			return this._cache.mcp.data;
 		try {
-			// Use /config as proxy for MCP status
-			const data = await this.fetchApi<unknown>('/config', directory);
+			const client = this.requireSdk();
+			const { data } = await client.mcp.status({ query: { directory } });
 			this._cache.mcp = { data, time: Date.now() };
 			return data;
 		} catch {
@@ -817,20 +826,18 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		sessionId: string,
 		model: { providerID: string; modelID: string },
 	): Promise<void> {
-		await this.fetchApi(`/session/${sessionId}/summarize`, directory, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ providerID: model.providerID, modelID: model.modelID, auto: false }),
+		const client = this.requireSdk();
+		await client.session.summarize({
+			path: { id: sessionId },
+			body: { providerID: model.providerID, modelID: model.modelID },
+			query: { directory },
 		});
 	}
 
 	private async createSession(directory: string): Promise<string> {
-		const data = await this.fetchApi<{ id: string }>('/session', directory, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({}),
-		});
-		if (!data.id) throw new Error('OpenCode create session: missing id');
+		const client = this.requireSdk();
+		const { data, error } = await client.session.create({ query: { directory } });
+		if (error || !data?.id) throw new Error(`OpenCode create session: ${error ?? 'missing id'}`);
 		return data.id;
 	}
 
@@ -848,7 +855,11 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 	async deleteSession(sessionId: string, config: CLIConfig): Promise<boolean> {
 		try {
-			await this.fetchApi(`/session/${sessionId}`, config.workspaceRoot, { method: 'DELETE' });
+			const client = this.requireSdk();
+			await client.session.delete({
+				path: { id: sessionId },
+				query: { directory: config.workspaceRoot },
+			});
 			logger.info(`[OpenCodeExecutor] Session deleted: ${sessionId}`);
 			return true;
 		} catch (error) {
@@ -859,10 +870,11 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 	async renameSession(sessionId: string, title: string, config: CLIConfig): Promise<boolean> {
 		try {
-			await this.fetchApi(`/session/${sessionId}`, config.workspaceRoot, {
-				method: 'PATCH',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ title }),
+			const client = this.requireSdk();
+			await client.session.update({
+				path: { id: sessionId },
+				body: { title },
+				query: { directory: config.workspaceRoot },
 			});
 			logger.info(`[OpenCodeExecutor] Session renamed: ${sessionId} -> "${title}"`);
 			return true;
@@ -873,11 +885,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	}
 
 	private async sendAbort(directory: string, sessionId: string): Promise<void> {
-		await this.fetchApi(`/session/${sessionId}/abort`, directory, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({}),
-		});
+		const client = this.requireSdk();
+		await client.session.abort({ path: { id: sessionId }, query: { directory } });
 	}
 
 	private async sendPermissionReply(
@@ -885,10 +894,12 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		requestId: string,
 		payload: { reply: 'once' | 'always' | 'reject'; message?: string },
 	): Promise<void> {
-		await this.fetchApi(`/permission/${encodeURIComponent(requestId)}/reply`, directory, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify(payload),
+		if (!this.sessionId) throw new Error('No active session for permission reply');
+		const client = this.requireSdk();
+		await client.postSessionIdPermissionsPermissionId({
+			path: { id: this.sessionId, permissionID: requestId },
+			body: { response: payload.reply },
+			query: { directory },
 		});
 	}
 
@@ -901,28 +912,20 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		const modelSpec = this.parseModel(config.model);
 		const modelProviderId = modelSpec?.providerID || '';
 
-		// OpenCode model override is optional. If we don't have a valid provider/model,
-		// omit the `model` field entirely so the server falls back to its configured default.
 		const modelOverride = modelProviderId
-			? {
-					model: {
-						providerID: modelProviderId,
-						modelID: modelSpec?.modelID || '',
-					},
-				}
+			? { model: { providerID: modelProviderId, modelID: modelSpec?.modelID || '' } }
 			: {};
 
-		const body = {
-			parts: [{ type: 'text' as const, text: prompt }],
-			...(config.messageID ? { messageID: config.messageID } : {}),
-			...modelOverride,
-			...(config.agent ? { agent: config.agent } : {}),
-		};
-
-		await this.fetchApi(`/session/${sessionId}/message`, directory, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify(body),
+		const client = this.requireSdk();
+		await client.session.promptAsync({
+			path: { id: sessionId },
+			query: { directory },
+			body: {
+				parts: [{ type: 'text' as const, text: prompt }],
+				...(config.messageID ? { messageID: config.messageID } : {}),
+				...modelOverride,
+				...(config.agent ? { agent: config.agent } : {}),
+			},
 		});
 	}
 
@@ -943,73 +946,31 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	// Event Streaming
 	// =========================================================================
 
-	private async connectEventStream(
-		baseUrl: string,
-		directory: string,
-		signal: AbortSignal,
-		lastEventId?: string,
-	): Promise<Response> {
-		const headers: Record<string, string> = { Accept: 'text/event-stream' };
-		if (lastEventId?.trim()) headers['Last-Event-ID'] = lastEventId.trim();
-
-		const resp = await fetch(`${baseUrl}/event?directory=${encodeURIComponent(directory)}`, {
-			method: 'GET',
-			headers,
-			signal,
-		});
-
-		if (!resp.ok || !resp.body) throw new Error(`OpenCode event stream failed: ${resp.status}`);
-		return resp;
-	}
-
-	private startEventStream(baseUrl: string, directory: string): void {
+	private startEventStream(_baseUrl: string, directory: string): void {
 		if (this.eventStreamRunning) return;
 		this.eventStreamRunning = true;
 		this.eventAbort = new AbortController();
 		const signal = this.eventAbort.signal;
-		const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-		const backoffMs = (base: number, att: number) =>
-			Math.min(1500, base * 2 ** Math.max(0, att - 1));
+		const client = this.requireSdk();
 
 		void (async () => {
-			let baseRetryDelayMs = 250;
-			const maxAttempts = 6;
-			this.reconnectAttempt = 0;
-
 			try {
-				while (!signal.aborted) {
-					let resp: Response;
-					try {
-						resp = await this.connectEventStream(
-							baseUrl,
-							directory,
-							signal,
-							this.lastEventId ?? undefined,
-						);
-						this.reconnectAttempt = 0;
-					} catch (error) {
-						if (signal.aborted) return;
-						this.reconnectAttempt++;
-						if (this.reconnectAttempt >= maxAttempts) throw error;
-						await sleep(backoffMs(baseRetryDelayMs, this.reconnectAttempt));
-						continue;
-					}
-
-					try {
-						for await (const evt of this.iterSseEvents(resp.body as ReadableStream<Uint8Array>)) {
-							if (signal.aborted) break;
-							if (evt.id?.trim()) this.lastEventId = evt.id.trim();
-							if (evt.retry && evt.retry > 0) baseRetryDelayMs = evt.retry;
-							this.handleSdkEvent(evt.data);
+				const { stream } = await client.event.subscribe({
+					query: { directory },
+					signal,
+					sseDefaultRetryDelay: 250,
+					sseMaxRetryAttempts: 6,
+					sseMaxRetryDelay: 1500,
+					onSseError: error => {
+						if (!signal.aborted) {
+							logger.warn('[OpenCode] SSE stream error (SDK will retry):', error);
 						}
-					} catch (_e) {
-						if (signal.aborted) return;
-					}
+					},
+				});
 
+				for await (const event of stream) {
 					if (signal.aborted) break;
-					this.reconnectAttempt++;
-					if (this.reconnectAttempt >= maxAttempts) throw new Error('Stream disconnected');
-					await sleep(backoffMs(baseRetryDelayMs, this.reconnectAttempt));
+					this.handleSdkEvent(event);
 				}
 			} catch (error) {
 				if (!signal.aborted) {
@@ -1023,180 +984,130 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		})();
 	}
 
-	private async *iterSseEvents(
-		body: ReadableStream<Uint8Array>,
-	): AsyncGenerator<{ id?: string; retry?: number; data: unknown }, void, unknown> {
-		const reader = body.getReader();
-		const decoder = new TextDecoder();
-		let buffer = '';
-
-		try {
-			while (true) {
-				const { value, done } = await reader.read();
-				if (done) break;
-				buffer += decoder.decode(value, { stream: true });
-
-				while (true) {
-					const idx = buffer.indexOf('\n\n');
-					if (idx === -1) break;
-					const chunk = buffer.slice(0, idx);
-					buffer = buffer.slice(idx + 2);
-
-					let id: string | undefined;
-					let retry: number | undefined;
-					const dataLines: string[] = [];
-
-					for (const line of chunk.split(/\r?\n/)) {
-						if (line.startsWith('id:')) id = line.slice(3).trim();
-						else if (line.startsWith('retry:')) retry = Number(line.slice(6).trim());
-						else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
-					}
-
-					if (dataLines.length > 0) {
-						try {
-							yield { id, retry, data: JSON.parse(dataLines.join('\n')) };
-						} catch {}
-					}
-				}
-			}
-		} finally {
-			reader.releaseLock();
-		}
-	}
-
 	private handleSdkEvent(raw: unknown): void {
 		const envelope = raw as { type: string; properties?: unknown };
 		if (!envelope || typeof envelope.type !== 'string') return;
 
-		const eventType = envelope.type;
-		const props = (envelope.properties ?? {}) as Record<string, unknown>;
-		const sessionId = this.extractSessionId(props, eventType);
+		// Handle events not in SDK Event union before narrowing
+		if (envelope.type === 'permission.asked') {
+			const props = (envelope.properties ?? {}) as Record<string, unknown>;
+			const sessionId = typeof props.sessionID === 'string' ? props.sessionID : undefined;
+			this.handlePermissionAsked(props, sessionId);
+			return;
+		}
 
-		switch (eventType) {
-			case 'message.updated':
-				this.handleMessageUpdated(props, sessionId);
+		const event = raw as SdkEvent;
+		switch (event.type) {
+			case 'message.updated': {
+				const props = (event as EventMessageUpdated).properties;
+				const sessionId = props.info.sessionID;
+				this.handleMessageUpdated(props.info, sessionId);
 				break;
-			case 'message.part.updated':
+			}
+			case 'message.part.updated': {
+				const props = (event as EventMessagePartUpdated).properties;
+				const sessionId = props.part.sessionID;
 				this.handlePartUpdated(props, sessionId);
 				break;
-			case 'permission.asked':
-				this.handlePermissionAsked(props, sessionId);
-				break;
-			case 'session.status':
-				this.handleSessionStatus(props, sessionId);
-				// Track active sessions: busy = add, idle-like = remove
+			}
+			case 'session.status': {
+				const props = (envelope as EventSessionStatus).properties;
+				const sessionId = props.sessionID;
+				this.handleSessionStatus(props.status, sessionId);
 				if (sessionId) {
-					const status = this.normalizeSessionStatus(
-						props.status as Record<string, unknown> | undefined,
-					);
-					if (status.type === 'busy') {
+					if (props.status.type === 'busy') {
 						this.activeSessions.add(sessionId);
-					} else if (status.type === 'idle') {
+					} else if (props.status.type === 'idle') {
 						this.activeSessions.delete(sessionId);
 					}
 				}
 				break;
-			case 'session.error':
-				this.handleSessionError(props, sessionId);
+			}
+			case 'session.error': {
+				const props = (envelope as EventSessionError).properties;
+				const sessionId = props.sessionID;
+				this.handleSessionError(props.error, sessionId);
 				break;
-			case 'session.idle':
-				if (sessionId) this.activeSessions.delete(sessionId);
-				this.emit('event', { type: 'finished', data: { reason: 'idle' }, sessionId });
+			}
+			case 'session.idle': {
+				const props = (envelope as { type: string; properties: { sessionID: string } }).properties;
+				if (props.sessionID) this.activeSessions.delete(props.sessionID);
+				this.emit('event', {
+					type: 'finished',
+					data: { reason: 'idle' },
+					sessionId: props.sessionID,
+				});
 				break;
-		}
-	}
-
-	private extractSessionId(props: Record<string, unknown>, eventType: string): string | undefined {
-		if (typeof props.sessionID === 'string') return props.sessionID;
-		if (typeof props.sessionId === 'string') return props.sessionId;
-		if (['message.updated', 'message.part.updated'].includes(eventType)) {
-			const sub = (props.info || props.part) as Record<string, unknown>;
-			if (sub) {
-				if (typeof sub.sessionID === 'string') return sub.sessionID;
-				if (typeof sub.sessionId === 'string') return sub.sessionId;
 			}
 		}
-		return undefined;
 	}
 
-	private handleMessageUpdated(props: Record<string, unknown>, sessionId?: string): void {
-		const info = props.info as Record<string, unknown> | undefined;
-		if (!info) return;
-
-		const messageId = typeof info.id === 'string' ? info.id : undefined;
-		const role = typeof info.role === 'string' ? info.role : undefined;
-
-		if (messageId && (role === 'user' || role === 'assistant')) {
-			this.messageRoles.set(messageId, role);
-		}
+	private handleMessageUpdated(info: Message, sessionId?: string): void {
+		this.messageRoles.set(info.id, info.role);
 
 		// Extract token stats from assistant messages (OpenCode SSE format)
-		if (role === 'assistant' && messageId) {
-			const tokens = info.tokens as Record<string, unknown> | undefined;
-			if (tokens) {
-				const input = typeof tokens.input === 'number' ? tokens.input : 0;
-				const output = typeof tokens.output === 'number' ? tokens.output : 0;
-				const cache = tokens.cache as Record<string, unknown> | undefined;
-				const cacheRead = typeof cache?.read === 'number' ? cache.read : 0;
+		if (info.role === 'assistant') {
+			const { tokens } = info;
+			const input = tokens.input;
+			const output = tokens.output;
+			const cacheRead = tokens.cache.read;
 
-				// Compute deltas from last known values (message.updated sends cumulative)
-				const prev = this.lastMessageTokens.get(messageId) ?? {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-				};
-				const deltaInput = Math.max(0, input - prev.input);
-				const deltaOutput = Math.max(0, output - prev.output);
-				const deltaCacheRead = Math.max(0, cacheRead - prev.cacheRead);
+			// Compute deltas from last known values (message.updated sends cumulative)
+			const prev = this.lastMessageTokens.get(info.id) ?? {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+			};
+			const deltaInput = Math.max(0, input - prev.input);
+			const deltaOutput = Math.max(0, output - prev.output);
+			const deltaCacheRead = Math.max(0, cacheRead - prev.cacheRead);
 
-				this.lastMessageTokens.set(messageId, { input, output, cacheRead });
+			this.lastMessageTokens.set(info.id, { input, output, cacheRead });
 
-				// Only emit if there's actual token delta
-				if (deltaInput > 0 || deltaOutput > 0 || deltaCacheRead > 0) {
-					this.emit('event', {
-						type: 'session_updated',
-						data: {
-							tokenStats: {
-								currentInputTokens: deltaInput,
-								currentOutputTokens: deltaOutput,
-								cacheReadTokens: deltaCacheRead,
-								cacheCreationTokens: 0,
-								reasoningTokens: 0,
-								totalTokensInput: input,
-								totalTokensOutput: output,
-								totalReasoningTokens: 0,
-							},
+			// Only emit if there's actual token delta
+			if (deltaInput > 0 || deltaOutput > 0 || deltaCacheRead > 0) {
+				this.emit('event', {
+					type: 'session_updated',
+					data: {
+						tokenStats: {
+							currentInputTokens: deltaInput,
+							currentOutputTokens: deltaOutput,
+							cacheReadTokens: deltaCacheRead,
+							cacheCreationTokens: 0,
+							reasoningTokens: 0,
+							totalTokensInput: input,
+							totalTokensOutput: output,
+							totalReasoningTokens: 0,
 						},
-						sessionId,
-					});
-				}
-			}
-		}
-
-		// Fallback: if assistant message has a completed timestamp, emit finished with totalStats
-		const timeRecord = info.time as Record<string, unknown> | undefined;
-		if (role === 'assistant' && timeRecord && typeof timeRecord.completed === 'number') {
-			const started = typeof timeRecord.created === 'number' ? timeRecord.created : 0;
-			const completed = timeRecord.completed as number;
-			const durationMs = started > 0 ? completed - started : undefined;
-
-			this.emit('event', {
-				type: 'session_updated',
-				data: {
-					totalStats: {
-						requestCount: 1,
-						currentDuration: durationMs,
-						totalDuration: durationMs,
 					},
-				},
-				sessionId,
-			});
+					sessionId,
+				});
+			}
 
-			this.emit('event', {
-				type: 'finished',
-				data: { reason: 'message_completed' },
-				sessionId,
-			});
+			// If assistant message has a completed timestamp, emit finished with totalStats
+			const completed = info.time.completed;
+			if (typeof completed === 'number') {
+				const started = info.time.created;
+				const durationMs = started > 0 ? completed - started : undefined;
+
+				this.emit('event', {
+					type: 'session_updated',
+					data: {
+						totalStats: {
+							requestCount: 1,
+							currentDuration: durationMs,
+							totalDuration: durationMs,
+						},
+					},
+					sessionId,
+				});
+
+				this.emit('event', {
+					type: 'finished',
+					data: { reason: 'message_completed' },
+					sessionId,
+				});
+			}
 		}
 	}
 
@@ -1216,28 +1127,33 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		});
 	}
 
-	private handleSessionStatus(props: Record<string, unknown>, sessionId?: string): void {
-		const status = this.normalizeSessionStatus(props.status as Record<string, unknown> | undefined);
+	private handleSessionStatus(status: SdkSessionStatus, sessionId?: string): void {
+		const normalized = this.normalizeSessionStatus(status);
 		const statusKey = sessionId || '__global__';
-		if (this.lastEmittedStatus.get(statusKey) === status.type) return;
+		if (this.lastEmittedStatus.get(statusKey) === normalized.type) return;
 
-		this.lastEmittedStatus.set(statusKey, status.type);
-		this.emit('event', { type: 'session_updated', data: { status }, sessionId });
+		this.lastEmittedStatus.set(statusKey, normalized.type);
+		this.emit('event', { type: 'session_updated', data: { status: normalized }, sessionId });
 	}
 
-	private handleSessionError(props: Record<string, unknown>, sessionId?: string): void {
-		const errorRecord = props.error as Record<string, unknown> | undefined;
-		const errorData = errorRecord?.data as Record<string, unknown> | undefined;
-		const message =
-			(typeof errorData?.message === 'string' ? errorData.message : undefined) ??
-			(typeof errorRecord?.message === 'string' ? errorRecord.message : undefined) ??
-			'OpenCode session error';
+	private handleSessionError(
+		error: EventSessionError['properties']['error'],
+		sessionId?: string,
+	): void {
+		let message = 'OpenCode session error';
+		if (error) {
+			const data = error.data as { message?: string };
+			message = data?.message ?? message;
+		}
 		this.emit('event', { type: 'error', data: { message }, sessionId });
 	}
 
-	private handlePartUpdated(props: Record<string, unknown>, sessionId?: string): void {
-		const part = this.normalizePart(props.part as Record<string, unknown> | undefined);
-		const delta = typeof props.delta === 'string' ? props.delta : undefined;
+	private handlePartUpdated(
+		props: EventMessagePartUpdated['properties'],
+		sessionId?: string,
+	): void {
+		const part = this.normalizePart(props.part);
+		const delta = props.delta;
 		const sid = part.sessionID ?? sessionId;
 
 		if (part.type === 'text') this.handleTextPart(part, sid, delta);
@@ -1293,7 +1209,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			this.seenToolCalls.add(callID);
 			const normalized = this.logNormalizer.normalizeToolUse(
 				name,
-				(state?.input as Record<string, unknown>) || {},
+				(state?.input ?? {}) as Record<string, unknown>,
 				callID,
 			);
 			const evt = {
@@ -1316,7 +1232,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			this.completedToolCalls.add(callID);
 			const resultNormalized = this.logNormalizer.normalizeToolUse(
 				name,
-				(state?.input as Record<string, unknown>) || {},
+				(state?.input ?? {}) as Record<string, unknown>,
 				callID,
 			);
 			this.emit('event', {
@@ -1336,56 +1252,50 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 	}
 
-	private normalizeSessionStatus(raw?: Record<string, unknown>): OpenCodeSessionStatus {
-		const statusType = raw?.type;
-		if (statusType === 'retry') {
-			return {
-				type: 'retry',
-				attempt: typeof raw?.attempt === 'number' ? raw.attempt : undefined,
-				message: typeof raw?.message === 'string' ? raw.message : undefined,
-				next: typeof raw?.next === 'number' ? raw.next : undefined,
-			};
-		}
-		if (statusType === 'idle' || statusType === 'busy') return { type: statusType };
+	private normalizeSessionStatus(raw?: SdkSessionStatus): OpenCodeSessionStatus {
+		if (!raw) return { type: 'other' };
+		if (raw.type === 'retry' || raw.type === 'idle' || raw.type === 'busy') return raw;
 		return { type: 'other', raw };
 	}
 
-	private normalizePart(raw: Record<string, unknown> | undefined): OpenCodePart {
+	private normalizePart(raw: Part | undefined): OpenCodePart {
 		if (!raw) return { type: 'other', raw: null };
-		const partType = raw.type;
 
-		if (partType === 'text' || partType === 'reasoning') {
+		if (raw.type === 'text') {
 			return {
-				type: partType,
-				messageID: typeof raw.messageID === 'string' ? raw.messageID : undefined,
-				text: typeof raw.text === 'string' ? raw.text : undefined,
-				sessionID: typeof raw.sessionID === 'string' ? raw.sessionID : undefined,
+				type: 'text',
+				messageID: raw.messageID,
+				text: raw.text,
+				sessionID: raw.sessionID,
 			};
 		}
-		if (partType === 'tool') {
-			const state = (raw.state ?? {}) as Record<string, unknown>;
-			const statusVal = state.status;
-			const validStatuses = ['pending', 'running', 'completed', 'error'] as const;
-			type ToolStatus = (typeof validStatuses)[number];
-
+		if (raw.type === 'reasoning') {
+			return {
+				type: 'reasoning',
+				messageID: raw.messageID,
+				text: raw.text,
+				sessionID: raw.sessionID,
+			};
+		}
+		if (raw.type === 'tool') {
+			const toolPart = raw as ToolPart;
 			return {
 				type: 'tool',
-				messageID: typeof raw.messageID === 'string' ? raw.messageID : undefined,
-				callID: typeof raw.callID === 'string' ? raw.callID : undefined,
-				tool: typeof raw.tool === 'string' ? raw.tool : undefined,
-				sessionID: typeof raw.sessionID === 'string' ? raw.sessionID : undefined,
+				messageID: toolPart.messageID,
+				callID: toolPart.callID,
+				tool: toolPart.tool,
+				sessionID: toolPart.sessionID,
 				state: {
-					status: validStatuses.includes(statusVal as ToolStatus)
-						? (statusVal as ToolStatus)
-						: undefined,
-					input: state.input,
-					output: typeof state.output === 'string' ? state.output : undefined,
-					title: typeof state.title === 'string' ? state.title : undefined,
-					metadata: state.metadata,
+					status: toolPart.state.status,
+					input: 'input' in toolPart.state ? toolPart.state.input : undefined,
+					output: toolPart.state.status === 'completed' ? toolPart.state.output : undefined,
+					title:
+						'title' in toolPart.state ? (toolPart.state.title as string | undefined) : undefined,
+					metadata: 'metadata' in toolPart.state ? toolPart.state.metadata : undefined,
 				},
 			};
 		}
-		return { type: 'other', raw };
+		return { type: 'other', raw, sessionID: 'sessionID' in raw ? raw.sessionID : undefined };
 	}
 
 	parseStream(_chunk: Buffer): CLIEvent[] {
@@ -1436,6 +1346,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		this.serverUrl = null;
 		this.directory = null;
 		this.sessionId = null;
+		this.sdkClient = null;
 	}
 
 	async respondToPermission(decision: {
@@ -1461,5 +1372,9 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		return this.serverUrl && this.directory
 			? { baseUrl: this.serverUrl, directory: this.directory }
 			: null;
+	}
+
+	getSdkClient(): OpencodeClient | null {
+		return this.sdkClient;
 	}
 }

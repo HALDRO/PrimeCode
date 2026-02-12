@@ -485,12 +485,11 @@ export class SessionHandler implements WebviewMessageHandler {
 				modelNotice = `Invalid OpenCode model selection: "${selectedModel}". Expected "provider/model". Please reselect a model in Settings.`;
 			} else {
 				const [providerId, modelId] = selectedModel.split('/', 2);
-				const info = this.context.cli.getOpenCodeServerInfo();
-				if (info) {
+				const sdkClient = this.context.cli.getSdkClient();
+				if (sdkClient) {
 					try {
 						const providers = (await this.context.services.openCodeClient.getConnectedProviders(
-							info.baseUrl,
-							info.directory,
+							sdkClient,
 						)) as OpenCodeProviderData[];
 						const provider = providers.find(p => p.id === providerId);
 						const exists = provider?.models?.some(m => m.id === modelId) ?? false;
@@ -979,9 +978,8 @@ export class SessionHandler implements WebviewMessageHandler {
 			const template = typeof templateFromSettings === 'string' ? templateFromSettings : undefined;
 
 			// Use the same model & server as the main chat
-			const serverInfo = this.context.cli.getOpenCodeServerInfo();
-			logger.info(`[ImprovePrompt] Server info: baseUrl=${serverInfo?.baseUrl ?? 'null'}`);
-			if (!serverInfo?.baseUrl) {
+			const sdkClient = this.context.cli.getSdkClient();
+			if (!sdkClient) {
 				throw new Error('OpenCode server is not running. Send a message first to start it.');
 			}
 
@@ -990,8 +988,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			const improvedText = await this.improvePromptViaOpenCode({
 				text,
 				template,
-				serverUrl: serverInfo.baseUrl,
-				directory: serverInfo.directory,
+				client: sdkClient,
 				model: sendConfig.model,
 				parentSessionId: this.context.sessionState.activeSessionId,
 				signal: this.improvePromptController.signal,
@@ -1045,236 +1042,76 @@ export class SessionHandler implements WebviewMessageHandler {
 
 	/**
 	 * Routes the "Improve Prompt" request through the running OpenCode server.
-	 * Creates a temporary session, sends the prompt (with instruction baked into text),
-	 * listens for completion via SSE, then fetches the assistant response.
-	 *
-	 * NOTE: OpenCode API does NOT support a `system` field in POST body —
-	 * the instruction must be embedded directly in the user message text.
+	 * Creates a temporary session, sends the prompt via SDK's synchronous prompt(),
+	 * which waits for the assistant response and returns it directly.
 	 */
 	private async improvePromptViaOpenCode(params: {
 		text: string;
 		template?: string;
 		model?: string;
-		serverUrl: string;
-		directory: string;
+		client: import('@opencode-ai/sdk').OpencodeClient;
 		parentSessionId?: string;
 		signal: AbortSignal;
 	}): Promise<string> {
-		const { serverUrl, directory, signal } = params;
-		const base = serverUrl.replace(/\/+$/, '');
+		const { client, signal } = params;
 
 		const instruction =
 			params.template?.trim() ||
 			'Rewrite the following user prompt to be clearer, more specific, and more actionable for an AI coding agent. Preserve the original intent and constraints. Return ONLY the rewritten prompt text, nothing else — no explanations, no markdown fences, no preamble.';
 
-		// Bake instruction into the message text (system field is not supported)
 		const fullText = `${instruction}\n\n---\n\n${params.text}`;
 
-		const buildUrl = (endpoint: string): string => {
-			const url = new URL(`${base}${endpoint}`);
-			if (directory) url.searchParams.append('directory', directory);
-			return url.toString();
-		};
-
-		// 1. Create a temporary session
-		const createBody: Record<string, unknown> = {};
-		if (params.parentSessionId) {
-			createBody.parentID = params.parentSessionId;
-		}
+		// 1. Create a temporary session via SDK
 		logger.info('[ImprovePrompt] Creating temp session...');
-		const createResp = await fetch(buildUrl('/session'), {
-			method: 'POST',
+		const { data: sessionData, error: createError } = await client.session.create({
+			body: params.parentSessionId ? { parentID: params.parentSessionId } : undefined,
 			signal,
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify(createBody),
 		});
-		if (!createResp.ok) {
-			const body = await createResp.text().catch(() => '');
-			throw new Error(`Failed to create temp session: ${createResp.status} ${body.slice(0, 200)}`);
+		if (createError || !sessionData?.id) {
+			throw new Error(`Failed to create temp session: ${createError ?? 'no session id'}`);
 		}
-		const session = (await createResp.json()) as { id?: string };
-		const sessionId = session?.id;
-		if (!sessionId) {
-			throw new Error('OpenCode returned session without id');
-		}
+		const sessionId = sessionData.id;
 		logger.info(`[ImprovePrompt] Temp session created: ${sessionId}`);
 
 		try {
-			// 2. Start SSE listener BEFORE sending the message
-			const idlePromise = this.waitForSessionIdle(base, directory, sessionId, signal);
-
-			// 3. Send the message with instruction baked into text
-			const msgBody: Record<string, unknown> = {
-				parts: [{ type: 'text', text: fullText }],
-			};
-			if (params.model?.includes('/')) {
-				const [providerID, modelID] = params.model.split('/', 2);
-				msgBody.model = { providerID, modelID };
-			}
+			// 2. Send message via SDK's synchronous prompt() — waits for assistant response
+			const modelOverride = params.model?.includes('/')
+				? { providerID: params.model.split('/')[0], modelID: params.model.split('/')[1] }
+				: undefined;
 
 			logger.info(`[ImprovePrompt] Sending message to session ${sessionId}...`);
-			const msgResp = await fetch(buildUrl(`/session/${sessionId}/message`), {
-				method: 'POST',
+			const { data: response, error: promptError } = await client.session.prompt({
+				path: { id: sessionId },
+				body: {
+					parts: [{ type: 'text', text: fullText }],
+					model: modelOverride,
+				},
 				signal,
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(msgBody),
 			});
-			if (!msgResp.ok) {
-				const body = await msgResp.text().catch(() => '');
-				throw new Error(`Improve prompt send failed: ${msgResp.status} ${body.slice(0, 200)}`);
+
+			if (promptError) {
+				throw new Error(`Improve prompt failed: ${promptError}`);
 			}
 
-			// 4. Wait for session.idle via SSE
-			logger.info('[ImprovePrompt] Waiting for session.idle via SSE...');
-			await idlePromise;
-			logger.info('[ImprovePrompt] Session idle received, fetching messages...');
+			// 3. Extract assistant text from response parts
+			let assistantText = '';
+			for (const part of response?.parts ?? []) {
+				if (part.type === 'text' && 'text' in part) {
+					assistantText += (part as { text: string }).text;
+				}
+			}
+			assistantText = assistantText.trim();
 
-			// 5. Fetch messages with retry — server may not have persisted yet
-			const assistantText = await this.fetchAssistantResponse(
-				buildUrl(`/session/${sessionId}/message`),
-				signal,
-			);
+			if (!assistantText) {
+				throw new Error('No assistant response in prompt result');
+			}
+
 			logger.info(`[ImprovePrompt] Got response: ${assistantText.length} chars`);
 			return assistantText;
 		} finally {
-			// 6. Clean up — delete the temporary session (fire and forget)
-			fetch(buildUrl(`/session/${sessionId}`), { method: 'DELETE' }).catch(() => {});
+			// 4. Clean up — delete the temporary session (fire and forget)
+			client.session.delete({ path: { id: sessionId } }).catch(() => {});
 		}
-	}
-
-	/**
-	 * Fetches the assistant response from a session with retry logic.
-	 * After session.idle, the server may not have persisted the message yet,
-	 * so we retry a few times with a short delay.
-	 */
-	private async fetchAssistantResponse(
-		messagesUrl: string,
-		signal: AbortSignal,
-		maxRetries = 5,
-		delayMs = 500,
-	): Promise<string> {
-		for (let attempt = 0; attempt < maxRetries; attempt++) {
-			if (signal.aborted) throw new Error('Aborted');
-
-			if (attempt > 0) {
-				logger.info(`[ImprovePrompt] Retry ${attempt}/${maxRetries} fetching messages...`);
-				await new Promise(r => setTimeout(r, delayMs));
-			}
-
-			const resp = await fetch(messagesUrl, { method: 'GET', signal });
-			if (!resp.ok) {
-				logger.warn(`[ImprovePrompt] Fetch messages failed: ${resp.status}`);
-				continue;
-			}
-
-			const messages = (await resp.json()) as Array<{
-				info?: { role?: string };
-				parts?: Array<{ type?: string; text?: string }>;
-				time?: { completed?: number };
-			}>;
-
-			logger.info(`[ImprovePrompt] Messages count: ${messages.length}`);
-
-			// Find the last assistant message (with or without time.completed)
-			for (let j = messages.length - 1; j >= 0; j--) {
-				const msg = messages[j];
-				if (msg.info?.role !== 'assistant') continue;
-
-				let text = '';
-				for (const part of msg.parts || []) {
-					if (part.type === 'text' && part.text) text += part.text;
-				}
-				text = text.trim();
-				if (text) return text;
-			}
-		}
-
-		throw new Error('No assistant response found after session.idle (retries exhausted)');
-	}
-
-	/**
-	 * Connects to the SSE event stream and resolves when `session.idle` fires
-	 * for the given sessionId. Rejects on abort or stream error.
-	 */
-	private waitForSessionIdle(
-		baseUrl: string,
-		directory: string,
-		sessionId: string,
-		signal: AbortSignal,
-	): Promise<void> {
-		return new Promise<void>((resolve, reject) => {
-			if (signal.aborted) {
-				reject(new Error('Aborted'));
-				return;
-			}
-
-			const sseUrl = `${baseUrl}/event?directory=${encodeURIComponent(directory)}`;
-			let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-
-			const cleanup = () => {
-				try {
-					reader?.cancel().catch(() => {});
-				} catch {}
-			};
-
-			signal.addEventListener(
-				'abort',
-				() => {
-					cleanup();
-					reject(new Error('Aborted'));
-				},
-				{ once: true },
-			);
-
-			void (async () => {
-				try {
-					const resp = await fetch(sseUrl, {
-						method: 'GET',
-						headers: { Accept: 'text/event-stream' },
-						signal,
-					});
-					if (!resp.ok || !resp.body) {
-						throw new Error(`SSE connect failed: ${resp.status}`);
-					}
-
-					reader = resp.body.getReader();
-					const decoder = new TextDecoder();
-					let buffer = '';
-
-					while (true) {
-						const { done, value } = await reader.read();
-						if (done) break;
-
-						buffer += decoder.decode(value, { stream: true });
-						const lines = buffer.split('\n');
-						buffer = lines.pop() || '';
-
-						for (const line of lines) {
-							if (!line.startsWith('data:')) continue;
-							const raw = line.slice(5).trim();
-							if (!raw) continue;
-
-							try {
-								const evt = JSON.parse(raw) as {
-									type?: string;
-									properties?: { sessionID?: string };
-								};
-								if (evt.type === 'session.idle' && evt.properties?.sessionID === sessionId) {
-									cleanup();
-									resolve();
-									return;
-								}
-							} catch {}
-						}
-					}
-
-					// Stream ended without session.idle
-					reject(new Error('SSE stream ended without session.idle'));
-				} catch (err) {
-					if (!signal.aborted) reject(err);
-				}
-			})();
-		});
 	}
 
 	// =============================================================================

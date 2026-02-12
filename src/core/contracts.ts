@@ -38,6 +38,8 @@ export interface ICLIRunner {
 	}): Promise<void>;
 	kill(): Promise<void>;
 	getOpenCodeServerInfo(): { baseUrl: string; directory: string } | null;
+	/** Returns the SDK client instance if available (OpenCode only). */
+	getSdkClient(): import('@opencode-ai/sdk').OpencodeClient | null;
 	getProvider(): 'claude' | 'opencode';
 	listSessions(config: ICLIConfig): Promise<
 		Array<{

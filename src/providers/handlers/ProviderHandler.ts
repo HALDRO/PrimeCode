@@ -124,8 +124,8 @@ export class ProviderHandler implements WebviewMessageHandler {
 				return;
 			}
 
-			const info = this.context.cli.getOpenCodeServerInfo();
-			if (!info) {
+			const sdkClient = this.context.cli.getSdkClient();
+			if (!sdkClient) {
 				this.context.view.postMessage({
 					type: 'openCodeProviders',
 					data: {
@@ -137,8 +137,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 			}
 
 			const providers = (await this.context.services.openCodeClient.getConnectedProviders(
-				info.baseUrl,
-				info.directory,
+				sdkClient,
 			)) as OpenCodeProviderData[];
 
 			this.context.view.postMessage({
@@ -162,16 +161,13 @@ export class ProviderHandler implements WebviewMessageHandler {
 				return;
 			}
 
-			const info = this.context.cli.getOpenCodeServerInfo();
-			if (!info) {
+			const sdkClient = this.context.cli.getSdkClient();
+			if (!sdkClient) {
 				this.context.view.postMessage({ type: 'availableProviders', data: { providers: [] } });
 				return;
 			}
 
-			const providers = await this.context.services.openCodeClient.getAvailableProviders(
-				info.baseUrl,
-				info.directory,
-			);
+			const providers = await this.context.services.openCodeClient.getAvailableProviders(sdkClient);
 
 			this.context.view.postMessage({ type: 'availableProviders', data: { providers } });
 		} catch {
@@ -197,8 +193,8 @@ export class ProviderHandler implements WebviewMessageHandler {
 		});
 
 		try {
-			const info = this.context.cli.getOpenCodeServerInfo();
-			if (!info) {
+			const sdkClient = this.context.cli.getSdkClient();
+			if (!sdkClient) {
 				this.context.view.postMessage({
 					type: 'openCodeAuthResult',
 					data: { success: false, error: 'OpenCode server not running', providerId },
@@ -206,12 +202,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 				return;
 			}
 
-			await this.context.services.openCodeClient.setProviderAuth(
-				info.baseUrl,
-				info.directory,
-				providerId,
-				apiKey,
-			);
+			await this.context.services.openCodeClient.setProviderAuth(sdkClient, providerId, apiKey);
 
 			this.context.view.postMessage({
 				type: 'openCodeAuthResult',
@@ -254,6 +245,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 				info.directory,
 				providerId,
 			);
+			// Note: disconnectProvider still uses fetch (no SDK method for DELETE /auth/{id})
 
 			this.context.view.postMessage({
 				type: 'openCodeDisconnectResult',

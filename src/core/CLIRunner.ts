@@ -133,6 +133,10 @@ export class CLIRunner extends EventEmitter {
 		return this.executor.getAdminInfo();
 	}
 
+	getSdkClient(): import('@opencode-ai/sdk').OpencodeClient | null {
+		return this.executor.getSdkClient?.() ?? null;
+	}
+
 	/**
 	 * Lists available sessions from the provider.
 	 */

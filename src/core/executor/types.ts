@@ -66,6 +66,8 @@ export interface CLIExecutor extends EventEmitter {
 	}): Promise<void>;
 
 	getAdminInfo(): { baseUrl: string; directory: string } | null;
+	/** Returns the SDK client instance if available (OpenCode only). */
+	getSdkClient?(): import('@opencode-ai/sdk').OpencodeClient | null;
 	listSessions(config: CLIConfig): Promise<
 		Array<{
 			id: string;
