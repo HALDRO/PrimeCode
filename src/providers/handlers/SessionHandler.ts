@@ -414,7 +414,10 @@ export class SessionHandler implements WebviewMessageHandler {
 			return;
 		}
 
-		await this.context.cli.abort();
+		// Force UI to idle IMMEDIATELY — before awaiting abort.
+		// This guarantees the Stop button always responds, even if the
+		// abort request hangs or the server is unreachable.
+		this.postStatus(activeId, 'idle', 'Stopped');
 		this.postSessionMessage(
 			{
 				id: `interrupted-${Date.now()}`,
@@ -424,7 +427,21 @@ export class SessionHandler implements WebviewMessageHandler {
 			},
 			activeId,
 		);
-		this.postStatus(activeId, 'idle', 'Stopped');
+
+		// Also force idle on any known child sessions (subagents)
+		for (const sid of this.context.sessionState.startedSessions) {
+			if (sid !== activeId) {
+				this.postStatus(sid, 'idle', 'Stopped');
+			}
+		}
+
+		// Now abort all sessions on the backend (main + subagents).
+		// Wrapped in try/catch so the UI is never left stuck.
+		try {
+			await this.context.cli.abort();
+		} catch (error) {
+			logger.error('[SessionHandler] Abort failed (UI already reset):', error);
+		}
 	}
 
 	private async handleSendMessage(
@@ -910,13 +927,17 @@ export class SessionHandler implements WebviewMessageHandler {
 	// =============================================================================
 
 	private async onImprovePromptRequest(msg: CommandOf<'improvePromptRequest'>): Promise<void> {
-		const { text, requestId, model: msgModel } = msg;
+		const { text, requestId } = msg;
+		logger.info(
+			`[ImprovePrompt] Request received: requestId=${requestId}, textLen=${text?.length ?? 0}`,
+		);
 		const timeoutMs =
 			msg.timeoutMs && Number.isFinite(msg.timeoutMs)
 				? Math.max(1000, Math.round(msg.timeoutMs))
-				: 30_000;
+				: 60_000;
 
 		if (!text.trim() || !requestId) {
+			logger.warn('[ImprovePrompt] Missing text or requestId');
 			this.context.view.postMessage({
 				type: 'improvePromptError',
 				data: { requestId: requestId || '', error: 'Missing text or requestId' },
@@ -931,25 +952,33 @@ export class SessionHandler implements WebviewMessageHandler {
 		const timeout = setTimeout(() => this.improvePromptController?.abort(), timeoutMs);
 
 		try {
-			const modelFromSettings = this.context.settings.get('promptImprove.model');
 			const templateFromSettings = this.context.settings.get('promptImprove.template');
-			const model = msgModel
-				? msgModel
-				: typeof modelFromSettings === 'string'
-					? modelFromSettings
-					: undefined;
-
 			const template = typeof templateFromSettings === 'string' ? templateFromSettings : undefined;
 
-			const improvedText = await this.improvePromptViaOpenAICompatible({
+			// Use the same model & server as the main chat
+			const serverInfo = this.context.cli.getOpenCodeServerInfo();
+			logger.info(`[ImprovePrompt] Server info: baseUrl=${serverInfo?.baseUrl ?? 'null'}`);
+			if (!serverInfo?.baseUrl) {
+				throw new Error('OpenCode server is not running. Send a message first to start it.');
+			}
+
+			const sendConfig = this.buildSendConfig();
+
+			const improvedText = await this.improvePromptViaOpenCode({
 				text,
-				model,
 				template,
+				serverUrl: serverInfo.baseUrl,
+				directory: serverInfo.directory,
+				model: sendConfig.model,
+				parentSessionId: this.context.sessionState.activeSessionId,
 				signal: this.improvePromptController.signal,
 			});
 
 			if (this.improvePromptActiveRequestId !== requestId) return;
 
+			logger.info(
+				`[ImprovePrompt] Success: requestId=${requestId}, resultLen=${improvedText.length}`,
+			);
 			this.context.view.postMessage({
 				type: 'improvePromptResult',
 				data: { requestId, improvedText },
@@ -959,6 +988,9 @@ export class SessionHandler implements WebviewMessageHandler {
 
 			const err = error instanceof Error ? error.message : String(error);
 			const aborted = err.toLowerCase().includes('abort');
+			logger.error(
+				`[ImprovePrompt] ${aborted ? 'Aborted' : 'Error'}: requestId=${requestId}, error=${err}`,
+			);
 			this.context.view.postMessage({
 				type: aborted ? 'improvePromptCancelled' : 'improvePromptError',
 				data: aborted ? { requestId } : { requestId, error: err },
@@ -988,83 +1020,238 @@ export class SessionHandler implements WebviewMessageHandler {
 		});
 	}
 
-	private async improvePromptViaOpenAICompatible(params: {
+	/**
+	 * Routes the "Improve Prompt" request through the running OpenCode server.
+	 * Creates a temporary session, sends the prompt (with instruction baked into text),
+	 * listens for completion via SSE, then fetches the assistant response.
+	 *
+	 * NOTE: OpenCode API does NOT support a `system` field in POST body —
+	 * the instruction must be embedded directly in the user message text.
+	 */
+	private async improvePromptViaOpenCode(params: {
 		text: string;
-		model?: string;
 		template?: string;
+		model?: string;
+		serverUrl: string;
+		directory: string;
+		parentSessionId?: string;
 		signal: AbortSignal;
 	}): Promise<string> {
-		const baseUrlRaw = this.context.settings.get('proxy.baseUrl');
-		const apiKeyRaw = this.context.settings.get('proxy.apiKey');
-		const baseUrl = typeof baseUrlRaw === 'string' ? baseUrlRaw.trim().replace(/\/+$/g, '') : '';
-		const apiKey = typeof apiKeyRaw === 'string' ? apiKeyRaw.trim() : '';
+		const { serverUrl, directory, signal } = params;
+		const base = serverUrl.replace(/\/+$/, '');
 
-		if (!baseUrl) {
-			throw new Error('Proxy baseUrl is not configured');
-		}
-
-		const url = new URL(`${baseUrl}/v1/chat/completions`);
-
-		const systemPrompt =
+		const instruction =
 			params.template?.trim() ||
-			'Rewrite the user message to be clearer, more specific, and more actionable for an AI coding agent. Preserve intent and constraints. Return only the rewritten prompt.';
+			'Rewrite the following user prompt to be clearer, more specific, and more actionable for an AI coding agent. Preserve the original intent and constraints. Return ONLY the rewritten prompt text, nothing else — no explanations, no markdown fences, no preamble.';
 
-		const model = params.model?.trim() || 'gpt-4o-mini';
+		// Bake instruction into the message text (system field is not supported)
+		const fullText = `${instruction}\n\n---\n\n${params.text}`;
 
-		const resp = await fetch(url, {
+		const buildUrl = (endpoint: string): string => {
+			const url = new URL(`${base}${endpoint}`);
+			if (directory) url.searchParams.append('directory', directory);
+			return url.toString();
+		};
+
+		// 1. Create a temporary session
+		const createBody: Record<string, unknown> = {};
+		if (params.parentSessionId) {
+			createBody.parentID = params.parentSessionId;
+		}
+		logger.info('[ImprovePrompt] Creating temp session...');
+		const createResp = await fetch(buildUrl('/session'), {
 			method: 'POST',
-			signal: params.signal,
-			headers: {
-				'Content-Type': 'application/json',
-				Accept: 'application/json',
-				...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-			},
-			body: JSON.stringify({
-				model,
-				messages: [
-					{ role: 'system', content: systemPrompt },
-					{ role: 'user', content: params.text },
-				],
-				temperature: 0.2,
-			}),
+			signal,
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(createBody),
 		});
-
-		const text = await resp.text();
-		if (!resp.ok) {
-			throw new Error(
-				`Prompt improver failed: ${resp.status} ${resp.statusText}: ${text.slice(0, 400)}`,
-			);
+		if (!createResp.ok) {
+			const body = await createResp.text().catch(() => '');
+			throw new Error(`Failed to create temp session: ${createResp.status} ${body.slice(0, 200)}`);
 		}
+		const session = (await createResp.json()) as { id?: string };
+		const sessionId = session?.id;
+		if (!sessionId) {
+			throw new Error('OpenCode returned session without id');
+		}
+		logger.info(`[ImprovePrompt] Temp session created: ${sessionId}`);
 
-		let json: unknown;
 		try {
-			json = JSON.parse(text) as unknown;
-		} catch {
-			throw new Error('Prompt improver returned non-JSON response');
+			// 2. Start SSE listener BEFORE sending the message
+			const idlePromise = this.waitForSessionIdle(base, directory, sessionId, signal);
+
+			// 3. Send the message with instruction baked into text
+			const msgBody: Record<string, unknown> = {
+				parts: [{ type: 'text', text: fullText }],
+			};
+			if (params.model?.includes('/')) {
+				const [providerID, modelID] = params.model.split('/', 2);
+				msgBody.model = { providerID, modelID };
+			}
+
+			logger.info(`[ImprovePrompt] Sending message to session ${sessionId}...`);
+			const msgResp = await fetch(buildUrl(`/session/${sessionId}/message`), {
+				method: 'POST',
+				signal,
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(msgBody),
+			});
+			if (!msgResp.ok) {
+				const body = await msgResp.text().catch(() => '');
+				throw new Error(`Improve prompt send failed: ${msgResp.status} ${body.slice(0, 200)}`);
+			}
+
+			// 4. Wait for session.idle via SSE
+			logger.info('[ImprovePrompt] Waiting for session.idle via SSE...');
+			await idlePromise;
+			logger.info('[ImprovePrompt] Session idle received, fetching messages...');
+
+			// 5. Fetch messages with retry — server may not have persisted yet
+			const assistantText = await this.fetchAssistantResponse(
+				buildUrl(`/session/${sessionId}/message`),
+				signal,
+			);
+			logger.info(`[ImprovePrompt] Got response: ${assistantText.length} chars`);
+			return assistantText;
+		} finally {
+			// 6. Clean up — delete the temporary session (fire and forget)
+			fetch(buildUrl(`/session/${sessionId}`), { method: 'DELETE' }).catch(() => {});
+		}
+	}
+
+	/**
+	 * Fetches the assistant response from a session with retry logic.
+	 * After session.idle, the server may not have persisted the message yet,
+	 * so we retry a few times with a short delay.
+	 */
+	private async fetchAssistantResponse(
+		messagesUrl: string,
+		signal: AbortSignal,
+		maxRetries = 5,
+		delayMs = 500,
+	): Promise<string> {
+		for (let attempt = 0; attempt < maxRetries; attempt++) {
+			if (signal.aborted) throw new Error('Aborted');
+
+			if (attempt > 0) {
+				logger.info(`[ImprovePrompt] Retry ${attempt}/${maxRetries} fetching messages...`);
+				await new Promise(r => setTimeout(r, delayMs));
+			}
+
+			const resp = await fetch(messagesUrl, { method: 'GET', signal });
+			if (!resp.ok) {
+				logger.warn(`[ImprovePrompt] Fetch messages failed: ${resp.status}`);
+				continue;
+			}
+
+			const messages = (await resp.json()) as Array<{
+				info?: { role?: string };
+				parts?: Array<{ type?: string; text?: string }>;
+				time?: { completed?: number };
+			}>;
+
+			logger.info(`[ImprovePrompt] Messages count: ${messages.length}`);
+
+			// Find the last assistant message (with or without time.completed)
+			for (let j = messages.length - 1; j >= 0; j--) {
+				const msg = messages[j];
+				if (msg.info?.role !== 'assistant') continue;
+
+				let text = '';
+				for (const part of msg.parts || []) {
+					if (part.type === 'text' && part.text) text += part.text;
+				}
+				text = text.trim();
+				if (text) return text;
+			}
 		}
 
-		const choice0 =
-			json &&
-			typeof json === 'object' &&
-			'choices' in json &&
-			Array.isArray((json as { choices?: unknown }).choices)
-				? (json as { choices: unknown[] }).choices[0]
-				: undefined;
+		throw new Error('No assistant response found after session.idle (retries exhausted)');
+	}
 
-		const content =
-			choice0 &&
-			typeof choice0 === 'object' &&
-			'message' in choice0 &&
-			(choice0 as { message?: unknown }).message &&
-			typeof (choice0 as { message: { content?: unknown } }).message.content === 'string'
-				? ((choice0 as { message: { content: string } }).message.content as string)
-				: undefined;
+	/**
+	 * Connects to the SSE event stream and resolves when `session.idle` fires
+	 * for the given sessionId. Rejects on abort or stream error.
+	 */
+	private waitForSessionIdle(
+		baseUrl: string,
+		directory: string,
+		sessionId: string,
+		signal: AbortSignal,
+	): Promise<void> {
+		return new Promise<void>((resolve, reject) => {
+			if (signal.aborted) {
+				reject(new Error('Aborted'));
+				return;
+			}
 
-		const improved = (content ?? '').trim();
-		if (!improved) {
-			throw new Error('Prompt improver returned empty result');
-		}
-		return improved;
+			const sseUrl = `${baseUrl}/event?directory=${encodeURIComponent(directory)}`;
+			let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+
+			const cleanup = () => {
+				try {
+					reader?.cancel().catch(() => {});
+				} catch {}
+			};
+
+			signal.addEventListener(
+				'abort',
+				() => {
+					cleanup();
+					reject(new Error('Aborted'));
+				},
+				{ once: true },
+			);
+
+			void (async () => {
+				try {
+					const resp = await fetch(sseUrl, {
+						method: 'GET',
+						headers: { Accept: 'text/event-stream' },
+						signal,
+					});
+					if (!resp.ok || !resp.body) {
+						throw new Error(`SSE connect failed: ${resp.status}`);
+					}
+
+					reader = resp.body.getReader();
+					const decoder = new TextDecoder();
+					let buffer = '';
+
+					while (true) {
+						const { done, value } = await reader.read();
+						if (done) break;
+
+						buffer += decoder.decode(value, { stream: true });
+						const lines = buffer.split('\n');
+						buffer = lines.pop() || '';
+
+						for (const line of lines) {
+							if (!line.startsWith('data:')) continue;
+							const raw = line.slice(5).trim();
+							if (!raw) continue;
+
+							try {
+								const evt = JSON.parse(raw) as {
+									type?: string;
+									properties?: { sessionID?: string };
+								};
+								if (evt.type === 'session.idle' && evt.properties?.sessionID === sessionId) {
+									cleanup();
+									resolve();
+									return;
+								}
+							} catch {}
+						}
+					}
+
+					// Stream ended without session.idle
+					reject(new Error('SSE stream ended without session.idle'));
+				} catch (err) {
+					if (!signal.aborted) reject(err);
+				}
+			})();
+		});
 	}
 
 	// =============================================================================

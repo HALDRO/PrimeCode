@@ -110,6 +110,9 @@ export const useIsImprovingPrompt = () =>
 export const useImprovingPromptRequestId = () =>
 	useChatStore((state: ChatState) => state.improvingPromptRequestId);
 
+/** Select prompt versions (original + improved) for toggle support */
+export const usePromptVersions = () => useChatStore((state: ChatState) => state.promptVersions);
+
 /** Select changed files panel state (active session) */
 export const useChangedFilesState = () =>
 	useChatStore(

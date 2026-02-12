@@ -83,6 +83,8 @@ export interface ChatState {
 	// Prompt Improver state (not persisted)
 	isImprovingPrompt: boolean;
 	improvingPromptRequestId: string | null;
+	/** Stores both prompt versions (original + improved) for toggle support. */
+	promptVersions: { original: string; improved: string; showingImproved: boolean } | null;
 	actions: ChatActions;
 }
 
@@ -153,6 +155,10 @@ export interface ChatActions {
 
 	// Prompt Improver actions
 	setImprovingPrompt: (isImproving: boolean, requestId?: string | null) => void;
+	/** Clear the stored prompt versions (e.g. after sending or discarding). */
+	clearPromptVersions: () => void;
+	/** Toggle between original and improved prompt text. */
+	togglePromptVersion: () => void;
 
 	// Bulk message operations (for extension message handlers)
 	setSessionMessages: (sessionId: string, messages: Message[]) => void;
@@ -248,6 +254,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 	editingMessageId: null,
 	isImprovingPrompt: false,
 	improvingPromptRequestId: null,
+	promptVersions: null,
 
 	actions: {
 		handleExtensionMessage: (message: ExtensionMessage) => {
@@ -297,6 +304,52 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 			if (message.type === 'session_event') {
 				const event = message as SessionEventMessage;
 				get().actions.dispatch(event.targetId, event.eventType, event.payload);
+				return;
+			}
+
+			// Handle improve prompt responses
+			if (message.type === 'improvePromptResult') {
+				const { requestId, improvedText } = (
+					message as { type: string; data: { requestId: string; improvedText: string } }
+				).data;
+				const state = get();
+				if (state.improvingPromptRequestId === requestId) {
+					// Save the original prompt before replacing with improved text
+					const activeSession = state.activeSessionId
+						? state.sessionsById[state.activeSessionId]
+						: undefined;
+					const currentInput = activeSession?.input || '';
+					set({
+						promptVersions: {
+							original: currentInput,
+							improved: improvedText,
+							showingImproved: true,
+						},
+					});
+					const actions = state.actions;
+					actions.setImprovingPrompt(false, null);
+					actions.setInput(improvedText);
+				}
+				return;
+			}
+
+			if (message.type === 'improvePromptError') {
+				const { requestId } = (
+					message as { type: string; data: { requestId: string; error: string } }
+				).data;
+				const state = get();
+				if (state.improvingPromptRequestId === requestId) {
+					state.actions.setImprovingPrompt(false, null);
+				}
+				return;
+			}
+
+			if (message.type === 'improvePromptCancelled') {
+				const { requestId } = (message as { type: string; data: { requestId: string } }).data;
+				const state = get();
+				if (state.improvingPromptRequestId === requestId) {
+					state.actions.setImprovingPrompt(false, null);
+				}
 				return;
 			}
 		},
@@ -747,6 +800,20 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
 		setImprovingPrompt: (isImproving, requestId = null) => {
 			set({ isImprovingPrompt: isImproving, improvingPromptRequestId: requestId });
+		},
+
+		clearPromptVersions: () => {
+			set({ promptVersions: null });
+		},
+
+		togglePromptVersion: () => {
+			const state = get();
+			if (state.promptVersions) {
+				const { original, improved, showingImproved } = state.promptVersions;
+				const next = !showingImproved;
+				state.actions.setInput(next ? improved : original);
+				set({ promptVersions: { original, improved, showingImproved: next } });
+			}
 		},
 
 		setSessionMessages: (sessionId, messages) =>

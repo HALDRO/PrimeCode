@@ -18,6 +18,7 @@ import {
 	useIsImprovingPrompt,
 	useIsProcessing,
 	useModelSelection,
+	usePromptVersions,
 	useSettingsStore,
 	useSlashCommandsState,
 } from '../../store';
@@ -225,7 +226,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
 	// Store-based state
 	const { input: storeInput } = useChatInputState();
-	const { setInput: setStoreInput, clearRevertedMessages, setImprovingPrompt } = useChatActions();
+	const {
+		setInput: setStoreInput,
+		clearRevertedMessages,
+		setImprovingPrompt,
+		clearPromptVersions,
+		togglePromptVersion,
+	} = useChatActions();
 	const isProcessing = useIsProcessing();
 	const { selectedModel, proxyModels, opencodeProviders, getSessionModel } = useModelSelection();
 	const promptImproveTimeoutSeconds = useSettingsStore(state => state.promptImproveTimeoutSeconds);
@@ -239,6 +246,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 	// Prompt Improver state from global store
 	const isImproving = useIsImprovingPrompt();
 	const currentImproveRequestId = useImprovingPromptRequestId();
+	const promptVersions = usePromptVersions();
 
 	// Derived values
 	const isControlled = controlledValue !== undefined;
@@ -533,6 +541,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 		clearRevertedMessages();
 		setStoreInput('');
 		clearAll();
+		clearPromptVersions();
 		setPlanMode(false);
 	}, [
 		inputValue,
@@ -547,6 +556,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 		clearRevertedMessages,
 		setStoreInput,
 		clearAll,
+		clearPromptVersions,
 		getSessionModel,
 	]);
 
@@ -780,6 +790,32 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 					)}
 
 					{/* Text Input Area */}
+					{promptVersions !== null && (
+						<div className="flex items-center gap-2 px-(--gap-3) py-(--gap-1) text-xs text-vscode-descriptionForeground border-b border-(--vscode-widget-border) bg-(--alpha-3)">
+							<span className="truncate flex-1 opacity-80">
+								{promptVersions.showingImproved ? 'Original' : 'Improved'}: {(() => {
+									const alt = promptVersions.showingImproved
+										? promptVersions.original
+										: promptVersions.improved;
+									return alt.length > 80 ? `${alt.slice(0, 80)}…` : alt;
+								})()}
+							</span>
+							<button
+								type="button"
+								className="shrink-0 px-1.5 py-0.5 rounded text-xs hover:bg-(--alpha-5) text-(--color-accent) cursor-pointer"
+								onClick={togglePromptVersion}
+							>
+								{promptVersions.showingImproved ? 'Use original' : 'Use improved'}
+							</button>
+							<button
+								type="button"
+								className="shrink-0 px-1.5 py-0.5 rounded text-xs hover:bg-(--alpha-5) opacity-60 cursor-pointer"
+								onClick={clearPromptVersions}
+							>
+								✕
+							</button>
+						</div>
+					)}
 					<div className="relative w-full min-w-0 grid place-items-stretch">
 						{/* Backdrop for highlighting */}
 						<div

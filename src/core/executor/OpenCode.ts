@@ -75,6 +75,9 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	private readonly messageRoles = new Map<string, 'user' | 'assistant'>();
 	private lastEmittedStatus = new Map<string, string>();
 
+	/** All session IDs that are currently active (main + subagent children). */
+	private readonly activeSessions = new Set<string>();
+
 	// Token stats tracking for message.updated events (per-message cumulative → delta)
 	private readonly lastMessageTokens = new Map<
 		string,
@@ -400,6 +403,57 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		return null as unknown as ChildProcess;
 	}
 
+	/**
+	 * Checks if a session title is the auto-generated default ("New session - <ISO>" or "Child session - <ISO>").
+	 * Matches the official OpenCode `isDefaultTitle()` logic.
+	 */
+	private static isDefaultTitle(title: string): boolean {
+		return /^(New session - |Child session - )\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(
+			title,
+		);
+	}
+
+	/**
+	 * Fetches the first user message's summary title for a session.
+	 * OpenCode stores LLM-generated titles on the session directly via ensureTitle(),
+	 * but if that hasn't run yet, we fall back to the first user message text.
+	 */
+	private async getSessionDisplayTitle(
+		sessionId: string,
+		directory: string,
+	): Promise<string | undefined> {
+		try {
+			const messages = await this.fetchApi<
+				Array<{
+					info?: { role?: string; summary?: { title?: string } };
+					parts?: Array<{ type?: string; text?: string; synthetic?: boolean }>;
+				}>
+			>(`/session/${sessionId}/message?limit=3`, directory);
+
+			if (!Array.isArray(messages)) return undefined;
+
+			// Find first user message
+			const userMsg = messages.find(m => m.info?.role === 'user');
+			if (!userMsg) return undefined;
+
+			// Try message-level summary title first
+			if (userMsg.info?.summary?.title) {
+				return userMsg.info.summary.title;
+			}
+
+			// Fall back to first non-synthetic text part, truncated
+			const textPart = userMsg.parts?.find(p => p.type === 'text' && !p.synthetic && p.text);
+			if (textPart?.text) {
+				const cleaned = textPart.text.trim().split('\n')[0];
+				return cleaned.length > 80 ? `${cleaned.substring(0, 77)}...` : cleaned;
+			}
+
+			return undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
 	async listSessions(
 		config: CLIConfig,
 	): Promise<Array<{ id: string; title?: string; lastModified?: number; parentID?: string }>> {
@@ -417,6 +471,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 
 		try {
+			// Use roots=true to filter out child/subagent sessions server-side
 			const raw = await this.fetchApi<
 				Array<{
 					id: string;
@@ -424,7 +479,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 					parentID?: string;
 					time?: { updated?: number; created?: number };
 				}>
-			>('/session', config.workspaceRoot);
+			>('/session?roots=true', config.workspaceRoot);
 
 			// Guard: ensure response is actually an array
 			const sessions = Array.isArray(raw) ? raw : [];
@@ -434,13 +489,29 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				directory: config.workspaceRoot,
 			});
 
-			return sessions.map(s => ({
-				id: s.id,
-				title: s.title || 'Untitled Session',
-				lastModified: s.time?.updated || s.time?.created || Date.now(),
-				created: s.time?.created,
-				parentID: s.parentID,
-			}));
+			// Resolve titles for sessions that still have the default "New session - <timestamp>" title.
+			// For these, fetch the first user message to get a meaningful display title.
+			const resolved = await Promise.all(
+				sessions.map(async s => {
+					const rawTitle = s.title || '';
+					let displayTitle = rawTitle;
+
+					if (!rawTitle || OpenCodeExecutor.isDefaultTitle(rawTitle)) {
+						const msgTitle = await this.getSessionDisplayTitle(s.id, config.workspaceRoot);
+						displayTitle = msgTitle || '';
+					}
+
+					return {
+						id: s.id,
+						title: displayTitle || undefined,
+						lastModified: s.time?.updated || s.time?.created || Date.now(),
+						created: s.time?.created,
+						parentID: s.parentID,
+					};
+				}),
+			);
+
+			return resolved;
 		} catch (error) {
 			logger.warn('[OpenCode] listSessions: API call failed', error);
 			return [];
@@ -1013,11 +1084,23 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				break;
 			case 'session.status':
 				this.handleSessionStatus(props, sessionId);
+				// Track active sessions: busy = add, idle-like = remove
+				if (sessionId) {
+					const status = this.normalizeSessionStatus(
+						props.status as Record<string, unknown> | undefined,
+					);
+					if (status.type === 'busy') {
+						this.activeSessions.add(sessionId);
+					} else if (status.type === 'idle') {
+						this.activeSessions.delete(sessionId);
+					}
+				}
 				break;
 			case 'session.error':
 				this.handleSessionError(props, sessionId);
 				break;
 			case 'session.idle':
+				if (sessionId) this.activeSessions.delete(sessionId);
 				this.emit('event', { type: 'finished', data: { reason: 'idle' }, sessionId });
 				break;
 		}
@@ -1304,10 +1387,20 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	}
 
 	async abort(): Promise<void> {
-		if (this.directory && this.sessionId) {
-			try {
-				await this.sendAbort(this.directory, this.sessionId);
-			} catch {}
+		if (this.directory) {
+			// Abort ALL tracked sessions (main + subagent children) in parallel
+			const sessionsToAbort = new Set<string>(this.activeSessions);
+			if (this.sessionId) sessionsToAbort.add(this.sessionId);
+
+			const dir = this.directory;
+			await Promise.allSettled(
+				[...sessionsToAbort].map(sid =>
+					this.sendAbort(dir, sid).catch(e =>
+						logger.warn(`[OpenCode] Failed to abort session ${sid}:`, e),
+					),
+				),
+			);
+			this.activeSessions.clear();
 		}
 		try {
 			this.eventAbort?.abort();
@@ -1323,6 +1416,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		this.completedToolCalls.clear();
 		this.lastEmittedStatus.clear();
 		this.lastMessageTokens.clear();
+		this.activeSessions.clear();
 	}
 
 	async dispose(): Promise<void> {

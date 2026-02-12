@@ -64,34 +64,31 @@ export class ConversationService {
 
 		try {
 			// NOTE: We do NOT fallback to local files for OpenCode.
-			// If the server returns empty, we show empty.
+			// The executor already uses roots=true to filter child sessions
+			// and resolves default titles from first user message.
 			const config: ICLIConfig = {
 				provider: 'opencode',
 				workspaceRoot: this.workspaceRoot || '',
 			};
-			const allSessions = await this.cliRunner.listSessions(config);
-
-			// Filter out subagent sessions and empty sessions (created but never used)
-			const sessions = allSessions.filter(s => !s.parentID && (s.title || s.lastModified));
+			const sessions = await this.cliRunner.listSessions(config);
 
 			logger.info('[ConversationService] listOpenCodeConversations result', {
-				totalFromAPI: allSessions.length,
-				afterFilter: sessions.length,
+				totalFromAPI: sessions.length,
 			});
 
 			return sessions
 				.map(s => ({
 					filename: s.id,
 					sessionId: s.id,
-					startTime: new Date(s.lastModified || 0).toISOString(),
+					startTime: new Date(s.created || s.lastModified || 0).toISOString(),
 					endTime: new Date(s.lastModified || 0).toISOString(),
 					messageCount: 0,
 					totalCost: 0,
-					firstUserMessage: s.title || 'Session',
+					firstUserMessage: s.title || 'New Session',
 					lastUserMessage: '',
-					customTitle: s.title,
+					customTitle: s.title || undefined,
 				}))
-				.sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
+				.sort((a, b) => new Date(b.endTime).getTime() - new Date(a.endTime).getTime());
 		} catch (error) {
 			logger.warn('[ConversationService] Failed to list CLI sessions:', error);
 			return [];
