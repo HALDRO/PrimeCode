@@ -79,6 +79,7 @@ export class LogNormalizer extends EventEmitter {
 		switch (toolName) {
 			case 'ReadFile':
 			case 'read_file':
+			case 'read':
 				actionType = {
 					type: 'FileRead',
 					path:
@@ -92,7 +93,8 @@ export class LogNormalizer extends EventEmitter {
 			case 'WriteFile':
 			case 'write_file':
 			case 'Write':
-			case 'write': {
+			case 'write':
+			case 'writefile': {
 				const path =
 					(input.path as string) || (input.file_path as string) || (input.filePath as string) || '';
 				const content = (input.content as string) || (input.contents as string) || '';
@@ -151,6 +153,7 @@ export class LogNormalizer extends EventEmitter {
 
 			case 'RunCommand':
 			case 'run_command':
+			case 'Bash':
 			case 'bash':
 				actionType = {
 					type: 'CommandRun',
@@ -182,6 +185,7 @@ export class LogNormalizer extends EventEmitter {
 				};
 				break;
 
+			case 'LS':
 			case 'ls':
 			case 'list_dir':
 			case 'serena_list_dir':
@@ -205,6 +209,7 @@ export class LogNormalizer extends EventEmitter {
 
 			case 'TodoWrite':
 			case 'todo_write':
+			case 'todowrite':
 				actionType = {
 					type: 'TodoManagement',
 					operation: 'write',

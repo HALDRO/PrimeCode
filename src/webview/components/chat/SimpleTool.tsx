@@ -4,6 +4,10 @@ import { type ReactNode, useId, useMemo, useState } from 'react';
 import type { NormalizedEntry } from '../../../../common/normalizedEvents';
 import { isMcpTool, isToolInList, NON_GROUPABLE_TOOLS } from '../../constants';
 import { cn } from '../../lib/cn';
+
+/** Max search results shown inline before collapsing with "+N more" */
+const SEARCH_PREVIEW_LIMIT = 10;
+
 import type { Message } from '../../store/chatStore';
 import { formatDuration, formatToolName } from '../../utils/format';
 import { Markdown } from '../../utils/markdown';
@@ -408,6 +412,8 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 			} else if (action.type === 'TaskCreate') {
 				label = 'Task';
 				meta = action.description;
+			} else if (action.type === 'TodoManagement') {
+				label = 'Todo';
 			} else if (isLs) {
 				label = 'Listed';
 				const args =
@@ -422,7 +428,10 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 				meta = (rawInput as { path?: string })?.path || '';
 			} else if (isRead) {
 				label = 'Read';
-				meta = (rawInput as { path?: string })?.path || '';
+				const ri = rawInput as { path?: string; file_path?: string; filePath?: string };
+				meta = ri?.path || ri?.file_path || ri?.filePath || '';
+			} else if (isTodo) {
+				label = 'Todo';
 			} else if (toolLower === 'grep') {
 				label = 'Grep';
 				meta = (rawInput as { pattern?: string })?.pattern || '';
@@ -625,11 +634,11 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 			) : isSearch ? (
 				searchEntries.length > 0 ? (
 					<div className="flex flex-col gap-1">
-						{searchEntries.map((ref, idx) => (
+						{searchEntries.slice(0, SEARCH_PREVIEW_LIMIT).map((ref, idx) => (
 							<div
 								// biome-ignore lint/suspicious/noArrayIndexKey: static rendering
 								key={idx}
-								className="flex items-center min-w-0"
+								className="flex items-center gap-2 min-w-0"
 							>
 								<PathChip
 									path={ref.path}
@@ -642,8 +651,18 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 									}
 									title={ref.path}
 								/>
+								{ref.detail && (
+									<span className="text-xs text-vscode-foreground opacity-50 truncate">
+										{ref.detail}
+									</span>
+								)}
 							</div>
 						))}
+						{searchEntries.length > SEARCH_PREVIEW_LIMIT && (
+							<span className="text-xs text-vscode-foreground opacity-50 pl-1">
+								+{searchEntries.length - SEARCH_PREVIEW_LIMIT} more
+							</span>
+						)}
 					</div>
 				) : null
 			) : hasBody ? (

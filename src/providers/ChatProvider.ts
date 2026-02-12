@@ -602,7 +602,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					);
 					this.activeAssistantPartId = null;
 				}
-				this.sessionHandler.postStatus(targetSessionId, 'idle', 'Ready');
+				// Stop guard: don't overwrite forced 'idle' with another 'idle' from SSE
+				// (harmless but avoids confusing log noise and potential flicker)
+				if (!this.sessionState.isStopGuarded()) {
+					this.sessionHandler.postStatus(targetSessionId, 'idle', 'Ready');
+				}
 				break;
 			}
 
@@ -951,6 +955,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					filePath,
 					isRunning: false,
 					timestamp: new Date().toISOString(),
+					normalizedEntry: event.normalizedEntry,
 					contextId,
 				},
 				toolResultTargetSessionId,

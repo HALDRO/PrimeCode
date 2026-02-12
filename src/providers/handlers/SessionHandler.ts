@@ -158,8 +158,23 @@ export class SessionHandler implements WebviewMessageHandler {
 			| undefined;
 
 		if (status?.type === 'busy') {
+			// Stop guard: suppress 'busy' events that arrive after user clicked Stop.
+			// This prevents delayed SSE events from overwriting the forced 'idle' status.
+			if (this.context.sessionState.isStopGuarded()) {
+				logger.debug('[SessionHandler] Suppressed busy status (stop guard active)', {
+					targetSessionId,
+				});
+				return;
+			}
 			this.postStatus(targetSessionId, 'busy', 'Working...');
 		} else if (status?.type === 'idle') {
+			// During stop guard, suppress idle too — we already forced idle.
+			if (this.context.sessionState.isStopGuarded()) {
+				logger.debug('[SessionHandler] Suppressed idle status (stop guard active)', {
+					targetSessionId,
+				});
+				return;
+			}
 			this.postStatus(targetSessionId, 'idle', 'Ready');
 		} else if (status?.type === 'retry') {
 			this.context.view.postMessage({
@@ -414,6 +429,10 @@ export class SessionHandler implements WebviewMessageHandler {
 			return;
 		}
 
+		// Activate stop guard FIRST — blocks any incoming SSE 'busy' events
+		// from overwriting our forced 'idle' status during the race window.
+		this.context.sessionState.activateStopGuard(10_000);
+
 		// Force UI to idle IMMEDIATELY — before awaiting abort.
 		// This guarantees the Stop button always responds, even if the
 		// abort request hangs or the server is unreachable.
@@ -450,6 +469,10 @@ export class SessionHandler implements WebviewMessageHandler {
 		explicitSessionId?: string,
 		messageIdToTruncate?: string,
 	): Promise<void> {
+		// Clear stop guard — user is explicitly sending a new message,
+		// so SSE 'busy' events should be allowed through again.
+		this.context.sessionState.clearStopGuard();
+
 		const config = this.buildSendConfig(uiModel);
 		let modelNotice: string | undefined;
 

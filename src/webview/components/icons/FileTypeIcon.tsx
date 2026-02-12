@@ -1,7 +1,12 @@
 import { useState } from 'react';
 import { getIconForFile, getIconForFolder, getIconForOpenFolder } from 'vscode-icons-js';
 
-const ICONS_CDN_BASE = 'https://raw.githubusercontent.com/vscode-icons/vscode-icons/master/icons/';
+/**
+ * Use jsDelivr CDN with pinned version for reliable icon loading.
+ * The vscode-icons GitHub raw URLs are unreliable (rate-limited, 404s).
+ * Version must match the icon set used by vscode-icons-js package.
+ */
+const ICONS_CDN_BASE = 'https://cdn.jsdelivr.net/gh/vscode-icons/vscode-icons@v11.6.0/icons/';
 
 interface FileTypeIconProps {
 	name: string;

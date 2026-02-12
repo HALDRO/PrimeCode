@@ -45,6 +45,10 @@ function createMockHandlerContext(
 		sessionState: {
 			activeSessionId: 'test-session-1',
 			startedSessions: new Set(['test-session-1']),
+			stopGuardUntil: 0,
+			isStopGuarded: () => false,
+			activateStopGuard: () => {},
+			clearStopGuard: () => {},
 		},
 		services: {} as any,
 		...overrides,

@@ -1314,6 +1314,11 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 		if ((status === 'completed' || status === 'error') && !this.completedToolCalls.has(callID)) {
 			this.completedToolCalls.add(callID);
+			const resultNormalized = this.logNormalizer.normalizeToolUse(
+				name,
+				(state?.input as Record<string, unknown>) || {},
+				callID,
+			);
 			this.emit('event', {
 				type: 'tool_result',
 				data: {
@@ -1325,6 +1330,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 					title: state?.title,
 					metadata: state?.metadata,
 				},
+				normalizedEntry: resultNormalized,
 				sessionId,
 			});
 		}

@@ -93,14 +93,19 @@ export const formatNumber = (num: number): string => {
 export const formatTokens = (tokens: number): string => formatNumber(tokens);
 
 /**
- * Format tool name for display
+ * Format tool name for display — always capitalizes first letter of each word
  */
 export const formatToolName = (name: string): string => {
 	if (name.startsWith('mcp__') || name.startsWith('mcp_')) {
 		const parts = name.replace(/^mcp_+/, '').split('_');
 		return parts.map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
 	}
-	return name.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2');
+	const spaced = name.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2');
+	// Capitalize first letter of each word
+	return spaced
+		.split(' ')
+		.map(w => w.charAt(0).toUpperCase() + w.slice(1))
+		.join(' ');
 };
 
 /**

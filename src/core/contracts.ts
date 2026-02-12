@@ -63,4 +63,12 @@ export interface IView {
 export interface ISessionState {
 	activeSessionId: string | undefined;
 	startedSessions: Set<string>;
+	/** Timestamp (ms) until which incoming 'busy' SSE events are suppressed after Stop. */
+	stopGuardUntil: number;
+	/** Returns true if the stop guard is currently active. */
+	isStopGuarded(): boolean;
+	/** Activate the stop guard for the given duration. */
+	activateStopGuard(durationMs?: number): void;
+	/** Clear the stop guard (e.g. when user sends a new message). */
+	clearStopGuard(): void;
 }

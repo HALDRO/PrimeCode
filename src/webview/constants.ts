@@ -235,10 +235,14 @@ export const isToolInList = (toolName: string | undefined, list: readonly string
 };
 
 /**
- * Capitalize first letter of tool name for display
+ * Capitalize first letter of each word in tool name for display
  */
 export const formatToolNameForDisplay = (toolName: string): string =>
-	toolName.charAt(0).toUpperCase() + toolName.slice(1).toLowerCase();
+	toolName
+		.replace(/([a-z])([A-Z])/g, '$1 $2')
+		.split(/[\s_-]+/)
+		.map(w => w.charAt(0).toUpperCase() + w.slice(1))
+		.join(' ');
 
 /**
  * Check if tool is an MCP tool based on naming conventions:
