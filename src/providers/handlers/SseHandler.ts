@@ -1,4 +1,4 @@
-import type { WebviewMessage } from '../../common';
+import type { CommandOf, WebviewCommand } from '../../common';
 import { logger } from '../../utils/logger';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
@@ -7,22 +7,22 @@ export class SseHandler implements WebviewMessageHandler {
 
 	constructor(private context: HandlerContext) {}
 
-	async handleMessage(msg: WebviewMessage): Promise<void> {
+	async handleMessage(msg: WebviewCommand): Promise<void> {
 		switch (msg.type) {
 			case 'sseSubscribe':
-				await this.handleSubscribe(msg as unknown as { id: string; url: string });
+				await this.handleSubscribe(msg);
 				break;
 			case 'sseClose':
-				this.handleClose((msg as unknown as { id: string }).id);
+				this.handleClose(msg.id);
 				break;
 		}
 	}
 
-	private async handleSubscribe(message: { id: string; url: string }) {
-		const { id, url } = message;
+	private async handleSubscribe(msg: CommandOf<'sseSubscribe'>) {
+		const { id, url } = msg;
 
 		if (typeof id !== 'string' || typeof url !== 'string') {
-			logger.warn('[SseHandler] Invalid sseSubscribe message', message);
+			logger.warn('[SseHandler] Invalid sseSubscribe message', { id, url });
 			return;
 		}
 

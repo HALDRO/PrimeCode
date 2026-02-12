@@ -1,12 +1,13 @@
 import type * as vscode from 'vscode';
-import type { HandlerContext, WebviewMessage, WebviewMessageHandler } from './types';
+import type { CommandOf, WebviewCommand } from '../../common/webviewCommands';
+import type { HandlerContext, WebviewMessageHandler } from './types';
 
 export class McpHandler implements WebviewMessageHandler {
 	private disposables: vscode.Disposable[] = [];
 
 	constructor(private context: HandlerContext) {}
 
-	async handleMessage(msg: WebviewMessage): Promise<void> {
+	async handleMessage(msg: WebviewCommand): Promise<void> {
 		switch (msg.type) {
 			case 'loadMCPServers':
 				await this.onLoadMcpServers();
@@ -43,30 +44,24 @@ export class McpHandler implements WebviewMessageHandler {
 		await this.context.services.mcpManagement.pingMcpServers();
 	}
 
-	private async onFetchMcpMarketplaceCatalog(msg: WebviewMessage): Promise<void> {
-		const forceRefresh = Boolean(
-			(msg.data as { forceRefresh?: boolean } | undefined)?.forceRefresh,
-		);
-		await this.context.services.mcpManagement.fetchMcpMarketplaceCatalog(forceRefresh);
+	private async onFetchMcpMarketplaceCatalog(
+		msg: CommandOf<'fetchMcpMarketplaceCatalog'>,
+	): Promise<void> {
+		await this.context.services.mcpManagement.fetchMcpMarketplaceCatalog(msg.forceRefresh);
 	}
 
-	private async onInstallMcpFromMarketplace(msg: WebviewMessage): Promise<void> {
-		const mcpId = typeof msg.mcpId === 'string' ? msg.mcpId : undefined;
-		if (!mcpId) throw new Error('Missing mcpId');
-		await this.context.services.mcpManagement.installMcpFromMarketplace(mcpId);
+	private async onInstallMcpFromMarketplace(
+		msg: CommandOf<'installMcpFromMarketplace'>,
+	): Promise<void> {
+		await this.context.services.mcpManagement.installMcpFromMarketplace(msg.mcpId);
 	}
 
-	private async onSaveMcpServer(msg: WebviewMessage): Promise<void> {
-		const name = typeof msg.name === 'string' ? msg.name : undefined;
-		const config = msg.config as import('../../common').MCPServerConfig | undefined;
-		if (!name || !config) throw new Error('Missing MCP server name/config');
-		await this.context.services.mcpManagement.saveMCPServer(name, config);
+	private async onSaveMcpServer(msg: CommandOf<'saveMCPServer'>): Promise<void> {
+		await this.context.services.mcpManagement.saveMCPServer(msg.name, msg.config);
 	}
 
-	private async onDeleteMcpServer(msg: WebviewMessage): Promise<void> {
-		const name = typeof msg.name === 'string' ? msg.name : undefined;
-		if (!name) throw new Error('Missing MCP server name');
-		await this.context.services.mcpManagement.deleteMCPServer(name);
+	private async onDeleteMcpServer(msg: CommandOf<'deleteMCPServer'>): Promise<void> {
+		await this.context.services.mcpManagement.deleteMCPServer(msg.name);
 	}
 
 	private async onOpenAgentsMcpConfig(): Promise<void> {

@@ -89,16 +89,16 @@ const ClaudeCLIStatus: React.FC = () => {
 	const { postMessage } = useVSCode();
 
 	useEffect(() => {
-		postMessage('checkCLIDiagnostics');
+		postMessage({ type: 'checkCLIDiagnostics' });
 	}, [postMessage]);
 
 	const handleRefresh = () => {
 		setCLIDiagnostics({ isChecking: true });
-		postMessage('checkCLIDiagnostics');
+		postMessage({ type: 'checkCLIDiagnostics' });
 	};
 
 	const handleOpenDocs = () => {
-		postMessage('openExternal', { url: 'https://docs.anthropic.com/en/docs/claude-code' });
+		postMessage({ type: 'openExternal', url: 'https://docs.anthropic.com/en/docs/claude-code' });
 	};
 
 	return (
@@ -146,7 +146,7 @@ const OpenCodeCLIStatus: React.FC = () => {
 		}
 		initialLoadDone.current = true;
 
-		postMessage('syncAll');
+		postMessage({ type: 'syncAll' });
 		startTimeout();
 
 		return () => {
@@ -159,12 +159,12 @@ const OpenCodeCLIStatus: React.FC = () => {
 	const handleRefresh = () => {
 		setOpenCodeStatus({ isChecking: true, error: undefined });
 		setOpenCodeConfig({ isLoading: true, error: undefined });
-		postMessage('syncAll');
+		postMessage({ type: 'syncAll' });
 		startTimeout();
 	};
 
 	const handleOpenDocs = () => {
-		postMessage('openExternal', { url: 'https://opencode.ai/docs' });
+		postMessage({ type: 'openExternal', url: 'https://opencode.ai/docs' });
 	};
 
 	return (
@@ -199,12 +199,12 @@ const PermissionsSettings: React.FC = () => {
 		value: 'ask' | 'allow' | 'deny',
 	) => {
 		const newPolicies = { ...policies, [type]: value };
-		postMessage('setPermissions', { policies: newPolicies, provider });
+		postMessage({ type: 'setPermissions', policies: newPolicies, provider });
 	};
 
 	const handlePreset = (preset: 'ask' | 'allow') => {
 		const newPolicies = { edit: preset, terminal: preset, network: preset };
-		postMessage('setPermissions', { policies: newPolicies, provider });
+		postMessage({ type: 'setPermissions', policies: newPolicies, provider });
 	};
 
 	const policyOptions = [
@@ -274,7 +274,7 @@ const PermissionsSettings: React.FC = () => {
 						<Button
 							size="sm"
 							variant="secondary"
-							onClick={() => postMessage('openFile', { filePath: '.claude/settings.json' })}
+							onClick={() => postMessage({ type: 'openFile', filePath: '.claude/settings.json' })}
 						>
 							{permissions.claudeConfig ? 'Open' : 'Create'}
 						</Button>
@@ -290,7 +290,7 @@ const PermissionsSettings: React.FC = () => {
 						<Button
 							size="sm"
 							variant="secondary"
-							onClick={() => postMessage('openFile', { filePath: 'opencode.json' })}
+							onClick={() => postMessage({ type: 'openFile', filePath: 'opencode.json' })}
 						>
 							{permissions.openCodeConfig ? 'Open' : 'Create'}
 						</Button>
@@ -323,19 +323,20 @@ const MainSettings: React.FC = () => {
 
 	const handleProviderChange = (newProvider: string) => {
 		setSettings({ provider: newProvider as 'claude' | 'opencode' });
-		postMessage('updateSettings', { settings: { provider: newProvider } });
+		postMessage({ type: 'updateSettings', settings: { provider: newProvider } });
 		// Refresh permissions when provider changes
-		setTimeout(() => postMessage('getPermissions'), 100);
+		setTimeout(() => postMessage({ type: 'getPermissions' }), 100);
 		// Load OpenCode providers when switching to OpenCode CLI
 		if (newProvider === 'opencode') {
-			postMessage('syncAll');
+			postMessage({ type: 'syncAll' });
 		}
 	};
 
 	// Save task-specific model settings
 	const saveTaskModels = (key: string, value: string) => {
 		setSettings({ [key]: value } as Record<string, string>);
-		postMessage('updateSettings', {
+		postMessage({
+			type: 'updateSettings',
 			settings: {
 				[`proxy.${key.replace('proxy', '').charAt(0).toLowerCase()}${key.replace('proxy', '').slice(1)}`]:
 					value,
@@ -397,7 +398,8 @@ const MainSettings: React.FC = () => {
 								onChange={() => {
 									const newValue = !proxyUseSingleModel;
 									setSettings({ proxyUseSingleModel: newValue });
-									postMessage('updateSettings', {
+									postMessage({
+										type: 'updateSettings',
 										settings: { 'proxy.useSingleModel': newValue },
 									});
 								}}

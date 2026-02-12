@@ -394,7 +394,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 										onClick={e => {
 											e.stopPropagation();
 											if (effectiveFilePath)
-												postMessage('openFile', { filePath: effectiveFilePath });
+												postMessage({ type: 'openFile', filePath: effectiveFilePath });
 										}}
 										className="text-sm cursor-pointer text-vscode-foreground bg-none border-none p-0 opacity-90 whitespace-nowrap overflow-hidden text-ellipsis"
 									>
@@ -413,7 +413,8 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 								onClick={e => {
 									e.stopPropagation();
 									if (effectiveFilePath)
-										postMessage('openFileDiff', {
+										postMessage({
+											type: 'openFileDiff',
 											filePath: effectiveFilePath,
 											oldContent,
 											newContent,

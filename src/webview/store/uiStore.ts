@@ -20,7 +20,7 @@ export type { ConversationIndexEntry, WorkspaceFile };
 // Re-export types from chatStore for backward compatibility
 export type { ChangedFile, CommitInfo, TokenStats, TotalStats } from './chatStore';
 
-export type ModalType = 'settings' | 'history' | 'access' | 'filePicker' | 'mcp' | null;
+export type ModalType = 'settings' | 'history' | 'access' | 'mcp' | null;
 
 export interface ConfirmDialogData {
 	title: string;

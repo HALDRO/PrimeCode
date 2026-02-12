@@ -63,7 +63,7 @@ export const Header: React.FC = React.memo(() => {
 			// Keep UI responsive (local switch) but also sync backend state
 			// so session-specific messages and restore state route correctly.
 			switchSession(sessionId);
-			postMessage('switchSession', { sessionId });
+			postMessage({ type: 'switchSession', sessionId });
 		},
 		[postMessage, switchSession],
 	);
@@ -71,13 +71,13 @@ export const Header: React.FC = React.memo(() => {
 	const handleCloseSession = useCallback(
 		(sessionId: string) => {
 			closeSession(sessionId);
-			postMessage('closeSession', { sessionId });
+			postMessage({ type: 'closeSession', sessionId });
 		},
 		[closeSession, postMessage],
 	);
 
 	const handleCreateSession = useCallback(() => {
-		postMessage('createSession', {});
+		postMessage({ type: 'createSession' });
 	}, [postMessage]);
 
 	const handleHistoryToggle = useCallback(() => {

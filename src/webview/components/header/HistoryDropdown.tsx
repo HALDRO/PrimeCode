@@ -78,7 +78,7 @@ export const HistoryDropdown: React.FC = () => {
 
 	useEffect(() => {
 		setIsLoading(true);
-		postMessage('getConversationList');
+		postMessage({ type: 'getConversationList' });
 
 		const messageHandler = (event: MessageEvent) => {
 			const message = event.data;
@@ -115,7 +115,7 @@ export const HistoryDropdown: React.FC = () => {
 			if (editingId) {
 				return;
 			}
-			postMessage('loadConversation', { filename: conv.filename });
+			postMessage({ type: 'loadConversation', filename: conv.filename });
 			onClose();
 		},
 		[postMessage, onClose, editingId],
@@ -129,7 +129,8 @@ export const HistoryDropdown: React.FC = () => {
 	const handleRenameSubmit = useCallback(
 		(conv: ConversationIndexEntry) => {
 			if (editValue.trim()) {
-				postMessage('renameConversation', {
+				postMessage({
+					type: 'renameConversation',
 					filename: conv.filename,
 					newTitle: editValue.trim(),
 				});
@@ -142,7 +143,7 @@ export const HistoryDropdown: React.FC = () => {
 
 	const handleDelete = useCallback(
 		(conv: ConversationIndexEntry) => {
-			postMessage('deleteConversation', { filename: conv.filename });
+			postMessage({ type: 'deleteConversation', filename: conv.filename });
 		},
 		[postMessage],
 	);
@@ -186,7 +187,7 @@ export const HistoryDropdown: React.FC = () => {
 				confirmLabel: 'Clear All',
 				cancelLabel: 'Cancel',
 				onConfirm: () => {
-					postMessage('clearAllConversations');
+					postMessage({ type: 'clearAllConversations' });
 				},
 			});
 		}, 50);

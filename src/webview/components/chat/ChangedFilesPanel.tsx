@@ -267,7 +267,7 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 
 	const handleOpenDiff = useCallback(
 		(filePath: string) => {
-			postMessage('openFileDiff', { filePath });
+			postMessage({ type: 'openFileDiff', filePath });
 		},
 		[postMessage],
 	);
@@ -281,13 +281,13 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 
 	const handleRejectFile = useCallback(
 		(filePath: string) => {
-			postMessage('undoFileChanges', { filePath });
+			postMessage({ type: 'undoFileChanges', filePath });
 		},
 		[postMessage],
 	);
 
 	const handleUndoAll = useCallback(() => {
-		postMessage('undoAllChanges');
+		postMessage({ type: 'undoAllChanges' });
 	}, [postMessage]);
 
 	const handleKeepAll = useCallback(() => {
@@ -296,19 +296,19 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 
 	// Copy operations delegated to extension side to avoid messages subscription
 	const handleCopyLastResponse = useCallback(() => {
-		postMessage('copyLastResponse');
+		postMessage({ type: 'copyLastResponse' });
 	}, [postMessage]);
 
 	const handleCopyAllMessages = useCallback(() => {
-		postMessage('copyAllMessages');
+		postMessage({ type: 'copyAllMessages' });
 	}, [postMessage]);
 
 	const handleCopyLastDiffs = useCallback(() => {
-		postMessage('copyLastDiffs');
+		postMessage({ type: 'copyLastDiffs' });
 	}, [postMessage]);
 
 	const handleCopyAllDiffs = useCallback(() => {
-		postMessage('copyAllDiffs');
+		postMessage({ type: 'copyAllDiffs' });
 	}, [postMessage]);
 
 	const copyMenuItems = useMemo<CopyMenuItem[]>(

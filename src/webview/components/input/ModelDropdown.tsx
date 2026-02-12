@@ -97,9 +97,9 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 			if (provider === 'opencode') {
 				// ModelDropdown uses composite ID "provider/model" for OpenCode.
 				// We pass this directly to setOpenCodeModel handler in ChatProvider.
-				postMessage('setOpenCodeModel', { model: model.id });
+				postMessage({ type: 'setOpenCodeModel', model: model.id });
 			} else {
-				postMessage('selectModel', { model: model.id });
+				postMessage({ type: 'selectModel', model: model.id });
 			}
 			onClose();
 		},

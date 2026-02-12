@@ -291,6 +291,11 @@
 					"default": [],
 					"description": "List of provider IDs that are hidden from the model dropdown (but keep their model selection). Works for all providers including oai."
 				},
+				"primeCode.access.autoApprove": {
+					"type": "boolean",
+					"default": false,
+					"description": "Automatically approve all file edit and creation requests without showing permission dialogs."
+				},
 				"primeCode.access.yoloMode": {
 					"type": "boolean",
 					"default": false,

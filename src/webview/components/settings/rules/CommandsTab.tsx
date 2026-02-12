@@ -25,7 +25,7 @@ export const CommandsTab: React.FC = () => {
 
 	// Initial load
 	useEffect(() => {
-		postMessage('getCommands');
+		postMessage({ type: 'getCommands' });
 	}, [postMessage]);
 
 	const handleCreate = () => {
@@ -33,7 +33,8 @@ export const CommandsTab: React.FC = () => {
 			return;
 		}
 
-		postMessage('createCommand', {
+		postMessage({
+			type: 'createCommand',
 			name: newName,
 			description: newDescription,
 			content: newContent,
@@ -46,11 +47,11 @@ export const CommandsTab: React.FC = () => {
 	};
 
 	const handleDelete = (name: string) => {
-		postMessage('deleteCommand', { name });
+		postMessage({ type: 'deleteCommand', name });
 	};
 
 	const handleOpen = (name: string) => {
-		postMessage('openCommandFile', { name });
+		postMessage({ type: 'openCommandFile', name });
 	};
 
 	return (
@@ -72,7 +73,7 @@ export const CommandsTab: React.FC = () => {
 								status: 'working',
 								message: 'Importing commands from CLI...',
 							});
-							postMessage('importCommandsFromClaude');
+							postMessage({ type: 'importCommandsFromClaude' });
 						}}
 					>
 						<DownloadIcon size={12} className="mr-1" />
@@ -95,7 +96,7 @@ export const CommandsTab: React.FC = () => {
 								status: 'working',
 								message: 'Syncing commands to CLI...',
 							});
-							postMessage('syncCommandsToCLI');
+							postMessage({ type: 'syncCommandsToCLI' });
 						}}
 					>
 						<RefreshIcon size={12} className="mr-1" />

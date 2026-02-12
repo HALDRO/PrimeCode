@@ -1,13 +1,14 @@
 import * as vscode from 'vscode';
+import type { CommandOf, WebviewCommand } from '../../common/webviewCommands';
 import { ClipboardContextService } from '../../services/ClipboardContextService';
-import type { HandlerContext, WebviewMessage, WebviewMessageHandler } from './types';
+import type { HandlerContext, WebviewMessageHandler } from './types';
 
 export class FileHandler implements WebviewMessageHandler {
 	private readonly clipboardContextService = ClipboardContextService.getInstance();
 
 	constructor(private context: HandlerContext) {}
 
-	async handleMessage(msg: WebviewMessage): Promise<void> {
+	async handleMessage(msg: WebviewCommand): Promise<void> {
 		switch (msg.type) {
 			case 'openFile':
 				await this.onOpenFile(msg);
@@ -27,9 +28,8 @@ export class FileHandler implements WebviewMessageHandler {
 		}
 	}
 
-	private async onOpenFile(msg: WebviewMessage): Promise<void> {
-		const filePath = typeof msg.filePath === 'string' ? msg.filePath : undefined;
-		if (!filePath) throw new Error('Missing filePath');
+	private async onOpenFile(msg: CommandOf<'openFile'>): Promise<void> {
+		const { filePath } = msg;
 
 		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 		const isAbsolute =
@@ -51,9 +51,8 @@ export class FileHandler implements WebviewMessageHandler {
 		await vscode.window.showTextDocument(uri);
 	}
 
-	private async onOpenFileDiff(msg: WebviewMessage): Promise<void> {
-		const filePath = typeof msg.filePath === 'string' ? msg.filePath : undefined;
-		if (!filePath) throw new Error('Missing filePath');
+	private async onOpenFileDiff(msg: CommandOf<'openFileDiff'>): Promise<void> {
+		const { filePath } = msg;
 
 		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 		const isAbsolute =
@@ -67,16 +66,14 @@ export class FileHandler implements WebviewMessageHandler {
 		await vscode.commands.executeCommand('primecode.openFileDiff', absolutePath);
 	}
 
-	private async onOpenExternal(msg: WebviewMessage): Promise<void> {
-		const url = typeof msg.url === 'string' ? msg.url : undefined;
-		if (!url) throw new Error('Missing url');
-		await vscode.env.openExternal(vscode.Uri.parse(url));
+	private async onOpenExternal(msg: CommandOf<'openExternal'>): Promise<void> {
+		await vscode.env.openExternal(vscode.Uri.parse(msg.url));
 	}
 
-	private async onGetImageData(msg: WebviewMessage): Promise<void> {
-		const maybeId = typeof msg.id === 'string' ? msg.id : undefined;
-		const maybeName = typeof msg.name === 'string' ? msg.name : undefined;
-		const requestedPath = typeof msg.path === 'string' ? msg.path : undefined;
+	private async onGetImageData(msg: CommandOf<'getImageData'>): Promise<void> {
+		const maybeId = msg.id;
+		const maybeName = msg.name;
+		const requestedPath = msg.path;
 
 		let fileUri: vscode.Uri | undefined;
 		if (requestedPath) {
@@ -136,8 +133,8 @@ export class FileHandler implements WebviewMessageHandler {
 		});
 	}
 
-	private async onGetClipboardContext(msg: WebviewMessage): Promise<void> {
-		const text = typeof msg.text === 'string' ? msg.text : undefined;
+	private async onGetClipboardContext(msg: CommandOf<'getClipboardContext'>): Promise<void> {
+		const { text } = msg;
 		if (!text) {
 			this.context.view.postMessage({ type: 'clipboardContextNotFound', data: {} });
 			return;

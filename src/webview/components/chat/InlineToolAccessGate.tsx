@@ -57,7 +57,8 @@ export const InlineToolAccessGate: React.FC<InlineToolAccessGateProps> = props =
 	const { updateMessage } = useChatActions();
 
 	const handleResponse = (isApproved: boolean, alwaysAllow = false) => {
-		postSessionMessage('accessResponse', {
+		postSessionMessage({
+			type: 'accessResponse',
 			id: requestId,
 			toolName: tool,
 			approved: isApproved,

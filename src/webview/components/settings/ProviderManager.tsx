@@ -76,7 +76,7 @@ export const ProviderManager: React.FC = () => {
 
 	useEffect(() => {
 		if (isOpenCodeCLI) {
-			postMessage('syncAll');
+			postMessage({ type: 'syncAll' });
 		}
 	}, [postMessage, isOpenCodeCLI]);
 
@@ -89,7 +89,7 @@ export const ProviderManager: React.FC = () => {
 				setEditingApiKey(null);
 				setEditApiKeyInput('');
 				setProviderAuthState(null);
-				postMessage('syncAll');
+				postMessage({ type: 'syncAll' });
 			}, 1000);
 			return () => clearTimeout(timer);
 		}
@@ -178,11 +178,12 @@ export const ProviderManager: React.FC = () => {
 	const canDisconnect = (providerId: string) => !isNonDisconnectableProviderId(providerId);
 
 	const handleRefresh = () => {
-		postMessage('syncAll');
+		postMessage({ type: 'syncAll' });
 	};
 
 	const saveProxySettings = () => {
-		postMessage('updateSettings', {
+		postMessage({
+			type: 'updateSettings',
 			settings: {
 				'proxy.baseUrl': proxyBaseUrl,
 				'proxy.apiKey': proxyApiKey,
@@ -192,7 +193,8 @@ export const ProviderManager: React.FC = () => {
 
 	const handleFetchProxyModels = () => {
 		setProxyTestStatus({ isLoading: true, error: null });
-		postMessage('loadProxyModels', {
+		postMessage({
+			type: 'loadProxyModels',
 			baseUrl: proxyBaseUrl,
 			apiKey: proxyApiKey,
 		});
@@ -203,7 +205,7 @@ export const ProviderManager: React.FC = () => {
 			? enabledProxyModels.filter(id => id !== modelId)
 			: [...enabledProxyModels, modelId];
 		setEnabledProxyModels(newEnabled);
-		postMessage('updateSettings', { settings: { 'proxy.enabledModels': newEnabled } });
+		postMessage({ type: 'updateSettings', settings: { 'proxy.enabledModels': newEnabled } });
 	};
 
 	const handleToggleProviderEnabled = (providerId: string) => {
@@ -211,12 +213,13 @@ export const ProviderManager: React.FC = () => {
 			? disabledProviders.filter(id => id !== providerId)
 			: [...disabledProviders, providerId];
 		setSettings({ disabledProviders: nextDisabled });
-		postMessage('updateSettings', { settings: { 'providers.disabled': nextDisabled } });
+		postMessage({ type: 'updateSettings', settings: { 'providers.disabled': nextDisabled } });
 	};
 
 	const handleConnectProvider = (providerId: string) => {
 		if (!apiKeyInput.trim()) return;
-		postMessage('setOpenCodeProviderAuth', {
+		postMessage({
+			type: 'setOpenCodeProviderAuth',
 			providerId,
 			apiKey: apiKeyInput.trim(),
 		});
@@ -224,7 +227,8 @@ export const ProviderManager: React.FC = () => {
 
 	const handleUpdateApiKey = (providerId: string) => {
 		if (!editApiKeyInput.trim()) return;
-		postMessage('setOpenCodeProviderAuth', {
+		postMessage({
+			type: 'setOpenCodeProviderAuth',
 			providerId,
 			apiKey: editApiKeyInput.trim(),
 		});
@@ -233,7 +237,7 @@ export const ProviderManager: React.FC = () => {
 	};
 
 	const handleDisconnectProvider = (providerId: string) => {
-		postMessage('disconnectOpenCodeProvider', { providerId });
+		postMessage({ type: 'disconnectOpenCodeProvider', providerId });
 	};
 
 	const handleToggleOpenCodeModel = (providerId: string, modelId: string) => {
@@ -242,7 +246,7 @@ export const ProviderManager: React.FC = () => {
 			? enabledOpenCodeModels.filter(id => id !== fullId)
 			: [...enabledOpenCodeModels, fullId];
 		setEnabledOpenCodeModels(newEnabled);
-		postMessage('updateSettings', { settings: { 'opencode.enabledModels': newEnabled } });
+		postMessage({ type: 'updateSettings', settings: { 'opencode.enabledModels': newEnabled } });
 	};
 
 	const getEnabledCountForProvider = (providerId: string) =>

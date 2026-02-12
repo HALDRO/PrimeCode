@@ -17,10 +17,10 @@ export const RulesTab: React.FC = () => {
 	const { discoveryStatus, rules } = useSettingsStore();
 	const { hasAgentsMd } = discoveryStatus.rules;
 
-	const handleOpenAgents = () => postMessage('openFile', { filePath: 'AGENTS.md' });
+	const handleOpenAgents = () => postMessage({ type: 'openFile', filePath: 'AGENTS.md' });
 
 	const handleToggleRule = (path: string, enabled: boolean, source: 'claude' | 'opencode') => {
-		postMessage('toggleRule', { path, enabled, source });
+		postMessage({ type: 'toggleRule', path, enabled, source });
 	};
 
 	return (
@@ -61,7 +61,7 @@ export const RulesTab: React.FC = () => {
 								<Tooltip content="Edit file" position="top" delay={200}>
 									<button
 										type="button"
-										onClick={() => postMessage('openFile', { filePath: rule.path })}
+										onClick={() => postMessage({ type: 'openFile', filePath: rule.path })}
 										className="p-1 rounded hover:bg-vscode-list-hoverBackground text-vscode-descriptionForeground hover:text-vscode-foreground transition-colors"
 									>
 										<EditIcon size={12} />

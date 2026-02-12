@@ -32,7 +32,7 @@ export const SubagentsTab: React.FC = () => {
 
 	// Initial load
 	useEffect(() => {
-		postMessage('getSubagents');
+		postMessage({ type: 'getSubagents' });
 	}, [postMessage]);
 
 	const handleCreate = () => {
@@ -40,7 +40,8 @@ export const SubagentsTab: React.FC = () => {
 			return;
 		}
 
-		postMessage('createSubagent', {
+		postMessage({
+			type: 'createSubagent',
 			name: newName,
 			description: newDescription,
 			content: newContent,
@@ -53,11 +54,11 @@ export const SubagentsTab: React.FC = () => {
 	};
 
 	const handleDelete = (name: string) => {
-		postMessage('deleteSubagent', { name });
+		postMessage({ type: 'deleteSubagent', name });
 	};
 
 	const handleOpen = (name: string) => {
-		postMessage('openSubagentFile', { name });
+		postMessage({ type: 'openSubagentFile', name });
 	};
 
 	const handleImport = () => {
@@ -66,7 +67,7 @@ export const SubagentsTab: React.FC = () => {
 			status: 'working',
 			message: 'Importing subagents from CLI...',
 		});
-		postMessage('importSubagentsFromCLI');
+		postMessage({ type: 'importSubagentsFromCLI' });
 	};
 
 	const handleSync = () => {
@@ -75,7 +76,7 @@ export const SubagentsTab: React.FC = () => {
 			status: 'working',
 			message: 'Syncing subagents to CLI...',
 		});
-		postMessage('syncSubagentsToCLI');
+		postMessage({ type: 'syncSubagentsToCLI' });
 	};
 
 	return (

@@ -1,11 +1,7 @@
 import type * as vscode from 'vscode';
+import type { WebviewCommand } from '../../common/webviewCommands';
 import type { ICLIRunner, ISessionState, ISettings, IView } from '../../core/contracts';
 import type { ServiceRegistry } from '../../core/ServiceRegistry';
-
-export interface WebviewMessage {
-	type: string;
-	[key: string]: unknown;
-}
 
 export interface HandlerContext {
 	extensionContext: vscode.ExtensionContext;
@@ -27,6 +23,6 @@ export interface HandlerContext {
 }
 
 export interface WebviewMessageHandler {
-	handleMessage(msg: WebviewMessage): Promise<void>;
+	handleMessage(msg: WebviewCommand): Promise<void>;
 	dispose?(): void;
 }

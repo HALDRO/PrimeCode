@@ -1,6 +1,7 @@
+import type { CommandOf, WebviewCommand } from '../../common/webviewCommands';
 import type { RulesService } from '../../services/RulesService';
 import { logger } from '../../utils/logger';
-import type { HandlerContext, WebviewMessage, WebviewMessageHandler } from './types';
+import type { HandlerContext, WebviewMessageHandler } from './types';
 
 export class SettingsHandler implements WebviewMessageHandler {
 	private rulesService: RulesService | null = null;
@@ -14,7 +15,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 		this.rulesService = this.context.services.rules;
 	}
 
-	async handleMessage(msg: WebviewMessage): Promise<void> {
+	async handleMessage(msg: WebviewCommand): Promise<void> {
 		switch (msg.type) {
 			case 'getSettings':
 				await this.onGetSettings();
@@ -44,9 +45,8 @@ export class SettingsHandler implements WebviewMessageHandler {
 		this.context.view.postMessage({ type: 'settingsData', data: this.context.settings.getAll() });
 	}
 
-	private async onUpdateSettings(msg: WebviewMessage): Promise<void> {
-		const settings = (msg.settings as Record<string, unknown> | undefined) || {};
-		await this.applyWebviewSettingsPatch(settings);
+	private async onUpdateSettings(msg: CommandOf<'updateSettings'>): Promise<void> {
+		await this.applyWebviewSettingsPatch(msg.settings);
 		this.context.settings.refresh();
 		this.context.view.postMessage({ type: 'settingsData', data: this.context.settings.getAll() });
 	}

@@ -286,7 +286,7 @@ const components: Components = {
 		if (isFilePath(codeText)) {
 			const fileName = getFileName(codeText);
 			const handleClick = () => {
-				vscode.postMessage({ type: 'openFile', path: codeText });
+				vscode.postMessage({ type: 'openFile', filePath: codeText });
 			};
 
 			return (

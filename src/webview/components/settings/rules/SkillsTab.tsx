@@ -24,7 +24,7 @@ export const SkillsTab: React.FC = () => {
 	const [newSkillContent, setNewSkillContent] = useState('');
 
 	useEffect(() => {
-		postMessage('getSkills');
+		postMessage({ type: 'getSkills' });
 	}, [postMessage]);
 
 	const handleCreateSkill = () => {
@@ -32,7 +32,8 @@ export const SkillsTab: React.FC = () => {
 			return;
 		}
 
-		postMessage('createSkill', {
+		postMessage({
+			type: 'createSkill',
 			name: newSkillName,
 			description: newSkillDesc,
 			content: newSkillContent,
@@ -45,15 +46,15 @@ export const SkillsTab: React.FC = () => {
 		setNewSkillContent('');
 	};
 
-	const handleDeleteSkill = (name: string) => postMessage('deleteSkill', { name });
-	const handleOpenSkill = (name: string) => postMessage('openSkillFile', { name });
+	const handleDeleteSkill = (name: string) => postMessage({ type: 'deleteSkill', name });
+	const handleOpenSkill = (name: string) => postMessage({ type: 'openSkillFile', name });
 	const handleImportSkills = () => {
 		useSettingsStore.getState().actions.setAgentsOps({
 			lastAction: 'import',
 			status: 'working',
 			message: 'Importing skills from CLI...',
 		});
-		postMessage('importSkillsFromCLI');
+		postMessage({ type: 'importSkillsFromCLI' });
 	};
 	const handleSyncSkills = () => {
 		useSettingsStore.getState().actions.setAgentsOps({
@@ -61,7 +62,7 @@ export const SkillsTab: React.FC = () => {
 			status: 'working',
 			message: 'Syncing skills to CLI...',
 		});
-		postMessage('syncSkillsToCLI');
+		postMessage({ type: 'syncSkillsToCLI' });
 	};
 
 	return (

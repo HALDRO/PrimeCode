@@ -1,5 +1,6 @@
 import type { OpenCodeProviderData } from '../../common';
-import type { HandlerContext, WebviewMessage, WebviewMessageHandler } from './types';
+import type { CommandOf, WebviewCommand } from '../../common/webviewCommands';
+import type { HandlerContext, WebviewMessageHandler } from './types';
 
 export class ProviderHandler implements WebviewMessageHandler {
 	constructor(private context: HandlerContext) {}
@@ -33,7 +34,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 		return legacy;
 	}
 
-	async handleMessage(msg: WebviewMessage): Promise<void> {
+	async handleMessage(msg: WebviewCommand): Promise<void> {
 		switch (msg.type) {
 			case 'reloadAllProviders':
 				await this.onReloadAllProviders();
@@ -178,9 +179,10 @@ export class ProviderHandler implements WebviewMessageHandler {
 		}
 	}
 
-	private async onSetOpenCodeProviderAuth(msg: WebviewMessage): Promise<void> {
-		const providerId = typeof msg.providerId === 'string' ? msg.providerId : '';
-		const apiKey = typeof msg.apiKey === 'string' ? msg.apiKey : '';
+	private async onSetOpenCodeProviderAuth(
+		msg: CommandOf<'setOpenCodeProviderAuth'>,
+	): Promise<void> {
+		const { providerId, apiKey } = msg;
 		if (!providerId || !apiKey) {
 			this.context.view.postMessage({
 				type: 'openCodeAuthResult',
@@ -225,8 +227,10 @@ export class ProviderHandler implements WebviewMessageHandler {
 		}
 	}
 
-	private async onDisconnectOpenCodeProvider(msg: WebviewMessage): Promise<void> {
-		const providerId = typeof msg.providerId === 'string' ? msg.providerId : '';
+	private async onDisconnectOpenCodeProvider(
+		msg: CommandOf<'disconnectOpenCodeProvider'>,
+	): Promise<void> {
+		const { providerId } = msg;
 		if (!providerId) {
 			this.context.view.postMessage({
 				type: 'openCodeDisconnectResult',
@@ -268,8 +272,8 @@ export class ProviderHandler implements WebviewMessageHandler {
 		}
 	}
 
-	private async onSetOpenCodeModel(msg: WebviewMessage): Promise<void> {
-		const model = typeof msg.model === 'string' ? msg.model : undefined;
+	private async onSetOpenCodeModel(msg: CommandOf<'setOpenCodeModel'>): Promise<void> {
+		const { model } = msg;
 		if (model) {
 			await this.context.extensionContext.globalState.update(
 				this.getSelectedModelKey('opencode'),
@@ -279,8 +283,8 @@ export class ProviderHandler implements WebviewMessageHandler {
 		}
 	}
 
-	private async onSelectModel(msg: WebviewMessage): Promise<void> {
-		const model = typeof msg.model === 'string' ? msg.model : undefined;
+	private async onSelectModel(msg: CommandOf<'selectModel'>): Promise<void> {
+		const { model } = msg;
 		if (model) {
 			await this.context.extensionContext.globalState.update(
 				this.getSelectedModelKey('claude'),
@@ -290,16 +294,14 @@ export class ProviderHandler implements WebviewMessageHandler {
 		}
 	}
 
-	private async onLoadProxyModels(msg: WebviewMessage): Promise<void> {
-		const data = (msg.data ?? {}) as { baseUrl?: unknown; apiKey?: unknown };
-
-		let baseUrlRaw = typeof data.baseUrl === 'string' ? data.baseUrl : '';
+	private async onLoadProxyModels(msg: CommandOf<'loadProxyModels'>): Promise<void> {
+		let baseUrlRaw = msg.baseUrl;
 		if (!baseUrlRaw.trim()) {
 			const setting = this.context.settings.get('proxy.baseUrl');
 			if (typeof setting === 'string') baseUrlRaw = setting;
 		}
 
-		let apiKeyRaw = typeof data.apiKey === 'string' ? data.apiKey : '';
+		let apiKeyRaw = msg.apiKey;
 		if (!apiKeyRaw.trim()) {
 			const setting = this.context.settings.get('proxy.apiKey');
 			if (typeof setting === 'string') apiKeyRaw = setting;

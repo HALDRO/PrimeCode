@@ -66,7 +66,8 @@ export const PromptImproverSettings: React.FC = () => {
 
 				const ms = Number.isFinite(seconds) ? Math.max(1000, Math.round(seconds * 1000)) : 30000;
 
-				postMessage('updateSettings', {
+				postMessage({
+					type: 'updateSettings',
 					settings: {
 						[backendKey]: ms,
 					},
@@ -74,7 +75,8 @@ export const PromptImproverSettings: React.FC = () => {
 				return;
 			}
 
-			postMessage('updateSettings', {
+			postMessage({
+				type: 'updateSettings',
 				settings: {
 					[backendKey]: value,
 				},

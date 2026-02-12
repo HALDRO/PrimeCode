@@ -18,6 +18,8 @@ export interface PrimeCodeSettings {
 	model?: string;
 	autoApprove: boolean;
 	yoloMode: boolean;
+	'access.autoApprove': boolean;
+	'access.yoloMode': boolean;
 	mcpServers: Record<string, unknown>;
 
 	'proxy.baseUrl': string;
@@ -103,8 +105,10 @@ export class Settings implements ISettings {
 		return {
 			provider: this.get('provider') || 'claude',
 			model: this.get('model'),
-			autoApprove: this.get('autoApprove') || false,
-			yoloMode: this.get('yoloMode') || false,
+			autoApprove: this.get('access.autoApprove') || this.get('autoApprove') || false,
+			yoloMode: this.get('access.yoloMode') || this.get('yoloMode') || false,
+			'access.autoApprove': this.get('access.autoApprove') || false,
+			'access.yoloMode': this.get('access.yoloMode') || false,
 			mcpServers: this.get('mcpServers') || {},
 
 			'proxy.baseUrl': this.get('proxy.baseUrl') || 'http://localhost:11434',

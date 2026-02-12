@@ -522,7 +522,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 		// In VS Code, the extension echoes the user message back as a session_event.
 		// To avoid duplicates, we do not optimistic-add user messages here.
 
-		postSessionMessage('sendMessage', {
+		postSessionMessage({
+			type: 'sendMessage',
 			text: inputValue.trim(),
 			planMode,
 			model: sessionModel,
@@ -549,13 +550,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 		getSessionModel,
 	]);
 
-	const handleStop = () => postSessionMessage('stopRequest');
+	const handleStop = () => postSessionMessage({ type: 'stopRequest' });
 
 	const handleImprovePrompt = useCallback(() => {
 		if (isImproving) {
 			// Cancel current request
 			if (currentImproveRequestId) {
-				postMessage('cancelImprovePrompt', { requestId: currentImproveRequestId });
+				postMessage({ type: 'cancelImprovePrompt', requestId: currentImproveRequestId });
 			}
 			// Reset state immediately for UI responsiveness
 			setImprovingPrompt(false, null);
@@ -569,7 +570,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 		const requestId = crypto.randomUUID();
 		setImprovingPrompt(true, requestId);
 
-		postMessage('improvePromptRequest', {
+		postMessage({
+			type: 'improvePromptRequest',
 			text: inputValue,
 			requestId,
 			model: selectedModel === 'default' ? undefined : selectedModel,
@@ -750,7 +752,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 									key={filePath}
 									path={filePath}
 									onRemove={() => removeFile(filePath)}
-									onClick={() => postMessage('openFile', { filePath })}
+									onClick={() => postMessage({ type: 'openFile', filePath })}
 									title={filePath}
 								/>
 							))}
@@ -763,7 +765,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 									iconName={snippet.filePath}
 									onRemove={() => removeCodeSnippet(snippet.id)}
 									onClick={() =>
-										postMessage('openFile', {
+										postMessage({
+											type: 'openFile',
 											filePath: snippet.filePath,
 											startLine: snippet.startLine,
 											endLine: snippet.endLine,
@@ -1007,7 +1010,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 										className="transition-transform duration-200 group-hover/image:scale-110"
 									/>
 								}
-								onClick={() => postMessage('getImageData')}
+								onClick={() => postMessage({ type: 'getImageData' })}
 								title="Attach image"
 								size={22}
 								className="group/image text-vscode-foreground opacity-70 hover:opacity-100"

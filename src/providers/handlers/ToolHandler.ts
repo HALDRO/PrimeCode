@@ -1,17 +1,29 @@
 import type { SessionEventMessage } from '../../common';
-import type { HandlerContext, WebviewMessage, WebviewMessageHandler } from './types';
+import type { PermissionPolicies } from '../../common/extensionMessages';
+import type { CommandOf, WebviewCommand } from '../../common/webviewCommands';
+import type { HandlerContext, WebviewMessageHandler } from './types';
+
+const VALID_POLICY_VALUES = new Set(['ask', 'allow', 'deny']);
+const DEFAULT_POLICIES: PermissionPolicies = { edit: 'ask', terminal: 'ask', network: 'ask' };
+const POLICIES_KEY = 'primeCode.permissionPolicies';
 
 export class ToolHandler implements WebviewMessageHandler {
 	private alwaysAllowByTool: Record<string, boolean> = {};
+	private policies: PermissionPolicies;
 
 	constructor(private context: HandlerContext) {
 		this.alwaysAllowByTool =
 			(this.context.extensionContext.workspaceState.get('primeCode.alwaysAllowByTool') as
 				| Record<string, boolean>
 				| undefined) ?? {};
+
+		const stored = this.context.extensionContext.workspaceState.get(POLICIES_KEY) as
+			| PermissionPolicies
+			| undefined;
+		this.policies = stored ? { ...DEFAULT_POLICIES, ...stored } : { ...DEFAULT_POLICIES };
 	}
 
-	async handleMessage(msg: WebviewMessage): Promise<void> {
+	async handleMessage(msg: WebviewCommand): Promise<void> {
 		switch (msg.type) {
 			case 'accessResponse':
 				await this.onAccessResponse(msg);
@@ -20,7 +32,7 @@ export class ToolHandler implements WebviewMessageHandler {
 				await this.onGetPermissions();
 				break;
 			case 'setPermissions':
-				await this.onSetPermissions();
+				await this.onSetPermissions(msg);
 				break;
 			case 'checkDiscoveryStatus':
 				await this.onCheckDiscoveryStatus();
@@ -38,23 +50,21 @@ export class ToolHandler implements WebviewMessageHandler {
 		return this.alwaysAllowByTool;
 	}
 
-	private async onAccessResponse(msg: WebviewMessage): Promise<void> {
-		const requestId = typeof msg.id === 'string' ? (msg.id as string) : undefined;
-		const approved = Boolean(msg.approved);
-		const alwaysAllow = Boolean(msg.alwaysAllow);
-		const response =
-			msg.response === 'once' || msg.response === 'always' || msg.response === 'reject'
-				? msg.response
-				: undefined;
-		const targetSessionId =
-			typeof msg.sessionId === 'string' ? msg.sessionId : this.context.sessionState.activeSessionId;
+	getPermissionPolicies(): PermissionPolicies {
+		return { ...this.policies };
+	}
+
+	private async onAccessResponse(msg: CommandOf<'accessResponse'>): Promise<void> {
+		const { id: requestId, approved, response } = msg;
+		const alwaysAllow = msg.alwaysAllow ?? false;
+		const targetSessionId = msg.sessionId ?? this.context.sessionState.activeSessionId;
 
 		if (!requestId) {
 			throw new Error('Missing accessResponse.id');
 		}
 
 		if (alwaysAllow) {
-			const toolName = typeof msg.toolName === 'string' ? (msg.toolName as string) : undefined;
+			const toolName = msg.toolName;
 			if (toolName) {
 				this.alwaysAllowByTool[toolName] = approved;
 				await this.context.extensionContext.workspaceState.update(
@@ -98,14 +108,24 @@ export class ToolHandler implements WebviewMessageHandler {
 	private async onGetPermissions(): Promise<void> {
 		this.context.view.postMessage({
 			type: 'permissionsUpdated',
-			data: { policies: { edit: 'ask', terminal: 'ask', network: 'ask' } },
+			data: { policies: { ...this.policies } },
 		});
 	}
 
-	private async onSetPermissions(): Promise<void> {
+	private async onSetPermissions(msg: CommandOf<'setPermissions'>): Promise<void> {
+		const incoming = msg.policies;
+		if (incoming) {
+			for (const key of ['edit', 'terminal', 'network'] as const) {
+				const val = incoming[key];
+				if (val && VALID_POLICY_VALUES.has(val)) {
+					this.policies[key] = val;
+				}
+			}
+		}
+		await this.context.extensionContext.workspaceState.update(POLICIES_KEY, this.policies);
 		this.context.view.postMessage({
 			type: 'permissionsUpdated',
-			data: { policies: { edit: 'ask', terminal: 'ask', network: 'ask' } },
+			data: { policies: { ...this.policies } },
 		});
 	}
 

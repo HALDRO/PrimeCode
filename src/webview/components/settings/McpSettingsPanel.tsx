@@ -94,18 +94,18 @@ export const McpSettingsPanel: React.FC = () => {
 
 	// Open .agents/mcp.json in editor
 	const openMcpConfig = () => {
-		postMessage('openAgentsMcpConfig');
+		postMessage({ type: 'openAgentsMcpConfig' });
 	};
 
-	const deleteServer = (name: string) => postMessage('deleteMCPServer', { name });
+	const deleteServer = (name: string) => postMessage({ type: 'deleteMCPServer', name });
 
 	const toggleEnabled = (name: string, config: MCPServerConfig, enabled: boolean) => {
-		postMessage('saveMCPServer', { name, config: { ...config, enabled } });
+		postMessage({ type: 'saveMCPServer', name, config: { ...config, enabled } });
 	};
 
 	const installMcp = (item: McpMarketplaceItem) => {
 		setInstalling(item.mcpId);
-		postMessage('installMcpFromMarketplace', { mcpId: item.mcpId });
+		postMessage({ type: 'installMcpFromMarketplace', mcpId: item.mcpId });
 		// Installing state will be cleared by message handler, but safeguard with timeout
 		setTimeout(() => {
 			if (isMounted()) {
@@ -115,7 +115,7 @@ export const McpSettingsPanel: React.FC = () => {
 	};
 
 	const refreshMarketplace = () => {
-		postMessage('fetchMcpMarketplaceCatalog', { forceRefresh: true });
+		postMessage({ type: 'fetchMcpMarketplaceCatalog', forceRefresh: true });
 	};
 	return (
 		<div className="animate-fade-in">
@@ -131,7 +131,7 @@ export const McpSettingsPanel: React.FC = () => {
 							size="sm"
 							variant="secondary"
 							title="Import and reload MCP configs from all CLI sources"
-							onClick={() => postMessage('importMcpFromCLI')}
+							onClick={() => postMessage({ type: 'importMcpFromCLI' })}
 						>
 							Import
 						</Button>
@@ -151,14 +151,14 @@ export const McpSettingsPanel: React.FC = () => {
 						<Button
 							size="sm"
 							variant="secondary"
-							onClick={() => postMessage('syncAgentsToClaudeProject')}
+							onClick={() => postMessage({ type: 'syncAgentsToClaudeProject' })}
 						>
 							Claude
 						</Button>
 						<Button
 							size="sm"
 							variant="secondary"
-							onClick={() => postMessage('syncAgentsToOpenCodeProject')}
+							onClick={() => postMessage({ type: 'syncAgentsToOpenCodeProject' })}
 						>
 							OpenCode
 						</Button>

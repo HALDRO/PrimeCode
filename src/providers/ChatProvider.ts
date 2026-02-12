@@ -1,13 +1,13 @@
 import * as vscode from 'vscode';
 import type { SessionEventMessage } from '../common';
 import { computeDiffStats } from '../common/diffStats';
+import type { WebviewCommand } from '../common/webviewCommands';
 import { type CLIEvent, CLIRunner } from '../core/CLIRunner';
 import type { ServiceRegistry } from '../core/ServiceRegistry';
 import { SessionState } from '../core/SessionState';
 import { Settings } from '../core/Settings';
 import { logger } from '../utils/logger';
 import { getHtml } from '../utils/webviewHtml';
-
 import { FileHandler } from './handlers/FileHandler';
 import { McpHandler } from './handlers/McpHandler';
 import { ProviderHandler } from './handlers/ProviderHandler';
@@ -16,7 +16,71 @@ import { SessionHandler } from './handlers/SessionHandler';
 import { SettingsHandler } from './handlers/SettingsHandler';
 import { SseHandler } from './handlers/SseHandler';
 import { ToolHandler } from './handlers/ToolHandler';
-import type { HandlerContext, WebviewMessage, WebviewMessageHandler } from './handlers/types';
+import type { HandlerContext, WebviewMessageHandler } from './handlers/types';
+
+/**
+ * Maps a tool name to its permission policy category (edit/terminal/network).
+ * Returns undefined for unrecognized tools (falls through to 'ask' UI prompt).
+ *
+ * Uses exact-match Sets first, then word-boundary regex as fallback
+ * to avoid false positives (e.g. "read_file_without_editing" matching "edit").
+ */
+function resolveToolPolicyCategory(tool: string): 'edit' | 'terminal' | 'network' | undefined {
+	const normalized = tool.toLowerCase();
+
+	// Exact known tool names (highest priority, no ambiguity).
+	const exactEdit = new Set([
+		'write',
+		'edit',
+		'multiedit',
+		'multi_edit',
+		'patch',
+		'create',
+		'writefile',
+		'editfile',
+		'write_file',
+		'edit_file',
+		'create_file',
+		'apply_diff',
+		'insert_code',
+	]);
+	const exactTerminal = new Set([
+		'bash',
+		'terminal',
+		'shell',
+		'command',
+		'exec',
+		'run',
+		'execute',
+		'run_command',
+		'run_terminal_cmd',
+	]);
+	const exactNetwork = new Set([
+		'fetch',
+		'http',
+		'curl',
+		'request',
+		'download',
+		'mcp',
+		'web_search',
+		'http_request',
+	]);
+
+	if (exactEdit.has(normalized)) return 'edit';
+	if (exactTerminal.has(normalized)) return 'terminal';
+	if (exactNetwork.has(normalized)) return 'network';
+
+	// Word-boundary regex fallback for dynamic/unknown tool names.
+	const editPattern = /\b(write|edit|patch|create|overwrite|insert|replace|append|delete_file)\b/;
+	const terminalPattern = /\b(bash|terminal|shell|command|exec|run)\b/;
+	const networkPattern = /\b(fetch|http|curl|request|download|mcp|web_search)\b/;
+
+	if (editPattern.test(normalized)) return 'edit';
+	if (terminalPattern.test(normalized)) return 'terminal';
+	if (networkPattern.test(normalized)) return 'network';
+
+	return undefined;
+}
 
 export class ChatProvider implements vscode.WebviewViewProvider {
 	private view?: vscode.WebviewView;
@@ -40,8 +104,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private restoreHandler: RestoreHandler;
 
 	private pendingSyncAll = false;
-
-	private handlers: Record<string, WebviewMessageHandler> = {};
 
 	constructor(
 		private context: vscode.ExtensionContext,
@@ -83,67 +145,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.sseHandler = new SseHandler(handlerContext);
 
 		// Proxy Fetch Handler
-		const proxyFetchHandler = {
-			handleMessage: async (msg: WebviewMessage) => {
-				if (msg.type === 'proxyFetch') {
-					try {
-						const { id, url, init } = msg as unknown as {
-							id: string;
-							url: string;
-							init?: {
-								method?: string;
-								headers?: Record<string, string>;
-								body?: string;
-							};
-						};
-
-						// Use global fetch in extension host
-						const response = await fetch(url, {
-							method: init?.method,
-							headers: init?.headers,
-							body: init?.body,
-						});
-
-						const bodyText = await response.text();
-						const headers: Record<string, string> = {};
-						response.headers.forEach((value, key) => {
-							headers[key] = value;
-						});
-
-						this.postMessage({
-							type: 'proxyFetchResult',
-							id,
-							ok: response.ok,
-							status: response.status,
-							statusText: response.statusText,
-							headers,
-							bodyText,
-						});
-					} catch (error) {
-						logger.error('[ChatProvider] proxyFetch failed:', error);
-						this.postMessage({
-							type: 'proxyFetchResult',
-							id: msg.id,
-							ok: false,
-							error: String(error),
-						});
-					}
-				}
-			},
-		};
-
-		this.handlers.proxyFetch = proxyFetchHandler;
-		this.handlers.proxyFetchAbort = {
-			handleMessage: async () => {
-				// Abort not fully implemented on extension side yet as fetch is promise-based
-				// But we acknowledge the message to prevent errors
-			},
-		};
-
 		// Single-point OpenCode initialization with retry polling
 		this.scheduleOpenCodeInit();
-
-		this.registerHandlers();
 
 		// Forward CLI events to webview
 		this.cli.on('event', event => this.handleCliEvent(event));
@@ -289,103 +292,172 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
-	private registerHandlers() {
-		// Map message types to handlers
-		const sessionTypes = [
-			'webviewDidLaunch',
-			'createSession',
-			'switchSession',
-			'closeSession',
-			'sendMessage',
-			'stopRequest',
-			'improvePromptRequest',
-			'cancelImprovePrompt',
-			'getConversationList',
-			'loadConversation',
-			'deleteConversation',
-			'renameConversation',
-		];
-		sessionTypes.forEach(t => {
-			this.handlers[t] = this.sessionHandler;
-		});
+	/**
+	 * Maps a webview command to its handler via exhaustive switch.
+	 * Returns null for unimplemented types (logged as TODO).
+	 */
+	private resolveHandler(msg: WebviewCommand): WebviewMessageHandler | null {
+		switch (msg.type) {
+			// Session
+			case 'webviewDidLaunch':
+			case 'createSession':
+			case 'switchSession':
+			case 'closeSession':
+			case 'sendMessage':
+			case 'stopRequest':
+			case 'improvePromptRequest':
+			case 'cancelImprovePrompt':
+			case 'getConversationList':
+			case 'loadConversation':
+			case 'deleteConversation':
+			case 'renameConversation':
+				return this.sessionHandler;
 
-		const settingsTypes = [
-			'getSettings',
-			'updateSettings',
-			'getCommands',
-			'getSkills',
-			'getHooks',
-			'getSubagents',
-			'getRules',
-		];
-		settingsTypes.forEach(t => {
-			this.handlers[t] = this.settingsHandler;
-		});
+			// Settings
+			case 'getSettings':
+			case 'updateSettings':
+			case 'getCommands':
+			case 'getSkills':
+			case 'getHooks':
+			case 'getSubagents':
+			case 'getRules':
+				return this.settingsHandler;
 
-		const mcpTypes = [
-			'loadMCPServers',
-			'fetchMcpMarketplaceCatalog',
-			'installMcpFromMarketplace',
-			'saveMCPServer',
-			'deleteMCPServer',
-			'openAgentsMcpConfig',
-			'importMcpFromCLI',
-			'syncAgentsToClaudeProject',
-			'syncAgentsToOpenCodeProject',
-		];
-		mcpTypes.forEach(t => {
-			this.handlers[t] = this.mcpHandler;
-		});
+			// MCP
+			case 'loadMCPServers':
+			case 'fetchMcpMarketplaceCatalog':
+			case 'installMcpFromMarketplace':
+			case 'saveMCPServer':
+			case 'deleteMCPServer':
+			case 'openAgentsMcpConfig':
+			case 'importMcpFromCLI':
+			case 'syncAgentsToClaudeProject':
+			case 'syncAgentsToOpenCodeProject':
+				return this.mcpHandler;
 
-		const providerTypes = [
-			'reloadAllProviders',
-			'checkOpenCodeStatus',
-			'loadOpenCodeProviders',
-			'loadAvailableProviders',
-			'setOpenCodeProviderAuth',
-			'disconnectOpenCodeProvider',
-			'setOpenCodeModel',
-			'selectModel',
-			'loadProxyModels',
-		];
-		providerTypes.forEach(t => {
-			this.handlers[t] = this.providerHandler;
-		});
+			// Provider
+			case 'reloadAllProviders':
+			case 'checkOpenCodeStatus':
+			case 'loadOpenCodeProviders':
+			case 'loadAvailableProviders':
+			case 'setOpenCodeProviderAuth':
+			case 'disconnectOpenCodeProvider':
+			case 'setOpenCodeModel':
+			case 'selectModel':
+			case 'loadProxyModels':
+				return this.providerHandler;
 
-		const toolTypes = [
-			'accessResponse',
-			'getPermissions',
-			'setPermissions',
-			'checkDiscoveryStatus',
-			'getAccess',
-			'checkCLIDiagnostics',
-		];
-		toolTypes.forEach(t => {
-			this.handlers[t] = this.toolHandler;
-		});
+			// Tool / Access
+			case 'accessResponse':
+			case 'getPermissions':
+			case 'setPermissions':
+			case 'checkDiscoveryStatus':
+			case 'getAccess':
+			case 'checkCLIDiagnostics':
+				return this.toolHandler;
 
-		const fileTypes = [
-			'openFile',
-			'openFileDiff',
-			'openExternal',
-			'getImageData',
-			'getClipboardContext',
-		];
-		fileTypes.forEach(t => {
-			this.handlers[t] = this.fileHandler;
-		});
+			// File
+			case 'openFile':
+			case 'openFileDiff':
+			case 'openExternal':
+			case 'getImageData':
+			case 'getClipboardContext':
+				return this.fileHandler;
 
-		const restoreTypes = ['restoreCommit', 'unrevert'];
-		restoreTypes.forEach(t => {
-			this.handlers[t] = this.restoreHandler;
-		});
+			// SSE
+			case 'sseSubscribe':
+			case 'sseClose':
+				return this.sseHandler;
 
-		// syncAll is an orchestration message handled by ChatProvider itself
-		this.handlers.syncAll = {
-			handleMessage: async () => {
-				await this.syncAllOrDefer('webview-syncAll');
-			},
-		};
+			// Restore
+			case 'restoreCommit':
+			case 'unrevert':
+				return this.restoreHandler;
+
+			// Orchestration
+			case 'syncAll':
+				return {
+					handleMessage: async () => {
+						await this.syncAllOrDefer('webview-syncAll');
+					},
+				};
+
+			// Proxy
+			case 'proxyFetch':
+				return {
+					handleMessage: async (m: WebviewCommand) => {
+						if (m.type !== 'proxyFetch') return;
+						try {
+							const { id, url, options } = m;
+							const response = await fetch(url, {
+								method: options?.method,
+								headers: options?.headers,
+								body: options?.body,
+							});
+							const bodyText = await response.text();
+							const headers: Record<string, string> = {};
+							response.headers.forEach((value, key) => {
+								headers[key] = value;
+							});
+							this.postMessage({
+								type: 'proxyFetchResult',
+								id,
+								ok: response.ok,
+								status: response.status,
+								statusText: response.statusText,
+								headers,
+								bodyText,
+							});
+						} catch (error) {
+							logger.error('[ChatProvider] proxyFetch failed:', error);
+							this.postMessage({
+								type: 'proxyFetchResult',
+								id: m.id,
+								ok: false,
+								error: String(error),
+							});
+						}
+					},
+				};
+			case 'proxyFetchAbort':
+				// Abort not fully implemented — fetch is promise-based
+				return { handleMessage: async () => {} };
+
+			// TODO: Agents CRUD — not yet implemented
+			case 'createSkill':
+			case 'deleteSkill':
+			case 'openSkillFile':
+			case 'importSkillsFromCLI':
+			case 'syncSkillsToCLI':
+			case 'createHook':
+			case 'deleteHook':
+			case 'openHookFile':
+			case 'importHooksFromClaude':
+			case 'syncHooksToClaude':
+			case 'createCommand':
+			case 'deleteCommand':
+			case 'openCommandFile':
+			case 'importCommandsFromClaude':
+			case 'syncCommandsToCLI':
+			case 'createSubagent':
+			case 'deleteSubagent':
+			case 'openSubagentFile':
+			case 'importSubagentsFromCLI':
+			case 'syncSubagentsToCLI':
+			case 'toggleRule':
+			// TODO: File actions — not yet implemented
+			case 'undoFileChanges':
+			case 'undoAllChanges':
+			case 'copyLastResponse':
+			case 'copyAllMessages':
+			case 'copyLastDiffs':
+			case 'copyAllDiffs':
+			// TODO: Missing handlers
+			case 'getWorkspaceFiles':
+			case 'clearAllConversations':
+				logger.warn(`[ChatProvider] Unimplemented message type: ${msg.type}`);
+				return null;
+		}
 	}
 
 	private async syncAllOrDefer(source: string): Promise<void> {
@@ -414,11 +486,12 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			this.mcpHandler.handleMessage({ type: 'loadMCPServers' }),
 			this.mcpHandler.handleMessage({
 				type: 'fetchMcpMarketplaceCatalog',
-				data: { forceRefresh: false },
+				forceRefresh: false,
 			}),
 			this.providerHandler.handleMessage({
 				type: 'loadProxyModels',
-				data: { baseUrl: '', apiKey: '' },
+				baseUrl: '',
+				apiKey: '',
 			}),
 			this.providerHandler.handleMessage({ type: 'reloadAllProviders' }),
 			this.toolHandler.handleMessage({ type: 'checkDiscoveryStatus' }),
@@ -472,15 +545,12 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
-	private async handleWebviewMessage(msg: WebviewMessage): Promise<void> {
+	private async handleWebviewMessage(msg: WebviewCommand): Promise<void> {
 		try {
-			const msgType = msg.type;
-			const handler = this.handlers[msgType];
-			if (!handler) {
-				logger.warn(`[ChatProvider] Unknown message type: ${msgType}`);
-				return;
+			const handler = this.resolveHandler(msg);
+			if (handler) {
+				await handler.handleMessage(msg);
 			}
-			await handler.handleMessage(msg);
 		} catch (error) {
 			logger.error(`[ChatProvider] Error handling message:`, error);
 			this.sessionHandler.postSessionMessage({
@@ -656,13 +726,33 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					(e.toolInput as Record<string, unknown> | undefined) ??
 					{};
 
-				const alwaysAllowByTool = this.toolHandler.getAlwaysAllowByTool();
+				const patterns = Array.isArray(e.patterns) ? (e.patterns as string[]) : undefined;
+				const metadata = e.metadata as Record<string, unknown> | undefined;
 
-				// Auto-approve if user previously marked this tool as always-allow.
-				if (alwaysAllowByTool[tool]) {
+				// Helper: post a resolved access_request so ToolCard can show the diff,
+				// then send the access response event to the webview.
+				const autoRespond = (approved: boolean, alwaysAllow?: boolean) => {
+					// Always create the access_request message (with metadata/diff)
+					// so ToolCard.resolveDiffData() can find it via useAccessRequestByToolUseId.
+					this.sessionHandler.postSessionMessage(
+						{
+							id: `access-${requestId}`,
+							type: 'access_request',
+							requestId,
+							tool,
+							toolUseId,
+							input,
+							pattern: patterns?.[0],
+							resolved: true,
+							approved,
+							timestamp: new Date().toISOString(),
+							metadata,
+						},
+						targetSessionId,
+					);
 					void this.cli
-						.respondToPermission({ requestId, approved: true, alwaysAllow: true })
-						.catch(error => logger.error('[ChatProvider] auto-approve failed:', error));
+						.respondToPermission({ requestId, approved, alwaysAllow })
+						.catch(error => logger.error('[ChatProvider] auto-response failed:', error));
 					this.postMessage({
 						type: 'session_event',
 						targetId: targetSessionId,
@@ -671,18 +761,41 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 							eventType: 'access',
 							action: 'response',
 							requestId,
-							approved: true,
-							alwaysAllow: true,
+							approved,
+							...(alwaysAllow ? { alwaysAllow } : {}),
 						},
 						timestamp: Date.now(),
 						sessionId: targetSessionId,
 					} satisfies SessionEventMessage);
+				};
+
+				// Auto-approve everything if yoloMode or autoApprove is enabled in settings.
+				const isYolo = Boolean(this.settings.get('access.yoloMode'));
+				const isAutoApprove = Boolean(this.settings.get('access.autoApprove'));
+				if (isYolo || isAutoApprove) {
+					autoRespond(true);
 					break;
 				}
 
-				const patterns = Array.isArray(e.patterns) ? (e.patterns as string[]) : undefined;
-				const metadata = e.metadata as Record<string, unknown> | undefined;
+				const alwaysAllowByTool = this.toolHandler.getAlwaysAllowByTool();
 
+				// Auto-approve if user previously marked this tool as always-allow.
+				if (alwaysAllowByTool[tool]) {
+					autoRespond(true, true);
+					break;
+				}
+
+				// Auto-approve/deny based on permission policies (edit/terminal/network).
+				const policies = this.toolHandler.getPermissionPolicies();
+				const policyCategory = resolveToolPolicyCategory(tool);
+				const policyValue = policyCategory ? policies[policyCategory] : undefined;
+
+				if (policyValue === 'allow' || policyValue === 'deny') {
+					autoRespond(policyValue === 'allow');
+					break;
+				}
+
+				// Fall through: show the permission dialog in the webview.
 				this.sessionHandler.postSessionMessage(
 					{
 						id: `access-${requestId}`,
@@ -957,8 +1070,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		if (workspaceRoot) {
 			this.settingsHandler.setWorkspaceRoot(workspaceRoot);
 		}
-
-		this.registerHandlers();
 
 		// If switching TO opencode, start the server (mirrors constructor logic)
 		this.scheduleOpenCodeInit();

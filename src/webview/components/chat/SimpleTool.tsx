@@ -450,7 +450,7 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 				<PathChip
 					path={meta}
 					isFolder={isFolder}
-					onClick={!isFolder ? () => postMessage('openFile', { filePath: meta }) : undefined}
+					onClick={!isFolder ? () => postMessage({ type: 'openFile', filePath: meta }) : undefined}
 					title={meta}
 					className="max-w-full min-w-0 shrink"
 				/>
@@ -614,7 +614,7 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 									path={path}
 									isFolder={isFolder}
 									onClick={
-										!isFolder ? () => postMessage('openFile', { filePath: path }) : undefined
+										!isFolder ? () => postMessage({ type: 'openFile', filePath: path }) : undefined
 									}
 									title={path}
 								/>
@@ -637,7 +637,7 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 									line={ref.line}
 									onClick={
 										!ref.isFolder
-											? () => postMessage('openFile', { filePath: ref.path, line: ref.line })
+											? () => postMessage({ type: 'openFile', filePath: ref.path, line: ref.line })
 											: undefined
 									}
 									title={ref.path}
@@ -677,7 +677,7 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 									line={ref.line}
 									onClick={
 										!ref.isFolder
-											? () => postMessage('openFile', { filePath: ref.path, line: ref.line })
+											? () => postMessage({ type: 'openFile', filePath: ref.path, line: ref.line })
 											: undefined
 									}
 									title={ref.path}

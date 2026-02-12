@@ -139,7 +139,7 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 					if (lowerLine.match(/\.(png|jpg|jpeg|gif|webp|svg|bmp|ico)$/)) {
 						const name = line.split(/[/\\]/).pop() || 'image';
 						const id = `img-${Date.now()}-${name}`;
-						postMessage('getImageData', { path: line, id, name });
+						postMessage({ type: 'getImageData', path: line, id, name });
 						continue;
 					}
 
@@ -209,7 +209,7 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 					// Store the text in case context is not found
 					setPendingPasteText(textPlain);
 					// Request context from extension
-					postMessage('getClipboardContext', { text: textPlain });
+					postMessage({ type: 'getClipboardContext', text: textPlain });
 				}
 			}
 		},

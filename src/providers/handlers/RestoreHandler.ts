@@ -9,8 +9,9 @@
 
 import * as vscode from 'vscode';
 import type { SessionEventMessage } from '../../common/extensionMessages';
+import type { CommandOf, WebviewCommand } from '../../common/webviewCommands';
 import { logger } from '../../utils/logger';
-import type { HandlerContext, WebviewMessage, WebviewMessageHandler } from './types';
+import type { HandlerContext, WebviewMessageHandler } from './types';
 
 /** Internal checkpoint record — never sent to the frontend */
 interface CheckpointRecord {
@@ -39,13 +40,13 @@ export class RestoreHandler implements WebviewMessageHandler {
 		logger.debug('[RestoreHandler] Registered checkpoint', { commitId, ...record });
 	}
 
-	async handleMessage(msg: WebviewMessage): Promise<void> {
+	async handleMessage(msg: WebviewCommand): Promise<void> {
 		switch (msg.type) {
 			case 'restoreCommit':
 				await this.handleRestoreCommit(msg);
 				break;
 			case 'unrevert':
-				await this.handleUnrevert(msg);
+				await this.handleUnrevert();
 				break;
 		}
 	}
@@ -56,9 +57,8 @@ export class RestoreHandler implements WebviewMessageHandler {
 	 * The frontend sends ONLY `{ commitId }`. This handler looks up the
 	 * checkpoint in the backend registry and calls the appropriate API.
 	 */
-	private async handleRestoreCommit(msg: WebviewMessage): Promise<void> {
-		const data = msg.data as { commitId?: string } | undefined;
-		const commitId = data?.commitId;
+	private async handleRestoreCommit(msg: CommandOf<'restoreCommit'>): Promise<void> {
+		const { commitId } = msg;
 
 		if (!commitId) {
 			logger.warn('[RestoreHandler] restoreCommit: no commitId provided');
@@ -113,7 +113,7 @@ export class RestoreHandler implements WebviewMessageHandler {
 	 * Handle unrevert from webview.
 	 * Frontend sends `{ }` — we use the active session.
 	 */
-	private async handleUnrevert(_msg: WebviewMessage): Promise<void> {
+	private async handleUnrevert(): Promise<void> {
 		const isOpenCode = this.context.cli.getProvider() === 'opencode';
 		if (!isOpenCode) {
 			logger.info('[RestoreHandler] unrevert: not supported for non-OpenCode providers');

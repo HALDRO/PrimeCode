@@ -24,7 +24,8 @@ export const AccessRequestMessage: React.FC<AccessRequestMessageProps> = ({ mess
 	const handleResponse = (isApproved: boolean, alwaysAllow = false) => {
 		// Send unified response format that works for both providers
 		// The extension backend will convert to the appropriate format
-		postMessage('accessResponse', {
+		postMessage({
+			type: 'accessResponse',
 			id: requestId,
 			toolName: tool,
 			approved: isApproved,

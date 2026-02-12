@@ -24,7 +24,7 @@ export const HooksTab: React.FC = () => {
 	const [newHookEvent, setNewHookEvent] = useState('bash');
 
 	useEffect(() => {
-		postMessage('getHooks');
+		postMessage({ type: 'getHooks' });
 	}, [postMessage]);
 
 	const handleCreateHook = () => {
@@ -32,7 +32,8 @@ export const HooksTab: React.FC = () => {
 			return;
 		}
 
-		postMessage('createHook', {
+		postMessage({
+			type: 'createHook',
 			name: newHookName,
 			enabled: true,
 			event: newHookEvent,
@@ -48,15 +49,15 @@ export const HooksTab: React.FC = () => {
 		setNewHookEvent('bash');
 	};
 
-	const handleDeleteHook = (name: string) => postMessage('deleteHook', { name });
-	const handleOpenHook = (name: string) => postMessage('openHookFile', { name });
+	const handleDeleteHook = (name: string) => postMessage({ type: 'deleteHook', name });
+	const handleOpenHook = (name: string) => postMessage({ type: 'openHookFile', name });
 	const handleImportHooks = () => {
 		useSettingsStore.getState().actions.setAgentsOps({
 			lastAction: 'import',
 			status: 'working',
 			message: 'Importing hooks from Claude...',
 		});
-		postMessage('importHooksFromClaude');
+		postMessage({ type: 'importHooksFromClaude' });
 	};
 	const handleSyncHooks = () => {
 		useSettingsStore.getState().actions.setAgentsOps({
@@ -64,7 +65,7 @@ export const HooksTab: React.FC = () => {
 			status: 'working',
 			message: 'Syncing hooks to Claude...',
 		});
-		postMessage('syncHooksToClaude');
+		postMessage({ type: 'syncHooksToClaude' });
 	};
 
 	return (

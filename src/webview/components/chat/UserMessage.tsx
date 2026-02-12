@@ -499,7 +499,8 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 			(text: string, shouldRestore: boolean) => {
 				if (shouldRestore && restoreCommit) {
 					// Frontend only sends commitId — backend resolves everything else
-					postMessage('restoreCommit', {
+					postMessage({
+						type: 'restoreCommit',
 						data: { commitId: restoreCommit.id },
 					});
 				}
@@ -536,7 +537,8 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 				const hasAttachments =
 					editAttachments.files || editAttachments.codeSnippets || editAttachments.images;
 
-				postSessionMessage('sendMessage', {
+				postSessionMessage({
+					type: 'sendMessage',
 					text,
 					planMode: false,
 					attachments: hasAttachments ? editAttachments : undefined,
@@ -589,7 +591,8 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 				// Frontend only sends commitId — backend resolves everything else
 				// Do NOT clear revertedFromMessageId here — the backend will send
 				// a 'success' event with the correct revertedFromMessageId.
-				postMessage('restoreCommit', {
+				postMessage({
+					type: 'restoreCommit',
 					data: { commitId: restoreCommit.id },
 				});
 			}
@@ -597,7 +600,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 
 		const handleUnrevert = useCallback(() => {
 			// Backend resolves the active session — no need to send sessionId
-			postMessage('unrevert', {});
+			postMessage({ type: 'unrevert' });
 		}, [postMessage]);
 
 		// Show unrevert on the REVERT POINT section (the message the user clicked Restore on).
@@ -719,7 +722,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 											key={filePath}
 											path={filePath}
 											onClick={() => {
-												postMessage('openFile', { filePath });
+												postMessage({ type: 'openFile', filePath });
 											}}
 											title={filePath}
 										/>
@@ -732,7 +735,8 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 											label={`${getShortFileName(snippet.filePath)} (${snippet.startLine}-${snippet.endLine})`}
 											iconName={snippet.filePath}
 											onClick={() => {
-												postMessage('openFile', {
+												postMessage({
+													type: 'openFile',
 													filePath: snippet.filePath,
 													startLine: snippet.startLine,
 													endLine: snippet.endLine,

@@ -36,3 +36,4 @@ export type {
 } from './extensionMessages';
 export { generateId } from './generateId';
 export * from './schemas';
+export * from './webviewCommands';

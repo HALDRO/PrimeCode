@@ -209,7 +209,7 @@ export const NotificationOverlay: React.FC = () => {
 
 	const handleResume = useCallback(() => {
 		if (!canResume) return;
-		postSessionMessage('sendMessage', { text: 'Continue from where you left off.' });
+		postSessionMessage({ type: 'sendMessage', text: 'Continue from where you left off.' });
 		clearNotifications();
 	}, [canResume, clearNotifications, postSessionMessage]);
 

@@ -9,7 +9,8 @@
  */
 
 import { useCallback, useMemo } from 'react';
-import type { VSCodeApi, WebviewMessage } from '../../common';
+import type { VSCodeApi } from '../../common';
+import type { WebviewCommand } from '../../common/webviewCommands';
 import { useChatStore } from '../store/chatStore';
 
 // ============================================================================
@@ -46,7 +47,7 @@ class VSCodeAPIWrapper {
 	/**
 	 * Send message to VS Code extension
 	 */
-	public postMessage(message: WebviewMessage): void {
+	public postMessage(message: WebviewCommand): void {
 		const api = getVSCodeApi();
 		if (api) {
 			api.postMessage(message);
@@ -96,36 +97,20 @@ if (typeof window !== 'undefined') {
 // ============================================================================
 
 /**
- * Post message to VS Code extension (stable function for hook)
- */
-function postMessageToVSCode(type: string, data?: unknown): void {
-	const api = getVSCodeApi();
-	if (!api) {
-		return;
-	}
-
-	// Ensure data is an object before spreading, or pass as data property
-	const message =
-		data && typeof data === 'object' && !Array.isArray(data) ? { type, ...data } : { type, data };
-
-	api.postMessage(message);
-}
-
-/**
  * React hook for VS Code API with stable function references
  * Use this in React components to prevent unnecessary re-renders
  *
  * @example
  * const { postMessage } = useVSCode();
- * postMessage('openFile', { filePath: '/path/to/file' });
+ * postMessage({ type: 'openFile', filePath: '/path/to/file' });
  */
 export function useVSCode() {
 	// Ensure API is initialized
 	getVSCodeApi();
 
-	// Stable postMessage reference
-	const postMessage = useCallback((type: string, data?: unknown) => {
-		postMessageToVSCode(type, data);
+	// Stable postMessage reference — fully typed
+	const postMessage = useCallback((message: WebviewCommand) => {
+		vscode.postMessage(message);
 	}, []);
 
 	// Message listener with cleanup
@@ -156,13 +141,16 @@ export function useVSCode() {
 // Session-Aware Message Hook
 // ============================================================================
 
+/** Commands that carry an optional sessionId field. */
+type SessionCommand = Extract<WebviewCommand, { sessionId?: string }>;
+
 /**
  * React hook that automatically attaches activeSessionId to messages
  * Use this for any message that needs to be routed to a specific session
  *
  * @example
  * const { postSessionMessage } = useSessionMessage();
- * postSessionMessage('sendMessage', { text: 'Hello' });
+ * postSessionMessage({ type: 'sendMessage', text: 'Hello' });
  * // Automatically becomes: { type: 'sendMessage', text: 'Hello', sessionId: 'session-xxx' }
  */
 export function useSessionMessage() {
@@ -170,36 +158,24 @@ export function useSessionMessage() {
 		(state: { activeSessionId?: string }) => state.activeSessionId,
 	);
 
-	// Post message with automatic sessionId attachment
+	// Post message with automatic sessionId attachment — fully typed
 	const postSessionMessage = useCallback(
-		(type: string, data?: Record<string, unknown>) => {
-			const api = getVSCodeApi();
-			if (!api) {
-				return;
+		(message: SessionCommand) => {
+			const sessionId = message.sessionId ?? activeSessionId;
+			if (sessionId) {
+				vscode.postMessage({ ...message, sessionId });
+			} else {
+				vscode.postMessage(message);
 			}
-
-			const message = {
-				type,
-				...data,
-				sessionId: activeSessionId,
-			};
-
-			api.postMessage(message);
 		},
 		[activeSessionId],
 	);
 
-	// For messages that don't need sessionId (global commands)
-	const postGlobalMessage = useCallback((type: string, data?: unknown) => {
-		postMessageToVSCode(type, data);
-	}, []);
-
 	return useMemo(
 		() => ({
 			postSessionMessage,
-			postGlobalMessage,
 			activeSessionId,
 		}),
-		[postSessionMessage, postGlobalMessage, activeSessionId],
+		[postSessionMessage, activeSessionId],
 	);
 }

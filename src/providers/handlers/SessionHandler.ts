@@ -8,10 +8,11 @@ import type {
 	TotalStats,
 } from '../../common';
 import { generateId } from '../../common';
+import type { CommandOf, WebviewCommand } from '../../common/webviewCommands';
 import { LogNormalizer } from '../../core/executor/LogNormalizer';
 import type { CLIEvent } from '../../core/executor/types';
 import { logger } from '../../utils/logger';
-import type { HandlerContext, WebviewMessage, WebviewMessageHandler } from './types';
+import type { HandlerContext, WebviewMessageHandler } from './types';
 
 export class SessionHandler implements WebviewMessageHandler {
 	private readonly logNormalizer = new LogNormalizer();
@@ -38,10 +39,10 @@ export class SessionHandler implements WebviewMessageHandler {
 		}
 	}
 
-	async handleMessage(msg: WebviewMessage): Promise<void> {
+	async handleMessage(msg: WebviewCommand): Promise<void> {
 		switch (msg.type) {
 			case 'webviewDidLaunch':
-				await this.onWebviewDidLaunch(msg);
+				await this.onWebviewDidLaunch();
 				break;
 			case 'createSession':
 				await this.onCreateSession();
@@ -56,7 +57,7 @@ export class SessionHandler implements WebviewMessageHandler {
 				await this.onSendMessage(msg);
 				break;
 			case 'stopRequest':
-				await this.onStopRequest(msg);
+				await this.onStopRequest();
 				break;
 			case 'improvePromptRequest':
 				await this.onImprovePromptRequest(msg);
@@ -239,7 +240,7 @@ export class SessionHandler implements WebviewMessageHandler {
 	// Private Handlers
 	// =============================================================================
 
-	private async onWebviewDidLaunch(_msg: WebviewMessage): Promise<void> {
+	private async onWebviewDidLaunch(): Promise<void> {
 		// Always load the most recent session from CLI (source of truth).
 		// No webview cache — CLI is the only authority for session history.
 		try {
@@ -369,8 +370,8 @@ export class SessionHandler implements WebviewMessageHandler {
 		}
 	}
 
-	private async onSwitchSession(msg: WebviewMessage): Promise<void> {
-		const sessionId = typeof msg.sessionId === 'string' ? msg.sessionId : undefined;
+	private async onSwitchSession(msg: CommandOf<'switchSession'>): Promise<void> {
+		const { sessionId } = msg;
 		if (!sessionId) return;
 		logger.info('[SessionHandler] Switching session', {
 			from: this.context.sessionState.activeSessionId,
@@ -383,8 +384,8 @@ export class SessionHandler implements WebviewMessageHandler {
 		this.initializeSessionStats(sessionId);
 	}
 
-	private async onCloseSession(msg: WebviewMessage): Promise<void> {
-		const sessionId = typeof msg.sessionId === 'string' ? msg.sessionId : undefined;
+	private async onCloseSession(msg: CommandOf<'closeSession'>): Promise<void> {
+		const { sessionId } = msg;
 		if (!sessionId) return;
 		logger.info('[SessionHandler] Closing session', { sessionId });
 
@@ -399,15 +400,12 @@ export class SessionHandler implements WebviewMessageHandler {
 		this.postLifecycle('closed', sessionId);
 	}
 
-	private async onSendMessage(msg: WebviewMessage): Promise<void> {
-		const text = msg.text as string;
-		const uiModel = typeof msg.model === 'string' ? (msg.model as string) : undefined;
-		const sessionId = typeof msg.sessionId === 'string' ? msg.sessionId : undefined;
-		const messageID = typeof msg.messageID === 'string' ? msg.messageID : undefined;
+	private async onSendMessage(msg: CommandOf<'sendMessage'>): Promise<void> {
+		const { text, model: uiModel, sessionId, messageID } = msg;
 		await this.handleSendMessage(text, uiModel, sessionId, messageID);
 	}
 
-	private async onStopRequest(_msg: WebviewMessage): Promise<void> {
+	private async onStopRequest(): Promise<void> {
 		const activeId = this.context.sessionState.activeSessionId;
 
 		// Only process stop request if there's an active session
@@ -628,8 +626,8 @@ export class SessionHandler implements WebviewMessageHandler {
 		}
 	}
 
-	private async onLoadConversation(msg: WebviewMessage): Promise<void> {
-		const filename = typeof msg.filename === 'string' ? msg.filename : undefined;
+	private async onLoadConversation(msg: CommandOf<'loadConversation'>): Promise<void> {
+		const { filename } = msg;
 		if (!filename) return;
 
 		// For OpenCode, filename IS the sessionId
@@ -863,8 +861,8 @@ export class SessionHandler implements WebviewMessageHandler {
 		}
 	}
 
-	private async onDeleteConversation(msg: WebviewMessage): Promise<void> {
-		const sessionId = typeof msg.filename === 'string' ? msg.filename : undefined;
+	private async onDeleteConversation(msg: CommandOf<'deleteConversation'>): Promise<void> {
+		const sessionId = msg.filename;
 		if (!sessionId) return;
 
 		logger.info('[SessionHandler] Deleting conversation', { sessionId });
@@ -891,9 +889,8 @@ export class SessionHandler implements WebviewMessageHandler {
 		await this.onGetConversationList();
 	}
 
-	private async onRenameConversation(msg: WebviewMessage): Promise<void> {
-		const sessionId = typeof msg.filename === 'string' ? msg.filename : undefined;
-		const newTitle = typeof msg.newTitle === 'string' ? msg.newTitle : undefined;
+	private async onRenameConversation(msg: CommandOf<'renameConversation'>): Promise<void> {
+		const { filename: sessionId, newTitle } = msg;
 		if (!sessionId || !newTitle) return;
 
 		logger.info('[SessionHandler] Renaming conversation', { sessionId, newTitle });
@@ -912,20 +909,11 @@ export class SessionHandler implements WebviewMessageHandler {
 	// Prompt Improvement
 	// =============================================================================
 
-	private async onImprovePromptRequest(msg: WebviewMessage): Promise<void> {
-		const data = (msg.data ?? {}) as {
-			text?: unknown;
-			requestId?: unknown;
-			model?: unknown;
-			timeoutMs?: unknown;
-		};
-
-		const text = typeof data.text === 'string' ? data.text : '';
-		const requestId = typeof data.requestId === 'string' ? data.requestId : '';
-		const timeoutMsRaw = typeof data.timeoutMs === 'number' ? data.timeoutMs : undefined;
+	private async onImprovePromptRequest(msg: CommandOf<'improvePromptRequest'>): Promise<void> {
+		const { text, requestId, model: msgModel } = msg;
 		const timeoutMs =
-			timeoutMsRaw && Number.isFinite(timeoutMsRaw)
-				? Math.max(1000, Math.round(timeoutMsRaw))
+			msg.timeoutMs && Number.isFinite(msg.timeoutMs)
+				? Math.max(1000, Math.round(msg.timeoutMs))
 				: 30_000;
 
 		if (!text.trim() || !requestId) {
@@ -945,12 +933,11 @@ export class SessionHandler implements WebviewMessageHandler {
 		try {
 			const modelFromSettings = this.context.settings.get('promptImprove.model');
 			const templateFromSettings = this.context.settings.get('promptImprove.template');
-			const model =
-				typeof data.model === 'string'
-					? data.model
-					: typeof modelFromSettings === 'string'
-						? modelFromSettings
-						: undefined;
+			const model = msgModel
+				? msgModel
+				: typeof modelFromSettings === 'string'
+					? modelFromSettings
+					: undefined;
 
 			const template = typeof templateFromSettings === 'string' ? templateFromSettings : undefined;
 
@@ -985,8 +972,8 @@ export class SessionHandler implements WebviewMessageHandler {
 		}
 	}
 
-	private async onCancelImprovePrompt(msg: WebviewMessage): Promise<void> {
-		const requestId = typeof msg.requestId === 'string' ? msg.requestId : '';
+	private async onCancelImprovePrompt(msg: CommandOf<'cancelImprovePrompt'>): Promise<void> {
+		const { requestId } = msg;
 		if (requestId && this.improvePromptActiveRequestId !== requestId) {
 			return;
 		}

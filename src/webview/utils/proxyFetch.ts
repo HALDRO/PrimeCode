@@ -4,7 +4,6 @@
  *              Allows the webview to access local resources (like OpenCode server on localhost) bypassing CORS/CSP restrictions.
  */
 
-import type { WebviewMessage } from '../../common';
 import { vscode } from './vscode';
 
 // Store pending requests to resolve them when extension responds
@@ -130,11 +129,11 @@ export async function proxyFetch(input: RequestInfo | URL, init?: RequestInit): 
 			type: 'proxyFetch',
 			id,
 			url,
-			init: {
+			options: {
 				method,
 				headers,
 				body: reqBody,
 			},
-		} as unknown as WebviewMessage);
+		});
 	});
 }
