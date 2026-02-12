@@ -16,7 +16,6 @@ import { shouldCollapseGroupedItem } from './components/chat/SimpleTool';
 import { UserMessage } from './components/chat/UserMessage';
 import { Header } from './components/header/Header';
 import { ChatInput } from './components/input/ChatInput';
-import { FilePicker } from './components/modals/FilePicker';
 import { SettingsPage } from './components/settings';
 import { ConfirmDialog } from './components/ui';
 import { useElementHeight } from './hooks/useElementHeight';
@@ -222,7 +221,6 @@ export const App: React.FC = () => {
 					<ChatInput />
 				</div>
 
-				{activeModal === 'filePicker' && <FilePicker />}
 				{activeModal === 'settings' && <SettingsPage />}
 				<ConfirmDialog />
 			</div>
@@ -281,7 +279,6 @@ export const App: React.FC = () => {
 				<ChatInput />
 			</div>
 
-			{activeModal === 'filePicker' && <FilePicker />}
 			{activeModal === 'settings' && <SettingsPage />}
 			<ConfirmDialog />
 		</div>
