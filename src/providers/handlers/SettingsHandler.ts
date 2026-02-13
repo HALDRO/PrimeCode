@@ -175,10 +175,14 @@ export class SettingsHandler implements WebviewMessageHandler {
 	private async onGetCommands(): Promise<void> {
 		this.context.view.postMessage({ type: 'commandsList', data: { custom: [], isLoading: true } });
 		try {
-			const commands = await this.context.services.agentsCommands.getAll();
+			// Fetch custom commands from .agents/ files and CLI commands from OpenCode server in parallel
+			const [commands, cliCommands] = await Promise.all([
+				this.context.services.agentsCommands.getAll(),
+				this.fetchCliCommands(),
+			]);
 			this.context.view.postMessage({
 				type: 'commandsList',
-				data: { custom: commands, isLoading: false },
+				data: { custom: commands, cli: cliCommands, isLoading: false },
 			});
 		} catch (error) {
 			this.context.view.postMessage({
@@ -189,6 +193,33 @@ export class SettingsHandler implements WebviewMessageHandler {
 					error: error instanceof Error ? error.message : String(error),
 				},
 			});
+		}
+	}
+
+	/**
+	 * Fetch built-in CLI commands from the running OpenCode server.
+	 * Merges server commands with PrimeCode-internal commands (e.g. compact)
+	 * that are handled locally but not registered on the server.
+	 * Returns empty array if server is not available.
+	 */
+	private async fetchCliCommands(): Promise<Array<{ name: string; description?: string }>> {
+		// Commands handled internally by PrimeCode (not registered on the server)
+		const internalCommands: Array<{ name: string; description?: string }> = [
+			{ name: 'compact', description: 'Summarize and compact session context' },
+		];
+
+		try {
+			const client = this.context.cli.getSdkClient();
+			const serverInfo = this.context.cli.getOpenCodeServerInfo();
+			if (!client || !serverInfo?.directory) return internalCommands;
+			const { data } = await client.command.list({ query: { directory: serverInfo.directory } });
+			const serverCommands = (data ?? []) as Array<{ name: string; description?: string }>;
+			// Merge: internal first, then server (skip duplicates)
+			const names = new Set(internalCommands.map(c => c.name));
+			return [...internalCommands, ...serverCommands.filter(c => !names.has(c.name))];
+		} catch (error) {
+			logger.warn('[SettingsHandler] Failed to fetch CLI commands:', error);
+			return internalCommands;
 		}
 	}
 

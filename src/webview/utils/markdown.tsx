@@ -148,27 +148,27 @@ const syntaxHighlightStyles = cn(
 const components: Components = {
 	// Headings
 	h1: ({ children }) => (
-		<h1 className="text-sm font-bold text-vscode-foreground mt-1.5 mb-0.5 first:mt-0 pb-0.5 border-b border-vscode-panel-border">
+		<h1 className="text-sm font-bold text-vscode-editor-foreground mt-1.5 mb-0.5 first:mt-0 pb-0.5 border-b border-vscode-panel-border">
 			{children}
 		</h1>
 	),
 	h2: ({ children }) => (
-		<h2 className="text-sm font-semibold text-vscode-foreground mt-1.5 mb-0.5 first:mt-0">
+		<h2 className="text-sm font-semibold text-vscode-editor-foreground mt-1.5 mb-0.5 first:mt-0">
 			{children}
 		</h2>
 	),
 	h3: ({ children }) => (
-		<h3 className="text-base font-semibold text-vscode-foreground mt-1 mb-0.5 first:mt-0">
+		<h3 className="text-base font-semibold text-vscode-editor-foreground mt-1 mb-0.5 first:mt-0">
 			{children}
 		</h3>
 	),
 	h4: ({ children }) => (
-		<h4 className="text-base font-medium text-vscode-foreground mt-1 mb-0.5 first:mt-0">
+		<h4 className="text-base font-medium text-vscode-editor-foreground mt-1 mb-0.5 first:mt-0">
 			{children}
 		</h4>
 	),
 	h5: ({ children }) => (
-		<h5 className="text-md font-bold text-vscode-foreground mt-1 mb-0.5 first:mt-0 uppercase tracking-wide">
+		<h5 className="text-md font-bold text-vscode-editor-foreground mt-1 mb-0.5 first:mt-0 uppercase tracking-wide">
 			{children}
 		</h5>
 	),
@@ -180,17 +180,19 @@ const components: Components = {
 
 	// Paragraphs
 	p: ({ children }) => (
-		<p className="text-base leading-relaxed text-vscode-foreground mb-0.5 last:mb-0">{children}</p>
+		<p className="text-base leading-relaxed text-vscode-editor-foreground mb-0.5 last:mb-0">
+			{children}
+		</p>
 	),
 
 	// Lists
 	ul: ({ children }) => (
-		<ul className="list-disc list-inside pl-(--gap-4) mb-0.5 text-base text-vscode-foreground marker:text-vscode-descriptionForeground space-y-0 [&>li::marker]:text-[1.2em]">
+		<ul className="list-disc list-inside pl-(--gap-4) mb-0.5 text-base text-vscode-editor-foreground marker:text-vscode-descriptionForeground space-y-0 [&>li::marker]:text-[1.2em]">
 			{children}
 		</ul>
 	),
 	ol: ({ children }) => (
-		<ol className="list-decimal list-inside pl-(--gap-4) mb-0.5 text-base text-vscode-foreground marker:text-vscode-descriptionForeground space-y-0">
+		<ol className="list-decimal list-inside pl-(--gap-4) mb-0.5 text-base text-vscode-editor-foreground marker:text-vscode-descriptionForeground space-y-0">
 			{children}
 		</ol>
 	),
@@ -220,9 +222,9 @@ const components: Components = {
 
 	// Formatting
 	strong: ({ children }) => (
-		<strong className="font-semibold text-vscode-foreground">{children}</strong>
+		<strong className="font-semibold text-vscode-editor-foreground">{children}</strong>
 	),
-	em: ({ children }) => <em className="italic text-vscode-foreground">{children}</em>,
+	em: ({ children }) => <em className="italic text-vscode-editor-foreground">{children}</em>,
 	del: ({ children }) => <del className="line-through opacity-70">{children}</del>,
 
 	// Code Blocks & Inline Code
@@ -266,7 +268,7 @@ const components: Components = {
 						<code
 							className={cn(
 								'block p-(--tool-content-padding) font-mono text-md leading-(--line-height-code) whitespace-pre',
-								'text-vscode-foreground bg-(--tool-bg-header) w-fit min-w-full',
+								'text-vscode-editor-foreground bg-(--tool-bg-header) w-fit min-w-full',
 								syntaxHighlightStyles,
 								className,
 							)}
@@ -339,12 +341,12 @@ const components: Components = {
 		</div>
 	),
 	thead: ({ children }) => (
-		<thead className="bg-(--tool-bg-header) text-vscode-foreground font-medium border-b border-(--border-subtle)">
+		<thead className="bg-(--tool-bg-header) text-vscode-editor-foreground font-medium border-b border-(--border-subtle)">
 			{children}
 		</thead>
 	),
 	tbody: ({ children }) => (
-		<tbody className="text-vscode-foreground/90 bg-(--tool-bg-header)">{children}</tbody>
+		<tbody className="text-vscode-editor-foreground/90 bg-(--tool-bg-header)">{children}</tbody>
 	),
 	tr: ({ children }) => (
 		<tr className="border-b border-(--border-subtle) last:border-b-0 hover:bg-(--alpha-5) transition-colors">
@@ -352,7 +354,7 @@ const components: Components = {
 		</tr>
 	),
 	th: ({ children }) => (
-		<th className="px-(--tool-content-padding) py-1.5 text-left font-medium text-sm text-vscode-foreground border-r border-(--border-subtle) last:border-r-0">
+		<th className="px-(--tool-content-padding) py-1.5 text-left font-medium text-sm text-vscode-editor-foreground border-r border-(--border-subtle) last:border-r-0">
 			{children}
 		</th>
 	),
@@ -395,7 +397,7 @@ export const Markdown: React.FC<MarkdownProps> = React.memo(
 		return (
 			<div
 				className={cn(
-					'markdown-body max-w-full text-vscode-foreground wrap-break-word overflow-x-clip',
+					'markdown-body max-w-full text-vscode-editor-foreground wrap-break-word overflow-x-clip',
 					className,
 				)}
 			>

@@ -1,5 +1,5 @@
 import type React from 'react';
-import { type ReactNode, useId, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
 // @ts-expect-error - normalizedEvents path issue in webview tsconfig
 import type { NormalizedEntry } from '../../../../common/normalizedEvents';
 import { isMcpTool, isToolInList, NON_GROUPABLE_TOOLS } from '../../constants';
@@ -88,11 +88,8 @@ export const SimpleTool: React.FC<SimpleToolProps> = ({
 			>
 				<span
 					className={cn(
-						'shrink-0 flex h-7 w-7 items-center justify-center rounded-sm border bg-(--surface-raised)',
-						isError
-							? 'border-(--color-error) text-error'
-							: 'border-(--border-subtle) text-vscode-foreground opacity-80',
-						/* keep badge a bit larger, but match ToolCard header icon scale */
+						'shrink-0 flex items-center justify-center text-vscode-descriptionForeground',
+						isError ? 'text-error' : '',
 						'[&>svg]:w-[14px] [&>svg]:h-[14px]',
 					)}
 				>
@@ -101,31 +98,37 @@ export const SimpleTool: React.FC<SimpleToolProps> = ({
 
 				<span
 					className={cn(
-						'text-sm font-medium opacity-90 whitespace-nowrap',
-						isError && 'text-error',
+						'text-sm font-semibold whitespace-nowrap text-vscode-foreground opacity-80',
+						isError && 'text-error !opacity-100',
 					)}
 				>
 					{label}
 				</span>
 
 				{meta && (
-					<span className="min-w-0 overflow-hidden flex items-center shrink">
-						{typeof meta === 'string' || typeof meta === 'number' ? (
-							<span className="text-xs opacity-60 truncate">{meta}</span>
-						) : (
-							meta
-						)}
-					</span>
+					<>
+						<span className="text-sm text-vscode-descriptionForeground">·</span>
+						<span className="min-w-0 overflow-hidden flex items-center shrink">
+							{typeof meta === 'string' || typeof meta === 'number' ? (
+								<span className="text-sm truncate text-vscode-descriptionForeground">{meta}</span>
+							) : (
+								meta
+							)}
+						</span>
+					</>
 				)}
 
-				{rightContent && <span className="text-xs opacity-60 shrink-0">{rightContent}</span>}
+				{rightContent && (
+					<span className="flex items-center gap-2 text-sm shrink-0 min-w-0 text-vscode-descriptionForeground">
+						{rightContent}
+					</span>
+				)}
 			</button>
-
 			{expanded && hasContent && (
 				<div
 					id={contentId}
 					className={cn(
-						'pl-3 ml-1 border-l border-(--border-subtle) mt-1 py-1 text-sm opacity-90 overflow-x-auto',
+						'pl-3 ml-1 border-l border-(--border-subtle) mt-1 py-1 text-sm overflow-x-auto',
 						contentClassName,
 					)}
 				>
@@ -150,23 +153,40 @@ export const ThinkingMessage: React.FC<ThinkingMessageProps> = ({
 	defaultExpanded,
 }) => {
 	const preview = content.split('\n')[0]?.trim();
+	const [expanded, setExpanded] = useState(defaultExpanded ?? isStreaming ?? false);
+	const wasStreamingRef = useRef(isStreaming);
+
+	useEffect(() => {
+		if (isStreaming) {
+			setExpanded(true);
+		} else if (wasStreamingRef.current && !isStreaming) {
+			setExpanded(false);
+		}
+		wasStreamingRef.current = isStreaming;
+	}, [isStreaming]);
 
 	return (
 		<SimpleTool
-			icon={<BrainSideIcon size={17} className="text-(--color-thinking)" />}
+			icon={<BrainSideIcon size={17} className="text-vscode-descriptionForeground" />}
 			label="Thinking"
 			meta={preview}
-			defaultExpanded={defaultExpanded ?? isStreaming}
+			expanded={expanded}
+			onToggle={() => setExpanded(prev => !prev)}
 			rightContent={
 				durationMs !== undefined && (
-					<span className="flex items-center gap-1 text-xs opacity-50">
+					<span className="flex items-center gap-1 text-sm font-bold text-vscode-descriptionForeground">
 						<TimerIcon size={11} />
 						{formatDuration(durationMs)}
 					</span>
 				)
 			}
 		>
-			{content && <Markdown content={content} />}
+			{content && (
+				<Markdown
+					content={content}
+					className="[&_p]:!text-sm [&_p]:!text-vscode-descriptionForeground [&_li]:!text-sm [&_li]:!text-vscode-descriptionForeground [&_ul]:!text-sm [&_ol]:!text-sm !text-vscode-descriptionForeground"
+				/>
+			)}
 		</SimpleTool>
 	);
 };
@@ -589,35 +609,36 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 			rightContent={
 				<>
 					{isRead && (
-						<span className="text-sm text-vscode-foreground opacity-60 whitespace-nowrap">
+						<span className="text-sm whitespace-nowrap text-vscode-descriptionForeground">
 							{readOffset !== undefined || readLimit !== undefined
 								? `${readOffset ?? 1}–${readLimit !== undefined ? (readOffset ?? 1) + readLimit - 1 : '...'} lines`
 								: `${nonEmptyLineCount} lines`}
 						</span>
 					)}
 					{!isRead && isSearch && nonEmptyLineCount > 0 && (
-						<span className="text-sm text-vscode-foreground opacity-60 whitespace-nowrap">
+						<span className="text-sm whitespace-nowrap text-vscode-descriptionForeground">
 							{nonEmptyLineCount} results
 						</span>
 					)}
 					{!isRead && !isSearch && isTodoWrite && totalCount > 0 && (
 						<>
-							<span className="text-sm font-medium text-vscode-foreground opacity-90 leading-none whitespace-nowrap">
+							<span className="text-sm text-vscode-descriptionForeground">·</span>
+							<span className="text-sm font-medium leading-none whitespace-nowrap text-vscode-descriptionForeground">
 								{completedCount} of {totalCount}
 							</span>
-							<span className="text-sm text-vscode-foreground opacity-60 truncate">
+							<span className="text-sm truncate text-vscode-descriptionForeground">
 								{(() => {
 									const active =
 										todos.find(t => t.status === 'in_progress') ||
 										todos.find(t => t.status === 'pending') ||
 										[...todos].reverse().find(t => t.status === 'completed');
-									return active ? `- ${active.content}` : '';
+									return active ? `— ${active.content}` : '';
 								})()}
 							</span>
 						</>
 					)}
 					{toolName === 'thinking' && (rawInput as { durationMs?: number })?.durationMs && (
-						<span className="flex items-center gap-1 text-sm leading-none text-vscode-foreground opacity-60">
+						<span className="flex items-center gap-1 text-sm leading-none text-vscode-descriptionForeground">
 							<TimerIcon size={11} />
 							{formatDuration((rawInput as { durationMs?: number })?.durationMs ?? 0)}
 						</span>
@@ -636,10 +657,8 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 							<TodoStatusIcon status={todo.status} />
 							<span
 								className={cn(
-									'text-sm truncate',
-									todo.status === 'completed'
-										? 'text-vscode-foreground opacity-50 line-through'
-										: 'text-vscode-foreground opacity-90',
+									'text-sm truncate text-vscode-descriptionForeground',
+									todo.status === 'completed' && 'opacity-50',
 								)}
 							>
 								{todo.content}
@@ -692,14 +711,14 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 									title={ref.path}
 								/>
 								{ref.detail && (
-									<span className="text-xs text-vscode-foreground opacity-50 truncate">
+									<span className="text-sm text-vscode-foreground opacity-50 truncate">
 										{ref.detail}
 									</span>
 								)}
 							</div>
 						))}
 						{searchEntries.length > SEARCH_PREVIEW_LIMIT && (
-							<span className="text-xs text-vscode-foreground opacity-50 pl-1">
+							<span className="text-sm text-vscode-foreground opacity-50 pl-1">
 								+{searchEntries.length - SEARCH_PREVIEW_LIMIT} more
 							</span>
 						)}

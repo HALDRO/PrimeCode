@@ -9,7 +9,6 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { OPENCODE_COMMANDS } from '../../constants';
 
 import { cn } from '../../lib/cn';
 import {
@@ -362,15 +361,16 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 		const { setEditingMessageId } = chatActions;
 		const { selectedModel, opencodeProviders } = useSettingsStore();
 		const customCommands = useSettingsStore(state => state.commands.custom);
+		const cliCommands = useSettingsStore(state => state.commands.cli);
 		const subagents = useSettingsStore(state => state.subagents);
 
-		// Build set of valid command names for highlighting
+		// Build set of valid command names for highlighting (dynamic from server)
 		const validCommands = useMemo(() => {
 			return new Set([
-				...OPENCODE_COMMANDS.map(cmd => cmd.name.toLowerCase()),
+				...cliCommands.map(cmd => cmd.name.toLowerCase()),
 				...customCommands.map(cmd => cmd.name.toLowerCase()),
 			]);
-		}, [customCommands]);
+		}, [cliCommands, customCommands]);
 
 		const validSubagents = useMemo(() => {
 			return new Set(subagents.items.map(a => a.name.toLowerCase()));

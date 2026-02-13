@@ -7,7 +7,6 @@
 
 import type React from 'react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { OPENCODE_COMMANDS } from '../../constants';
 
 import { useFileAttachments } from '../../hooks/useFileAttachments';
 import { cn } from '../../lib/cn';
@@ -237,6 +236,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 	const { selectedModel, proxyModels, opencodeProviders, getSessionModel } = useModelSelection();
 	const promptImproveTimeoutSeconds = useSettingsStore(state => state.promptImproveTimeoutSeconds);
 	const customCommands = useSettingsStore(state => state.commands.custom);
+	const cliCommands = useSettingsStore(state => state.commands.cli);
 	const subagents = useSettingsStore(state => state.subagents);
 	const { showSlashCommands, setShowSlashCommands, setSlashFilter } = useSlashCommandsState();
 	const { showFilePicker, setShowFilePicker, setFileFilter } = useFilePickerState();
@@ -312,15 +312,15 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
 	// Find all commands and subagents in input and calculate their positions for highlighting
 	const commandHighlights = useMemo(() => {
-		// Build set of valid command names
+		// Build set of valid command names from dynamic CLI + custom commands
 		const validCommandNames = new Set([
-			...OPENCODE_COMMANDS.map(cmd => cmd.name.toLowerCase()),
+			...cliCommands.map(cmd => cmd.name.toLowerCase()),
 			...customCommands.map(cmd => cmd.name.toLowerCase()),
 		]);
 		const validSubagentNames = new Set(subagents.items.map(a => a.name.toLowerCase()));
 
 		return getMessageHighlights(inputValue, validCommandNames, validSubagentNames);
-	}, [inputValue, customCommands, subagents.items]);
+	}, [inputValue, cliCommands, customCommands, subagents.items]);
 
 	// Handle pending paste text fallback - insert text if context was not found
 	useEffect(() => {

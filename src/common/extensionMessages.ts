@@ -605,6 +605,8 @@ export type CommandsListMessage = BaseExtensionMessage<
 	'commandsList',
 	{
 		custom: ParsedCommand[];
+		/** CLI commands fetched dynamically from the OpenCode server */
+		cli?: Array<{ name: string; description?: string }>;
 		isLoading: boolean;
 		error?: string;
 		meta?: { operation?: string; message?: string };

@@ -18,36 +18,6 @@ export interface CommandItem {
 	prompt?: string;
 }
 
-/**
- * OpenCode slash commands available via chat input.
- * Only commands that provide unique value in UI context are included.
- * Commands handled by Settings UI (config, model, provider, mcp, etc.) are excluded.
- */
-export const OPENCODE_COMMANDS: CommandItem[] = [
-	{ id: 'init', name: 'init', description: 'Create/update AGENTS.md for project', type: 'cli' },
-	{
-		id: 'review',
-		name: 'review',
-		description: 'Review changes (commit, branch, or PR)',
-		type: 'cli',
-	},
-	{
-		id: 'compact',
-		name: 'compact',
-		description: 'Summarize and compact session context',
-		type: 'cli',
-	},
-	// { id: 'config', name: 'config', description: 'View/modify configuration', type: 'cli' }, // Handled by Settings UI
-	// { id: 'model', name: 'model', description: 'Select or change the AI model', type: 'cli' }, // Handled by model dropdown
-	// { id: 'provider', name: 'provider', description: 'Manage AI providers', type: 'cli' }, // Handled by Settings UI
-	// { id: 'mcp', name: 'mcp', description: 'Manage MCP server connections', type: 'cli' }, // Handled by MCP Tab
-	// { id: 'clear', name: 'clear', description: 'Clear conversation history', type: 'cli' }, // Use "New Chat" button instead
-	{ id: 'share', name: 'share', description: 'Share current session', type: 'cli' },
-	{ id: 'unshare', name: 'unshare', description: 'Unshare current session', type: 'cli' },
-	// { id: 'help', name: 'help', description: 'Get usage help', type: 'cli' }, // Not useful in UI
-	// { id: 'version', name: 'version', description: 'Show OpenCode version', type: 'cli' }, // Not useful in UI
-];
-
 // ============================================================================
 // Settings Navigation
 // ============================================================================

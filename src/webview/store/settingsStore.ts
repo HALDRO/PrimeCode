@@ -274,6 +274,8 @@ export interface SettingsState {
 	commands: {
 		builtin: CommandItem[];
 		custom: ParsedCommand[];
+		/** CLI commands fetched dynamically from the OpenCode server */
+		cli: Array<{ name: string; description?: string }>;
 		isLoading: boolean;
 		error?: string;
 	};
@@ -400,6 +402,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 	commands: {
 		builtin: [],
 		custom: [],
+		cli: [],
 		isLoading: false,
 		error: undefined,
 	},
@@ -555,13 +558,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 			switch (message.type) {
 				case 'commandsList':
 					if (message.data) {
-						const { custom, isLoading, error, meta } = message.data as {
+						const { custom, cli, isLoading, error, meta } = message.data as {
 							custom: ParsedCommand[];
+							cli?: Array<{ name: string; description?: string }>;
 							isLoading: boolean;
 							error?: string;
 							meta?: { operation?: string; message?: string };
 						};
-						actions.setCommands({ custom, isLoading, error });
+						actions.setCommands({ custom, ...(cli !== undefined && { cli }), isLoading, error });
 						handleLoadingMeta(meta, error, actions.setAgentsOps);
 					}
 					break;

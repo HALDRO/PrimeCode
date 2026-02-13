@@ -95,7 +95,7 @@
 	--color-accent-muted: rgba(168, 85, 247, 0.15);
 
 	/* Special */
-	--color-thinking: #9c27b0;
+	--color-thinking: rgb(123, 123, 123);
 	--color-mcp: #3b82f6;
 	--color-stop: #ef4444;
 
@@ -105,7 +105,7 @@
 	--glow-warning: rgba(247, 168, 37, 0.5);
 	--glow-info: rgba(59, 130, 246, 0.5);
 	--glow-accent: rgba(168, 85, 247, 0.5);
-	--glow-thinking: rgba(156, 39, 176, 0.5);
+	--glow-thinking: rgba(123, 123, 123, 0.5);
 
 	/* ===========================================
 	   SURFACES & BORDERS

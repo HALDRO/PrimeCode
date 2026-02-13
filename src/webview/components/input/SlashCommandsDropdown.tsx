@@ -6,10 +6,26 @@
 
 import type React from 'react';
 import { useCallback, useMemo } from 'react';
-import { type CommandItem, OPENCODE_COMMANDS } from '../../constants';
+import type { CommandItem } from '../../constants';
 
 import { useChatInputState, useSettingsStore, useSlashCommandsState } from '../../store';
 import { type AnchorRectLike, DropdownMenu, type DropdownMenuItem } from '../ui';
+
+/**
+ * Commands that are handled by dedicated UI and should not appear in the slash dropdown.
+ * These are filtered out from the dynamic CLI commands list.
+ */
+const CLI_COMMANDS_UI_BLOCKLIST = new Set([
+	'config',
+	'model',
+	'provider',
+	'mcp',
+	'clear',
+	'help',
+	'version',
+	'share',
+	'unshare',
+]);
 
 const getTypeLabel = (type: string) => {
 	switch (type) {
@@ -108,8 +124,17 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 			prompt: `@${agent.name}`,
 		}));
 
-		return [...customList, ...OPENCODE_COMMANDS, ...subagentList];
-	}, [commands.custom, subagents.items]);
+		const cliList: CommandItem[] = (commands.cli ?? [])
+			.filter(cmd => !CLI_COMMANDS_UI_BLOCKLIST.has(cmd.name))
+			.map(cmd => ({
+				id: cmd.name,
+				name: cmd.name,
+				description: cmd.description ?? '',
+				type: 'cli' as const,
+			}));
+
+		return [...customList, ...cliList, ...subagentList];
+	}, [commands.custom, commands.cli, subagents.items]);
 
 	const filteredCommands = useMemo(() => {
 		const term = slashFilter.toLowerCase().replace(/^\//, '');

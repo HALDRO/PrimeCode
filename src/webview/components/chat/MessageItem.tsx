@@ -85,12 +85,12 @@ const SubtaskItem: React.FC<{
 					<span className="toolcard-leading-icon flex items-center justify-center w-5 h-5 shrink-0">
 						{subtaskStatusIcon(message.status)}
 					</span>
-					<span className="text-xs font-medium px-1.5 py-0.5 rounded-sm bg-vscode-badge-background text-vscode-badge-foreground whitespace-nowrap">
-						SUB-AGENT
+					<span className="text-sm font-medium px-1.5 py-0.5 rounded-sm bg-vscode-badge-background text-vscode-badge-foreground whitespace-nowrap">
+						SubAgent
 					</span>
 					{agentType && (
-						<span className="text-xs text-vscode-foreground opacity-50 whitespace-nowrap">
-							{agentType}
+						<span className="text-sm text-vscode-foreground opacity-50 whitespace-nowrap">
+							{agentType.charAt(0).toUpperCase() + agentType.slice(1)}
 						</span>
 					)}
 					<span className="text-sm text-vscode-foreground opacity-80 truncate">
@@ -100,7 +100,7 @@ const SubtaskItem: React.FC<{
 			}
 			headerRight={
 				totalDurationMs > 0 ? (
-					<span className="flex items-center gap-1 text-xs text-vscode-foreground opacity-70">
+					<span className="flex items-center gap-1 text-sm font-bold text-vscode-descriptionForeground">
 						<TimerIcon size={11} />
 						{formatDuration(totalDurationMs)}
 					</span>
@@ -191,7 +191,7 @@ const SimpleToolGroup: React.FC<{ messages: Message[]; shouldCollapse: boolean }
 	return (
 		<SimpleTool
 			icon={<ListIcon size={18} />}
-			label={`Tools · ${toolUseMessages.length}`}
+			label={`Tools x${toolUseMessages.length}`}
 			meta={toolCountsLabel}
 			expanded={expanded}
 			onToggle={() => setExpanded(prev => !prev)}
