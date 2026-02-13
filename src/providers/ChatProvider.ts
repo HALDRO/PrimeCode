@@ -1,7 +1,7 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { SessionEventMessage } from '../common';
-import { computeDiffStats } from '../common/diffStats';
+
 import type { WebviewCommand } from '../common/webviewCommands';
 import { type CLIEvent, CLIRunner } from '../core/CLIRunner';
 import type { ServiceRegistry } from '../core/ServiceRegistry';
@@ -1010,7 +1010,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 										? toolInput.content
 										: '';
 
-					const stats = computeDiffStats(oldContent, newContent);
+					const oldLineCount = oldContent ? oldContent.split('\n').length : 0;
+					const newLineCount = newContent ? newContent.split('\n').length : 0;
 
 					this.postMessage({
 						type: 'session_event',
@@ -1021,8 +1022,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 							action: 'changed',
 							filePath,
 							fileName: filePath.split(/[/\\]/).pop() || filePath,
-							linesAdded: stats.added,
-							linesRemoved: stats.removed,
+							linesAdded: Math.max(0, newLineCount - oldLineCount),
+							linesRemoved: Math.max(0, oldLineCount - newLineCount),
 							toolUseId,
 						},
 						timestamp: Date.now(),

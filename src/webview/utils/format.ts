@@ -40,34 +40,27 @@ export const formatRelativeTime = (dateInput: string | number | Date): string =>
 
 	try {
 		const date = new Date(dateInput);
+		if (Number.isNaN(date.getTime())) return '';
+
 		const now = new Date();
+		const diffMs = now.getTime() - date.getTime();
+
+		// Guard against epoch-zero or very old dates
+		if (date.getFullYear() < 2000) {
+			return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+		}
+
+		// Only show relative time for today (same calendar day)
 		const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-		// Future dates or invalid dates check could be added here if needed
-
-		// Today: show relative time
 		if (date >= today) {
-			const diffMs = now.getTime() - date.getTime();
 			const diffMins = Math.floor(diffMs / (1000 * 60));
-
-			if (diffMins < 1) {
-				return 'now';
-			}
-			if (diffMins < 60) {
-				return `${diffMins}m ago`;
-			}
-
+			if (diffMins < 1) return 'now';
+			if (diffMins < 60) return `${diffMins}m ago`;
 			const diffHours = Math.floor(diffMins / 60);
 			return `${diffHours}h ago`;
 		}
 
-		// Yesterday
-		const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
-		if (date >= yesterday) {
-			return 'yesterday';
-		}
-
-		// Older: show date
+		// Everything else — concrete date
 		return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
 	} catch {
 		return '';

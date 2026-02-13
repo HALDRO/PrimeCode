@@ -222,7 +222,7 @@ export class AgentsConfigService {
 	/**
 	 * Read JSON file safely with optional schema validation
 	 */
-	private async _readJsonFile<T>(filePath: string, schema?: any): Promise<T | null> {
+	private async _readJsonFile<T>(filePath: string, schema?: TSchema): Promise<T | null> {
 		try {
 			const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(filePath));
 			const data = JSON.parse(new TextDecoder().decode(bytes));

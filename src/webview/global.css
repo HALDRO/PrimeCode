@@ -423,7 +423,7 @@ div:hover > .user-copy-btn {
 	--input-border-focus: var(--border-focus);
 	--input-text-color: var(--vscode-input-foreground);
 	--input-toolbar-height: 22px;
-	--input-min-height: 36px;
+	--input-min-height: 45px;
 	--input-max-height: 266px;
 	--input-width-sm: 180px;
 	--input-width-md: 200px;

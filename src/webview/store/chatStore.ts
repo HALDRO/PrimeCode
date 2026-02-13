@@ -31,7 +31,6 @@ import type {
 	TotalStats,
 } from '../../common';
 import { generateId } from '../../common';
-import { computeDiffStats } from '../../common/diffStats';
 
 export type { CommitInfo, ConversationMessage, SubtaskMessage, TokenStats, TotalStats };
 
@@ -503,9 +502,10 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 										const oldContent = raw.old_string || raw.old_str || raw.oldString || '';
 										const newContent =
 											raw.new_string || raw.new_str || raw.newString || raw.content || '';
-										const stats = computeDiffStats(oldContent, newContent);
-										linesAdded = stats.added;
-										linesRemoved = stats.removed;
+										const oldLineCount = oldContent ? oldContent.split('\n').length : 0;
+										const newLineCount = newContent ? newContent.split('\n').length : 0;
+										linesAdded = Math.max(0, newLineCount - oldLineCount);
+										linesRemoved = Math.max(0, oldLineCount - newLineCount);
 									}
 								}
 

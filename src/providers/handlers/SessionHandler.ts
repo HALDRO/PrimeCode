@@ -252,44 +252,68 @@ export class SessionHandler implements WebviewMessageHandler {
 	// =============================================================================
 
 	private async onWebviewDidLaunch(): Promise<void> {
-		// Always load the most recent session from CLI (source of truth).
-		// No webview cache — CLI is the only authority for session history.
+		// Restore all previously open tabs from globalState, then replay their history.
 		try {
 			const config = this.buildBaseConfig();
 			const allSessions = await this.context.cli.listSessions(config);
+			const validSessionIds = new Set(allSessions.filter(s => !s.parentID).map(s => s.id));
 
-			// Find the most recent top-level session (no parentID)
-			const topLevelSessions = allSessions
-				.filter(s => !s.parentID)
-				.sort((a, b) => (b.lastModified || 0) - (a.lastModified || 0));
-
-			if (topLevelSessions.length === 0) {
+			if (validSessionIds.size === 0) {
 				logger.info('[SessionHandler] No sessions found in CLI, staying in EmptyState');
 				return;
 			}
 
-			const lastSession = topLevelSessions[0];
-			const sessionId = lastSession.id;
+			// Read persisted tabs
+			const persisted = this.getPersistedTabs();
+			// Filter out tabs that no longer exist in CLI
+			const tabsToRestore = persisted.openTabs.filter(id => validSessionIds.has(id));
+			let activeTab =
+				persisted.activeTab && validSessionIds.has(persisted.activeTab)
+					? persisted.activeTab
+					: undefined;
 
-			logger.info('[SessionHandler] Restoring last session from CLI', {
-				sessionId,
-				title: lastSession.title,
+			// Fallback: if no persisted tabs, restore the most recent session
+			if (tabsToRestore.length === 0) {
+				const topLevel = allSessions
+					.filter(s => !s.parentID)
+					.sort((a, b) => (b.lastModified || 0) - (a.lastModified || 0));
+				if (topLevel.length > 0) {
+					tabsToRestore.push(topLevel[0].id);
+					activeTab = topLevel[0].id;
+				}
+			}
+
+			if (tabsToRestore.length === 0) return;
+			if (!activeTab) activeTab = tabsToRestore[tabsToRestore.length - 1];
+
+			logger.info('[SessionHandler] Restoring tabs from persistence', {
+				tabCount: tabsToRestore.length,
+				activeTab,
 			});
 
-			// Register session on extension side
-			this.context.sessionState.activeSessionId = sessionId;
-			this.context.sessionState.startedSessions.add(sessionId);
-			this.postLifecycle('created', sessionId);
-			this.postLifecycle('switched', sessionId, { isProcessing: false });
-			this.initializeSessionStats(sessionId);
+			// Create all tabs in webview
+			for (const tabId of tabsToRestore) {
+				this.context.sessionState.startedSessions.add(tabId);
+				this.postLifecycle('created', tabId);
+				this.initializeSessionStats(tabId);
+			}
 
-			// Load and replay history from CLI
-			await this.replaySessionFromCLI(sessionId, config);
+			// Switch to the active tab
+			this.context.sessionState.activeSessionId = activeTab;
+			this.postLifecycle('switched', activeTab, { isProcessing: false });
 
-			this.postStatus(sessionId, 'idle', 'Ready');
+			// Replay history only for the active tab (others load on switch)
+			await this.replaySessionFromCLI(activeTab, config);
+			this.postStatus(activeTab, 'idle', 'Ready');
+
+			// Mark non-active tabs as idle
+			for (const tabId of tabsToRestore) {
+				if (tabId !== activeTab) {
+					this.postStatus(tabId, 'idle', 'Ready');
+				}
+			}
 		} catch (error) {
-			logger.error('[SessionHandler] Failed to restore session from CLI:', error);
-			// Stay in EmptyState on failure
+			logger.error('[SessionHandler] Failed to restore sessions from CLI:', error);
 		}
 	}
 
@@ -375,6 +399,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			this.postLifecycle('switched', newSessionId, { isProcessing: false });
 			this.postStatus(newSessionId, 'idle', 'Ready');
 			this.initializeSessionStats(newSessionId);
+			this.persistOpenTabs(newSessionId);
 		} catch (error) {
 			logger.error('[SessionHandler] Failed to create session:', error);
 			this.context.sessionState.activeSessionId = undefined;
@@ -393,6 +418,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		this.postLifecycle('switched', sessionId, { isProcessing: false });
 		this.postStatus(sessionId, 'idle', 'Ready');
 		this.initializeSessionStats(sessionId);
+		this.persistOpenTabs(sessionId);
 	}
 
 	private async onCloseSession(msg: CommandOf<'closeSession'>): Promise<void> {
@@ -409,6 +435,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		}
 
 		this.postLifecycle('closed', sessionId);
+		this.persistOpenTabs(undefined, sessionId);
 	}
 
 	private async onSendMessage(msg: CommandOf<'sendMessage'>): Promise<void> {
@@ -666,20 +693,24 @@ export class SessionHandler implements WebviewMessageHandler {
 		try {
 			const config = this.buildBaseConfig();
 			const sessions = await this.context.cli.listSessions(config);
-			return sessions
-				.filter(s => !s.parentID)
-				.map(s => ({
-					filename: s.id,
-					sessionId: s.id,
-					startTime: new Date(s.created || s.lastModified || 0).toISOString(),
-					endTime: new Date(s.lastModified || 0).toISOString(),
-					messageCount: 0,
-					totalCost: 0,
-					firstUserMessage: s.title || 'New Session',
-					lastUserMessage: '',
-					customTitle: s.title || undefined,
-				}))
-				.sort((a, b) => new Date(b.endTime).getTime() - new Date(a.endTime).getTime());
+			return (
+				sessions
+					.filter(s => !s.parentID)
+					// Filter out empty sessions (no title means user never sent a message)
+					.filter(s => s.title && s.title.trim() !== '')
+					.map(s => ({
+						filename: s.id,
+						sessionId: s.id,
+						startTime: new Date(s.created || s.lastModified || 0).toISOString(),
+						endTime: new Date(s.lastModified || 0).toISOString(),
+						messageCount: 0,
+						totalCost: 0,
+						firstUserMessage: s.title || 'New Session',
+						lastUserMessage: '',
+						customTitle: s.title || undefined,
+					}))
+					.sort((a, b) => new Date(b.endTime).getTime() - new Date(a.endTime).getTime())
+			);
 		} catch (error) {
 			logger.warn('[SessionHandler] Failed to list CLI sessions:', error);
 			return [];
@@ -701,6 +732,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		this.postLifecycle('created', sessionId);
 		this.postLifecycle('switched', sessionId, { isProcessing: false });
 		this.initializeSessionStats(sessionId);
+		this.persistOpenTabs(sessionId);
 
 		try {
 			const config = this.buildBaseConfig();
@@ -1223,6 +1255,37 @@ export class SessionHandler implements WebviewMessageHandler {
 
 	private clearSessionStats(sessionId: string): void {
 		this.sessionTotalsByUiSession.delete(sessionId);
+	}
+
+	private static readonly OPEN_TABS_KEY = 'primecode.openTabs';
+	private static readonly ACTIVE_TAB_KEY = 'primecode.activeTab';
+
+	/**
+	 * Persist the current set of open tabs and active tab to globalState.
+	 * @param activeSessionId - the tab to mark active (defaults to current)
+	 * @param excludeSessionId - a tab to remove (used on close)
+	 */
+	private persistOpenTabs(activeSessionId?: string, excludeSessionId?: string): void {
+		const tabs = [...this.context.sessionState.startedSessions];
+		const filtered = excludeSessionId ? tabs.filter(id => id !== excludeSessionId) : tabs;
+		const active = activeSessionId || this.context.sessionState.activeSessionId;
+
+		this.context.extensionContext.globalState.update(SessionHandler.OPEN_TABS_KEY, filtered);
+		this.context.extensionContext.globalState.update(SessionHandler.ACTIVE_TAB_KEY, active);
+
+		logger.debug('[SessionHandler] Persisted open tabs', {
+			count: filtered.length,
+			active,
+		});
+	}
+
+	private getPersistedTabs(): { openTabs: string[]; activeTab: string | undefined } {
+		const openTabs =
+			this.context.extensionContext.globalState.get<string[]>(SessionHandler.OPEN_TABS_KEY) || [];
+		const activeTab = this.context.extensionContext.globalState.get<string>(
+			SessionHandler.ACTIVE_TAB_KEY,
+		);
+		return { openTabs, activeTab };
 	}
 
 	private postLifecycle(

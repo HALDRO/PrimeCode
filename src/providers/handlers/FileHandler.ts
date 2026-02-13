@@ -52,7 +52,7 @@ export class FileHandler implements WebviewMessageHandler {
 	}
 
 	private async onOpenFileDiff(msg: CommandOf<'openFileDiff'>): Promise<void> {
-		const { filePath } = msg;
+		const { filePath, oldContent, newContent } = msg;
 
 		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 		const isAbsolute =
@@ -62,6 +62,55 @@ export class FileHandler implements WebviewMessageHandler {
 
 		const absolutePath =
 			!isAbsolute && root ? vscode.Uri.joinPath(vscode.Uri.file(root), filePath).fsPath : filePath;
+
+		// If we have old/new content, show an in-memory diff directly
+		if (oldContent !== undefined || newContent !== undefined) {
+			const fileName = absolutePath.split(/[\\/]/).pop() ?? 'file';
+			// Keep the original extension so VS Code detects language & icon
+			const ts = Date.now();
+			const oldUri = vscode.Uri.from({
+				scheme: 'primecode-diff',
+				path: `/before/${ts}/${fileName}`,
+			});
+			const newUri = vscode.Uri.from({
+				scheme: 'primecode-diff-new',
+				path: `/after/${ts}/${fileName}`,
+			});
+
+			const oldProvider = new (class implements vscode.TextDocumentContentProvider {
+				provideTextDocumentContent(): string {
+					return oldContent ?? '';
+				}
+			})();
+			const newProvider = new (class implements vscode.TextDocumentContentProvider {
+				provideTextDocumentContent(): string {
+					return newContent ?? '';
+				}
+			})();
+
+			const disposable1 = vscode.workspace.registerTextDocumentContentProvider(
+				'primecode-diff',
+				oldProvider,
+			);
+			const disposable2 = vscode.workspace.registerTextDocumentContentProvider(
+				'primecode-diff-new',
+				newProvider,
+			);
+
+			await vscode.commands.executeCommand(
+				'vscode.diff',
+				oldUri,
+				newUri,
+				`${fileName} (before ↔ after)`,
+			);
+
+			// Clean up providers after a delay (documents are already loaded)
+			setTimeout(() => {
+				disposable1.dispose();
+				disposable2.dispose();
+			}, 5000);
+			return;
+		}
 
 		await vscode.commands.executeCommand('primecode.openFileDiff', absolutePath);
 	}

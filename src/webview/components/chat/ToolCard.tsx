@@ -7,18 +7,23 @@
 import React, { type ReactNode, useMemo, useState } from 'react';
 // @ts-expect-error - normalizedEvents path issue in webview tsconfig
 import type { NormalizedEntry } from '../../../../common/normalizedEvents';
-import { computeDiffStats } from '../../../common/diffStats';
+
 import { isMcpTool, isToolMatch } from '../../constants';
 import { cn } from '../../lib/cn';
 import { useAccessRequestByToolUseId, useMcpServers, useToolResultByToolId } from '../../store';
 import type { Message as WebviewMessage } from '../../store/chatStore';
-import { formatToolName, getShortFileName } from '../../utils/format';
+import { formatToolName } from '../../utils/format';
 import { useVSCode } from '../../utils/vscode';
 import { ChevronDownIcon, CopyIcon, McpIcon, TerminalIcon, WandIcon } from '../icons';
 import { FileTypeIcon } from '../icons/FileTypeIcon';
 import { Button, IconButton, Tooltip } from '../ui';
 import { InlineToolAccessGate } from './InlineToolAccessGate';
-import { getDiffContentHeight, parseUnifiedDiffSnapshots, SimpleDiff } from './SimpleDiff';
+import {
+	computeSimpleStats,
+	getDiffContentHeight,
+	resolveDiffData,
+	SimpleDiff,
+} from './SimpleDiff';
 import { InlineToolLine } from './SimpleTool';
 
 export const TOOL_CARD_CLASSES =
@@ -31,187 +36,11 @@ const DEFAULT_TEXT_PREVIEW_LINES = 6;
 
 type ToolUse = Extract<WebviewMessage, { type: 'tool_use' }>;
 type ToolResult = Extract<WebviewMessage, { type: 'tool_result' }>;
-type AccessRequestMessage = Extract<WebviewMessage, { type: 'access_request' }>;
-
-type FileEditChange = {
-	type?: string;
-	content?: string;
-	unifiedDiff?: string;
-	oldContent?: string;
-	newContent?: string;
-};
-
-type FileEditAction = {
-	type: 'FileEdit';
-	path?: string;
-	changes?: FileEditChange[];
-};
-
-type ResolvedDiffData = {
-	oldContent: string;
-	newContent: string;
-	effectiveFilePath: string;
-	name: string;
-	hasDeleteChange: boolean;
-};
 
 const inlinePreview = (text: string, maxLines: number) => {
 	const lines = text.split('\n');
 	if (lines.length <= maxLines) return { preview: text, needsExpand: false };
 	return { preview: lines.slice(-maxLines).join('\n'), needsExpand: true };
-};
-
-const asRecord = (value: unknown): Record<string, unknown> | undefined =>
-	value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
-
-const getStringFromRecord = (
-	record: Record<string, unknown> | undefined,
-	keys: string[],
-): string | undefined => {
-	if (!record) return undefined;
-	for (const key of keys) {
-		const value = record[key];
-		if (typeof value === 'string' && value.length > 0) {
-			return value;
-		}
-	}
-	return undefined;
-};
-
-const resolveFileEditAction = (actionType: unknown): FileEditAction | null => {
-	const record = asRecord(actionType);
-	if (!record || record.type !== 'FileEdit') return null;
-
-	const changesRaw = record.changes;
-	const changes = Array.isArray(changesRaw)
-		? changesRaw.map(change => asRecord(change) as FileEditChange).filter(Boolean)
-		: [];
-
-	return {
-		type: 'FileEdit',
-		path: typeof record.path === 'string' ? record.path : undefined,
-		changes,
-	};
-};
-
-const resolveDiffFromAccessMetadata = (
-	accessRequest: AccessRequestMessage | undefined,
-): { oldContent: string; newContent: string; filePath?: string } | null => {
-	const accessRequestRecord = asRecord(accessRequest as unknown);
-	const metadata = asRecord(accessRequestRecord?.metadata);
-	const diffText = getStringFromRecord(metadata, ['diff']);
-	if (!diffText) return null;
-
-	const parsedSnapshots = parseUnifiedDiffSnapshots(diffText);
-	const filePath = getStringFromRecord(metadata, ['filepath', 'filePath', 'path']);
-	if (parsedSnapshots) {
-		return {
-			oldContent: parsedSnapshots.oldContent,
-			newContent: parsedSnapshots.newContent,
-			filePath,
-		};
-	}
-
-	return {
-		oldContent: '',
-		newContent: diffText,
-		filePath,
-	};
-};
-
-const resolveDiffData = (params: {
-	actionType: unknown;
-	toolResult: ToolResult | undefined;
-	accessRequest: AccessRequestMessage | undefined;
-	fallbackFilePath?: string;
-}): ResolvedDiffData => {
-	let oldContent = '';
-	let newContent = '';
-	let effectiveFilePath = '';
-	let hasDeleteChange = false;
-
-	const fileEditAction = resolveFileEditAction(params.actionType);
-
-	if (fileEditAction) {
-		effectiveFilePath = fileEditAction.path ?? '';
-		const primaryChange = fileEditAction.changes?.[0];
-		if (primaryChange) {
-			hasDeleteChange = primaryChange.type === 'Delete';
-			if (primaryChange.type === 'Write' && typeof primaryChange.content === 'string') {
-				newContent = primaryChange.content;
-			} else if (primaryChange.type === 'Edit' && typeof primaryChange.unifiedDiff === 'string') {
-				newContent = primaryChange.unifiedDiff;
-			} else if (primaryChange.type === 'Replace') {
-				oldContent = primaryChange.oldContent ?? '';
-				newContent = primaryChange.newContent ?? '';
-			}
-		}
-	}
-
-	const toolResultMetadata = asRecord(params.toolResult?.metadata);
-	const metadataFilePath = getStringFromRecord(toolResultMetadata, [
-		'filepath',
-		'filePath',
-		'path',
-	]);
-
-	const metadataFileDiffRaw = toolResultMetadata?.filediff;
-	const metadataFileDiff = Array.isArray(metadataFileDiffRaw)
-		? asRecord(metadataFileDiffRaw.find(item => item && typeof item === 'object'))
-		: asRecord(metadataFileDiffRaw);
-
-	if (metadataFileDiff) {
-		const before = getStringFromRecord(metadataFileDiff, ['before']);
-		const after = getStringFromRecord(metadataFileDiff, ['after']);
-		if (before !== undefined || after !== undefined) {
-			oldContent = before ?? '';
-			newContent = after ?? '';
-		}
-
-		const filediffPath = getStringFromRecord(metadataFileDiff, ['filepath', 'filePath', 'path']);
-		if (!effectiveFilePath && filediffPath) {
-			effectiveFilePath = filediffPath;
-		}
-	}
-
-	if (!newContent && !oldContent) {
-		const metadataUnifiedDiff = getStringFromRecord(toolResultMetadata, ['diff']);
-		if (metadataUnifiedDiff) {
-			const parsedSnapshots = parseUnifiedDiffSnapshots(metadataUnifiedDiff);
-			if (parsedSnapshots) {
-				oldContent = parsedSnapshots.oldContent;
-				newContent = parsedSnapshots.newContent;
-			} else {
-				newContent = metadataUnifiedDiff;
-			}
-		}
-	}
-
-	if (!newContent && !oldContent) {
-		const accessDiff = resolveDiffFromAccessMetadata(params.accessRequest);
-		if (accessDiff) {
-			oldContent = accessDiff.oldContent;
-			newContent = accessDiff.newContent;
-			if (!effectiveFilePath && accessDiff.filePath) {
-				effectiveFilePath = accessDiff.filePath;
-			}
-		}
-	}
-
-	if (!effectiveFilePath && metadataFilePath) {
-		effectiveFilePath = metadataFilePath;
-	}
-	if (!effectiveFilePath && params.fallbackFilePath) {
-		effectiveFilePath = params.fallbackFilePath;
-	}
-
-	return {
-		oldContent,
-		newContent,
-		effectiveFilePath,
-		name: effectiveFilePath ? getShortFileName(effectiveFilePath) : 'unknown',
-		hasDeleteChange,
-	};
 };
 
 const ToolCardLeadingIcon: React.FC<{ children: ReactNode; className?: string }> = ({
@@ -360,20 +189,16 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		if (isFileEdit) {
 			const resolved = resolveDiffData({
 				actionType,
-				toolResult,
-				accessRequest: accessRequest as AccessRequestMessage | undefined,
+				toolResultMetadata: toolResult?.metadata,
+				accessRequestRaw: accessRequest,
 				fallbackFilePath: filePath,
 			});
 
-			const oldContent = resolved.oldContent;
-			const newContent = resolved.newContent;
-			const effectiveFilePath = resolved.effectiveFilePath;
-			const name = resolved.name;
-
-			const hasContent = newContent || oldContent || resolved.hasDeleteChange;
+			const { oldContent, newContent, effectiveFilePath, name, hasDeleteChange } = resolved;
+			const hasContent = newContent || oldContent || hasDeleteChange;
 
 			if (hasContent) {
-				const stats = computeDiffStats(oldContent, newContent);
+				const stats = computeSimpleStats(oldContent, newContent);
 				const maxHeight = 120;
 				const needsExpand =
 					getDiffContentHeight(oldContent, newContent, {

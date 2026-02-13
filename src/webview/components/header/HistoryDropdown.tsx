@@ -36,7 +36,8 @@ const groupByDate = (
 	];
 
 	for (const conv of conversations) {
-		const date = new Date(conv.startTime);
+		// Use endTime (lastModified) for grouping — consistent with sort order
+		const date = new Date(conv.endTime || conv.startTime);
 		if (date >= today) {
 			groups[0].items.push(conv);
 		} else if (date >= yesterday) {
@@ -56,7 +57,7 @@ const groupByDate = (
 				id: conv.filename,
 				label: conv.customTitle || conv.firstUserMessage || 'Untitled',
 				icon: <MessageIcon size={14} />,
-				meta: formatRelativeTime(conv.startTime),
+				meta: formatRelativeTime(conv.endTime || conv.startTime),
 				data: conv,
 			})),
 		}));

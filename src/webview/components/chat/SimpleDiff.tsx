@@ -1,45 +1,163 @@
 /**
- * @file SimpleDiff - Advanced diff viewer component with LCS algorithm
- * @description Renders code diff with colored line indicators (green for added, red for removed).
- * Uses Myers diff algorithm (LCS-based) for accurate line-by-line comparison.
- * Supports unified diff format export and inline character-level highlighting.
- * Uses OverlayScrollbars for consistent scrollbar styling across the app.
+ * @file SimpleDiff - All diff logic in one place
+ * @description Diff data resolution, stats, and rendering.
+ * ToolCard imports helpers from here — it never touches diff internals.
  */
 
 import { OverlayScrollbarsComponent } from 'overlayscrollbars-react';
 import type React from 'react';
 import { Fragment, useMemo } from 'react';
-import { computeDiff } from '../../../common/diffStats';
 import { cn } from '../../lib/cn';
+import { getShortFileName } from '../../utils/format';
 
 const LINE_HEIGHT = 19;
-const DEFAULT_HUNK_CONTEXT_LINES = 2;
+const CONTEXT_LINES = 2;
 
-interface SimpleDiffProps {
-	original: string;
-	modified: string;
-	maxHeight?: number;
-	expanded?: boolean;
-	showLineNumbers?: boolean;
-	/**
-	 * When true (default), collapse large unchanged regions and keep only hunks
-	 * around changed lines.
-	 */
-	collapseUnchanged?: boolean;
-	/** Number of unchanged context lines to keep around each changed line (only when collapsing). */
-	contextLines?: number;
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+type LineType = 'added' | 'removed' | 'unchanged';
+
+interface DiffLine {
+	type: LineType;
+	content: string;
 }
 
-type BaseDiffLine = ReturnType<typeof computeDiff>[number];
+interface DisplayLine extends DiffLine {
+	/** Number of hidden unchanged lines before this line */
+	hiddenBefore?: number;
+}
 
-type DisplayDiffLine = BaseDiffLine & {
-	/** If present, render a separator before this line showing skipped unchanged lines */
-	separatorBefore?: number;
-};
+// ---------------------------------------------------------------------------
+// Simple line diff (no Myers)
+// ---------------------------------------------------------------------------
+
+function splitLines(s: string): string[] {
+	return s ? s.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n') : [];
+}
 
 /**
- * Best-effort parse for unified diff hunks ("@@ ... @@") into old/new content snapshots.
- * Returns null when input does not look like a valid unified diff with hunks.
+ * Build LCS table and backtrack to produce a line-level diff.
+ * O(n*m) but with early-outs for trivial cases (new file, delete, identical).
+ */
+function diffLines(oldText: string, newText: string): DiffLine[] {
+	const oldL = splitLines(oldText);
+	const newL = splitLines(newText);
+
+	if (oldL.length === 0 && newL.length === 0) return [];
+	if (oldL.length === 0) return newL.map(c => ({ type: 'added', content: c }));
+	if (newL.length === 0) return oldL.map(c => ({ type: 'removed', content: c }));
+
+	// Quick check: identical
+	if (oldText === newText) return oldL.map(c => ({ type: 'unchanged', content: c }));
+
+	const n = oldL.length;
+	const m = newL.length;
+
+	// LCS DP (space-optimised to two rows)
+	let prev = new Uint16Array(m + 1);
+	let curr = new Uint16Array(m + 1);
+
+	for (let i = 1; i <= n; i++) {
+		for (let j = 1; j <= m; j++) {
+			curr[j] = oldL[i - 1] === newL[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], curr[j - 1]);
+		}
+		[prev, curr] = [curr, prev];
+		curr.fill(0);
+	}
+
+	// Backtrack through full table to recover edit script
+	// We need the full table for backtracking, rebuild it
+	const dp: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+	for (let i = 1; i <= n; i++) {
+		for (let j = 1; j <= m; j++) {
+			dp[i][j] =
+				oldL[i - 1] === newL[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+		}
+	}
+
+	const result: DiffLine[] = [];
+	let i = n;
+	let j = m;
+	while (i > 0 || j > 0) {
+		if (i > 0 && j > 0 && oldL[i - 1] === newL[j - 1]) {
+			result.push({ type: 'unchanged', content: oldL[i - 1] });
+			i--;
+			j--;
+		} else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+			result.push({ type: 'added', content: newL[j - 1] });
+			j--;
+		} else {
+			result.push({ type: 'removed', content: oldL[i - 1] });
+			i--;
+		}
+	}
+
+	result.reverse();
+	return result;
+}
+
+// ---------------------------------------------------------------------------
+// Hunk collapsing
+// ---------------------------------------------------------------------------
+
+function collapseUnchanged(lines: DiffLine[], ctx = CONTEXT_LINES): DisplayLine[] {
+	if (lines.length === 0) return [];
+
+	const changed: number[] = [];
+	for (let i = 0; i < lines.length; i++) {
+		if (lines[i].type !== 'unchanged') changed.push(i);
+	}
+	if (changed.length === 0) return [];
+
+	// Build visible ranges (changed ± context)
+	const ranges: { start: number; end: number }[] = [];
+	for (const idx of changed) {
+		const start = Math.max(0, idx - ctx);
+		const end = Math.min(lines.length - 1, idx + ctx);
+		const last = ranges[ranges.length - 1];
+		if (last && start <= last.end + 1) {
+			last.end = Math.max(last.end, end);
+		} else {
+			ranges.push({ start, end });
+		}
+	}
+
+	const out: DisplayLine[] = [];
+	let prevEnd = -1;
+
+	for (const r of ranges) {
+		for (let i = r.start; i <= r.end; i++) {
+			const dl: DisplayLine = { ...lines[i] };
+			if (i === r.start && prevEnd >= 0 && r.start > prevEnd + 1) {
+				dl.hiddenBefore = r.start - prevEnd - 1;
+			}
+			out.push(dl);
+		}
+		prevEnd = r.end;
+	}
+
+	return out;
+}
+
+// ---------------------------------------------------------------------------
+// Public helpers (used by ToolCard)
+// ---------------------------------------------------------------------------
+
+export function getDiffContentHeight(
+	original: string,
+	modified: string,
+	options?: { collapseUnchanged?: boolean },
+): number {
+	const raw = diffLines(original, modified);
+	const display = options?.collapseUnchanged === false ? raw : collapseUnchanged(raw);
+	const separators = (display as DisplayLine[]).filter(l => l.hiddenBefore).length;
+	return (display.length + separators) * LINE_HEIGHT;
+}
+
+/**
+ * Best-effort parse for unified diff hunks ("@@ ... @@") into old/new snapshots.
  */
 export function parseUnifiedDiffSnapshots(
 	diffText: string,
@@ -56,11 +174,7 @@ export function parseUnifiedDiffSnapshots(
 			continue;
 		}
 		if (!inHunk) continue;
-
-		// Skip headers if they appear inside parsed chunk
-		if (line.startsWith('+++') || line.startsWith('---')) continue;
-		if (line.startsWith('\\')) continue; // e.g. "\\ No newline at end of file"
-
+		if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('\\')) continue;
 		if (line.startsWith('+')) {
 			newLines.push(line.slice(1));
 			sawChange = true;
@@ -72,198 +186,174 @@ export function parseUnifiedDiffSnapshots(
 			continue;
 		}
 		if (line.startsWith(' ')) {
-			const ctx = line.slice(1);
-			oldLines.push(ctx);
-			newLines.push(ctx);
+			const c = line.slice(1);
+			oldLines.push(c);
+			newLines.push(c);
 		}
 	}
 
-	if (!inHunk) return null;
-	if (!sawChange && oldLines.length === 0 && newLines.length === 0) return null;
+	if (!inHunk || (!sawChange && oldLines.length === 0 && newLines.length === 0)) return null;
+	return { oldContent: oldLines.join('\n'), newContent: newLines.join('\n') };
+}
+
+// ---------------------------------------------------------------------------
+// Diff data resolution (used by ToolCard)
+// ---------------------------------------------------------------------------
+
+export type ResolvedDiffData = {
+	oldContent: string;
+	newContent: string;
+	effectiveFilePath: string;
+	name: string;
+	hasDeleteChange: boolean;
+};
+
+const asRecord = (value: unknown): Record<string, unknown> | undefined =>
+	value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
+
+const getString = (
+	rec: Record<string, unknown> | undefined,
+	keys: string[],
+): string | undefined => {
+	if (!rec) return undefined;
+	for (const k of keys) {
+		const v = rec[k];
+		if (typeof v === 'string' && v.length > 0) return v;
+	}
+	return undefined;
+};
+
+/**
+ * Resolve old/new content from various sources (actionType, toolResult metadata, accessRequest).
+ * Single entry point — ToolCard just passes raw data, SimpleDiff figures out the diff.
+ */
+export function resolveDiffData(params: {
+	actionType: unknown;
+	toolResultMetadata?: unknown;
+	accessRequestRaw?: unknown;
+	fallbackFilePath?: string;
+}): ResolvedDiffData {
+	let oldContent = '';
+	let newContent = '';
+	let effectiveFilePath = '';
+	let hasDeleteChange = false;
+
+	// 1. ActionType (FileEdit from NormalizedEntry)
+	const actionRec = asRecord(params.actionType);
+	if (actionRec?.type === 'FileEdit') {
+		effectiveFilePath = typeof actionRec.path === 'string' ? actionRec.path : '';
+		const changesRaw = actionRec.changes;
+		const change = Array.isArray(changesRaw) ? asRecord(changesRaw[0]) : undefined;
+		if (change) {
+			hasDeleteChange = change.type === 'Delete';
+			if (change.type === 'Write' && typeof change.content === 'string') {
+				newContent = change.content;
+			} else if (change.type === 'Edit' && typeof change.unifiedDiff === 'string') {
+				newContent = change.unifiedDiff;
+			} else if (change.type === 'Replace') {
+				oldContent = typeof change.oldContent === 'string' ? change.oldContent : '';
+				newContent = typeof change.newContent === 'string' ? change.newContent : '';
+			}
+		}
+	}
+
+	// 2. Tool result metadata (filediff, diff)
+	const meta = asRecord(params.toolResultMetadata);
+	const metaPath = getString(meta, ['filepath', 'filePath', 'path']);
+
+	const fileDiffRaw = meta?.filediff;
+	const fileDiff = Array.isArray(fileDiffRaw)
+		? asRecord(fileDiffRaw.find(item => item && typeof item === 'object'))
+		: asRecord(fileDiffRaw);
+
+	if (fileDiff) {
+		const before = getString(fileDiff, ['before']);
+		const after = getString(fileDiff, ['after']);
+		if (before !== undefined || after !== undefined) {
+			oldContent = before ?? '';
+			newContent = after ?? '';
+		}
+		const fdPath = getString(fileDiff, ['filepath', 'filePath', 'path']);
+		if (!effectiveFilePath && fdPath) effectiveFilePath = fdPath;
+	}
+
+	if (!newContent && !oldContent) {
+		const unifiedDiff = getString(meta, ['diff']);
+		if (unifiedDiff) {
+			const parsed = parseUnifiedDiffSnapshots(unifiedDiff);
+			if (parsed) {
+				oldContent = parsed.oldContent;
+				newContent = parsed.newContent;
+			} else {
+				newContent = unifiedDiff;
+			}
+		}
+	}
+
+	// 3. Access request metadata
+	if (!newContent && !oldContent) {
+		const accRec = asRecord(params.accessRequestRaw);
+		const accMeta = asRecord(accRec?.metadata);
+		const diffText = getString(accMeta, ['diff']);
+		if (diffText) {
+			const parsed = parseUnifiedDiffSnapshots(diffText);
+			if (parsed) {
+				oldContent = parsed.oldContent;
+				newContent = parsed.newContent;
+			} else {
+				newContent = diffText;
+			}
+			const accPath = getString(accMeta, ['filepath', 'filePath', 'path']);
+			if (!effectiveFilePath && accPath) effectiveFilePath = accPath;
+		}
+	}
+
+	if (!effectiveFilePath && metaPath) effectiveFilePath = metaPath;
+	if (!effectiveFilePath && params.fallbackFilePath) effectiveFilePath = params.fallbackFilePath;
 
 	return {
-		oldContent: oldLines.join('\n'),
-		newContent: newLines.join('\n'),
+		oldContent,
+		newContent,
+		effectiveFilePath,
+		name: effectiveFilePath ? getShortFileName(effectiveFilePath) : 'unknown',
+		hasDeleteChange,
 	};
 }
 
-function groupIntoHunks(diffLines: BaseDiffLine[], contextLines = 1): DisplayDiffLine[] {
-	if (diffLines.length === 0) return [];
-
-	// Find indices of all changed lines
-	const changedIndices: number[] = [];
-	for (let i = 0; i < diffLines.length; i++) {
-		if (diffLines[i].type !== 'unchanged') {
-			changedIndices.push(i);
-		}
-	}
-
-	// If no changes, return empty
-	if (changedIndices.length === 0) {
-		return [];
-	}
-
-	// Build ranges that should be included (changed lines + context)
-	const includedRanges: Array<{ start: number; end: number }> = [];
-
-	for (const idx of changedIndices) {
-		const start = Math.max(0, idx - contextLines);
-		const end = Math.min(diffLines.length - 1, idx + contextLines);
-
-		// Merge with previous range if overlapping or adjacent
-		if (includedRanges.length > 0) {
-			const lastRange = includedRanges[includedRanges.length - 1];
-			if (start <= lastRange.end + 1) {
-				lastRange.end = Math.max(lastRange.end, end);
-				continue;
-			}
-		}
-
-		includedRanges.push({ start, end });
-	}
-
-	// Build the display lines with separatorBefore markers
-	const result: DisplayDiffLine[] = [];
-	let lastEnd = -1;
-
-	for (const range of includedRanges) {
-		for (let i = range.start; i <= range.end; i++) {
-			const line: DisplayDiffLine = { ...diffLines[i] };
-
-			// Add separator marker on first line of hunk if there's a gap
-			// Skip separator for the very first hunk - no need to show "hidden lines" at the top
-			if (i === range.start) {
-				if (lastEnd >= 0 && range.start > lastEnd + 1) {
-					// Gap between hunks - show hidden lines count
-					line.separatorBefore = range.start - lastEnd - 1;
-				}
-			}
-
-			result.push(line);
-		}
-
-		lastEnd = range.end;
-	}
-
-	return result;
+/** Simple line-count based stats for +N / -N display */
+export function computeSimpleStats(oldContent: string, newContent: string) {
+	const oldLines = oldContent ? oldContent.split('\n').length : 0;
+	const newLines = newContent ? newContent.split('\n').length : 0;
+	return { added: Math.max(0, newLines - oldLines), removed: Math.max(0, oldLines - newLines) };
 }
 
-/**
- * Calculate content height based on displayed lines count (hunks with context)
- */
-export function getDiffContentHeight(
-	original: string,
-	modified: string,
-	options?: { collapseUnchanged?: boolean; contextLines?: number },
-): number {
-	const diffLines = computeDiff(original, modified);
-	const collapseUnchanged = options?.collapseUnchanged ?? true;
-	const contextLines = options?.contextLines ?? DEFAULT_HUNK_CONTEXT_LINES;
-	const displayLines: DisplayDiffLine[] = collapseUnchanged
-		? groupIntoHunks(diffLines, contextLines)
-		: diffLines.map(l => ({ ...l }));
-	// Count separators (lines with separatorBefore) as additional height
-	const separatorCount = displayLines.filter(l => l.separatorBefore !== undefined).length;
-	return (displayLines.length + separatorCount) * LINE_HEIGHT;
+// ---------------------------------------------------------------------------
+// Props
+// ---------------------------------------------------------------------------
+
+interface SimpleDiffProps {
+	original: string;
+	modified: string;
+	maxHeight?: number;
+	expanded?: boolean;
+	collapseUnchanged?: boolean;
 }
 
-/**
- * Format diff as unified diff string (for copying)
- */
-export function formatAsUnifiedDiff(original: string, modified: string, fileName?: string): string {
-	const diffLines = computeDiff(original, modified);
-	const result: string[] = [];
-
-	if (fileName) {
-		result.push(`--- a/${fileName}`);
-		result.push(`+++ b/${fileName}`);
-	}
-
-	// Group changes into hunks
-	const hunks: Array<{ start: number; lines: BaseDiffLine[] }> = [];
-	let currentHunk: BaseDiffLine[] = [];
-	let hunkStart = 0;
-	let contextBefore = 0;
-
-	for (let i = 0; i < diffLines.length; i++) {
-		const line = diffLines[i];
-
-		if (line.type !== 'unchanged') {
-			// Start new hunk if needed
-			if (currentHunk.length === 0) {
-				// Add up to 3 lines of context before
-				const contextStart = Math.max(0, i - 3);
-				hunkStart = contextStart;
-				for (let j = contextStart; j < i; j++) {
-					currentHunk.push(diffLines[j]);
-				}
-			}
-			currentHunk.push(line);
-			contextBefore = 0;
-		} else if (currentHunk.length > 0) {
-			currentHunk.push(line);
-			contextBefore++;
-
-			// End hunk after 3 lines of context
-			if (contextBefore >= 3) {
-				hunks.push({ start: hunkStart, lines: currentHunk });
-				currentHunk = [];
-				contextBefore = 0;
-			}
-		}
-	}
-
-	// Don't forget the last hunk
-	if (currentHunk.length > 0) {
-		hunks.push({ start: hunkStart, lines: currentHunk });
-	}
-
-	// Format hunks
-	for (const hunk of hunks) {
-		const oldStart = hunk.lines[0]?.oldLineNumber || 1;
-		const newStart = hunk.lines[0]?.newLineNumber || 1;
-		const oldCount = hunk.lines.filter(l => l.type !== 'added').length;
-		const newCount = hunk.lines.filter(l => l.type !== 'removed').length;
-
-		result.push(`@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`);
-
-		for (const line of hunk.lines) {
-			const prefix = line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' ';
-			result.push(`${prefix}${line.content}`);
-		}
-	}
-
-	return result.join('\n');
-}
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
 
 export const SimpleDiff: React.FC<SimpleDiffProps> = ({
 	original,
 	modified,
 	maxHeight = 120,
 	expanded = false,
-	showLineNumbers = false,
-	collapseUnchanged = true,
-	contextLines = DEFAULT_HUNK_CONTEXT_LINES,
+	collapseUnchanged: collapse = true,
 }) => {
-	const diffLines = useMemo(() => computeDiff(original, modified), [original, modified]);
-	const displayLines = useMemo(
-		(): DisplayDiffLine[] =>
-			collapseUnchanged ? groupIntoHunks(diffLines, contextLines) : diffLines.map(l => ({ ...l })),
-		[diffLines, collapseUnchanged, contextLines],
-	);
-
-	const maxHeightStyle = expanded ? undefined : `${maxHeight}px`;
-
-	// Find first and last line for rounded corners
-	const firstLine = displayLines[0];
-	const lastLine = displayLines[displayLines.length - 1];
-
-	// Calculate max line number width for alignment
-	const maxLineNum = Math.max(
-		...displayLines.map(l => Math.max(l.oldLineNumber || 0, l.newLineNumber || 0)),
-		1,
-	);
-	const lineNumWidth = showLineNumbers ? `${String(maxLineNum).length * 8 + 8}px` : '0px';
+	const displayLines = useMemo(() => {
+		const raw = diffLines(original, modified);
+		return collapse ? collapseUnchanged(raw) : raw.map<DisplayLine>(l => ({ ...l }));
+	}, [original, modified, collapse]);
 
 	if (displayLines.length === 0) {
 		return (
@@ -273,9 +363,12 @@ export const SimpleDiff: React.FC<SimpleDiffProps> = ({
 		);
 	}
 
+	const first = displayLines[0];
+	const last = displayLines[displayLines.length - 1];
+
 	return (
 		<OverlayScrollbarsComponent
-			style={{ maxHeight: maxHeightStyle }}
+			style={{ maxHeight: expanded ? undefined : `${maxHeight}px` }}
 			className="bg-(--tool-bg-header)"
 			options={{
 				scrollbars: {
@@ -284,47 +377,41 @@ export const SimpleDiff: React.FC<SimpleDiffProps> = ({
 					autoHideDelay: 800,
 					clickScroll: true,
 				},
-				overflow: {
-					x: 'scroll',
-					y: 'scroll',
-				},
+				overflow: { x: 'scroll', y: 'scroll' },
 			}}
 			defer
 		>
 			<div className="min-w-fit relative">
-				{/* Rounded cap at top */}
+				{/* Top rounded cap */}
 				<div
 					className={cn(
 						'absolute top-0 left-0 w-(--border-indicator) h-1.5 rounded-tr-(--gap-1) z-1',
-						firstLine?.type === 'added'
+						first.type === 'added'
 							? 'bg-success'
-							: firstLine?.type === 'removed'
+							: first.type === 'removed'
 								? 'bg-error'
 								: 'bg-transparent',
 					)}
 				/>
-				{/* Rounded cap at bottom */}
+				{/* Bottom rounded cap */}
 				<div
 					className={cn(
 						'absolute bottom-0 left-0 w-(--border-indicator) h-1.5 rounded-br-(--gap-1) z-1',
-						lastLine?.type === 'added'
+						last.type === 'added'
 							? 'bg-success'
-							: lastLine?.type === 'removed'
+							: last.type === 'removed'
 								? 'bg-error'
 								: 'bg-transparent',
 					)}
 				/>
+
 				{displayLines.map((line, idx) => (
-					<Fragment
-						key={`${idx}-${line.type}-${line.oldLineNumber ?? ''}-${line.newLineNumber ?? ''}`}
-					>
-						{/* Hidden lines separator - styled like reference screenshot */}
-						{line.separatorBefore !== undefined && line.separatorBefore > 0 && (
+					<Fragment key={`${idx}-${line.type}-${line.content.length}`}>
+						{line.hiddenBefore != null && line.hiddenBefore > 0 && (
 							<div className="flex items-center h-(--line-height-diff) px-2 text-xs text-vscode-descriptionForeground select-none bg-(--tool-bg-header)">
-								<span className="opacity-70">— {line.separatorBefore} hidden lines —</span>
+								<span className="opacity-70">— {line.hiddenBefore} hidden lines —</span>
 							</div>
 						)}
-						{/* Actual diff line */}
 						<div
 							className={cn(
 								'flex items-stretch min-h-(--line-height-diff) leading-(--line-height-diff) text-sm',
@@ -335,7 +422,6 @@ export const SimpleDiff: React.FC<SimpleDiffProps> = ({
 										: '',
 							)}
 						>
-							{/* Color indicator */}
 							<div
 								className={cn(
 									'w-(--border-indicator) shrink-0',
@@ -346,22 +432,6 @@ export const SimpleDiff: React.FC<SimpleDiffProps> = ({
 											: 'bg-transparent',
 								)}
 							/>
-
-							{/* Line numbers */}
-							{showLineNumbers && (
-								<div
-									className="shrink-0 text-right pr-2 text-vscode-descriptionForeground opacity-50 select-none"
-									style={{ width: lineNumWidth }}
-								>
-									{line.type === 'removed'
-										? line.oldLineNumber
-										: line.type === 'added'
-											? line.newLineNumber
-											: line.oldLineNumber}
-								</div>
-							)}
-
-							{/* Content */}
 							<pre
 								className={cn(
 									'm-0 px-2 whitespace-pre text-vscode-foreground flex-1',
