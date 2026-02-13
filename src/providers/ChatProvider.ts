@@ -4,7 +4,7 @@ import { computeDiffStats } from '../common/diffStats';
 import type { WebviewCommand } from '../common/webviewCommands';
 import { type CLIEvent, CLIRunner } from '../core/CLIRunner';
 import type { ServiceRegistry } from '../core/ServiceRegistry';
-import { SessionState } from '../core/SessionState';
+import { SessionGraph, SessionState } from '../core/SessionManager';
 import { Settings } from '../core/Settings';
 import { logger } from '../utils/logger';
 import { getHtml } from '../utils/webviewHtml';
@@ -89,8 +89,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private sessionState: SessionState;
 	private disposables: vscode.Disposable[] = [];
 
-	private activeAssistantPartId: string | null = null;
-	private subSessionParentMap = new Map<string, string>();
+	/** Per-session active assistant part IDs — avoids cross-contamination between concurrent subagents. */
+	private activeAssistantPartIds = new Map<string, string>();
+	private sessionGraph = new SessionGraph();
 	private openCodeInitTimer: ReturnType<typeof setInterval> | null = null;
 
 	// Handlers
@@ -122,6 +123,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			view: { postMessage: msg => this.postMessage(msg) },
 			sessionState: this.sessionState,
 			services: this.services,
+			sessionGraph: this.sessionGraph,
 		});
 
 		const handlerContext: HandlerContext = {
@@ -131,6 +133,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			view: { postMessage: msg => this.postMessage(msg) },
 			sessionState: this.sessionState,
 			services: this.services,
+			sessionGraph: this.sessionGraph,
 			registerCheckpoint: (commitId, record) =>
 				this.restoreHandler.registerCheckpoint(commitId, record),
 		};
@@ -571,37 +574,29 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			return;
 		}
 
-		let targetSessionId = event.sessionId || this.sessionState.activeSessionId;
-
-		// Check if this session is a sub-session mapped to a parent
-		if (event.sessionId && this.subSessionParentMap.has(event.sessionId)) {
-			targetSessionId = this.subSessionParentMap.get(event.sessionId) ?? targetSessionId;
-		}
+		// Resolve target session: events always go to their own session bucket.
+		// Child session events stay in the child bucket — the parent only holds the subtask card.
+		const targetSessionId = event.sessionId || this.sessionState.activeSessionId;
 
 		if (!targetSessionId) {
 			logger.warn(`[ChatProvider] Dropping event ${event.type}: no active session`);
 			return;
 		}
 
+		// Determine if this event belongs to a known child session
+		const isChildSession = this.sessionGraph.isChild(targetSessionId);
+
 		switch (event.type) {
 			case 'normalized_log': {
-				// Pure data event for history/logs, no direct UI message by default
-				// but can be attached to other messages or used for auditing
-				// We don't need to post it as a separate session message unless requested
 				break;
 			}
 
 			case 'finished': {
-				if (this.activeAssistantPartId) {
-					this.sessionHandler.postComplete(
-						this.activeAssistantPartId,
-						this.activeAssistantPartId,
-						targetSessionId,
-					);
-					this.activeAssistantPartId = null;
+				const finishedPartId = this.activeAssistantPartIds.get(targetSessionId);
+				if (finishedPartId) {
+					this.sessionHandler.postComplete(finishedPartId, finishedPartId, targetSessionId);
+					this.activeAssistantPartIds.delete(targetSessionId);
 				}
-				// Stop guard: don't overwrite forced 'idle' with another 'idle' from SSE
-				// (harmless but avoids confusing log noise and potential flicker)
 				if (!this.sessionState.isStopGuarded()) {
 					this.sessionHandler.postStatus(targetSessionId, 'idle', 'Ready');
 				}
@@ -610,19 +605,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 			case 'message': {
 				const e = event.data as { content?: string; partId?: string; isDelta?: boolean };
-				const partId = e.partId || this.activeAssistantPartId || `part-${now}`;
-				this.activeAssistantPartId = partId;
+				const partId =
+					e.partId || this.activeAssistantPartIds.get(targetSessionId) || `part-${now}`;
+				this.activeAssistantPartIds.set(targetSessionId, partId);
 
-				// Determine context: prefer event.sessionId mapping
-				let contextId: string | undefined;
-				const messageTargetSessionId = targetSessionId;
-
-				if (event.sessionId && this.subSessionParentMap.has(event.sessionId)) {
-					// Message from a known sub-session
-					contextId = event.sessionId;
-				}
-
-				// Ensure unique ID for assistant message distinct from thinking block with same partId
 				const messageId = partId.startsWith('msg-') ? partId : `msg-${partId}`;
 
 				this.sessionHandler.postSessionMessage(
@@ -635,9 +621,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 						isDelta: e.isDelta ?? true,
 						timestamp: new Date().toISOString(),
 						normalizedEntry: event.normalizedEntry,
-						contextId,
+						contextId: isChildSession ? targetSessionId : undefined,
 					},
-					messageTargetSessionId,
+					targetSessionId,
 				);
 				break;
 			}
@@ -646,15 +632,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				const e = event.data as { content?: string; partId?: string; isDelta?: boolean };
 				const partId = e.partId || `thinking-${now}`;
 
-				// Determine context: prefer event.sessionId mapping
-				let contextId: string | undefined;
-				const thinkingTargetSessionId = targetSessionId;
-
-				if (event.sessionId && this.subSessionParentMap.has(event.sessionId)) {
-					contextId = event.sessionId;
-				}
-
-				// Ensure unique ID for thinking block distinct from assistant message with same partId
 				const thinkingId = partId.startsWith('thinking-') ? partId : `thinking-${partId}`;
 
 				this.sessionHandler.postSessionMessage(
@@ -665,9 +642,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 						content: e.content || '',
 						isDelta: e.isDelta ?? false,
 						timestamp: new Date().toISOString(),
-						contextId,
+						contextId: isChildSession ? targetSessionId : undefined,
 					},
-					thinkingTargetSessionId,
+					targetSessionId,
 				);
 				break;
 			}
@@ -684,11 +661,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 			case 'error': {
 				const errorId = `error-${now}`;
-				const contextId =
-					event.sessionId && this.subSessionParentMap.has(event.sessionId)
-						? event.sessionId
-						: undefined;
-
 				this.sessionHandler.postSessionMessage(
 					{
 						id: errorId,
@@ -697,7 +669,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 						isError: true,
 						timestamp: new Date().toISOString(),
 						normalizedEntry: event.normalizedEntry,
-						contextId,
+						contextId: isChildSession ? targetSessionId : undefined,
 					},
 					targetSessionId,
 				);
@@ -828,15 +800,18 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		const toolName = (e.name as string) || (e.tool as string) || 'unknown';
 
 		if (toolName === 'task') {
-			// Register this sub-session to the current active session (Parent)
-			const parentSessionId = this.sessionState.activeSessionId;
-			// The event.sessionId here is likely the *Sub-Session* ID (allocated by OpenCode executor)
-			if (parentSessionId && event.sessionId && event.sessionId !== parentSessionId) {
-				this.subSessionParentMap.set(event.sessionId, parentSessionId);
+			const childSessionId = event.sessionId;
+			// Resolve parent from graph first, fall back to active session
+			const parentSessionId =
+				(childSessionId && this.sessionGraph.getParent(childSessionId)) ||
+				this.sessionState.activeSessionId;
+
+			// Register in the session graph using the toolUseId as the explicit link
+			if (parentSessionId && childSessionId && childSessionId !== parentSessionId) {
+				this.sessionGraph.registerChild(childSessionId, parentSessionId, toolUseId);
 			}
 
 			const input = (e.input as Record<string, unknown>) || {};
-			const childSessionId = event.sessionId;
 
 			this.sessionHandler.postSessionMessage(
 				{
@@ -854,7 +829,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					isRunning: true,
 					timestamp: new Date().toISOString(),
 					normalizedEntry: event.normalizedEntry,
-					// Backend-first: contextId points to the REAL child session
 					contextId: childSessionId,
 					metadata: childSessionId ? { childSessionId } : undefined,
 				},
@@ -863,14 +837,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			return;
 		}
 
-		// Check if this tool use belongs to a known sub-session
-		let contextId: string | undefined;
-		const toolUseTargetSessionId = targetSessionId;
-
-		if (event.sessionId && this.subSessionParentMap.has(event.sessionId)) {
-			contextId = event.sessionId;
-		}
-
+		// Non-task tool: route to the event's own session bucket
 		this.sessionHandler.postSessionMessage(
 			{
 				id: toolUseId,
@@ -883,9 +850,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				isRunning: true,
 				timestamp: new Date().toISOString(),
 				normalizedEntry: event.normalizedEntry,
-				contextId,
+				contextId: this.sessionGraph.isChild(targetSessionId) ? targetSessionId : undefined,
 			},
-			toolUseTargetSessionId,
+			targetSessionId,
 		);
 	}
 
@@ -907,7 +874,16 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			);
 			const extractedChildSessionId = sessionIdMatch ? sessionIdMatch[1].trim() : undefined;
 
-			const childSessionId = event.sessionId ?? extractedChildSessionId;
+			const childSessionId =
+				this.sessionGraph.getChildByTaskId(toolUseId) ?? event.sessionId ?? extractedChildSessionId;
+
+			// Resolve parent from graph first, fall back to active session
+			const parentSessionId =
+				(childSessionId && this.sessionGraph.getParent(childSessionId)) ||
+				this.sessionState.activeSessionId;
+			if (childSessionId && parentSessionId && !this.sessionGraph.isChild(childSessionId)) {
+				this.sessionGraph.registerChild(childSessionId, parentSessionId, toolUseId);
+			}
 
 			this.sessionHandler.postSessionMessage(
 				{
@@ -921,20 +897,14 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					timestamp: new Date().toISOString(),
 					normalizedEntry: event.normalizedEntry,
 				},
-				// Card lives in parent
-				this.sessionState.activeSessionId,
+				parentSessionId,
 			);
-			this.sessionHandler.postComplete(toolUseId, toolUseId, this.sessionState.activeSessionId);
+			this.sessionHandler.postComplete(toolUseId, toolUseId, parentSessionId);
 			return;
 		}
 
-		// Determine context for subagent tool results
-		let contextId: string | undefined;
-		const toolResultTargetSessionId = targetSessionId;
-
-		if (event.sessionId && this.subSessionParentMap.has(event.sessionId)) {
-			contextId = event.sessionId;
-		}
+		// Non-task tool result: route to the event's own session bucket
+		const isChildSession = this.sessionGraph.isChild(targetSessionId);
 
 		const toolInputRaw = e.input;
 		let emittedFileChange = false;
@@ -954,9 +924,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					isRunning: false,
 					timestamp: new Date().toISOString(),
 					normalizedEntry: event.normalizedEntry,
-					contextId,
+					contextId: isChildSession ? targetSessionId : undefined,
 				},
-				toolResultTargetSessionId,
+				targetSessionId,
 			);
 
 			if (filePath && !emittedFileChange) {
@@ -987,7 +957,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 					this.postMessage({
 						type: 'session_event',
-						targetId: toolResultTargetSessionId,
+						targetId: targetSessionId,
 						eventType: 'file',
 						payload: {
 							eventType: 'file',
@@ -999,7 +969,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 							toolUseId,
 						},
 						timestamp: Date.now(),
-						sessionId: toolResultTargetSessionId,
+						sessionId: targetSessionId,
 					} satisfies SessionEventMessage);
 					emittedFileChange = true;
 				}
@@ -1028,11 +998,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 						: undefined,
 				timestamp: new Date().toISOString(),
 				normalizedEntry: event.normalizedEntry,
-				contextId,
+				contextId: isChildSession ? targetSessionId : undefined,
 			},
-			toolResultTargetSessionId,
+			targetSessionId,
 		);
-		this.sessionHandler.postComplete(toolUseId, toolUseId, toolResultTargetSessionId);
+		this.sessionHandler.postComplete(toolUseId, toolUseId, targetSessionId);
 	}
 
 	private handleSettingsChange(): void {

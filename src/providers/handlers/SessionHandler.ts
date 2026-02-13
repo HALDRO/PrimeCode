@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import type {
+	ConversationIndexEntry,
 	OpenCodeProviderData,
 	SessionEventMessage,
 	SessionLifecycleMessage,
@@ -32,12 +33,7 @@ export class SessionHandler implements WebviewMessageHandler {
 	private improvePromptController: AbortController | null = null;
 	private improvePromptActiveRequestId: string | null = null;
 
-	constructor(private context: HandlerContext) {
-		// Inject CLI runner into ConversationService
-		if (this.context.services.conversationService) {
-			this.context.services.conversationService.setCLIRunner(this.context.cli);
-		}
-	}
+	constructor(private context: HandlerContext) {}
 
 	async handleMessage(msg: WebviewCommand): Promise<void> {
 		switch (msg.type) {
@@ -299,19 +295,21 @@ export class SessionHandler implements WebviewMessageHandler {
 
 	/**
 	 * Loads a session's full history (including child subagent sessions) from CLI
-	 * and replays it into the webview. Reused by both onWebviewDidLaunch and onLoadConversation.
+	 * and replays it into the webview. Uses SessionGraph for parent↔child linkage.
 	 */
 	private async replaySessionFromCLI(
 		sessionId: string,
 		config: { provider: 'opencode'; workspaceRoot: string },
 	): Promise<void> {
+		const graph = this.context.sessionGraph;
+
 		const allSessions = await this.context.cli.listSessions(config);
 		const childSessions = allSessions
 			.filter(s => s.parentID === sessionId)
 			.sort((a, b) => (a.created || 0) - (b.created || 0));
 		const childSessionIds = childSessions.map(s => s.id);
 
-		// Map task toolUseId -> child session id
+		// Extract task toolUseIds from parent history to build graph links
 		const parentHistory = await this.context.cli.getHistory(sessionId, config);
 		const taskToolUseIds: string[] = [];
 		for (const ev of parentHistory) {
@@ -322,13 +320,11 @@ export class SessionHandler implements WebviewMessageHandler {
 				}
 			}
 		}
-		const taskToChildSessionId = new Map<string, string>();
-		for (let i = 0; i < taskToolUseIds.length; i++) {
-			const childId = childSessionIds[i];
-			if (childId) taskToChildSessionId.set(taskToolUseIds[i], childId);
-		}
 
-		// Replay child sessions
+		// Register all parent↔child links in the graph (single source of truth)
+		graph.registerChildrenFromHistory(sessionId, taskToolUseIds, childSessionIds);
+
+		// Replay child sessions into their own buckets
 		for (const child of childSessions) {
 			const childHistory = await this.context.cli.getHistory(child.id, config);
 			this.replayHistoryIntoSession(child.id, childHistory);
@@ -353,14 +349,14 @@ export class SessionHandler implements WebviewMessageHandler {
 			}
 		}
 
-		// Replay parent history
+		// Replay parent history, using graph for task→child resolution
 		if (parentHistory.length > 0) {
 			logger.info(
 				`[SessionHandler] Replaying ${parentHistory.length} events for session ${sessionId}`,
 			);
 			this.replayHistoryIntoSession(sessionId, parentHistory, {
 				mode: 'parent',
-				taskToChildSessionId,
+				parentSessionId: sessionId,
 			});
 		}
 	}
@@ -647,7 +643,7 @@ export class SessionHandler implements WebviewMessageHandler {
 
 	private async onGetConversationList(): Promise<void> {
 		try {
-			const conversations = await this.context.services.conversationService.listConversations();
+			const conversations = await this.listConversationsFromCLI();
 			logger.info('[SessionHandler] Sending conversation list to webview', {
 				count: conversations.length,
 				titles: conversations.slice(0, 5).map(c => c.customTitle || c.firstUserMessage),
@@ -662,6 +658,31 @@ export class SessionHandler implements WebviewMessageHandler {
 				type: 'conversationList',
 				data: [],
 			});
+		}
+	}
+
+	/** Inline replacement for ConversationService — lists top-level sessions from CLI. */
+	private async listConversationsFromCLI(): Promise<ConversationIndexEntry[]> {
+		try {
+			const config = this.buildBaseConfig();
+			const sessions = await this.context.cli.listSessions(config);
+			return sessions
+				.filter(s => !s.parentID)
+				.map(s => ({
+					filename: s.id,
+					sessionId: s.id,
+					startTime: new Date(s.created || s.lastModified || 0).toISOString(),
+					endTime: new Date(s.lastModified || 0).toISOString(),
+					messageCount: 0,
+					totalCost: 0,
+					firstUserMessage: s.title || 'New Session',
+					lastUserMessage: '',
+					customTitle: s.title || undefined,
+				}))
+				.sort((a, b) => new Date(b.endTime).getTime() - new Date(a.endTime).getTime());
+		} catch (error) {
+			logger.warn('[SessionHandler] Failed to list CLI sessions:', error);
+			return [];
 		}
 	}
 
@@ -696,7 +717,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		history: CLIEvent[],
 		options?: {
 			mode?: 'default' | 'parent';
-			taskToChildSessionId?: Map<string, string>;
+			parentSessionId?: string;
 		},
 	): void {
 		for (const event of history) {
@@ -806,7 +827,8 @@ export class SessionHandler implements WebviewMessageHandler {
 								: undefined;
 
 				if (options?.mode === 'parent' && toolName === 'task') {
-					const childSessionId = options.taskToChildSessionId?.get(toolUseId);
+					const graph = this.context.sessionGraph;
+					const childSessionId = graph.getChildByTaskId(toolUseId);
 					this.postSessionMessage(
 						{
 							id: toolUseId,
@@ -859,7 +881,8 @@ export class SessionHandler implements WebviewMessageHandler {
 						: undefined;
 
 				if (options?.mode === 'parent' && toolName === 'task') {
-					const childSessionId = options.taskToChildSessionId?.get(toolUseId);
+					const graph = this.context.sessionGraph;
+					const childSessionId = graph.getChildByTaskId(toolUseId);
 					this.postSessionMessage(
 						{
 							id: toolUseId,

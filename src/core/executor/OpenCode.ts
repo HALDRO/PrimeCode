@@ -502,25 +502,32 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			});
 
 			const resolved = await Promise.all(
-				sessions
-					.filter(s => !s.parentID)
-					.map(async s => {
+				sessions.map(async s => {
+					const isChild = Boolean(s.parentID);
+					let displayTitle: string | undefined;
+
+					// Only resolve display titles for top-level sessions (expensive operation)
+					if (!isChild) {
 						const rawTitle = s.title || '';
-						let displayTitle = rawTitle;
+						displayTitle = rawTitle;
 
 						if (!rawTitle || OpenCodeExecutor.isDefaultTitle(rawTitle)) {
 							const msgTitle = await this.getSessionDisplayTitle(s.id, config.workspaceRoot);
 							displayTitle = msgTitle || '';
 						}
+						displayTitle = displayTitle || undefined;
+					} else {
+						displayTitle = s.title || undefined;
+					}
 
-						return {
-							id: s.id,
-							title: displayTitle || undefined,
-							lastModified: s.time?.updated || s.time?.created || Date.now(),
-							created: s.time?.created,
-							parentID: s.parentID,
-						};
-					}),
+					return {
+						id: s.id,
+						title: displayTitle,
+						lastModified: s.time?.updated || s.time?.created || Date.now(),
+						created: s.time?.created,
+						parentID: s.parentID,
+					};
+				}),
 			);
 
 			return resolved;

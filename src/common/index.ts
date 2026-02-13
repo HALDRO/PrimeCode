@@ -34,6 +34,10 @@ export type {
 	ToolResultData,
 	ToolUseData,
 } from './extensionMessages';
-export { generateId } from './generateId';
 export * from './schemas';
 export * from './webviewCommands';
+
+/** Generate a unique ID with the given prefix: `{prefix}-{timestamp}-{random}` */
+export function generateId(prefix: string): string {
+	return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
