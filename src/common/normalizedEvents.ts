@@ -39,7 +39,7 @@ export type ToolStatus =
 	| 'timed_out';
 
 export type ActionType =
-	| { type: 'FileRead'; path: string }
+	| { type: 'FileRead'; path: string; offset?: number; limit?: number }
 	| { type: 'FileEdit'; path: string; changes: FileChange[] }
 	| { type: 'CommandRun'; command: string; result?: CommandRunResult }
 	| { type: 'Search'; query: string }

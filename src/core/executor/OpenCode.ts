@@ -354,14 +354,19 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		return null as unknown as ChildProcess;
 	}
 
-	async spawnFollowUp(prompt: string, sessionId: string, config: CLIConfig): Promise<ChildProcess> {
+	async spawnFollowUp(
+		prompt: string,
+		sessionId: string,
+		config: CLIConfig,
+		attachments?: Parameters<CLIExecutor['spawnFollowUp']>[3],
+	): Promise<ChildProcess> {
 		if (!this.serverUrl) throw new Error('OpenCode server not running');
 
 		try {
 			// Continue the existing session (no fork) - just send a message
 			this.sessionId = sessionId;
 			this.startEventStream(this.serverUrl, config.workspaceRoot);
-			await this.sendPrompt(config.workspaceRoot, sessionId, prompt, config);
+			await this.sendPrompt(config.workspaceRoot, sessionId, prompt, config, attachments);
 		} catch (error) {
 			if (this.isServerDownError(error)) {
 				logger.warn('[OpenCode] Server connection lost during followUp, reconnecting...');
@@ -915,6 +920,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		sessionId: string,
 		prompt: string,
 		config: CLIConfig,
+		attachments?: Parameters<CLIExecutor['spawnFollowUp']>[3],
 	): Promise<void> {
 		const modelSpec = this.parseModel(config.model);
 		const modelProviderId = modelSpec?.providerID || '';
@@ -923,12 +929,58 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			? { model: { providerID: modelProviderId, modelID: modelSpec?.modelID || '' } }
 			: {};
 
+		// Build prompt parts: text + file attachments
+		const parts: Array<
+			| { type: 'text'; text: string }
+			| { type: 'file'; mime: string; url: string; filename?: string }
+		> = [{ type: 'text' as const, text: prompt }];
+
+		if (attachments) {
+			// Attach workspace files as file parts
+			for (const filePath of attachments.files ?? []) {
+				const fileUrl = filePath.startsWith('file://')
+					? filePath
+					: `file://${filePath.replace(/\\/g, '/')}`;
+				const fileName = filePath.split(/[\\/]/).pop() || filePath;
+				parts.push({ type: 'file' as const, mime: 'text/plain', url: fileUrl, filename: fileName });
+			}
+
+			// Attach code snippets as file parts with line ranges
+			for (const snippet of attachments.codeSnippets ?? []) {
+				const snippetUrl = new URL(
+					snippet.filePath.startsWith('file://')
+						? snippet.filePath
+						: `file://${snippet.filePath.replace(/\\/g, '/')}`,
+				);
+				if (snippet.startLine) snippetUrl.searchParams.set('start', String(snippet.startLine));
+				if (snippet.endLine) snippetUrl.searchParams.set('end', String(snippet.endLine));
+				const fileName = snippet.filePath.split(/[\\/]/).pop() || snippet.filePath;
+				parts.push({
+					type: 'file' as const,
+					mime: 'text/plain',
+					url: snippetUrl.toString(),
+					filename: fileName,
+				});
+			}
+
+			// Attach images as file parts with data URLs
+			for (const img of attachments.images ?? []) {
+				const mime = img.dataUrl.match(/^data:([^;]+)/)?.[1] || 'image/png';
+				const url = img.path
+					? img.path.startsWith('file://')
+						? img.path
+						: `file://${img.path.replace(/\\/g, '/')}`
+					: img.dataUrl;
+				parts.push({ type: 'file' as const, mime, url, filename: img.name });
+			}
+		}
+
 		const client = this.requireSdk();
 		await client.session.promptAsync({
 			path: { id: sessionId },
 			query: { directory },
 			body: {
-				parts: [{ type: 'text' as const, text: prompt }],
+				parts,
 				...(config.messageID ? { messageID: config.messageID } : {}),
 				...modelOverride,
 				...(config.agent ? { agent: config.agent } : {}),

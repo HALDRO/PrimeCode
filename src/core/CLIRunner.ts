@@ -50,8 +50,9 @@ export class CLIRunner extends EventEmitter {
 		prompt: string,
 		sessionId: string,
 		config: CLIConfig,
+		attachments?: Parameters<CLIExecutor['spawnFollowUp']>[3],
 	): Promise<ChildProcess | null> {
-		await this.executor.spawnFollowUp(prompt, sessionId, config);
+		await this.executor.spawnFollowUp(prompt, sessionId, config, attachments);
 		return null;
 	}
 

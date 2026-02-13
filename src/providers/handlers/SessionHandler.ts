@@ -84,11 +84,14 @@ export class SessionHandler implements WebviewMessageHandler {
 		const targetId = sessionId || this.context.sessionState.activeSessionId;
 		if (!targetId) return;
 
-		logger.debug('[SessionHandler] postSessionMessage', {
-			messageType: message.type,
-			messageId: message.id,
-			targetSessionId: targetId,
-		});
+		// Only log non-streaming message types to avoid per-token spam
+		if (message.type !== 'thinking' && message.type !== 'assistant') {
+			logger.debug('[SessionHandler] postSessionMessage', {
+				messageType: message.type,
+				messageId: message.id,
+				targetSessionId: targetId,
+			});
+		}
 
 		this.context.view.postMessage({
 			type: 'session_event',
@@ -439,8 +442,8 @@ export class SessionHandler implements WebviewMessageHandler {
 	}
 
 	private async onSendMessage(msg: CommandOf<'sendMessage'>): Promise<void> {
-		const { text, model: uiModel, sessionId, messageID } = msg;
-		await this.handleSendMessage(text, uiModel, sessionId, messageID);
+		const { text, model: uiModel, sessionId, messageID, attachments } = msg;
+		await this.handleSendMessage(text, uiModel, sessionId, messageID, attachments);
 	}
 
 	private async onStopRequest(): Promise<void> {
@@ -491,6 +494,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		uiModel?: string,
 		explicitSessionId?: string,
 		messageIdToTruncate?: string,
+		attachments?: CommandOf<'sendMessage'>['attachments'],
 	): Promise<void> {
 		// Clear stop guard — user is explicitly sending a new message,
 		// so SSE 'busy' events should be allowed through again.
@@ -584,6 +588,10 @@ export class SessionHandler implements WebviewMessageHandler {
 			const prefix = isOpenCode ? 'msg' : 'user';
 			// Reuse edited message ID for UI merge (prevents duplicate user bubble after edit).
 			const userMessageId = messageIdToTruncate || generateId(prefix);
+			const hasAttachments =
+				attachments?.files?.length ||
+				attachments?.codeSnippets?.length ||
+				attachments?.images?.length;
 			this.postSessionMessage(
 				{
 					id: userMessageId,
@@ -592,6 +600,7 @@ export class SessionHandler implements WebviewMessageHandler {
 					model: config.model,
 					timestamp: new Date().toISOString(),
 					normalizedEntry: this.logNormalizer.normalizeMessage(text, 'user'),
+					...(hasAttachments ? { attachments } : {}),
 				},
 				activeId,
 			);
@@ -644,7 +653,7 @@ export class SessionHandler implements WebviewMessageHandler {
 				await this.context.cli.truncateSession(activeId, messageIdToTruncate, config);
 			}
 
-			await this.context.cli.spawnFollowUp(text, activeId, config);
+			await this.context.cli.spawnFollowUp(text, activeId, config, attachments);
 		} catch (error) {
 			logger.error('[SessionHandler] Failed to spawn CLI:', error);
 

@@ -44,7 +44,21 @@ export interface CLIEvent {
 export interface CLIExecutor extends EventEmitter {
 	ensureServer(config: CLIConfig): Promise<void>;
 	spawn(prompt: string, config: CLIConfig): Promise<ChildProcess | null>;
-	spawnFollowUp(prompt: string, sessionId: string, config: CLIConfig): Promise<ChildProcess | null>;
+	spawnFollowUp(
+		prompt: string,
+		sessionId: string,
+		config: CLIConfig,
+		attachments?: {
+			files?: string[];
+			codeSnippets?: Array<{
+				filePath: string;
+				content: string;
+				startLine?: number;
+				endLine?: number;
+			}>;
+			images?: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
+		},
+	): Promise<ChildProcess | null>;
 	/** Truncate session history at a specific message ID (OpenCode only). */
 	truncateSession?(sessionId: string, messageId: string, config: CLIConfig): Promise<void>;
 	/** Spawn a process specifically for code review. */

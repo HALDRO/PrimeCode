@@ -375,7 +375,17 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 	const { postMessage } = useVSCode();
 	const toolLower = toolName.toLowerCase();
 
-	const { label, meta, metaDisplay, isListDir, isTodoWrite, isRead, isSearch } = useMemo(() => {
+	const {
+		label,
+		meta,
+		metaDisplay,
+		isListDir,
+		isTodoWrite,
+		isRead,
+		isSearch,
+		readOffset,
+		readLimit,
+	} = useMemo(() => {
 		const action =
 			normalizedEntry?.entryType &&
 			typeof normalizedEntry.entryType === 'object' &&
@@ -396,10 +406,15 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 		let label = formatToolName(toolName);
 		let meta = '';
 
+		let readOffset: number | undefined;
+		let readLimit: number | undefined;
+
 		if (action) {
 			if (action.type === 'FileRead') {
 				label = 'Read';
 				meta = action.path;
+				readOffset = action.offset;
+				readLimit = action.limit;
 			} else if (action.type === 'CommandRun') {
 				label = 'Run';
 				meta = action.command;
@@ -428,8 +443,16 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 				meta = (rawInput as { path?: string })?.path || '';
 			} else if (isRead) {
 				label = 'Read';
-				const ri = rawInput as { path?: string; file_path?: string; filePath?: string };
+				const ri = rawInput as {
+					path?: string;
+					file_path?: string;
+					filePath?: string;
+					offset?: number;
+					limit?: number;
+				};
 				meta = ri?.path || ri?.file_path || ri?.filePath || '';
+				readOffset = typeof ri?.offset === 'number' ? ri.offset : undefined;
+				readLimit = typeof ri?.limit === 'number' ? ri.limit : undefined;
 			} else if (isTodo) {
 				label = 'Todo';
 			} else if (toolLower === 'grep') {
@@ -447,7 +470,17 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 			metaDisplay = getLeafName(meta);
 		}
 
-		return { label, meta, metaDisplay, isListDir: isLs, isTodoWrite: isTodo, isRead, isSearch };
+		return {
+			label,
+			meta,
+			metaDisplay,
+			isListDir: isLs,
+			isTodoWrite: isTodo,
+			isRead,
+			isSearch,
+			readOffset,
+			readLimit,
+		};
 	}, [normalizedEntry, rawInput, toolLower, toolName]);
 
 	const metaNode = useMemo(() => {
@@ -557,10 +590,17 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 				<>
 					{isRead && (
 						<span className="text-sm text-vscode-foreground opacity-60 whitespace-nowrap">
-							{nonEmptyLineCount} lines
+							{readOffset !== undefined || readLimit !== undefined
+								? `${readOffset ?? 1}–${readLimit !== undefined ? (readOffset ?? 1) + readLimit - 1 : '...'} lines`
+								: `${nonEmptyLineCount} lines`}
 						</span>
 					)}
-					{!isRead && isTodoWrite && totalCount > 0 && (
+					{!isRead && isSearch && nonEmptyLineCount > 0 && (
+						<span className="text-sm text-vscode-foreground opacity-60 whitespace-nowrap">
+							{nonEmptyLineCount} results
+						</span>
+					)}
+					{!isRead && !isSearch && isTodoWrite && totalCount > 0 && (
 						<>
 							<span className="text-sm font-medium text-vscode-foreground opacity-90 leading-none whitespace-nowrap">
 								{completedCount} of {totalCount}
@@ -664,6 +704,10 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 							</span>
 						)}
 					</div>
+				) : fullText.trim().length > 0 ? (
+					<pre className="m-0 px-1 py-0.5 rounded-sm text-sm leading-(--line-height-code) whitespace-pre-wrap text-vscode-foreground opacity-60">
+						{fullText}
+					</pre>
 				) : null
 			) : hasBody ? (
 				<div className="flex flex-col gap-1">

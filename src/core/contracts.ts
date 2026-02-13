@@ -22,7 +22,21 @@ export interface ICLIConfig {
 
 export interface ICLIRunner {
 	spawn(prompt: string, config: ICLIConfig): Promise<unknown>;
-	spawnFollowUp(prompt: string, sessionId: string, config: ICLIConfig): Promise<unknown>;
+	spawnFollowUp(
+		prompt: string,
+		sessionId: string,
+		config: ICLIConfig,
+		attachments?: {
+			files?: string[];
+			codeSnippets?: Array<{
+				filePath: string;
+				content: string;
+				startLine?: number;
+				endLine?: number;
+			}>;
+			images?: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
+		},
+	): Promise<unknown>;
 	/** Truncate session history at a specific message ID (OpenCode only; no-op for other providers). */
 	truncateSession(sessionId: string, messageId: string, config: ICLIConfig): Promise<void>;
 	spawnReview(prompt: string, config: ICLIConfig): Promise<unknown>;

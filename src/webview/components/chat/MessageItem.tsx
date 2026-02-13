@@ -42,6 +42,18 @@ const subtaskStatusIcon = (status: Extract<Message, { type: 'subtask' }>['status
 	}
 };
 
+/** Strip <task_result> XML wrapper and task_id prefix from subtask result text */
+const cleanSubtaskResult = (raw: string): string => {
+	let text = raw;
+	// Remove task_id: ... line at the start
+	text = text.replace(/^task_id:\s*\S+.*\n?/i, '');
+	// Remove <task_result> / </task_result> wrappers
+	text = text.replace(/<\/?task_result>/gi, '');
+	// Remove <task_metadata>...</task_metadata> blocks
+	text = text.replace(/<task_metadata>[\s\S]*?<\/task_metadata>/gi, '');
+	return text.trim();
+};
+
 const SubtaskItem: React.FC<{
 	message: Extract<Message, { type: 'subtask' }>;
 	ctx: MessageItemContext;
@@ -51,6 +63,21 @@ const SubtaskItem: React.FC<{
 	const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
 	const { groupedChildren, totalDurationMs } = useSubtaskThread(message.id || '', mcpServerNames);
 
+	// Build the header description: prefer description, fall back to cleaned result
+	const headerDescription = useMemo(() => {
+		if (message.description) return message.description;
+		if (message.status === 'completed' && message.result) {
+			const cleaned = cleanSubtaskResult(message.result);
+			// Take first line only for the header
+			const firstLine = cleaned.split('\n')[0] || '';
+			return firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine;
+		}
+		return 'Running...';
+	}, [message.description, message.result, message.status]);
+
+	// Show subagent_type as a secondary label if it's meaningful (not just "subagent")
+	const agentType = message.agent && message.agent !== 'subagent' ? message.agent : undefined;
+
 	return (
 		<ToolCard
 			headerLeft={
@@ -59,12 +86,15 @@ const SubtaskItem: React.FC<{
 						{subtaskStatusIcon(message.status)}
 					</span>
 					<span className="text-xs font-medium px-1.5 py-0.5 rounded-sm bg-vscode-badge-background text-vscode-badge-foreground whitespace-nowrap">
-						{(message.agent || 'SUBAGENT').toUpperCase()}
+						SUB-AGENT
 					</span>
+					{agentType && (
+						<span className="text-xs text-vscode-foreground opacity-50 whitespace-nowrap">
+							{agentType}
+						</span>
+					)}
 					<span className="text-sm text-vscode-foreground opacity-80 truncate">
-						{message.status === 'completed' && message.result
-							? message.result
-							: message.description || 'Running...'}
+						{headerDescription}
 					</span>
 				</>
 			}
@@ -99,6 +129,11 @@ const SubtaskItem: React.FC<{
 								/>
 							);
 						})}
+						{groupedChildren.length === 0 && message.status === 'completed' && message.result && (
+							<pre className="m-0 text-sm leading-(--line-height-code) whitespace-pre-wrap text-vscode-foreground opacity-80">
+								{cleanSubtaskResult(message.result)}
+							</pre>
+						)}
 					</div>
 				) : undefined
 			}

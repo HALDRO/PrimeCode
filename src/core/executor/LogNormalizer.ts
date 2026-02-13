@@ -79,7 +79,9 @@ export class LogNormalizer extends EventEmitter {
 		switch (toolName) {
 			case 'ReadFile':
 			case 'read_file':
-			case 'read':
+			case 'read': {
+				const readOffset = typeof input.offset === 'number' ? input.offset : undefined;
+				const readLimit = typeof input.limit === 'number' ? input.limit : undefined;
 				actionType = {
 					type: 'FileRead',
 					path:
@@ -87,8 +89,11 @@ export class LogNormalizer extends EventEmitter {
 						(input.file_path as string) ||
 						(input.filePath as string) ||
 						'',
+					...(readOffset !== undefined && { offset: readOffset }),
+					...(readLimit !== undefined && { limit: readLimit }),
 				};
 				break;
+			}
 
 			case 'WriteFile':
 			case 'write_file':

@@ -1,5 +1,4 @@
 import { useMemo } from 'react';
-import { useShallow } from 'zustand/react/shallow';
 import { groupToolMessages } from '../components/chat/SimpleTool';
 import { type Message, useChatStore } from '../store/chatStore';
 
@@ -10,6 +9,10 @@ const EMPTY_GROUPED: (Message | Message[])[] = [];
 /**
  * Hook to retrieve all child messages for a given subtask using unified Context ID.
  * Resolves contextId from the subtask message and retrieves the corresponding session bucket.
+ *
+ * Subscribes only to the specific child session's messages (not the entire sessionsById map)
+ * to avoid unnecessary re-renders and potential recursive rendering when contextId
+ * accidentally points to the parent session.
  */
 export function useSubtaskChildren(subtaskId: string): Message[] {
 	// 1. Get the subtask message from current active session messages
@@ -19,29 +22,29 @@ export function useSubtaskChildren(subtaskId: string): Message[] {
 		return state.sessionsById[sid]?.messages.find((m: Message) => m.id === subtaskId);
 	});
 
-	// 2. Get sessionsById for direct context lookup
-	const sessionsById = useChatStore(useShallow(state => state.sessionsById));
+	// 2. Extract contextId from the subtask message
+	const contextId = message?.type === 'subtask' ? message.contextId : undefined;
 
+	// 3. Subscribe to the specific child session's messages only (not all sessions).
+	//    Guard: if contextId equals the active session, ignore it to prevent recursive rendering.
+	const childMessages = useChatStore(state => {
+		if (!contextId) return EMPTY_MESSAGES;
+		// Safety: never read from the parent session as child context
+		if (contextId === state.activeSessionId) return EMPTY_MESSAGES;
+		const session = state.sessionsById[contextId];
+		return session?.messages?.length ? session.messages : EMPTY_MESSAGES;
+	});
+
+	// 4. Fall back to archived transcript if no live child session
 	const children = useMemo(() => {
 		if (!message || message.type !== 'subtask') {
 			return EMPTY_MESSAGES;
 		}
-
-		// Get contextId from subtask message
-		const contextId = message.contextId;
-
-		// If contextId exists, look up live session bucket
-		if (contextId) {
-			const contextSession = sessionsById[contextId];
-			// If session exists (live), return its messages.
-			if (contextSession?.messages?.length) {
-				return contextSession.messages;
-			}
+		if (childMessages.length > 0) {
+			return childMessages;
 		}
-
-		// If no live session or contextId cleared, use archived transcript
 		return message.transcript ?? EMPTY_MESSAGES;
-	}, [message, sessionsById]);
+	}, [message, childMessages]);
 
 	return children;
 }

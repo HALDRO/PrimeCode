@@ -82,7 +82,16 @@ export interface SessionMessageData {
 	estimatedTokens?: number;
 	title?: string;
 	durationMs?: number;
-	attachments?: Array<{ id: string; mime: string; filename?: string; url?: string }>;
+	attachments?: {
+		files?: string[];
+		codeSnippets?: Array<{
+			filePath: string;
+			content: string;
+			startLine?: number;
+			endLine?: number;
+		}>;
+		images?: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
+	};
 	metadata?: Record<string, unknown>;
 	agent?: string;
 	prompt?: string;

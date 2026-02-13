@@ -96,6 +96,13 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private sessionGraph = new SessionGraph();
 	private openCodeInitTimer: ReturnType<typeof setInterval> | null = null;
 
+	/**
+	 * Tracks pending subtask tool_use IDs that haven't been linked to a child session yet.
+	 * When a `task` tool_use arrives, the child session ID is unknown (event.sessionId is the parent).
+	 * We store the toolUseId here and link it when the first child event arrives.
+	 */
+	private pendingSubtaskToolIds = new Set<string>();
+
 	// Handlers
 	private sessionHandler: SessionHandler;
 	private settingsHandler: SettingsHandler;
@@ -655,7 +662,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 	private handleCliEvent(event: CLIEvent): void {
 		const now = Date.now();
-		logger.debug(`[ChatProvider] handleCliEvent: ${event.type}`, event.data);
+		// Skip verbose per-token logging for high-frequency delta events
+		if (event.type !== 'thinking' && event.type !== 'message') {
+			logger.debug(`[ChatProvider] handleCliEvent: ${event.type}`, event.data);
+		}
 
 		if (event.type === 'session_updated') {
 			this.sessionHandler.handleSessionUpdatedEvent(event.data, event.sessionId);
@@ -673,6 +683,41 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 		// Determine if this event belongs to a known child session
 		const isChildSession = this.sessionGraph.isChild(targetSessionId);
+
+		// Deferred child→parent linking: if this event's session is unknown to the graph
+		// but we have pending subtask tool IDs, this is the first event from a new child session.
+		if (
+			!isChildSession &&
+			targetSessionId !== this.sessionState.activeSessionId &&
+			this.pendingSubtaskToolIds.size > 0
+		) {
+			const parentSessionId = this.sessionState.activeSessionId;
+			if (parentSessionId) {
+				// Link the first pending subtask to this child session
+				const pendingToolId = this.pendingSubtaskToolIds.values().next().value;
+				if (pendingToolId) {
+					this.pendingSubtaskToolIds.delete(pendingToolId);
+					this.sessionGraph.registerChild(targetSessionId, parentSessionId, pendingToolId);
+					logger.debug('[ChatProvider] Deferred child session linked', {
+						childSessionId: targetSessionId,
+						parentSessionId,
+						toolUseId: pendingToolId,
+					});
+
+					// Update the subtask card's contextId in the parent session
+					this.sessionHandler.postSessionMessage(
+						{
+							id: pendingToolId,
+							type: 'subtask',
+							contextId: targetSessionId,
+							metadata: { childSessionId: targetSessionId },
+							timestamp: new Date().toISOString(),
+						},
+						parentSessionId,
+					);
+				}
+			}
+		}
 
 		switch (event.type) {
 			case 'normalized_log': {
@@ -888,15 +933,22 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		const toolName = (e.name as string) || (e.tool as string) || 'unknown';
 
 		if (toolName === 'task') {
-			const childSessionId = event.sessionId;
-			// Resolve parent from graph first, fall back to active session
-			const parentSessionId =
-				(childSessionId && this.sessionGraph.getParent(childSessionId)) ||
-				this.sessionState.activeSessionId;
+			const eventSessionId = event.sessionId;
+			// The task tool_use event comes from the PARENT's SSE stream,
+			// so event.sessionId is the parent — NOT the child.
+			// The real child session ID only becomes known when child events arrive later.
+			const parentSessionId = this.sessionState.activeSessionId;
 
-			// Register in the session graph using the toolUseId as the explicit link
-			if (parentSessionId && childSessionId && childSessionId !== parentSessionId) {
+			// Only treat eventSessionId as child if it's genuinely different from parent
+			const childSessionId =
+				eventSessionId && eventSessionId !== parentSessionId ? eventSessionId : undefined;
+
+			// Register in the session graph if we already know the child
+			if (parentSessionId && childSessionId) {
 				this.sessionGraph.registerChild(childSessionId, parentSessionId, toolUseId);
+			} else {
+				// Child session unknown — mark as pending for deferred linking
+				this.pendingSubtaskToolIds.add(toolUseId);
 			}
 
 			const input = (e.input as Record<string, unknown>) || {};
@@ -917,6 +969,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					isRunning: true,
 					timestamp: new Date().toISOString(),
 					normalizedEntry: event.normalizedEntry,
+					// Only set contextId if we know the real child session
 					contextId: childSessionId,
 					metadata: childSessionId ? { childSessionId } : undefined,
 				},
@@ -962,8 +1015,18 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			);
 			const extractedChildSessionId = sessionIdMatch ? sessionIdMatch[1].trim() : undefined;
 
-			const childSessionId =
-				this.sessionGraph.getChildByTaskId(toolUseId) ?? event.sessionId ?? extractedChildSessionId;
+			// Clean up pending tracking for this tool
+			this.pendingSubtaskToolIds.delete(toolUseId);
+
+			const graphChildId = this.sessionGraph.getChildByTaskId(toolUseId);
+			// Only use event.sessionId / extractedChildSessionId if they differ from the active (parent) session
+			const fallbackChildId =
+				event.sessionId && event.sessionId !== this.sessionState.activeSessionId
+					? event.sessionId
+					: extractedChildSessionId && extractedChildSessionId !== this.sessionState.activeSessionId
+						? extractedChildSessionId
+						: undefined;
+			const childSessionId = graphChildId ?? fallbackChildId;
 
 			// Resolve parent from graph first, fall back to active session
 			const parentSessionId =
@@ -1126,7 +1189,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				isArray: Array.isArray(data),
 				count: Array.isArray(data) ? data.length : 'N/A',
 			});
-		} else {
+		} else if (msgType !== 'session_event') {
 			logger.debug('[ChatProvider] postMessage', {
 				type: msgType,
 				targetId: (msg as { targetId?: string })?.targetId,
@@ -1138,6 +1201,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 	dispose(): void {
 		this.clearOpenCodeInitTimer();
+		this.pendingSubtaskToolIds.clear();
 		for (const disposable of this.disposables) {
 			disposable.dispose();
 		}
