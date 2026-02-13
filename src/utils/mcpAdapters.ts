@@ -1,91 +1,12 @@
 /**
  * @file MCP config adapters
  * @description Pure conversion functions between the extension unified MCP registry
- * and provider-specific config formats (Claude Code CLI, OpenCode).
+ * and provider-specific config formats (OpenCode).
  */
 
-import type { MCPServerConfig, UnifiedMcpRegistry, UnifiedMcpServer } from '../common';
+import type { UnifiedMcpRegistry, UnifiedMcpServer } from '../common';
 
 export const INTERNAL_PERMISSIONS_SERVER_NAME = 'internal-permissions';
-
-export function unifiedServerToClaudeConfig(server: UnifiedMcpServer): MCPServerConfig | null {
-	if (server.enabled === false) return null;
-
-	const transport = server.transport;
-	if (transport.type === 'stdio') {
-		const [command, ...args] = transport.command;
-		if (!command) return null;
-		return {
-			enabled: server.enabled ?? true,
-			timeoutMs: server.timeoutMs,
-			type: 'stdio',
-			command,
-			args,
-			env: transport.env,
-			cwd: transport.cwd,
-		};
-	}
-
-	if (transport.type === 'http' || transport.type === 'sse') {
-		return {
-			enabled: server.enabled ?? true,
-			timeoutMs: server.timeoutMs,
-			type: transport.type,
-			url: transport.url,
-			headers: transport.headers,
-		};
-	}
-
-	return null;
-}
-
-export function claudeConfigToUnifiedServer(config: MCPServerConfig): UnifiedMcpServer | null {
-	const type = config.type;
-
-	if (type === 'stdio' || (!type && config.command)) {
-		if (!config.command) return null;
-		return {
-			enabled: config.enabled ?? true,
-			timeoutMs: config.timeoutMs,
-			transport: {
-				type: 'stdio',
-				command: [config.command, ...(config.args ?? [])],
-				env: config.env,
-				cwd: config.cwd,
-			},
-		};
-	}
-
-	if (type === 'http' || type === 'sse' || (!type && config.url)) {
-		if (!config.url) return null;
-		return {
-			enabled: config.enabled ?? true,
-			timeoutMs: config.timeoutMs,
-			transport: {
-				type: type === 'sse' ? 'sse' : 'http',
-				url: config.url,
-				headers: config.headers,
-			},
-		};
-	}
-
-	return null;
-}
-
-export function buildClaudeMcpServersJson(registry: UnifiedMcpRegistry): {
-	mcpServers: Record<string, MCPServerConfig>;
-} {
-	const mcpServers: Record<string, MCPServerConfig> = {};
-
-	for (const [name, server] of Object.entries(registry)) {
-		if (name === INTERNAL_PERMISSIONS_SERVER_NAME) continue;
-		const config = unifiedServerToClaudeConfig(server);
-		if (!config) continue;
-		mcpServers[name] = config;
-	}
-
-	return { mcpServers };
-}
 
 export type OpenCodeMcpConfig =
 	| {

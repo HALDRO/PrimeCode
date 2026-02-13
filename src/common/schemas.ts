@@ -3,7 +3,7 @@
  * @description Defines runtime-validated schemas (TypeBox) shared between extension and webview.
  * Acts as the single source of truth for cross-boundary message payloads and stored data shapes.
  * Types are derived from schemas to keep compile-time and runtime contracts aligned.
- * Includes commit/checkpoint metadata used by both git-based restore (Claude CLI) and OpenCode-native checkpoints.
+ * Includes commit/checkpoint metadata used by both git-based restore and OpenCode-native checkpoints.
  */
 
 import type { Static } from '@sinclair/typebox';
@@ -13,7 +13,7 @@ import { Type } from '@sinclair/typebox';
 // CLI Provider Types
 // =============================================================================
 
-export const CLIProviderTypeSchema = Type.Union([Type.Literal('claude'), Type.Literal('opencode')]);
+export const CLIProviderTypeSchema = Type.Literal('opencode');
 export type CLIProviderType = Static<typeof CLIProviderTypeSchema>;
 
 // =============================================================================
@@ -115,7 +115,7 @@ export const MCPServerConfigSchema = Type.Object({
 	url: Type.Optional(Type.String()),
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
 	type: Type.Optional(MCPServerTypeSchema),
-	// UI/registry helpers (not part of Claude's raw mcp-servers.json, but used by this extension)
+	// UI/registry helpers (not part of raw mcp-servers.json, but used by this extension)
 	enabled: Type.Optional(Type.Boolean()),
 	timeoutMs: Type.Optional(Type.Number()),
 });
@@ -204,7 +204,7 @@ export const TotalStatsSchema = Type.Object({
 export type TotalStats = Static<typeof TotalStatsSchema>;
 
 /**
- * Transforms Claude API token usage to UI-friendly token stats
+ * Transforms API token usage to UI-friendly token stats
  */
 export function apiTokensToStats(api: TokenUsageAPI): Partial<TokenStats> {
 	return {
@@ -511,7 +511,7 @@ export type PlatformInfo = Static<typeof PlatformInfoSchema>;
 // Settings
 // =============================================================================
 
-export const ClaudeSettingsSchema = Type.Object({
+export const PrimeCodeSettingsSchema = Type.Object({
 	provider: Type.Optional(CLIProviderTypeSchema),
 	'proxy.baseUrl': Type.String(),
 	'proxy.apiKey': Type.String(),
@@ -530,7 +530,7 @@ export const ClaudeSettingsSchema = Type.Object({
 	'promptImprove.template': Type.Optional(Type.String()),
 	'promptImprove.timeoutMs': Type.Optional(Type.Number()),
 });
-export type ClaudeSettings = Static<typeof ClaudeSettingsSchema>;
+export type PrimeCodeSettings = Static<typeof PrimeCodeSettingsSchema>;
 
 // =============================================================================
 // Session Info
@@ -648,7 +648,7 @@ export const RuleSchema = Type.Object({
 	name: Type.String(),
 	path: Type.String(),
 	isEnabled: Type.Boolean(),
-	source: Type.Union([Type.Literal('claude'), Type.Literal('opencode')]),
+	source: Type.Union([Type.Literal('opencode')]),
 	content: Type.Optional(Type.String()),
 	isReadOnly: Type.Optional(Type.Boolean()),
 });
@@ -706,26 +706,23 @@ export type ParsedSubagent = Static<typeof ParsedSubagentSchema>;
 export const DiscoveryStatusSchema = Type.Object({
 	rules: Type.Object({
 		hasAgentsMd: Type.Boolean(),
-		hasClaudeMd: Type.Boolean(),
-		hasClaudeShim: Type.Boolean(),
 		ruleFiles: Type.Array(Type.String()),
 	}),
 	permissions: Type.Object({
-		claudeConfig: Type.Optional(Type.String()),
 		openCodeConfig: Type.Optional(Type.String()),
 	}),
 	skills: Type.Array(
 		Type.Object({
 			name: Type.String(),
 			path: Type.String(),
-			type: Type.Union([Type.Literal('claude'), Type.Literal('opencode')]),
+			type: Type.Literal('opencode'),
 		}),
 	),
 	hooks: Type.Array(
 		Type.Object({
 			name: Type.String(),
 			path: Type.String(),
-			type: Type.Literal('claude'),
+			type: Type.Literal('opencode'),
 		}),
 	),
 });
@@ -758,12 +755,12 @@ export const WebviewMessageSchema = Type.Object({
 	approved: Type.Optional(Type.Boolean()),
 	alwaysAllow: Type.Optional(Type.Boolean()),
 	response: Type.Optional(OpenCodeAccessResponseSchema),
-	createClaudeShim: Type.Optional(Type.Boolean()),
+	createPrimeCodeShim: Type.Optional(Type.Boolean()),
 	toolName: Type.Optional(Type.String()),
 	name: Type.Optional(Type.String()),
 	content: Type.Optional(Type.String()),
 	enabled: Type.Optional(Type.Boolean()),
-	source: Type.Optional(Type.Union([Type.Literal('claude'), Type.Literal('opencode')])),
+	source: Type.Optional(Type.Literal('opencode')),
 	messageId: Type.Optional(Type.String()),
 	policies: Type.Optional(
 		Type.Object({

@@ -10,7 +10,7 @@ import type { CLIEvent } from './executor/types';
 export type { ISettings } from './Settings';
 
 export interface ICLIConfig {
-	provider: 'claude' | 'opencode';
+	provider: 'opencode';
 	model?: string;
 	workspaceRoot: string;
 	yoloMode?: boolean;
@@ -18,7 +18,6 @@ export interface ICLIConfig {
 	env?: Record<string, string>;
 	serverTimeoutMs?: number;
 	autoCompact?: boolean;
-	commitReminder?: boolean;
 }
 
 export interface ICLIRunner {
@@ -40,7 +39,7 @@ export interface ICLIRunner {
 	getOpenCodeServerInfo(): { baseUrl: string; directory: string } | null;
 	/** Returns the SDK client instance if available (OpenCode only). */
 	getSdkClient(): import('@opencode-ai/sdk').OpencodeClient | null;
-	getProvider(): 'claude' | 'opencode';
+	getProvider(): 'opencode';
 	listSessions(config: ICLIConfig): Promise<
 		Array<{
 			id: string;

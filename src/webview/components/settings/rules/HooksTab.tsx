@@ -55,32 +55,29 @@ export const HooksTab: React.FC = () => {
 		useSettingsStore.getState().actions.setAgentsOps({
 			lastAction: 'import',
 			status: 'working',
-			message: 'Importing hooks from Claude...',
+			message: 'Importing hooks from CLI...',
 		});
-		postMessage({ type: 'importHooksFromClaude' });
+		postMessage({ type: 'importHooksFromCLI' });
 	};
 	const handleSyncHooks = () => {
 		useSettingsStore.getState().actions.setAgentsOps({
 			lastAction: 'sync',
 			status: 'working',
-			message: 'Syncing hooks to Claude...',
+			message: 'Syncing hooks to CLI...',
 		});
-		postMessage({ type: 'syncHooksToClaude' });
+		postMessage({ type: 'syncHooksToCLI' });
 	};
 
 	return (
 		<>
 			<GroupTitle>Import & Sync</GroupTitle>
 			<SettingsGroup>
-				<SettingRow
-					title="Import from CLI"
-					tooltip="Import hookify rules from .claude/ into .agents/hooks/"
-				>
+				<SettingRow title="Import from CLI" tooltip="Import hookify rules into .agents/hooks/">
 					<Button
 						size="sm"
 						variant="secondary"
 						onClick={handleImportHooks}
-						title="Import hookify.*.local.md from .claude"
+						title="Import hookify.*.local.md into .agents"
 					>
 						<DownloadIcon size={12} className="mr-1" />
 						Import
@@ -88,14 +85,14 @@ export const HooksTab: React.FC = () => {
 				</SettingRow>
 				<SettingRow
 					title="Sync to CLI"
-					tooltip="Export hookify rules from .agents/hooks/ to .claude/"
+					tooltip="Export hookify rules from .agents/hooks/ to CLI directories"
 					last={isCreatingHook}
 				>
 					<Button
 						size="sm"
 						variant="secondary"
 						onClick={handleSyncHooks}
-						title="Export hooks to .claude"
+						title="Export hooks to CLI directories"
 					>
 						<RefreshIcon size={12} className="mr-1" />
 						Sync
@@ -198,7 +195,7 @@ export const HooksTab: React.FC = () => {
 						Loading hooks...
 					</div>
 				) : hooks.items.length === 0 ? (
-					<EmptyState>No hook rules found. Create one or import from Claude.</EmptyState>
+					<EmptyState>No hook rules found. Create one or import from CLI.</EmptyState>
 				) : (
 					hooks.items.map((hook, i) => (
 						<SettingRow

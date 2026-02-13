@@ -1,10 +1,10 @@
 /**
  * @file ModelDropdown - AI model selector
- * @description Uses universal DropdownMenu for consistent styling. Shows standard Claude models,
+ * @description Uses universal DropdownMenu for consistent styling. Shows standard models,
  *              proxy models (OpenAI-compatible), and OpenCode provider models with active indicator.
  *              Only displays models that are explicitly enabled in settings (enabledProxyModels,
  *              enabledOpenCodeModels). Provider names displayed as badges. Active model indicated
- *              with purple glow dot. Supports both Claude and OpenCode providers.
+ *              with purple glow dot. Supports multiple providers.
  */
 
 import type React from 'react';
@@ -12,7 +12,6 @@ import { useCallback, useMemo } from 'react';
 import { OPENAI_COMPATIBLE_PROVIDER_ID } from '../../../common';
 import { cn } from '../../lib/cn';
 import { useModelDropdownState, useModelSelection } from '../../store';
-import { STANDARD_MODELS } from '../../utils/models';
 import { useVSCode } from '../../utils/vscode';
 import { BrainSideIcon, ZapIcon } from '../icons';
 import { type DropdownItemRenderProps, DropdownMenu, type DropdownMenuItem, GlowDot } from '../ui';
@@ -149,15 +148,13 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 	// Build flat list of models with provider as badge
 	const items = useMemo((): DropdownMenuItem<ModelData>[] => {
 		const result: DropdownMenuItem<ModelData>[] = [];
-
-		if (provider === 'claude') {
-			// Claude models: use built-in list (Claude Code CLI handles actual selection)
-			const claudeModels = STANDARD_MODELS;
-
-			for (const model of claudeModels) {
-				const isActive = selectedModel === model.id;
+		// OpenCode models - flatten all providers into single list
+		for (const opProvider of filteredOpencodeProviders) {
+			for (const model of opProvider.models) {
+				const modelId = `${opProvider.id}/${model.id}`;
+				const isActive = selectedModel === modelId;
 				result.push({
-					id: model.id,
+					id: modelId,
 					label: model.name,
 					icon: (
 						<ZapIcon
@@ -168,94 +165,46 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 							}}
 						/>
 					),
-					meta: 'Claude',
-					data: { id: model.id, name: model.name, isActive },
-				});
-			}
-
-			// Proxy models
-			for (const model of enabledProxyModelsList) {
-				const isActive = selectedModel === model.id;
-				result.push({
-					id: model.id,
-					label: model.name || model.id,
-					icon: (
-						<ZapIcon
-							size={14}
-							style={{
-								color: isActive ? 'var(--color-accent)' : 'var(--vscode-descriptionForeground)',
-								opacity: isActive ? 1 : 0.7,
-							}}
-						/>
-					),
-					meta: 'OAI',
-					data: {
-						id: model.id,
-						name: model.name || model.id,
-						isActive,
-						capabilities: model.capabilities,
-					},
-				});
-			}
-		} else if (provider === 'opencode') {
-			// OpenCode models - flatten all providers into single list
-			for (const opProvider of filteredOpencodeProviders) {
-				for (const model of opProvider.models) {
-					const modelId = `${opProvider.id}/${model.id}`;
-					const isActive = selectedModel === modelId;
-					result.push({
-						id: modelId,
-						label: model.name,
-						icon: (
-							<ZapIcon
-								size={14}
-								style={{
-									color: isActive ? 'var(--color-accent)' : 'var(--vscode-descriptionForeground)',
-									opacity: isActive ? 1 : 0.7,
-								}}
-							/>
-						),
-						meta: opProvider.name,
-						data: {
-							id: modelId,
-							name: model.name,
-							isActive,
-							capabilities: { reasoning: model.reasoning === true },
-						},
-					});
-				}
-			}
-
-			// Also add enabled proxy models for OpenCode (OpenAI Compatible)
-			for (const model of enabledProxyModelsList) {
-				// For OpenCode, proxy models use 'oai' provider prefix (saved to opencode.json)
-				const modelId = `${OPENAI_COMPATIBLE_PROVIDER_ID}/${model.id}`;
-				const isActive = selectedModel === modelId;
-				result.push({
-					id: modelId,
-					label: model.name || model.id,
-					icon: (
-						<ZapIcon
-							size={14}
-							style={{
-								color: isActive ? 'var(--color-accent)' : 'var(--vscode-descriptionForeground)',
-								opacity: isActive ? 1 : 0.7,
-							}}
-						/>
-					),
-					meta: 'OAI',
+					meta: opProvider.name,
 					data: {
 						id: modelId,
-						name: model.name || model.id,
+						name: model.name,
 						isActive,
-						capabilities: model.capabilities,
+						capabilities: { reasoning: model.reasoning === true },
 					},
 				});
 			}
 		}
 
+		// Also add enabled proxy models for OpenCode (OpenAI Compatible)
+		for (const model of enabledProxyModelsList) {
+			// For OpenCode, proxy models use 'oai' provider prefix (saved to opencode.json)
+			const modelId = `${OPENAI_COMPATIBLE_PROVIDER_ID}/${model.id}`;
+			const isActive = selectedModel === modelId;
+			result.push({
+				id: modelId,
+				label: model.name || model.id,
+				icon: (
+					<ZapIcon
+						size={14}
+						style={{
+							color: isActive ? 'var(--color-accent)' : 'var(--vscode-descriptionForeground)',
+							opacity: isActive ? 1 : 0.7,
+						}}
+					/>
+				),
+				meta: 'OAI',
+				data: {
+					id: modelId,
+					name: model.name || model.id,
+					isActive,
+					capabilities: model.capabilities,
+				},
+			});
+		}
+
 		return result;
-	}, [selectedModel, provider, enabledProxyModelsList, filteredOpencodeProviders]);
+	}, [selectedModel, enabledProxyModelsList, filteredOpencodeProviders]);
 
 	return (
 		<DropdownMenu

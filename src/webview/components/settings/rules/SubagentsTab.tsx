@@ -2,7 +2,7 @@
  * @file SubagentsTab.tsx
  * @description Settings tab for managing subagents stored in .agents/subagents/.
  *              Provides UI for creating, editing, deleting, importing, and syncing subagents
- *              to/from CLI-specific directories (.claude/agents/ and .opencode/agent/).
+ *              to/from CLI-specific directories (.opencode/agent/).
  */
 
 import type React from 'react';
@@ -86,12 +86,12 @@ export const SubagentsTab: React.FC = () => {
 			<SettingsGroup>
 				<SettingRow
 					title="Import from CLI"
-					tooltip="Import existing subagents from .claude/agents/ or .opencode/agent/"
+					tooltip="Import existing subagents from .opencode/agent/"
 				>
 					<Button
 						size="sm"
 						variant="secondary"
-						title="Import from .claude/.opencode into .agents"
+						title="Import from .opencode into .agents"
 						onClick={handleImport}
 					>
 						<DownloadIcon size={12} className="mr-1" />
@@ -101,13 +101,13 @@ export const SubagentsTab: React.FC = () => {
 
 				<SettingRow
 					title="Sync to CLI"
-					tooltip="Export subagents to .claude/agents/ and .opencode/agent/"
+					tooltip="Export subagents to .opencode/agent/"
 					last={isCreating}
 				>
 					<Button
 						size="sm"
 						variant="secondary"
-						title="Export from .agents to .claude/.opencode"
+						title="Export from .agents to .opencode"
 						onClick={handleSync}
 					>
 						<RefreshIcon size={12} className="mr-1" />

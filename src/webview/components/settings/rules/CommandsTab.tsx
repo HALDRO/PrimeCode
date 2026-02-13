@@ -61,19 +61,19 @@ export const CommandsTab: React.FC = () => {
 			<SettingsGroup>
 				<SettingRow
 					title="Import from CLI"
-					tooltip="Import existing commands from .claude/commands/, .opencode/command/ or .cursor/commands/"
+					tooltip="Import existing commands from .opencode/command/ or .cursor/commands/"
 				>
 					<Button
 						size="sm"
 						variant="secondary"
-						title="Import from .claude/.opencode/.cursor into .agents"
+						title="Import from .opencode/.cursor into .agents"
 						onClick={() => {
 							useSettingsStore.getState().actions.setAgentsOps({
 								lastAction: 'import',
 								status: 'working',
 								message: 'Importing commands from CLI...',
 							});
-							postMessage({ type: 'importCommandsFromClaude' });
+							postMessage({ type: 'importCommandsFromCLI' });
 						}}
 					>
 						<DownloadIcon size={12} className="mr-1" />
@@ -83,13 +83,13 @@ export const CommandsTab: React.FC = () => {
 
 				<SettingRow
 					title="Sync to CLI"
-					tooltip="Export commands to .claude/commands/, .opencode/command/ and .cursor/commands/"
+					tooltip="Export commands to .opencode/command/ and .cursor/commands/"
 					last={isCreating}
 				>
 					<Button
 						size="sm"
 						variant="secondary"
-						title="Export from .agents to .claude/.opencode/.cursor"
+						title="Export from .agents to .opencode/.cursor"
 						onClick={() => {
 							useSettingsStore.getState().actions.setAgentsOps({
 								lastAction: 'sync',

@@ -71,13 +71,6 @@ export class RestoreHandler implements WebviewMessageHandler {
 			return;
 		}
 
-		if (!record.isOpenCode) {
-			// Git-based restore (Claude CLI) — not yet implemented
-			logger.info('[RestoreHandler] Git-based restore not yet implemented', { commitId });
-			this.notifyRestoreResult(record.sessionId, { canUnrevert: false });
-			return;
-		}
-
 		// OpenCode: POST /session/:id/revert { messageID }
 		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 		if (!workspaceRoot) {
@@ -114,12 +107,6 @@ export class RestoreHandler implements WebviewMessageHandler {
 	 * Frontend sends `{ }` — we use the active session.
 	 */
 	private async handleUnrevert(): Promise<void> {
-		const isOpenCode = this.context.cli.getProvider() === 'opencode';
-		if (!isOpenCode) {
-			logger.info('[RestoreHandler] unrevert: not supported for non-OpenCode providers');
-			return;
-		}
-
 		const sessionId = this.context.sessionState.activeSessionId;
 		if (!sessionId) {
 			logger.warn('[RestoreHandler] unrevert: no active session');

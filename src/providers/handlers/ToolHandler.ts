@@ -136,8 +136,6 @@ export class ToolHandler implements WebviewMessageHandler {
 			data: {
 				rules: {
 					hasAgentsMd: true,
-					hasClaudeMd: false,
-					hasClaudeShim: false,
 					ruleFiles: [],
 				},
 				permissions: {},

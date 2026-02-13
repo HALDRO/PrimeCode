@@ -1,7 +1,7 @@
 /**
  * @file Access request message component
- * @description Displays access requests from CLI providers (Claude/OpenCode) with
- * unified action buttons. Supports both Claude format (approved/alwaysAllow) and
+ * @description Displays access requests from CLI providers with
+ * unified action buttons. Supports provider-specific formats and
  * OpenCode format (once/always/reject). Automatically adapts button behavior based
  * on the active CLI provider from settings store.
  */

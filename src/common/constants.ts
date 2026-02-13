@@ -102,12 +102,6 @@ export const PATHS = {
 	AGENTS_HOOKS_DIR: '.agents/hooks',
 	AGENTS_SUBAGENTS_DIR: '.agents/subagents',
 
-	// Claude compatibility
-	CLAUDE_COMMANDS_DIR: '.claude/commands',
-	CLAUDE_RULES_DIR: '.claude/rules',
-	CLAUDE_SKILLS_DIR: '.claude/skills',
-	CLAUDE_AGENTS_DIR: '.claude/agents',
-
 	// OpenCode compatibility
 	OPENCODE_COMMAND_DIR: '.opencode/command',
 	OPENCODE_AGENT_DIR: '.opencode/agent',

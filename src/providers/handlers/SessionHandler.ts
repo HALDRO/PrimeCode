@@ -303,7 +303,7 @@ export class SessionHandler implements WebviewMessageHandler {
 	 */
 	private async replaySessionFromCLI(
 		sessionId: string,
-		config: { provider: 'claude' | 'opencode'; workspaceRoot: string },
+		config: { provider: 'opencode'; workspaceRoot: string },
 	): Promise<void> {
 		const allSessions = await this.context.cli.listSessions(config);
 		const childSessions = allSessions
@@ -1118,19 +1118,17 @@ export class SessionHandler implements WebviewMessageHandler {
 	// Utils
 	// =============================================================================
 
-	private getSelectedModelKey(provider: 'claude' | 'opencode'): string {
-		return provider === 'opencode'
-			? 'primecode.selectedModel.opencode'
-			: 'primecode.selectedModel.claude';
+	private getSelectedModelKey(): string {
+		return 'primecode.selectedModel.opencode';
 	}
 
-	private buildBaseConfig(): { provider: 'claude' | 'opencode'; workspaceRoot: string } {
+	private buildBaseConfig(): { provider: 'opencode'; workspaceRoot: string } {
 		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 		if (!workspaceRoot) {
 			throw new Error('No workspace root');
 		}
 		return {
-			provider: (this.context.settings.get('provider') || 'claude') as 'claude' | 'opencode',
+			provider: 'opencode',
 			workspaceRoot,
 		};
 	}
@@ -1139,7 +1137,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		const { provider, workspaceRoot } = this.buildBaseConfig();
 
 		const savedModel = this.context.extensionContext.globalState.get<string>(
-			this.getSelectedModelKey(provider),
+			this.getSelectedModelKey(),
 		);
 		const model = uiModel ?? savedModel;
 

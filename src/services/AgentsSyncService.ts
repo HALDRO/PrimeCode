@@ -2,7 +2,7 @@
  * @file AgentsSyncService
  * @description Synchronizes MCP configurations from project `.agents/mcp.json` to project-level
  *              CLI-specific formats:
- *              - Claude CLI: `.mcp.json`
+ *              - Legacy CLI: `.mcp.json`
  *              - OpenCode CLI: `opencode.json`
  *              Cursor is treated as read-only and is only used as an import source.
  *              Also supports migration/import from existing project configs and creates backups in
@@ -16,11 +16,7 @@ import { Value } from '@sinclair/typebox/value';
 import * as vscode from 'vscode';
 import type { AgentsMcpConfig, AgentsMcpServer } from '../common';
 import { logger } from '../utils/logger';
-import {
-	buildClaudeMcpServersJson,
-	buildOpenCodeMcpConfig,
-	claudeConfigToUnifiedServer,
-} from '../utils/mcpAdapters';
+import { buildOpenCodeMcpConfig } from '../utils/mcpAdapters';
 import { type AgentsConfigService, agentsConfigToUnifiedRegistry } from './AgentsConfigService';
 
 // =============================================================================
@@ -34,7 +30,7 @@ const MAX_BACKUPS = 10;
 // Types
 // =============================================================================
 
-interface ClaudeServerConfig {
+interface McpJsonServerConfig {
 	type?: 'stdio' | 'http' | 'sse';
 	command?: string;
 	args?: string[];
@@ -205,13 +201,6 @@ export class AgentsSyncService {
 			if (backup) backups.push(backup);
 		}
 
-		// Backup .mcp.json (Claude)
-		const claudePath = this._getProjectPath('.mcp.json');
-		if (claudePath) {
-			const backup = await this._backupFile(claudePath, 'claude-mcp');
-			if (backup) backups.push(backup);
-		}
-
 		// Backup opencode.json
 		const opencodePath = this._getProjectPath('opencode.json');
 		if (opencodePath) {
@@ -294,28 +283,6 @@ export class AgentsSyncService {
 	}
 
 	// =========================================================================
-	// Sync to Claude CLI (.mcp.json)
-	// =========================================================================
-
-	/**
-	 * Sync to project-level .mcp.json (Claude CLI format)
-	 * Format: { "mcpServers": { "server-name": { command, args, env } } }
-	 */
-	public async syncToClaudeProject(): Promise<void> {
-		const mcpJsonPath = this._getProjectPath('.mcp.json');
-		if (!mcpJsonPath) return;
-
-		const config = await this._agentsConfig.loadProjectConfig();
-		if (!config) return;
-
-		const registry = agentsConfigToUnifiedRegistry(config);
-		const claudeJson = buildClaudeMcpServersJson(registry);
-
-		await this._writeJsonFile(mcpJsonPath, claudeJson);
-		logger.info('[AgentsSyncService] Synced to .mcp.json');
-	}
-
-	// =========================================================================
 	// Sync to OpenCode (opencode.json)
 	// =========================================================================
 
@@ -351,8 +318,8 @@ export class AgentsSyncService {
 	 * Cursor is intentionally excluded (read-only).
 	 */
 	public async syncAllProject(): Promise<void> {
-		await Promise.all([this.syncToClaudeProject(), this.syncToOpenCodeProject()]);
-		logger.info('[AgentsSyncService] Synced to all project configs');
+		await this.syncToOpenCodeProject();
+		logger.info('[AgentsSyncService] Synced to project configs');
 	}
 
 	// =========================================================================
@@ -393,54 +360,39 @@ export class AgentsSyncService {
 	}
 
 	/**
-	 * Import from .mcp.json (Claude) into .agents/mcp.json
+	 * Import from .mcp.json into .agents/mcp.json
 	 * Format: { "mcpServers": { "server-name": { command, args, env } } }
 	 */
-	public async importFromClaude(): Promise<AgentsMcpConfig | null> {
-		const claudePath = this._getProjectPath('.mcp.json');
-		if (!claudePath) return null;
+	public async importFromMcpJson(): Promise<AgentsMcpConfig | null> {
+		const mcpJsonPath = this._getProjectPath('.mcp.json');
+		if (!mcpJsonPath) return null;
 
-		// .mcp.json format: { "mcpServers": { "server-name": {...} } }
-		const claudeConfig = await this._readJsonFile<{
-			mcpServers?: Record<string, ClaudeServerConfig>;
-		}>(claudePath);
-		if (!claudeConfig?.mcpServers || Object.keys(claudeConfig.mcpServers).length === 0) return null;
+		const mcpJson = await this._readJsonFile<{
+			mcpServers?: Record<string, McpJsonServerConfig>;
+		}>(mcpJsonPath);
+		if (!mcpJson?.mcpServers || Object.keys(mcpJson.mcpServers).length === 0) return null;
 
 		const servers: Record<string, AgentsMcpServer> = {};
 
-		for (const [name, server] of Object.entries(claudeConfig.mcpServers)) {
-			// Skip non-server entries (like $schema or comments)
+		for (const [name, server] of Object.entries(mcpJson.mcpServers)) {
 			if (name.startsWith('$') || name.startsWith('_')) continue;
 
-			const unified = claudeConfigToUnifiedServer({
-				type: server.type,
-				command: server.command,
-				args: server.args,
-				url: server.url,
-				env: server.env,
-				headers: server.headers,
-			});
-
-			if (unified) {
-				const transport = unified.transport;
-				if (transport.type === 'stdio') {
-					servers[name] = {
-						type: 'stdio',
-						command: transport.command,
-						env: transport.env,
-						cwd: transport.cwd,
-						enabled: unified.enabled,
-						timeout: unified.timeoutMs,
-					};
-				} else {
-					servers[name] = {
-						type: transport.type,
-						url: transport.url,
-						headers: transport.headers,
-						enabled: unified.enabled,
-						timeout: unified.timeoutMs,
-					};
-				}
+			if (server.type === 'stdio' || (!server.type && server.command)) {
+				if (!server.command) continue;
+				servers[name] = {
+					type: 'stdio',
+					command: [server.command, ...(server.args ?? [])],
+					env: server.env,
+					enabled: true,
+				};
+			} else if (server.type === 'http' || server.type === 'sse' || (!server.type && server.url)) {
+				if (!server.url) continue;
+				servers[name] = {
+					type: server.type === 'sse' ? 'sse' : 'http',
+					url: server.url,
+					headers: server.headers,
+					enabled: true,
+				};
 			}
 		}
 
@@ -508,10 +460,10 @@ export class AgentsSyncService {
 			sources.push('opencode.json');
 		}
 
-		// 2. Import from .mcp.json (Claude)
-		const claudeConfig = await this.importFromClaude();
-		if (claudeConfig && Object.keys(claudeConfig.servers).length > 0) {
-			mergedServers = { ...mergedServers, ...claudeConfig.servers };
+		// 2. Import from .mcp.json
+		const mcpJsonConfig = await this.importFromMcpJson();
+		if (mcpJsonConfig && Object.keys(mcpJsonConfig.servers).length > 0) {
+			mergedServers = { ...mergedServers, ...mcpJsonConfig.servers };
 			sources.push('.mcp.json');
 		}
 

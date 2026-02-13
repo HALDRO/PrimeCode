@@ -1,7 +1,7 @@
 {
 	"name": "primecode",
 	"displayName": "PrimeCode",
-	"description": "Universal AI CLI Interface - Unified chat for Claude Code, OpenCode and more",
+	"description": "OpenCode-first AI coding assistant for VS Code",
 	"version": "0.2.0",
 	"main": "./out/extension.js",
 	"scripts": {
@@ -26,8 +26,6 @@
 		"test:vscode": "vscode-test"
 	},
 	"dependencies": {
-		"@anthropic-ai/claude-agent-sdk": "^0.2.2",
-		"@anthropic-ai/sdk": "^0.71.2",
 		"@floating-ui/react": "^0.27.16",
 		"@modelcontextprotocol/sdk": "^1.25.1",
 		"@opencode-ai/sdk": "^1.1.6",
@@ -110,8 +108,6 @@
 	],
 	"keywords": [
 		"primecode",
-		"universal cli",
-		"claude code",
 		"opencode",
 		"code explanation",
 		"code generation",
@@ -120,12 +116,10 @@
 		"vibe coding",
 		"prompt language",
 		"copilot",
-		"claude",
 		"ai",
 		"assistant",
 		"chatbot",
 		"chat",
-		"anthropic",
 		"code",
 		"programming",
 		"development",
@@ -245,20 +239,18 @@
 				"primeCode.provider": {
 					"type": "string",
 					"enum": [
-						"claude",
 						"opencode"
 					],
-					"default": "claude",
-					"description": "Select the CLI provider to use. 'claude' uses Claude Code CLI, 'opencode' uses OpenCode CLI.",
+					"default": "opencode",
+					"description": "CLI provider used by PrimeCode.",
 					"enumDescriptions": [
-						"Claude Code CLI - Anthropic's official coding assistant",
-						"OpenCode CLI - Open source AI coding assistant with multi-agent support"
+						"OpenCode CLI - open source AI coding assistant with multi-agent support"
 					]
 				},
 				"primeCode.opencode.autoStart": {
 					"type": "boolean",
 					"default": true,
-					"description": "Automatically start OpenCode server when the extension activates (only when provider is 'opencode')"
+					"description": "Automatically start OpenCode server when the extension activates"
 				},
 				"primeCode.opencode.serverTimeout": {
 					"type": "number",
@@ -299,7 +291,7 @@
 				"primeCode.access.yoloMode": {
 					"type": "boolean",
 					"default": false,
-					"description": "Enable Yolo Mode to skip all access checks. Use with caution as Claude can execute any command without asking."
+					"description": "Enable Yolo Mode to skip all access checks. Use with caution as OpenCode can execute any command without asking."
 				},
 				"primeCode.proxy.baseUrl": {
 					"type": "string",

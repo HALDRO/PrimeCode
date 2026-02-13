@@ -1,6 +1,6 @@
 /**
  * @file ChangedFilesPanel - displays list of files changed during session
- * @description Collapsible panel showing files modified by Claude with diff stats.
+ * @description Collapsible panel showing files modified by AI with diff stats.
  *              Header layout mirrors FileRow structure for perfect alignment.
  *              Also displays current Todo list status when available.
  *              Session-specific data (changedFiles, totalStats) now comes from chatStore.

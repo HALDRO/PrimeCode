@@ -2,7 +2,7 @@
  * @file Rules Service
  * @description Manages rule files with automatic sync to CLI formats.
  *              Single source of truth: `.agents/rules/` (active) and `.agents/rules/disabled/` (inactive)
- *              Auto-syncs to `.claude/rules/` and generates `AGENTS.md` + `.opencode/memories/`
+ *              Auto-syncs to CLI directories and generates `AGENTS.md` + `.opencode/memories/`
  */
 
 import * as fs from 'node:fs/promises';
@@ -15,7 +15,7 @@ export interface Rule {
 	name: string;
 	path: string;
 	isEnabled: boolean;
-	source: 'claude' | 'opencode';
+	source: 'opencode';
 	content?: string;
 }
 
@@ -39,7 +39,7 @@ export class RulesService {
 						name: file,
 						path: normalizeToPosixPath(path.join(PATHS.AGENTS_RULES_DIR, file)),
 						isEnabled: true,
-						source: 'claude',
+						source: 'opencode',
 					});
 				}
 			}
@@ -52,7 +52,7 @@ export class RulesService {
 						name: file,
 						path: normalizeToPosixPath(path.join(PATHS.AGENTS_RULES_DIR, 'disabled', file)),
 						isEnabled: false,
-						source: 'claude',
+						source: 'opencode',
 					});
 				}
 			}
@@ -66,11 +66,7 @@ export class RulesService {
 	/**
 	 * Create a new rule and auto-sync to CLI formats
 	 */
-	public async createRule(
-		name: string,
-		content: string,
-		_provider: 'claude' | 'opencode',
-	): Promise<Rule> {
+	public async createRule(name: string, content: string): Promise<Rule> {
 		const safeName = name.endsWith('.md') ? name : `${name}.md`;
 		const rulesDir = path.join(this._workspaceRoot, PATHS.AGENTS_RULES_DIR);
 		await fs.mkdir(rulesDir, { recursive: true });
@@ -85,18 +81,14 @@ export class RulesService {
 			name: safeName,
 			path: normalizeToPosixPath(path.relative(this._workspaceRoot, filePath)),
 			isEnabled: true,
-			source: 'claude',
+			source: 'opencode',
 		};
 	}
 
 	/**
 	 * Toggle rule enabled/disabled and auto-sync
 	 */
-	public async toggleRule(
-		rulePath: string,
-		enabled: boolean,
-		_source: 'claude' | 'opencode',
-	): Promise<void> {
+	public async toggleRule(rulePath: string, enabled: boolean): Promise<void> {
 		const rulesDir = path.join(this._workspaceRoot, PATHS.AGENTS_RULES_DIR);
 		const disabledDir = path.join(rulesDir, 'disabled');
 		const fullPath = path.join(this._workspaceRoot, rulePath);
@@ -131,37 +123,10 @@ export class RulesService {
 	}
 
 	/**
-	 * Auto-sync: `.agents/rules/` → `.claude/rules/` + `AGENTS.md` + `.opencode/memories/`
+	 * Auto-sync: `.agents/rules/` → `AGENTS.md` + `.opencode/memories/`
 	 */
 	private async _autoSync(): Promise<void> {
-		await Promise.all([this._syncToClaude(), this._syncToOpenCode()]);
-	}
-
-	/**
-	 * Sync `.agents/rules/` → `.claude/rules/` (mirror structure)
-	 */
-	private async _syncToClaude(): Promise<void> {
-		const fromDir = path.join(this._workspaceRoot, PATHS.AGENTS_RULES_DIR);
-		const toDir = path.join(this._workspaceRoot, PATHS.CLAUDE_RULES_DIR);
-
-		try {
-			// Clear target directory
-			await fs.rm(toDir, { recursive: true, force: true });
-			await fs.mkdir(toDir, { recursive: true });
-
-			// Copy all files (including disabled/)
-			const files = await this._findMdFiles(fromDir, true);
-			for (const rel of files) {
-				const src = path.join(fromDir, rel);
-				const dst = path.join(toDir, rel);
-				await fs.mkdir(path.dirname(dst), { recursive: true });
-				await fs.copyFile(src, dst);
-			}
-
-			logger.debug(`[RulesService] Synced ${files.length} rules to .claude/rules/`);
-		} catch (error) {
-			logger.warn('[RulesService] Failed to sync to Claude:', error);
-		}
+		await this._syncToOpenCode();
 	}
 
 	/**

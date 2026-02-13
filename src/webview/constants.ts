@@ -1,7 +1,7 @@
 /**
  * @file Webview constants - centralized configuration and static data
  * @description Contains all static constants used across webview components including
- * slash commands, CLI commands, built-in snippets, and navigation items. Centralizing
+ * slash commands, built-in snippets, and navigation items. Centralizing
  * these prevents duplication and makes maintenance easier. All constants are typed
  * and exported for use throughout the webview application.
  */
@@ -19,44 +19,7 @@ export interface CommandItem {
 }
 
 /**
- * Claude CLI commands available via slash syntax
- * Only commands that provide unique value in UI context are included.
- * Commands handled by Settings UI (config, model, mcp, etc.) are excluded.
- */
-export const CLI_COMMANDS: CommandItem[] = [
-	{
-		id: 'bug',
-		name: 'bug',
-		description: 'Report bugs (sends conversation to Anthropic)',
-		type: 'cli',
-	},
-	// { id: 'clear', name: 'clear', description: 'Clear conversation history', type: 'cli' }, // Use "New Chat" button instead
-	{
-		id: 'compact',
-		name: 'compact',
-		description: 'Compact conversation with optional focus',
-		type: 'cli',
-	},
-	// { id: 'config', name: 'config', description: 'View/modify configuration', type: 'cli' }, // Handled by Settings UI
-	// { id: 'cost', name: 'cost', description: 'Show token usage statistics', type: 'cli' }, // Handled by StatsDisplay
-	// { id: 'doctor', name: 'doctor', description: 'Check Claude Code installation health', type: 'cli' }, // Use terminal directly
-	// { id: 'help', name: 'help', description: 'Get usage help', type: 'cli' }, // Not useful in UI
-	{ id: 'init', name: 'init', description: 'Initialize project with CLAUDE.md guide', type: 'cli' },
-	// { id: 'login', name: 'login', description: 'Switch Anthropic accounts', type: 'cli' }, // Handled by Settings UI
-	// { id: 'logout', name: 'logout', description: 'Sign out from Anthropic account', type: 'cli' }, // Handled by Settings UI
-	// { id: 'mcp', name: 'mcp', description: 'Manage MCP server connections', type: 'cli' }, // Handled by MCP Tab
-	// { id: 'memory', name: 'memory', description: 'Edit CLAUDE.md memory files', type: 'cli' }, // Handled by Rules Tab
-	// { id: 'model', name: 'model', description: 'Select or change the AI model', type: 'cli' }, // Handled by model dropdown
-	// { id: 'access', name: 'access', description: 'View and manage tool access', type: 'cli' }, // Handled by Permissions Tab
-	{ id: 'pr-comments', name: 'pr-comments', description: 'View PR comments', type: 'cli' },
-	{ id: 'review', name: 'review', description: 'Request a code review', type: 'cli' },
-	// { id: 'status', name: 'status', description: 'View account and system status', type: 'cli' }, // Handled by Settings UI
-	// { id: 'terminal-setup', name: 'terminal-setup', description: 'Install Shift+Enter key binding', type: 'cli' }, // Not applicable in VS Code
-	// { id: 'vim', name: 'vim', description: 'Enter vim mode for multi-line editing', type: 'cli' }, // Not applicable in VS Code
-];
-
-/**
- * OpenCode CLI commands available via slash syntax.
+ * OpenCode slash commands available via chat input.
  * Only commands that provide unique value in UI context are included.
  * Commands handled by Settings UI (config, model, provider, mcp, etc.) are excluded.
  */
@@ -130,8 +93,8 @@ export const SETTINGS_NAV_ITEMS: NavItem[] = [
 
 /**
  * Tools that should NOT be grouped in the message list
- * Heavy tools like Bash, Edit, Write are shown individually
- * Includes both Claude CLI (PascalCase) and OpenCode (lowercase) tool names
+ * Heavy tools like Bash, Edit, Write are shown individually.
+ * Tool names may come in different casings depending on source adapters.
  */
 export const NON_GROUPABLE_TOOLS = [
 	'Bash',
@@ -149,8 +112,8 @@ export const NON_GROUPABLE_TOOLS = [
 ] as const;
 
 /**
- * File edit tools that show diff view
- * Includes both Claude CLI (PascalCase) and OpenCode (lowercase) tool names
+ * File edit tools that show diff view.
+ * Tool names may come in different casings depending on source adapters.
  */
 export const FILE_EDIT_TOOLS = [
 	'Edit',
@@ -164,8 +127,8 @@ export const FILE_EDIT_TOOLS = [
 ] as const;
 
 /**
- * Tools with collapsible output (Grep, Glob, LS, Serena listing tools)
- * Includes both Claude CLI (PascalCase) and OpenCode (lowercase) tool names
+ * Tools with collapsible output (Grep, Glob, LS, Serena listing tools).
+ * Tool names may come in different casings depending on source adapters.
  */
 export const COLLAPSIBLE_OUTPUT_TOOLS = [
 	'Grep',
@@ -191,14 +154,14 @@ export const isThinkTool = (toolName: string): boolean =>
 	toolName.toLowerCase().includes(THINK_TOOLS_PATTERN);
 
 /**
- * Search/read tools that don't modify files
- * Includes both Claude CLI (PascalCase) and OpenCode (lowercase) tool names
+ * Search/read tools that don't modify files.
+ * Tool names may come in different casings depending on source adapters.
  */
 export const SEARCH_TOOLS = ['Read', 'Grep', 'Glob', 'LS', 'read', 'grep', 'glob', 'ls'] as const;
 
 /**
- * Action tools that modify files or execute commands
- * Includes both Claude CLI (PascalCase) and OpenCode (lowercase) tool names
+ * Action tools that modify files or execute commands.
+ * Tool names may come in different casings depending on source adapters.
  */
 export const ACTION_TOOLS = [
 	'Edit',
@@ -246,7 +209,7 @@ export const formatToolNameForDisplay = (toolName: string): string =>
 
 /**
  * Check if tool is an MCP tool based on naming conventions:
- * - Claude CLI format: mcp__server__tool or mcp_server_tool
+ * - Legacy prefixed format: mcp__server__tool or mcp_server_tool
  * - OpenCode format: ServerName_tool-name (PascalCase server + underscore + tool)
  *
  * @param toolName - The tool name to check
@@ -257,7 +220,7 @@ export const isMcpTool = (toolName: string | undefined, mcpServerNames?: string[
 		return false;
 	}
 
-	// Claude CLI format: mcp__ or mcp_ prefix
+	// Legacy prefixed format
 	if (toolName.startsWith('mcp__') || toolName.startsWith('mcp_')) {
 		return true;
 	}

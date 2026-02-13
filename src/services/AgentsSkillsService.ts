@@ -1,7 +1,7 @@
 /**
  * @file AgentsSkillsService
  * @description Manages skills stored under `.agents/skills/<name>/SKILL.md`.
- *              Provides CRUD plus import/sync to legacy Claude (`.claude/skills/`) and
+ *              Provides CRUD plus import/sync to legacy CLI directories and
  *              OpenCode (`.opencode/skill/`) locations. Uses `.agents/` as the canonical store.
  */
 
@@ -26,10 +26,6 @@ export class AgentsSkillsService {
 
 	private get agentsSkillsDir(): string {
 		return path.join(this.workspaceRoot, PATHS.AGENTS_SKILLS_DIR);
-	}
-
-	private get claudeSkillsDir(): string {
-		return path.join(this.workspaceRoot, PATHS.CLAUDE_SKILLS_DIR);
 	}
 
 	private get openCodeSkillDir(): string {
@@ -88,12 +84,6 @@ export class AgentsSkillsService {
 		let imported = 0;
 		const sources = new Set<string>();
 
-		const fromClaude = await this._importFromDirectory(this.claudeSkillsDir, 'claude');
-		if (fromClaude > 0) {
-			imported += fromClaude;
-			sources.add('Claude CLI');
-		}
-
 		const fromOpenCode = await this._importFromDirectory(this.openCodeSkillDir, 'opencode');
 		if (fromOpenCode > 0) {
 			imported += fromOpenCode;
@@ -113,24 +103,16 @@ export class AgentsSkillsService {
 		const skills = await this.getSkills();
 		let synced = 0;
 
-		await fs.mkdir(this.claudeSkillsDir, { recursive: true });
 		await fs.mkdir(this.openCodeSkillDir, { recursive: true });
 		// Cursor is read-only: do not write .cursor/skills
 
 		for (const skill of skills) {
 			const content = this._stringifySkill(skill);
 
-			// Sync to Claude (.claude/skills/)
-			const claudeTargetDir = path.join(this.claudeSkillsDir, skill.name);
-			await fs.mkdir(claudeTargetDir, { recursive: true });
-			await fs.writeFile(path.join(claudeTargetDir, 'SKILL.md'), content, 'utf8');
-
 			// Sync to OpenCode (.opencode/skill/)
 			const openCodeTargetDir = path.join(this.openCodeSkillDir, skill.name);
 			await fs.mkdir(openCodeTargetDir, { recursive: true });
 			await fs.writeFile(path.join(openCodeTargetDir, 'SKILL.md'), content, 'utf8');
-
-			// Cursor is read-only: do not write .cursor/skills
 
 			synced += 1;
 		}
@@ -168,10 +150,7 @@ export class AgentsSkillsService {
 		return stringifyFrontmatter(attributes, skill.content);
 	}
 
-	private async _importFromDirectory(
-		dir: string,
-		_source: 'claude' | 'opencode' | 'cursor',
-	): Promise<number> {
+	private async _importFromDirectory(dir: string, _source: 'opencode' | 'cursor'): Promise<number> {
 		const exists = await fs
 			.access(dir)
 			.then(() => true)

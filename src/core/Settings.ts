@@ -14,7 +14,7 @@ import { logger } from '../utils/logger';
 // =============================================================================
 
 export interface PrimeCodeSettings {
-	provider: 'claude' | 'opencode';
+	provider: 'opencode';
 	model?: string;
 	autoApprove: boolean;
 	yoloMode: boolean;
@@ -103,7 +103,7 @@ export class Settings implements ISettings {
 
 	getAll(): PrimeCodeSettings {
 		return {
-			provider: this.get('provider') || 'claude',
+			provider: 'opencode',
 			model: this.get('model'),
 			autoApprove: this.get('access.autoApprove') || this.get('autoApprove') || false,
 			yoloMode: this.get('access.yoloMode') || this.get('yoloMode') || false,
@@ -174,7 +174,7 @@ export class Settings implements ISettings {
 	}
 
 	// =============================================================================
-	// MCP Config (.claude/mcp.json or .opencode/mcp.json)
+	// MCP Config (.mcp.json or .opencode/mcp.json)
 	// =============================================================================
 
 	getMcpConfigPath(): string {
@@ -182,13 +182,7 @@ export class Settings implements ISettings {
 			throw new Error('No workspace root');
 		}
 
-		const provider = this.get('provider') || 'claude';
-
-		if (provider === 'claude') {
-			return path.join(this.workspaceRoot, '.claude', 'mcp.json');
-		} else {
-			return path.join(this.workspaceRoot, '.opencode', 'mcp.json');
-		}
+		return path.join(this.workspaceRoot, '.opencode', 'mcp.json');
 	}
 
 	async getMcpConfig(): Promise<McpConfig> {

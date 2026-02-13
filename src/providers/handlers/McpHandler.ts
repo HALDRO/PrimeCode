@@ -30,11 +30,8 @@ export class McpHandler implements WebviewMessageHandler {
 			case 'importMcpFromCLI':
 				await this.onImportMcpFromCli();
 				break;
-			case 'syncAgentsToClaudeProject':
-				await this.onSyncAgentsToProject('claude');
-				break;
 			case 'syncAgentsToOpenCodeProject':
-				await this.onSyncAgentsToProject('opencode');
+				await this.onSyncAgentsToProject();
 				break;
 		}
 	}
@@ -72,8 +69,8 @@ export class McpHandler implements WebviewMessageHandler {
 		await this.context.services.mcpManagement.importFromAllSources();
 	}
 
-	private async onSyncAgentsToProject(target: 'claude' | 'opencode'): Promise<void> {
-		await this.context.services.mcpManagement.syncAgentsToProject(target);
+	private async onSyncAgentsToProject(): Promise<void> {
+		await this.context.services.mcpManagement.syncAgentsToProject('opencode');
 	}
 
 	dispose() {

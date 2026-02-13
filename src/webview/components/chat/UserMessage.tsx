@@ -9,7 +9,8 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CLI_COMMANDS, OPENCODE_COMMANDS } from '../../constants';
+import { OPENCODE_COMMANDS } from '../../constants';
+
 import { cn } from '../../lib/cn';
 import {
 	type CommitInfo,
@@ -360,18 +361,16 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 		const chatActions = useChatActions();
 		const { setEditingMessageId } = chatActions;
 		const { selectedModel, opencodeProviders } = useSettingsStore();
-		const provider = useSettingsStore(state => state.provider);
 		const customCommands = useSettingsStore(state => state.commands.custom);
 		const subagents = useSettingsStore(state => state.subagents);
 
 		// Build set of valid command names for highlighting
 		const validCommands = useMemo(() => {
-			const cliCommands = provider === 'opencode' ? OPENCODE_COMMANDS : CLI_COMMANDS;
 			return new Set([
-				...cliCommands.map(cmd => cmd.name.toLowerCase()),
+				...OPENCODE_COMMANDS.map(cmd => cmd.name.toLowerCase()),
 				...customCommands.map(cmd => cmd.name.toLowerCase()),
 			]);
-		}, [provider, customCommands]);
+		}, [customCommands]);
 
 		const validSubagents = useMemo(() => {
 			return new Set(subagents.items.map(a => a.name.toLowerCase()));
@@ -436,7 +435,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 					return modelIdPart;
 				}
 
-				// For standard Claude models
+				// For standard models
 				const standardModel = STANDARD_MODELS.find(m => m.id === modelId);
 				if (standardModel) {
 					return standardModel.name;

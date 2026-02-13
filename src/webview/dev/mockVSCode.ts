@@ -2049,8 +2049,6 @@ const mockVSCodeApi: VSCodeApi = {
 			dispatchGlobalMessage('discoveryStatus', {
 				rules: {
 					hasAgentsMd: true,
-					hasClaudeMd: true,
-					hasClaudeShim: true,
 					ruleFiles: [
 						'.agents/rules/base.md',
 						'.agents/rules/disabled/legacy.md',
@@ -2058,22 +2056,18 @@ const mockVSCodeApi: VSCodeApi = {
 					],
 				},
 				permissions: {
-					claudeConfig: '.claude/settings.json',
 					openCodeConfig: 'opencode.json',
 				},
 				skills: [
-					{
-						name: 'frontend-design',
-						path: '.claude/skills/frontend-design/SKILL.md',
-						type: 'claude',
-					},
 					{
 						name: 'mcp-integration',
 						path: '.opencode/skills/mcp-integration.md',
 						type: 'opencode',
 					},
 				],
-				hooks: [{ name: 'SessionStart.ts', path: '.claude/hooks/SessionStart.ts', type: 'claude' }],
+				hooks: [
+					{ name: 'SessionStart.ts', path: '.opencode/hooks/SessionStart.ts', type: 'opencode' },
+				],
 			});
 		} else if (msg.type === 'getRules') {
 			dispatchGlobalMessage('ruleList', {
@@ -2082,13 +2076,13 @@ const mockVSCodeApi: VSCodeApi = {
 						name: 'base.md',
 						path: '.agents/rules/base.md',
 						isEnabled: true,
-						source: 'claude',
+						source: 'opencode',
 					},
 					{
 						name: 'legacy.md',
 						path: '.agents/rules/disabled/legacy.md',
 						isEnabled: false,
-						source: 'claude',
+						source: 'opencode',
 					},
 					{
 						name: 'default.md',
@@ -2098,7 +2092,7 @@ const mockVSCodeApi: VSCodeApi = {
 					},
 				],
 			});
-		} else if (msg.type === 'importRulesFromClaude') {
+		} else if (msg.type === 'importRulesFromCLI') {
 			dispatchGlobalMessage('tool_result', {
 				toolName: 'Import Rules',
 				toolUseId: createId('t'),
@@ -2106,11 +2100,11 @@ const mockVSCodeApi: VSCodeApi = {
 				isError: false,
 			});
 			mockVSCodeApi.postMessage({ type: 'getRules' });
-		} else if (msg.type === 'syncRulesToClaude') {
+		} else if (msg.type === 'syncRulesToCLI') {
 			dispatchGlobalMessage('tool_result', {
 				toolName: 'Sync Rules',
 				toolUseId: createId('t'),
-				content: 'Synced .agents/rules/ to .claude/rules/',
+				content: 'Synced .agents/rules/ to CLI directories',
 				isError: false,
 			});
 		} else if (msg.type === 'toggleRule') {
@@ -2121,7 +2115,7 @@ const mockVSCodeApi: VSCodeApi = {
 						name: rulePath.split('/').pop() ?? rulePath,
 						path: rulePath,
 						isEnabled: enabled,
-						source: rulePath.includes('.opencode') ? 'opencode' : 'claude',
+						source: 'opencode',
 					},
 				});
 				// Keep list in sync (simple emulation)
@@ -2132,9 +2126,9 @@ const mockVSCodeApi: VSCodeApi = {
 			dispatchGlobalMessage('ruleUpdated', {
 				rule: {
 					name: name ?? 'new-rule.md',
-					path: `.claude/rules/${name ?? 'new-rule.md'}`,
+					path: `.agents/rules/${name ?? 'new-rule.md'}`,
 					isEnabled: true,
-					source: 'claude',
+					source: 'opencode',
 				},
 			});
 			mockVSCodeApi.postMessage({ type: 'getRules' });
@@ -2149,9 +2143,6 @@ const mockVSCodeApi: VSCodeApi = {
 			if (policies) {
 				dispatchGlobalMessage('permissionsUpdated', { policies });
 			}
-		} else if (msg.type === 'createClaudeShim') {
-			// Simulate shim creation affecting discovery
-			mockVSCodeApi.postMessage({ type: 'checkDiscoveryStatus' });
 		} else if (msg.type === 'reloadAllProviders') {
 			// Unified handler for reloading all providers
 			mockVSCodeApi.postMessage({ type: 'loadOpenCodeProviders' });

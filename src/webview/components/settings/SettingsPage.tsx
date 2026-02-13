@@ -82,38 +82,6 @@ const NavButton = React.memo<{
 });
 NavButton.displayName = 'NavButton';
 
-// Claude CLI Status wrapper - uses unified CLIStatusBar
-const ClaudeCLIStatus: React.FC = () => {
-	const { cliDiagnostics } = useSettingsStore();
-	const { setCLIDiagnostics } = useSettingsActions();
-	const { postMessage } = useVSCode();
-
-	useEffect(() => {
-		postMessage({ type: 'checkCLIDiagnostics' });
-	}, [postMessage]);
-
-	const handleRefresh = () => {
-		setCLIDiagnostics({ isChecking: true });
-		postMessage({ type: 'checkCLIDiagnostics' });
-	};
-
-	const handleOpenDocs = () => {
-		postMessage({ type: 'openExternal', url: 'https://docs.anthropic.com/en/docs/claude-code' });
-	};
-
-	return (
-		<CLIStatusBar
-			variant="claude"
-			isChecking={cliDiagnostics.isChecking}
-			installed={cliDiagnostics.installed}
-			version={cliDiagnostics.version ?? undefined}
-			updateAvailable={cliDiagnostics.updateAvailable}
-			onRefresh={handleRefresh}
-			onOpenDocs={handleOpenDocs}
-		/>
-	);
-};
-
 // OpenCode CLI Status wrapper - uses unified CLIStatusBar
 const OpenCodeCLIStatus: React.FC = () => {
 	const { postMessage } = useVSCode();
@@ -191,7 +159,7 @@ const OpenCodeProvidersSection: React.FC = () => <ProviderManager />;
 // Permissions settings tab (Unified)
 const PermissionsSettings: React.FC = () => {
 	const { postMessage } = useVSCode();
-	const { discoveryStatus, policies, provider } = useSettingsStore();
+	const { discoveryStatus, policies } = useSettingsStore();
 	const { permissions } = discoveryStatus;
 
 	const handlePolicyChange = (
@@ -199,12 +167,12 @@ const PermissionsSettings: React.FC = () => {
 		value: 'ask' | 'allow' | 'deny',
 	) => {
 		const newPolicies = { ...policies, [type]: value };
-		postMessage({ type: 'setPermissions', policies: newPolicies, provider });
+		postMessage({ type: 'setPermissions', policies: newPolicies, provider: 'opencode' });
 	};
 
 	const handlePreset = (preset: 'ask' | 'allow') => {
 		const newPolicies = { edit: preset, terminal: preset, network: preset };
-		postMessage({ type: 'setPermissions', policies: newPolicies, provider });
+		postMessage({ type: 'setPermissions', policies: newPolicies, provider: 'opencode' });
 	};
 
 	const policyOptions = [
@@ -215,7 +183,7 @@ const PermissionsSettings: React.FC = () => {
 
 	return (
 		<div className="animate-fade-in">
-			<GroupTitle>Global Policies ({provider === 'opencode' ? 'OpenCode' : 'Claude'})</GroupTitle>
+			<GroupTitle>Global Policies (OpenCode)</GroupTitle>
 			<SettingsGroup>
 				<SettingRow title="Edit Files" tooltip="Allow AI to modify files in workspace">
 					<Select
@@ -256,30 +224,11 @@ const PermissionsSettings: React.FC = () => {
 
 			<div className="p-3 bg-white/3 border border-white/8 rounded text-sm text-white/60 mt-4 mb-4">
 				These settings are persisted in{' '}
-				<code className="bg-white/10 px-1 rounded">
-					{provider === 'opencode' ? 'opencode.json' : '.claude/settings.json'}
-				</code>
-				.
+				<code className="bg-white/10 px-1 rounded">opencode.json</code>.
 			</div>
 
 			<GroupTitle>Configuration Files</GroupTitle>
 			<SettingsGroup>
-				<SettingRow title="Claude Settings" tooltip=".claude/settings.json">
-					<div className="flex items-center gap-2">
-						{permissions.claudeConfig ? (
-							<SettingsBadge variant="green">Active</SettingsBadge>
-						) : (
-							<SettingsBadge>Missing</SettingsBadge>
-						)}
-						<Button
-							size="sm"
-							variant="secondary"
-							onClick={() => postMessage({ type: 'openFile', filePath: '.claude/settings.json' })}
-						>
-							{permissions.claudeConfig ? 'Open' : 'Create'}
-						</Button>
-					</div>
-				</SettingRow>
 				<SettingRow title="OpenCode Config" tooltip="opencode.json" last>
 					<div className="flex items-center gap-2">
 						{permissions.openCodeConfig ? (
@@ -308,7 +257,7 @@ const PermissionsSettings: React.FC = () => {
 
 // Main settings tab
 const MainSettings: React.FC = () => {
-	const { provider } = useMainSettings();
+	useMainSettings();
 	const {
 		proxyUseSingleModel,
 		proxyHaikuModel,
@@ -321,15 +270,9 @@ const MainSettings: React.FC = () => {
 	const { setSettings } = useSettingsActions();
 	const { postMessage } = useVSCode();
 
-	const handleProviderChange = (newProvider: string) => {
-		setSettings({ provider: newProvider as 'claude' | 'opencode' });
-		postMessage({ type: 'updateSettings', settings: { provider: newProvider } });
-		// Refresh permissions when provider changes
-		setTimeout(() => postMessage({ type: 'getPermissions' }), 100);
-		// Load OpenCode providers when switching to OpenCode CLI
-		if (newProvider === 'opencode') {
-			postMessage({ type: 'syncAll' });
-		}
+	const handleProviderChange = (_newProvider: string) => {
+		// Only OpenCode is supported
+		postMessage({ type: 'syncAll' });
 	};
 
 	// Save task-specific model settings
@@ -343,8 +286,6 @@ const MainSettings: React.FC = () => {
 			},
 		});
 	};
-
-	const isClaude = provider === 'claude';
 
 	// Check if OpenAI Compatible provider is enabled and has models
 	const hasEnabledProxyModels = enabledProxyModels.length > 0;
@@ -366,25 +307,22 @@ const MainSettings: React.FC = () => {
 		<div className="animate-fade-in">
 			<GroupTitle>Main</GroupTitle>
 			<SettingsGroup>
-				<SettingRow title="CLI Provider" tooltip="Select which AI coding assistant CLI to use" last>
+				<SettingRow title="CLI Provider" tooltip="AI coding assistant CLI" last>
 					<Select
-						value={provider}
+						value="opencode"
 						onChange={e => handleProviderChange(e.target.value)}
-						options={[
-							{ value: 'claude', label: 'Claude Code' },
-							{ value: 'opencode', label: 'OpenCode' },
-						]}
+						options={[{ value: 'opencode', label: 'OpenCode' }]}
 					/>
 				</SettingRow>
 			</SettingsGroup>
 
-			{/* Unified Provider Manager - works for both Claude and OpenCode */}
+			{/* Provider Manager */}
 			<OpenCodeProvidersSection />
 
 			<PromptImproverSettings />
 
-			{/* Task-Specific Models - only for Claude provider with available models */}
-			{isClaude && hasAnyModels && (
+			{/* Task-Specific Models - disabled, OpenCode handles model selection */}
+			{false && hasAnyModels && (
 				<>
 					<GroupTitle>Task-Specific Models</GroupTitle>
 					<SettingsGroup>
@@ -453,7 +391,6 @@ const MainSettings: React.FC = () => {
 export const SettingsPage: React.FC = () => {
 	const [activeTab, setActiveTab] = useState<SettingsTab>('main');
 	const { setActiveModal } = useUIActions();
-	const { provider } = useSettingsStore();
 	const navContainerRef = useRef<HTMLDivElement | null>(null);
 	const visibleNavRef = useRef<HTMLElement | null>(null);
 	const measureNavRef = useRef<HTMLElement | null>(null);
@@ -575,7 +512,7 @@ export const SettingsPage: React.FC = () => {
 			{/* CLI Status fixed at the bottom */}
 			<div className="shrink-0 pb-2" style={{ backgroundColor: 'var(--vscode-editor-background)' }}>
 				<div className="max-w-(--modal-width-md) mx-auto px-3">
-					{provider === 'claude' ? <ClaudeCLIStatus /> : <OpenCodeCLIStatus />}
+					<OpenCodeCLIStatus />
 				</div>
 			</div>
 		</div>

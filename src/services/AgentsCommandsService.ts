@@ -2,7 +2,7 @@
  * @file AgentsCommandsService
  * @description Manages custom commands (prompts) in .agents/commands/
  *              Handles reading, writing, importing, and syncing commands.
- *              Supports both Claude CLI (.claude/commands/) and OpenCode CLI (.opencode/command/) formats.
+ *              Supports import from legacy CLI directories (.opencode/command/, .cursor/commands/).
  */
 
 import * as fs from 'node:fs/promises';
@@ -141,12 +141,12 @@ export class AgentsCommandsService {
 		let count = 0;
 		const sources = new Set<string>();
 
-		// 1. Claude CLI (.claude/commands/)
-		const claudeDir = path.join(this._workspaceRoot, PATHS.CLAUDE_COMMANDS_DIR);
-		const claudeCount = await this.importFromDir(claudeDir);
-		if (claudeCount > 0) {
-			count += claudeCount;
-			sources.add('Claude CLI');
+		// 1. Legacy CLI commands
+		const legacyDir = path.join(this._workspaceRoot, '.claude', 'commands');
+		const legacyCount = await this.importFromDir(legacyDir);
+		if (legacyCount > 0) {
+			count += legacyCount;
+			sources.add('.claude/commands');
 		}
 
 		// 2. OpenCode CLI (.opencode/command/)
@@ -209,18 +209,6 @@ export class AgentsCommandsService {
 		if (!this._workspaceRoot) return;
 
 		const commands = await this.getCommands();
-
-		// Sync to Claude (.claude/commands/)
-		const claudeDir = path.join(this._workspaceRoot, PATHS.CLAUDE_COMMANDS_DIR);
-		await fs.mkdir(claudeDir, { recursive: true });
-
-		for (const cmd of commands) {
-			await fs.writeFile(
-				path.join(claudeDir, `${cmd.name}.md`),
-				this.stringifyCommand(cmd),
-				'utf-8',
-			);
-		}
 
 		// Sync to OpenCode (.opencode/command/)
 		const openCodeDir = path.join(this._workspaceRoot, PATHS.OPENCODE_COMMAND_DIR);

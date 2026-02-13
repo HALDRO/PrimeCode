@@ -25,7 +25,6 @@ const AgentsHelpContent = () => (
 		<div className="flex flex-col gap-0.5 text-vscode-foreground">
 			<div>
 				<span className="text-vscode-button-background">Import</span> — copies from{' '}
-				<code className="bg-(--alpha-10) px-0.5 rounded text-xs">.claude/</code>,{' '}
 				<code className="bg-(--alpha-10) px-0.5 rounded text-xs">.cursor/</code> and{' '}
 				<code className="bg-(--alpha-10) px-0.5 rounded text-xs">.opencode/</code> into{' '}
 				<code className="bg-(--alpha-10) px-0.5 rounded text-xs">.agents/</code> (skips duplicates)

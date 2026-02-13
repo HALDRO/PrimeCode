@@ -157,10 +157,6 @@ export interface ImportMcpFromCLICommand {
 	type: 'importMcpFromCLI';
 }
 
-export interface SyncAgentsToClaudeProjectCommand {
-	type: 'syncAgentsToClaudeProject';
-}
-
 export interface SyncAgentsToOpenCodeProjectCommand {
 	type: 'syncAgentsToOpenCodeProject';
 }
@@ -388,12 +384,12 @@ export interface OpenHookFileCommand {
 	name: string;
 }
 
-export interface ImportHooksFromClaudeCommand {
-	type: 'importHooksFromClaude';
+export interface ImportHooksFromCLICommand {
+	type: 'importHooksFromCLI';
 }
 
-export interface SyncHooksToClaudeCommand {
-	type: 'syncHooksToClaude';
+export interface SyncHooksToCLICommand {
+	type: 'syncHooksToCLI';
 }
 
 export interface CreateCommandCommand {
@@ -413,8 +409,8 @@ export interface OpenCommandFileCommand {
 	name: string;
 }
 
-export interface ImportCommandsFromClaudeCommand {
-	type: 'importCommandsFromClaude';
+export interface ImportCommandsFromCLICommand {
+	type: 'importCommandsFromCLI';
 }
 
 export interface SyncCommandsToCLICommand {
@@ -450,7 +446,7 @@ export interface ToggleRuleCommand {
 	type: 'toggleRule';
 	path: string;
 	enabled: boolean;
-	source: 'claude' | 'opencode';
+	source: 'opencode';
 }
 
 // =============================================================================
@@ -532,7 +528,6 @@ export type WebviewCommand =
 	| DeleteMCPServerCommand
 	| OpenAgentsMcpConfigCommand
 	| ImportMcpFromCLICommand
-	| SyncAgentsToClaudeProjectCommand
 	| SyncAgentsToOpenCodeProjectCommand
 	// Provider
 	| ReloadAllProvidersCommand
@@ -576,12 +571,12 @@ export type WebviewCommand =
 	| CreateHookCommand
 	| DeleteHookCommand
 	| OpenHookFileCommand
-	| ImportHooksFromClaudeCommand
-	| SyncHooksToClaudeCommand
+	| ImportHooksFromCLICommand
+	| SyncHooksToCLICommand
 	| CreateCommandCommand
 	| DeleteCommandCommand
 	| OpenCommandFileCommand
-	| ImportCommandsFromClaudeCommand
+	| ImportCommandsFromCLICommand
 	| SyncCommandsToCLICommand
 	| CreateSubagentCommand
 	| DeleteSubagentCommand

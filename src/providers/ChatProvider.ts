@@ -111,8 +111,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	) {
 		this.settings = new Settings();
 		this.sessionState = new SessionState();
-		const provider = (this.settings.get('provider') || 'claude') as 'claude' | 'opencode';
-		this.cli = new CLIRunner(provider);
+		this.cli = new CLIRunner();
 
 		// Initialize Handlers
 		// RestoreHandler is created first so its registerCheckpoint can be wired into the context
@@ -331,7 +330,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			case 'deleteMCPServer':
 			case 'openAgentsMcpConfig':
 			case 'importMcpFromCLI':
-			case 'syncAgentsToClaudeProject':
 			case 'syncAgentsToOpenCodeProject':
 				return this.mcpHandler;
 
@@ -432,12 +430,12 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			case 'createHook':
 			case 'deleteHook':
 			case 'openHookFile':
-			case 'importHooksFromClaude':
-			case 'syncHooksToClaude':
+			case 'importHooksFromCLI':
+			case 'syncHooksToCLI':
 			case 'createCommand':
 			case 'deleteCommand':
 			case 'openCommandFile':
-			case 'importCommandsFromClaude':
+			case 'importCommandsFromCLI':
 			case 'syncCommandsToCLI':
 			case 'createSubagent':
 			case 'deleteSubagent':
@@ -1038,47 +1036,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	}
 
 	private handleSettingsChange(): void {
-		// Recreate CLI runner if provider changed
 		this.settings.refresh();
-		const provider = (this.settings.get('provider') || 'claude') as 'claude' | 'opencode';
-
-		if (this.cli.getProvider() === provider) {
-			logger.info('[ChatProvider] Provider unchanged, skipping CLI restart');
-			this.postMessage({ type: 'configChanged' });
-			return;
-		}
-
-		this.cli.dispose();
-
-		this.cli = new CLIRunner(provider);
-		this.cli.on('event', event => this.handleCliEvent(event));
-
-		const handlerContext: HandlerContext = {
-			extensionContext: this.context,
-			settings: this.settings,
-			cli: this.cli,
-			view: { postMessage: msg => this.postMessage(msg) },
-			sessionState: this.sessionState,
-			services: this.services,
-		};
-
-		// Re-instantiate handlers with new CLI
-		this.sessionHandler = new SessionHandler(handlerContext);
-		this.settingsHandler = new SettingsHandler(handlerContext);
-		this.mcpHandler = new McpHandler(handlerContext);
-		this.providerHandler = new ProviderHandler(handlerContext);
-		this.toolHandler = new ToolHandler(handlerContext);
-		this.fileHandler = new FileHandler(handlerContext);
-
-		// Restore workspace root for settings handler
-		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-		if (workspaceRoot) {
-			this.settingsHandler.setWorkspaceRoot(workspaceRoot);
-		}
-
-		// If switching TO opencode, start the server (mirrors constructor logic)
-		this.scheduleOpenCodeInit();
-
 		this.postMessage({ type: 'configChanged' });
 	}
 

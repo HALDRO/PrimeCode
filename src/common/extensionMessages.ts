@@ -114,7 +114,7 @@ export interface SessionMessagePayload {
 export interface SessionStatusPayload {
 	eventType: 'status';
 	status: SessionStatus;
-	/** Optional human-readable UI status text (e.g., "Ready", "Claude is working...") */
+	/** Optional human-readable UI status text (e.g., "Ready", "AI is working...") */
 	statusText?: string;
 	/** Optional loading message shown while busy */
 	loadingMessage?: string;
@@ -549,7 +549,7 @@ export type AgentsConfigStatusMessage = BaseExtensionMessage<
 	{ hasProjectConfig: boolean; projectPath: string }
 >;
 
-export type AgentsSyncTarget = 'claude' | 'opencode' | 'cursor';
+export type AgentsSyncTarget = 'opencode' | 'cursor';
 
 export type AgentsSyncResultMessage = BaseExtensionMessage<
 	'agentsSyncResult',

@@ -424,7 +424,7 @@ export const EmptyState: React.FC<EmptyStateProps> = ({ children, className }) =
 // =============================================================================
 
 interface CLIStatusBarProps {
-	variant: 'claude' | 'opencode';
+	variant: 'opencode';
 	isChecking: boolean;
 	installed: boolean;
 	version?: string;
@@ -436,11 +436,6 @@ interface CLIStatusBarProps {
 }
 
 const CLI_CONFIG = {
-	claude: {
-		name: 'Claude CLI',
-		package: '@anthropic-ai/claude-code',
-		docsUrl: 'https://docs.anthropic.com/en/docs/claude-code',
-	},
 	opencode: {
 		name: 'OpenCode CLI',
 		package: '@opencode-ai/cli',
@@ -487,14 +482,10 @@ export const CLIStatusBar: React.FC<CLIStatusBarProps> = ({
 			: installed
 				? updateAvailable
 					? 'Update available'
-					: variant === 'claude'
-						? 'Up to date'
-						: 'Connected'
+					: 'Connected'
 				: 'Not installed';
 
-	// Show install command when not installed OR (for claude) when update available
-	const showInstallCommand =
-		!error && (variant === 'claude' ? updateAvailable || !installed : !installed && !isChecking);
+	const showInstallCommand = !error && !installed && !isChecking;
 
 	return (
 		<div className="mt-2.5 p-2.5 mx-(--gap-1) bg-(--alpha-10) border border-vscode-panel-border rounded text-xs">

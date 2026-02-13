@@ -147,22 +147,13 @@ export const McpSettingsPanel: React.FC = () => {
 					tooltip="Export .agents/mcp.json to CLI-specific config files"
 					last
 				>
-					<div className="flex items-center gap-1.5">
-						<Button
-							size="sm"
-							variant="secondary"
-							onClick={() => postMessage({ type: 'syncAgentsToClaudeProject' })}
-						>
-							Claude
-						</Button>
-						<Button
-							size="sm"
-							variant="secondary"
-							onClick={() => postMessage({ type: 'syncAgentsToOpenCodeProject' })}
-						>
-							OpenCode
-						</Button>
-					</div>
+					<Button
+						size="sm"
+						variant="secondary"
+						onClick={() => postMessage({ type: 'syncAgentsToOpenCodeProject' })}
+					>
+						Sync
+					</Button>
 				</SettingRow>
 			</SettingsGroup>
 

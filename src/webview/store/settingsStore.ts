@@ -3,7 +3,7 @@
  * @description Centralized state for all extension settings including proxy settings,
  *              access, MCP servers, custom snippets, CLI diagnostics and platform info.
  *              Uses unified types from schemas for consistency with extension backend.
- *              Supports both Claude and OpenCode CLI providers with unified access handling.
+ *              OpenCode-only provider model with unified access handling.
  *
  * Loading State Management:
  * -------------------------
@@ -321,7 +321,7 @@ export interface SettingsState {
 export const useSettingsStore = create<SettingsState>((set, get) => ({
 	workspaceName: '',
 
-	provider: 'claude',
+	provider: 'opencode',
 
 	proxyBaseUrl: 'http://localhost:11434',
 	proxyApiKey: '',
@@ -358,12 +358,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 	discoveryStatus: {
 		rules: {
 			hasAgentsMd: false,
-			hasClaudeMd: false,
-			hasClaudeShim: false,
 			ruleFiles: [],
 		},
 		permissions: {
-			claudeConfig: undefined,
 			openCodeConfig: undefined,
 		},
 		skills: [],

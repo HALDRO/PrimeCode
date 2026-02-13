@@ -7,14 +7,12 @@ export class ProviderHandler implements WebviewMessageHandler {
 
 	private static readonly LEGACY_SELECTED_MODEL_KEY = 'primecode.selectedModel';
 
-	private getSelectedModelKey(provider: 'claude' | 'opencode'): string {
-		return provider === 'opencode'
-			? 'primecode.selectedModel.opencode'
-			: 'primecode.selectedModel.claude';
+	private getSelectedModelKey(): string {
+		return 'primecode.selectedModel.opencode';
 	}
 
-	private async readSelectedModel(provider: 'claude' | 'opencode'): Promise<string | undefined> {
-		const key = this.getSelectedModelKey(provider);
+	private async readSelectedModel(): Promise<string | undefined> {
+		const key = this.getSelectedModelKey();
 		const fromNew = this.context.extensionContext.globalState.get<string>(key);
 		if (fromNew) return fromNew;
 
@@ -24,11 +22,8 @@ export class ProviderHandler implements WebviewMessageHandler {
 		);
 		if (!legacy) return undefined;
 
-		// Guard against cross-provider contamination.
 		// OpenCode models are composite IDs: "provider/model".
-		if (provider === 'opencode' && !legacy.includes('/')) return undefined;
-		// Claude models are simple IDs without '/'.
-		if (provider === 'claude' && legacy.includes('/')) return undefined;
+		if (!legacy.includes('/')) return undefined;
 
 		await this.context.extensionContext.globalState.update(key, legacy);
 		return legacy;
@@ -76,27 +71,12 @@ export class ProviderHandler implements WebviewMessageHandler {
 	}
 
 	private async restoreSelectedModel(): Promise<void> {
-		const provider = (this.context.settings.get('provider') || 'claude') as 'claude' | 'opencode';
-		const savedModel = await this.readSelectedModel(provider);
+		const savedModel = await this.readSelectedModel();
 		if (!savedModel) return;
-
-		if (provider === 'opencode') {
-			this.context.view.postMessage({ type: 'openCodeModelSet', data: { model: savedModel } });
-		} else {
-			this.context.view.postMessage({ type: 'modelSelected', model: savedModel });
-		}
+		this.context.view.postMessage({ type: 'openCodeModelSet', data: { model: savedModel } });
 	}
 
 	private async onCheckOpenCodeStatus(): Promise<void> {
-		const provider = (this.context.settings.get('provider') || 'claude') as 'claude' | 'opencode';
-		if (provider !== 'opencode') {
-			this.context.view.postMessage({
-				type: 'openCodeStatus',
-				data: { installed: false, version: null },
-			});
-			return;
-		}
-
 		const info = this.context.cli.getOpenCodeServerInfo();
 		if (!info) {
 			this.context.view.postMessage({
@@ -115,15 +95,6 @@ export class ProviderHandler implements WebviewMessageHandler {
 
 	private async onLoadOpenCodeProviders(): Promise<void> {
 		try {
-			const provider = (this.context.settings.get('provider') || 'claude') as 'claude' | 'opencode';
-			if (provider !== 'opencode') {
-				this.context.view.postMessage({
-					type: 'openCodeProviders',
-					data: { providers: [], config: { isLoading: false } },
-				});
-				return;
-			}
-
 			const sdkClient = this.context.cli.getSdkClient();
 			if (!sdkClient) {
 				this.context.view.postMessage({
@@ -155,12 +126,6 @@ export class ProviderHandler implements WebviewMessageHandler {
 
 	private async onLoadAvailableProviders(): Promise<void> {
 		try {
-			const provider = (this.context.settings.get('provider') || 'claude') as 'claude' | 'opencode';
-			if (provider !== 'opencode') {
-				this.context.view.postMessage({ type: 'availableProviders', data: { providers: [] } });
-				return;
-			}
-
 			const sdkClient = this.context.cli.getSdkClient();
 			if (!sdkClient) {
 				this.context.view.postMessage({ type: 'availableProviders', data: { providers: [] } });
@@ -267,10 +232,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 	private async onSetOpenCodeModel(msg: CommandOf<'setOpenCodeModel'>): Promise<void> {
 		const { model } = msg;
 		if (model) {
-			await this.context.extensionContext.globalState.update(
-				this.getSelectedModelKey('opencode'),
-				model,
-			);
+			await this.context.extensionContext.globalState.update(this.getSelectedModelKey(), model);
 			this.context.view.postMessage({ type: 'openCodeModelSet', data: { model } });
 		}
 	}
@@ -278,10 +240,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 	private async onSelectModel(msg: CommandOf<'selectModel'>): Promise<void> {
 		const { model } = msg;
 		if (model) {
-			await this.context.extensionContext.globalState.update(
-				this.getSelectedModelKey('claude'),
-				model,
-			);
+			await this.context.extensionContext.globalState.update(this.getSelectedModelKey(), model);
 			this.context.view.postMessage({ type: 'modelSelected', model });
 		}
 	}

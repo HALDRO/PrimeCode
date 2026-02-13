@@ -3,7 +3,6 @@
  * @description Manages subagent definitions stored under `.agents/subagents/` as the canonical source.
  *              Provides import/sync bridges to CLI-specific subagent directories:
  *              - OpenCode: `.opencode/agent/<name>.md` (frontmatter: { description, mode: 'subagent', name? })
- *              - Claude Code: `.claude/agents/<name>.md` (frontmatter: { name, description, model?, tools?, permissionMode?, skills? })
  *              This intentionally mirrors the approach used by rulesync-main: subagents are markdown files with
  *              frontmatter + body prompt, and the command layer can reference them via the `agent` field.
  */
@@ -20,13 +19,6 @@ export interface ParsedSubagent {
 	name: string;
 	description: string;
 	prompt: string;
-	/** Optional explicit target config for Claude Code agent frontmatter */
-	claude?: {
-		model?: string;
-		tools?: string[];
-		permissionMode?: string;
-		skills?: string[];
-	};
 	/** Optional explicit OpenCode agent options (reserved for future) */
 	opencode?: Record<string, unknown>;
 	path: string;
@@ -35,24 +27,8 @@ export interface ParsedSubagent {
 type SubagentFrontmatter = {
 	description?: unknown;
 	name?: unknown;
-	claude?: unknown;
 	opencode?: unknown;
 };
-
-function toStringArray(value: unknown): string[] | undefined {
-	if (Array.isArray(value)) {
-		const items = value.map(v => (typeof v === 'string' ? v.trim() : '')).filter(Boolean);
-		return items.length > 0 ? items : undefined;
-	}
-	if (typeof value === 'string') {
-		const items = value
-			.split(',')
-			.map(s => s.trim())
-			.filter(Boolean);
-		return items.length > 0 ? items : undefined;
-	}
-	return undefined;
-}
 
 export class AgentsSubagentsService {
 	private _workspaceRoot: string | undefined;
@@ -68,10 +44,6 @@ export class AgentsSubagentsService {
 
 	private get agentsSubagentsDir(): string {
 		return path.join(this.workspaceRoot, PATHS.AGENTS_SUBAGENTS_DIR);
-	}
-
-	private get claudeAgentsDir(): string {
-		return path.join(this.workspaceRoot, PATHS.CLAUDE_AGENTS_DIR);
 	}
 
 	private get openCodeAgentDir(): string {
@@ -134,40 +106,6 @@ export class AgentsSubagentsService {
 		}
 	}
 
-	public async importFromClaude(): Promise<{ imported: number }> {
-		if (!this._workspaceRoot) return { imported: 0 };
-		try {
-			const exists = await fs
-				.access(this.claudeAgentsDir)
-				.then(() => true)
-				.catch(() => false);
-			if (!exists) return { imported: 0 };
-
-			await fs.mkdir(this.agentsSubagentsDir, { recursive: true });
-			const files = await fs.readdir(this.claudeAgentsDir);
-			let imported = 0;
-
-			for (const file of files) {
-				if (!file.endsWith('.md')) continue;
-				const sourcePath = path.join(this.claudeAgentsDir, file);
-				const targetPath = path.join(this.agentsSubagentsDir, file);
-				const targetExists = await fs
-					.access(targetPath)
-					.then(() => true)
-					.catch(() => false);
-				if (targetExists) continue;
-				const content = await fs.readFile(sourcePath, 'utf8');
-				await fs.writeFile(targetPath, content, 'utf8');
-				imported += 1;
-			}
-
-			return { imported };
-		} catch (error) {
-			logger.error('[AgentsSubagentsService] importFromClaude error:', error);
-			return { imported: 0 };
-		}
-	}
-
 	public async importFromOpenCode(): Promise<{ imported: number }> {
 		if (!this._workspaceRoot) return { imported: 0 };
 		try {
@@ -206,26 +144,11 @@ export class AgentsSubagentsService {
 		if (!this._workspaceRoot) return { synced: 0 };
 
 		const subagents = await this.getSubagents();
-		await fs.mkdir(this.claudeAgentsDir, { recursive: true });
 		await fs.mkdir(this.openCodeAgentDir, { recursive: true });
 
 		let synced = 0;
 		for (const sa of subagents) {
 			const fileName = `${this._sanitizeName(sa.name)}.md`;
-			// Claude
-			const claudeFrontmatter: Record<string, string | boolean | undefined> = {
-				name: sa.name,
-				description: sa.description,
-				...(sa.claude?.model ? { model: sa.claude.model } : {}),
-				...(sa.claude?.tools ? { tools: sa.claude.tools.join(',') } : {}),
-				...(sa.claude?.permissionMode ? { permissionMode: sa.claude.permissionMode } : {}),
-				...(sa.claude?.skills ? { skills: sa.claude.skills.join(',') } : {}),
-			};
-			await fs.writeFile(
-				path.join(this.claudeAgentsDir, fileName),
-				stringifyFrontmatter(claudeFrontmatter, sa.prompt),
-				'utf8',
-			);
 
 			// OpenCode
 			const openCodeFrontmatter: Record<string, string | boolean | undefined> = {
@@ -274,23 +197,6 @@ export class AgentsSubagentsService {
 		const description =
 			typeof frontmatter.description === 'string' ? frontmatter.description : 'Subagent';
 
-		const claudeRaw =
-			frontmatter.claude && typeof frontmatter.claude === 'object' ? frontmatter.claude : undefined;
-		const claude = claudeRaw
-			? {
-					model:
-						typeof (claudeRaw as Record<string, unknown>).model === 'string'
-							? String((claudeRaw as Record<string, unknown>).model)
-							: undefined,
-					tools: toStringArray((claudeRaw as Record<string, unknown>).tools),
-					permissionMode:
-						typeof (claudeRaw as Record<string, unknown>).permissionMode === 'string'
-							? String((claudeRaw as Record<string, unknown>).permissionMode)
-							: undefined,
-					skills: toStringArray((claudeRaw as Record<string, unknown>).skills),
-				}
-			: undefined;
-
 		const opencode =
 			frontmatter.opencode && typeof frontmatter.opencode === 'object'
 				? (frontmatter.opencode as Record<string, unknown>)
@@ -300,18 +206,16 @@ export class AgentsSubagentsService {
 			name,
 			description,
 			prompt: body.trim(),
-			claude,
 			opencode,
 			path: normalizeToPosixPath(path.join(PATHS.AGENTS_SUBAGENTS_DIR, filename)),
 		};
 	}
 
 	private _stringifySubagent(subagent: Omit<ParsedSubagent, 'path'>): string {
-		// Use yaml.dump directly for canonical format to support nested objects (claude, opencode)
+		// Use yaml.dump directly for canonical format to support nested objects
 		const attributes: Record<string, unknown> = {
 			name: subagent.name,
 			description: subagent.description,
-			...(subagent.claude ? { claude: subagent.claude } : {}),
 			...(subagent.opencode ? { opencode: subagent.opencode } : {}),
 		};
 		const yamlStr = yaml.dump(attributes, { lineWidth: -1 }).trim();

@@ -1,8 +1,7 @@
 /**
  * @file McpConfigWatcherService
  * @description Watches `.agents/mcp.json` for changes and triggers hot-reload of MCP configuration.
- *              For OpenCode: calls `instance.dispose()` via SDK to reload config without server restart.
- *              For Claude: re-syncs `mcp-servers.json` with updated user MCP servers.
+ *              Calls OpenCode SDK dispose callback so MCP config is reloaded without extension restart.
  *              Debounces rapid file changes to prevent excessive reloads.
  *              Emits events for UI notification about config changes.
  *              Supports suppression of reload when changes originate from UI (to avoid double reload).
@@ -46,9 +45,8 @@ export class McpConfigWatcherService implements vscode.Disposable {
 	private readonly _onConfigChanged = new vscode.EventEmitter<McpConfigChangeEvent>();
 	public readonly onConfigChanged = this._onConfigChanged.event;
 
-	// Callbacks for different CLI providers
+	// Callbacks for CLI providers
 	private _openCodeReloadCallback: ReloadCallback | undefined;
-	private _claudeReloadCallback: ReloadCallback | undefined;
 
 	constructor(
 		readonly _agentsConfigService: AgentsConfigService,
@@ -116,14 +114,6 @@ export class McpConfigWatcherService implements vscode.Disposable {
 	 */
 	public setOpenCodeReloadCallback(callback: ReloadCallback): void {
 		this._openCodeReloadCallback = callback;
-	}
-
-	/**
-	 * Register callback for Claude CLI reload
-	 * Called when config changes to re-sync mcp-servers.json
-	 */
-	public setClaudeReloadCallback(callback: ReloadCallback): void {
-		this._claudeReloadCallback = callback;
 	}
 
 	// =========================================================================
@@ -198,31 +188,15 @@ export class McpConfigWatcherService implements vscode.Disposable {
 		try {
 			logger.info(`[McpConfigWatcherService] Reloading MCP config (source: ${source})`);
 
-			// 1. Sync to supported CLI formats first (for OpenCode + UI registry)
+			// 1. Sync canonical config to project files first
 			await this._agentsSyncService.syncAllProject();
 
-			// 2. Call provider-specific reload callbacks
-			const reloadPromises: Promise<void>[] = [];
-
+			// 2. Hot-reload OpenCode runtime if callback is registered
 			if (this._openCodeReloadCallback) {
-				reloadPromises.push(
-					this._openCodeReloadCallback().catch(error => {
-						logger.error('[McpConfigWatcherService] OpenCode reload failed:', error);
-					}),
-				);
+				await this._openCodeReloadCallback().catch(error => {
+					logger.error('[McpConfigWatcherService] OpenCode reload failed:', error);
+				});
 			}
-
-			// Claude SDK consumes MCP servers from `.agents/mcp.json` directly via SDK options.
-			// No need to write `.mcp.json` (legacy Claude CLI) but we DO hot-swap active query servers.
-			if (this._claudeReloadCallback) {
-				reloadPromises.push(
-					this._claudeReloadCallback().catch(error => {
-						logger.error('[McpConfigWatcherService] Claude reload failed:', error);
-					}),
-				);
-			}
-
-			await Promise.all(reloadPromises);
 
 			// 3. Emit change event for UI notification
 			this._onConfigChanged.fire({

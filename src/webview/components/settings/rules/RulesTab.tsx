@@ -19,7 +19,7 @@ export const RulesTab: React.FC = () => {
 
 	const handleOpenAgents = () => postMessage({ type: 'openFile', filePath: 'AGENTS.md' });
 
-	const handleToggleRule = (path: string, enabled: boolean, source: 'claude' | 'opencode') => {
+	const handleToggleRule = (path: string, enabled: boolean, source: 'opencode') => {
 		postMessage({ type: 'toggleRule', path, enabled, source });
 	};
 

@@ -71,13 +71,13 @@ export const SkillsTab: React.FC = () => {
 			<SettingsGroup>
 				<SettingRow
 					title="Import from CLI"
-					tooltip="Import skills from .claude/skills/, .opencode/skill/ and .cursor/skills/ into .agents/skills/"
+					tooltip="Import skills from .opencode/skill/ and .cursor/skills/ into .agents/skills/"
 				>
 					<Button
 						size="sm"
 						variant="secondary"
 						onClick={handleImportSkills}
-						title="Import from .claude/.opencode/.cursor into .agents"
+						title="Import from .opencode/.cursor into .agents"
 					>
 						<DownloadIcon size={12} className="mr-1" />
 						Import
@@ -85,14 +85,14 @@ export const SkillsTab: React.FC = () => {
 				</SettingRow>
 				<SettingRow
 					title="Sync to CLI"
-					tooltip="Export skills from .agents/skills/ to .claude/skills/, .opencode/skill/ and .cursor/skills/"
+					tooltip="Export skills from .agents/skills/ to .opencode/skill/ and .cursor/skills/"
 					last={isCreatingSkill}
 				>
 					<Button
 						size="sm"
 						variant="secondary"
 						onClick={handleSyncSkills}
-						title="Export from .agents to .claude/.opencode/.cursor"
+						title="Export from .agents to .opencode/.cursor"
 					>
 						<RefreshIcon size={12} className="mr-1" />
 						Sync

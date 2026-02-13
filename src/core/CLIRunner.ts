@@ -1,6 +1,6 @@
 /**
  * @file CLIRunner.ts
- * @description Stateless facade over CLI executors (Claude / OpenCode).
+ * @description Stateless facade over CLI executors.
  * All session-ID tracking lives in SessionState (single source of truth);
  * CLIRunner passes sessionId explicitly via method parameters.
  */
@@ -8,7 +8,6 @@
 import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 
-import { ClaudeExecutor } from './executor/ClaudeCode';
 import { OpenCodeExecutor } from './executor/OpenCode';
 import type { CLIConfig, CLIEvent, CLIExecutor } from './executor/types';
 
@@ -20,18 +19,10 @@ export type { CLIConfig, CLIEvent, CLIExecutor };
 
 export class CLIRunner extends EventEmitter {
 	private executor: CLIExecutor;
-	private readonly provider: 'claude' | 'opencode';
 
-	constructor(provider: 'claude' | 'opencode') {
+	constructor() {
 		super();
-		this.provider = provider;
-
-		if (provider === 'claude') {
-			this.executor = new ClaudeExecutor();
-		} else {
-			this.executor = new OpenCodeExecutor();
-		}
-
+		this.executor = new OpenCodeExecutor();
 		this.executor.on('event', (event: CLIEvent) => this.emit('event', event));
 	}
 
@@ -167,7 +158,7 @@ export class CLIRunner extends EventEmitter {
 		return this.executor.renameSession(sessionId, title, config);
 	}
 
-	getProvider(): 'claude' | 'opencode' {
-		return this.provider;
+	getProvider(): 'opencode' {
+		return 'opencode';
 	}
 }

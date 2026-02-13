@@ -21,7 +21,7 @@ function createMockHandlerContext(
 
 	const mockCli = {
 		respondToPermission: vi.fn().mockResolvedValue(undefined),
-		getProvider: vi.fn().mockReturnValue('claude'),
+		getProvider: vi.fn().mockReturnValue('opencode'),
 	};
 
 	const mockSettings = {

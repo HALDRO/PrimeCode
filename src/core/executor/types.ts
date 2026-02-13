@@ -8,7 +8,7 @@ import type { EventEmitter } from 'node:events';
 import type { NormalizedEntry } from '../../common/normalizedEvents';
 
 export interface CLIConfig {
-	provider: 'claude' | 'opencode';
+	provider: 'opencode';
 	model?: string;
 	/** Optional stable message ID for OpenCode prompts (used for edit/revert flows). */
 	messageID?: string;
@@ -23,8 +23,6 @@ export interface CLIConfig {
 	serverUrl?: string;
 	/** Enable auto-compaction for OpenCode. */
 	autoCompact?: boolean;
-	/** Enable git commit reminder checks (Claude). */
-	commitReminder?: boolean;
 }
 
 export interface CLIEvent {

@@ -2,12 +2,12 @@
  * @file SlashCommandsDropdown - Slash commands picker
  * @description Uses universal DropdownMenu for consistent styling. Shows CLI commands,
  *              built-in snippets, and custom snippets with type badges.
- *              CLI commands are filtered based on selected provider (Claude/OpenCode).
  */
 
 import type React from 'react';
 import { useCallback, useMemo } from 'react';
-import { CLI_COMMANDS, type CommandItem, OPENCODE_COMMANDS } from '../../constants';
+import { type CommandItem, OPENCODE_COMMANDS } from '../../constants';
+
 import { useChatInputState, useSettingsStore, useSlashCommandsState } from '../../store';
 import { type AnchorRectLike, DropdownMenu, type DropdownMenuItem } from '../ui';
 
@@ -35,7 +35,8 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 	anchorElement,
 	anchorRect,
 }) => {
-	const { provider, commands, subagents } = useSettingsStore();
+	const { commands, subagents } = useSettingsStore();
+
 	const { input, setInput } = useChatInputState();
 	const { slashFilter, setShowSlashCommands, setSlashFilter } = useSlashCommandsState();
 
@@ -98,8 +99,6 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 			type: 'custom' as const,
 			prompt: cmd.prompt,
 		}));
-		// Use provider-specific CLI commands
-		const cliCommands = provider === 'opencode' ? OPENCODE_COMMANDS : CLI_COMMANDS;
 
 		const subagentList: CommandItem[] = subagents.items.map(agent => ({
 			id: agent.name,
@@ -109,8 +108,8 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 			prompt: `@${agent.name}`,
 		}));
 
-		return [...customList, ...cliCommands, ...subagentList];
-	}, [commands.custom, provider, subagents.items]);
+		return [...customList, ...OPENCODE_COMMANDS, ...subagentList];
+	}, [commands.custom, subagents.items]);
 
 	const filteredCommands = useMemo(() => {
 		const term = slashFilter.toLowerCase().replace(/^\//, '');
@@ -128,8 +127,7 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 		(cmd: CommandItem) => {
 			if (cmd.type === 'cli' || cmd.type === 'custom') {
 				// Execute CLI + custom commands through the chat pipeline (extension-side).
-				// - OpenCode: MessageHandler detects leading '/' and uses SDK session.command().
-				// - Claude: ClaudeSDKService receives the prompt and handles built-in commands via SDK.
+				// OpenCode commands are detected by MessageHandler and routed to SDK session.command().
 				replaceCurrentCommand(`/${cmd.id}  `);
 			} else if (cmd.type === 'subagent') {
 				// Subagent type - insert @agent-name

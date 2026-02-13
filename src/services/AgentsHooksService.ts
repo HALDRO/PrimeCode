@@ -1,8 +1,8 @@
 /**
  * @file AgentsHooksService
  * @description Manages hook definitions stored under `.agents/hooks/`.
- *              Focuses on Claude-compatible hookify rule files (`hookify.*.local.md`) as the
- *              lowest-common-denominator hook format we can safely sync to `.claude/`.
+ *              Focuses on hookify rule files (`hookify.*.local.md`) as the
+ *              lowest-common-denominator hook format we can safely sync to CLI directories.
  *              OpenCode hooks are currently experimental and intentionally handled separately.
  */
 
@@ -27,10 +27,6 @@ export class AgentsHooksService {
 
 	private get agentsHooksDir(): string {
 		return path.join(this.workspaceRoot, PATHS.AGENTS_HOOKS_DIR);
-	}
-
-	private get claudeDir(): string {
-		return path.join(this.workspaceRoot, '.claude');
 	}
 
 	public async getHooks(): Promise<ParsedHook[]> {
@@ -76,55 +72,6 @@ export class AgentsHooksService {
 		await fs.unlink(path.join(this.workspaceRoot, match.path));
 	}
 
-	public async importFromClaude(): Promise<{ imported: number }> {
-		const exists = await fs
-			.access(this.claudeDir)
-			.then(() => true)
-			.catch(() => false);
-		if (!exists) return { imported: 0 };
-
-		await fs.mkdir(this.agentsHooksDir, { recursive: true });
-
-		const entries = await fs.readdir(this.claudeDir, { withFileTypes: true });
-		let imported = 0;
-
-		for (const entry of entries) {
-			if (!entry.isFile()) continue;
-			// Hookify rules live directly under `.claude/`.
-			if (!entry.name.startsWith('hookify.') || !entry.name.endsWith('.local.md')) continue;
-
-			const src = path.join(this.claudeDir, entry.name);
-			const dst = path.join(this.agentsHooksDir, entry.name);
-			const dstExists = await fs
-				.access(dst)
-				.then(() => true)
-				.catch(() => false);
-			if (dstExists) continue;
-
-			const content = await fs.readFile(src, 'utf8');
-			await fs.writeFile(dst, content, 'utf8');
-			imported += 1;
-		}
-
-		return { imported };
-	}
-
-	public async syncToClaude(): Promise<{ synced: number }> {
-		const hooks = await this.getHooks();
-		await fs.mkdir(this.claudeDir, { recursive: true });
-
-		let synced = 0;
-		for (const hook of hooks) {
-			const src = path.join(this.workspaceRoot, hook.path);
-			const fileName = path.basename(hook.path);
-			const dst = path.join(this.claudeDir, fileName);
-			await fs.copyFile(src, dst);
-			synced += 1;
-		}
-
-		return { synced };
-	}
-
 	private _sanitizeName(name: string): string {
 		const trimmed = name.trim();
 		if (!trimmed) throw new Error('Hook name is required');
@@ -132,7 +79,7 @@ export class AgentsHooksService {
 	}
 
 	private _fileNameForHook(name: string): string {
-		// Preserve Claude hookify naming convention.
+		// Preserve hookify naming convention.
 		return `hookify.${name}.local.md`;
 	}
 

@@ -13,7 +13,7 @@ import type { OpenCodeExecutor } from './executor/OpenCode';
 type FetchMock = ReturnType<typeof vi.fn>;
 
 function getOpenCodeExecutorForTest(): any {
-	const runner = new CLIRunner('opencode');
+	const runner = new CLIRunner();
 	return (runner as unknown as { executor: OpenCodeExecutor }).executor as OpenCodeExecutor;
 }
 

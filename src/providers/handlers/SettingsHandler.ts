@@ -57,7 +57,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 		for (const [key, value] of Object.entries(patch)) {
 			switch (key) {
 				case 'provider':
-					if (value === 'claude' || value === 'opencode') {
+					if (value === 'opencode') {
 						await this.context.settings.set('provider', value);
 					}
 					break;
