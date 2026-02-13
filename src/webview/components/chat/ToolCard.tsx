@@ -17,7 +17,7 @@ import { useVSCode } from '../../utils/vscode';
 import { ChevronDownIcon, CopyIcon, McpIcon, TerminalIcon, WandIcon } from '../icons';
 import { FileTypeIcon } from '../icons/FileTypeIcon';
 import { Button, IconButton, Tooltip } from '../ui';
-import { InlineToolAccessGate } from './InlineToolAccessGate';
+import { AccessGate } from './AccessGate';
 import {
 	computeSimpleStats,
 	getDiffContentHeight,
@@ -267,7 +267,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 								</div>
 								{showAccessGate && (
 									<div className="px-(--tool-content-padding) py-2 border-t border-(--border-subtle)">
-										<InlineToolAccessGate
+										<AccessGate
 											requestId={accessRequest?.requestId}
 											messageId={accessRequest?.id}
 											tool={accessRequest?.tool || toolName}
@@ -393,7 +393,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 							)}
 							{showAccessGate && (
 								<div className="px-(--tool-content-padding) py-2 border-t border-(--border-subtle)">
-									<InlineToolAccessGate
+									<AccessGate
 										requestId={accessRequest?.requestId}
 										messageId={accessRequest?.id}
 										tool={accessRequest?.tool || toolName}

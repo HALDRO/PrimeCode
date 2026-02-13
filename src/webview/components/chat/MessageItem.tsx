@@ -21,7 +21,6 @@ import {
 	TodoPendingIcon,
 	TodoProgressIcon,
 } from '../icons';
-import { AccessRequestMessage } from './AccessRequestMessage';
 import { SimpleTool, shouldCollapseGroupedItem, ThinkingMessage } from './SimpleTool';
 import { ToolCard, ToolCardMessage } from './ToolCard';
 
@@ -199,17 +198,9 @@ export const MessageItem: React.FC<{
 					<ToolCardMessage message={item} />
 				</div>
 			);
-		case 'access_request': {
-			const hasToolUseId = Boolean((item as { toolUseId?: string }).toolUseId);
-			// Access requests are rendered inline inside the related tool card.
-			// Fallback to standalone rendering only if we cannot associate the request with a tool_use.
-			if (hasToolUseId) return null;
-			return (
-				<div className="mb-(--tool-block-margin)">
-					<AccessRequestMessage message={item} />
-				</div>
-			);
-		}
+		case 'access_request':
+			// All access requests are rendered inline inside the related ToolCard.
+			return null;
 		case 'subtask':
 			return <SubtaskItem message={item} ctx={ctx} />;
 		case 'assistant':

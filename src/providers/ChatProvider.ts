@@ -487,6 +487,37 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			case 'importSubagentsFromCLI':
 			case 'syncSubagentsToCLI':
 			case 'toggleRule':
+			// File actions: accept (git stage)
+			case 'acceptFile': {
+				const filePath = (msg as { filePath: string }).filePath;
+				return {
+					async handleMessage() {
+						try {
+							const uri = vscode.Uri.file(filePath);
+							await vscode.commands.executeCommand('git.stage', uri);
+							logger.info('[ChatProvider] Staged file', { filePath });
+						} catch (err) {
+							logger.error('[ChatProvider] Failed to stage file', { filePath, err });
+						}
+					},
+				};
+			}
+			case 'acceptAllFiles': {
+				const filePaths = (msg as { filePaths: string[] }).filePaths;
+				return {
+					async handleMessage() {
+						for (const fp of filePaths) {
+							try {
+								const uri = vscode.Uri.file(fp);
+								await vscode.commands.executeCommand('git.stage', uri);
+							} catch (err) {
+								logger.error('[ChatProvider] Failed to stage file', { filePath: fp, err });
+							}
+						}
+						logger.info('[ChatProvider] Staged all files', { count: filePaths.length });
+					},
+				};
+			}
 			// TODO: File actions — not yet implemented
 			case 'undoFileChanges':
 			case 'undoAllChanges':

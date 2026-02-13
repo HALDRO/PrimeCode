@@ -17,7 +17,7 @@ import {
 } from '../../store';
 import { proxyEventSource } from '../../utils/proxyEventSource';
 import { useVSCode } from '../../utils/vscode';
-import { CloseIcon, FileIcon, HistoryIcon, PlusIcon, SettingsIcon } from '../icons';
+import { CloseIcon, HistoryIcon, MessageIcon, PlusIcon, SettingsIcon } from '../icons';
 import { Button } from '../ui';
 import { HistoryDropdown } from './HistoryDropdown';
 
@@ -97,6 +97,11 @@ export const Header: React.FC = React.memo(() => {
 						<div
 							key={session.id}
 							onClick={() => handleSwitchSession(session.id)}
+							onMouseDown={e => {
+								if (e.button === 1) {
+									e.preventDefault();
+								}
+							}}
 							onAuxClick={e => {
 								if (e.button === 1) {
 									e.preventDefault();
@@ -104,30 +109,35 @@ export const Header: React.FC = React.memo(() => {
 								}
 							}}
 							className={cn(
-								'group flex items-center h-(--tab-height) px-(--gap-0-5) gap-0 rounded transition-all duration-150 cursor-pointer relative select-none min-w-(--icon-btn-md) justify-center border border-transparent',
+								'group flex items-center h-(--tab-height) px-(--gap-2) gap-(--gap-1-5) rounded transition-all duration-150 cursor-pointer select-none border border-transparent',
 								session.id === activeSessionId
 									? 'bg-(--alpha-10) text-vscode-foreground border-(--alpha-5)'
 									: 'text-vscode-descriptionForeground hover:bg-(--alpha-10) hover:text-vscode-foreground',
 							)}
 							title={`Chat ${index + 1}`}
 						>
-							<FileIcon
-								size={14}
-								className={cn(session.id === activeSessionId ? 'opacity-100' : 'opacity-60')}
-							/>
-							<span className="text-sm font-medium">{index + 1}</span>
-
-							{/* Close button on hover */}
-							<button
-								type="button"
-								onClick={e => {
-									e.stopPropagation();
-									handleCloseSession(session.id);
-								}}
-								className="opacity-0 group-hover:opacity-100 p-(--gap-0-5) hover:bg-(--alpha-10) rounded transition-opacity flex items-center justify-center"
-							>
-								<CloseIcon size={12} />
-							</button>
+							<div className="relative w-5 h-5 shrink-0 flex items-center justify-center">
+								<MessageIcon
+									size={18}
+									className={cn(
+										'transition-opacity duration-150',
+										session.id === activeSessionId
+											? 'opacity-100 group-hover:opacity-0'
+											: 'opacity-60 group-hover:opacity-0',
+									)}
+								/>
+								<button
+									type="button"
+									onClick={e => {
+										e.stopPropagation();
+										handleCloseSession(session.id);
+									}}
+									className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 rounded transition-all duration-150 hover:bg-(--alpha-10)"
+								>
+									<CloseIcon size={18} />
+								</button>
+							</div>
+							<span className="text-sm font-medium shrink-0">{index + 1}</span>
 						</div>
 					))}
 				</div>
@@ -157,7 +167,7 @@ export const Header: React.FC = React.memo(() => {
 					title="New Chat"
 					className="w-(--header-btn-size) h-(--header-btn-size)"
 				>
-					<PlusIcon size={16} />
+					<PlusIcon size={18} />
 				</Button>
 
 				<div className="relative">
@@ -168,7 +178,7 @@ export const Header: React.FC = React.memo(() => {
 						title="History"
 						className="w-(--header-btn-size) h-(--header-btn-size)"
 					>
-						<HistoryIcon size={16} />
+						<HistoryIcon size={18} />
 					</Button>
 					{showHistoryDropdown && <HistoryDropdown />}
 				</div>

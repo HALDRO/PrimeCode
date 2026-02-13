@@ -14,7 +14,7 @@ import { cn } from '../../lib/cn';
 import { useModelDropdownState, useModelSelection } from '../../store';
 import { useVSCode } from '../../utils/vscode';
 import { BrainSideIcon, ZapIcon } from '../icons';
-import { type DropdownItemRenderProps, DropdownMenu, type DropdownMenuItem, GlowDot } from '../ui';
+import { type DropdownItemRenderProps, DropdownMenu, type DropdownMenuItem } from '../ui';
 
 interface ModelData {
 	id: string;
@@ -127,16 +127,8 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 					</span>
 					{item.data.capabilities?.reasoning && (
 						<span className="flex shrink-0 items-center gap-(--gap-1) opacity-70 text-vscode-descriptionForeground">
-							{isSelected && (
-								<GlowDot color="var(--color-accent)" glow="var(--color-accent-glow)" size={4} />
-							)}
 							<BrainSideIcon size={14} />
 						</span>
-					)}
-					{isSelected && !item.data.capabilities?.reasoning && (
-						<div className="shrink-0 ml-(--gap-2)">
-							<GlowDot color="var(--color-accent)" glow="var(--color-accent-glow)" size={4} />
-						</div>
 					)}
 					{item.meta && <span className="shrink-0 text-xs text-(--alpha-40)">{item.meta}</span>}
 				</div>

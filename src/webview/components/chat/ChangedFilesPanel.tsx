@@ -274,9 +274,10 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 
 	const handleAcceptFile = useCallback(
 		(filePath: string) => {
+			postMessage({ type: 'acceptFile', filePath });
 			removeChangedFile(filePath);
 		},
-		[removeChangedFile],
+		[postMessage, removeChangedFile],
 	);
 
 	const handleRejectFile = useCallback(
@@ -291,8 +292,10 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 	}, [postMessage]);
 
 	const handleKeepAll = useCallback(() => {
+		const filePaths = groupedFiles.map(f => f.filePath);
+		postMessage({ type: 'acceptAllFiles', filePaths });
 		clearChangedFiles();
-	}, [clearChangedFiles]);
+	}, [groupedFiles, postMessage, clearChangedFiles]);
 
 	// Copy operations delegated to extension side to avoid messages subscription
 	const handleCopyLastResponse = useCallback(() => {

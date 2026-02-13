@@ -28,7 +28,6 @@ import { getMessageHighlights } from '../../utils/messageParser';
 import { STANDARD_MODELS } from '../../utils/models';
 import { useSessionMessage, useVSCode } from '../../utils/vscode';
 import {
-	AgentsIcon,
 	AtSignIcon,
 	ChevronIcon,
 	ImageIcon,
@@ -943,7 +942,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 										showModelDropdown && 'bg-(--alpha-5) opacity-100',
 									)}
 								>
-									<AgentsIcon size={14} className="shrink-0" />
 									<span className="truncate">{getModelDisplayName()}</span>
 									<ChevronIcon expanded={showModelDropdown} size={10} className="shrink-0" />
 								</Button>

@@ -892,6 +892,49 @@ export class SessionHandler implements WebviewMessageHandler {
 					},
 					sessionId,
 				);
+
+				// Emit file change event for edit tools during replay
+				// so ChangedFilesPanel is restored after extension restart
+				if (filePathFromInput && this.isFileEditTool(toolName)) {
+					const oldContent =
+						typeof input.old_string === 'string'
+							? input.old_string
+							: typeof input.old_str === 'string'
+								? input.old_str
+								: typeof input.oldString === 'string'
+									? input.oldString
+									: '';
+					const newContent =
+						typeof input.new_string === 'string'
+							? input.new_string
+							: typeof input.new_str === 'string'
+								? input.new_str
+								: typeof input.newString === 'string'
+									? input.newString
+									: typeof input.content === 'string'
+										? input.content
+										: '';
+					const oldLines = oldContent ? String(oldContent).split('\n').length : 0;
+					const newLines = newContent ? String(newContent).split('\n').length : 0;
+
+					this.context.view.postMessage({
+						type: 'session_event',
+						targetId: sessionId,
+						eventType: 'file',
+						payload: {
+							eventType: 'file',
+							action: 'changed',
+							filePath: filePathFromInput,
+							fileName: filePathFromInput.split(/[/\\]/).pop() || filePathFromInput,
+							linesAdded: Math.max(0, newLines - oldLines),
+							linesRemoved: Math.max(0, oldLines - newLines),
+							toolUseId,
+						},
+						timestamp: Date.now(),
+						sessionId,
+					} satisfies SessionEventMessage);
+				}
+
 				continue;
 			}
 
@@ -1286,6 +1329,30 @@ export class SessionHandler implements WebviewMessageHandler {
 			SessionHandler.ACTIVE_TAB_KEY,
 		);
 		return { openTabs, activeTab };
+	}
+
+	/** Check if a tool name corresponds to a file-editing operation */
+	private isFileEditTool(toolName: string): boolean {
+		const normalized = toolName.toLowerCase();
+		const editTools = new Set([
+			'write',
+			'edit',
+			'multiedit',
+			'multi_edit',
+			'patch',
+			'create',
+			'writefile',
+			'editfile',
+			'write_file',
+			'edit_file',
+			'create_file',
+			'apply_diff',
+			'insert_code',
+		]);
+		if (editTools.has(normalized)) return true;
+		return /\b(write|edit|patch|create|overwrite|insert|replace|append|delete_file)\b/.test(
+			normalized,
+		);
 	}
 
 	private postLifecycle(

@@ -453,6 +453,16 @@ export interface ToggleRuleCommand {
 // File Action Commands
 // =============================================================================
 
+export interface AcceptFileCommand {
+	type: 'acceptFile';
+	filePath: string;
+}
+
+export interface AcceptAllFilesCommand {
+	type: 'acceptAllFiles';
+	filePaths: string[];
+}
+
 export interface UndoFileChangesCommand {
 	type: 'undoFileChanges';
 	filePath: string;
@@ -585,6 +595,8 @@ export type WebviewCommand =
 	| SyncSubagentsToCLICommand
 	| ToggleRuleCommand
 	// File Actions
+	| AcceptFileCommand
+	| AcceptAllFilesCommand
 	| UndoFileChangesCommand
 	| UndoAllChangesCommand
 	| CopyLastResponseCommand

@@ -8,8 +8,8 @@
 
 import type React from 'react';
 import { isToolMatch } from '../../constants';
-import { type Message, useChatActions } from '../../store';
-import { useVSCode } from '../../utils/vscode';
+import { useAccessResponse } from '../../hooks/useAccessResponse';
+import type { Message } from '../../store';
 import { Button, GlowDot } from '../ui';
 
 interface AccessRequestMessageProps {
@@ -17,30 +17,8 @@ interface AccessRequestMessageProps {
 }
 
 export const AccessRequestMessage: React.FC<AccessRequestMessageProps> = ({ message }) => {
-	const { postMessage } = useVSCode();
-	const { updateMessage } = useChatActions();
 	const { requestId, tool, pattern, input, resolved, approved, id } = message;
-
-	const handleResponse = (isApproved: boolean, alwaysAllow = false) => {
-		// Send unified response format that works for both providers
-		// The extension backend will convert to the appropriate format
-		postMessage({
-			type: 'accessResponse',
-			id: requestId,
-			toolName: tool,
-			approved: isApproved,
-			alwaysAllow,
-			// Include OpenCode-compatible response for direct handling
-			response: isApproved ? (alwaysAllow ? 'always' : 'once') : 'reject',
-		});
-
-		if (id) {
-			updateMessage(id, {
-				resolved: true,
-				approved: isApproved,
-			});
-		}
-	};
+	const handleResponse = useAccessResponse({ requestId, tool, messageId: id });
 
 	if (resolved) {
 		const dotColor = approved ? 'var(--color-success)' : 'var(--color-error)';

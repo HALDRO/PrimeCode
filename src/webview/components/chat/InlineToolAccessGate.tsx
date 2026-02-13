@@ -6,9 +6,8 @@
  */
 
 import type React from 'react';
+import { useAccessResponse } from '../../hooks/useAccessResponse';
 import { cn } from '../../lib/cn';
-import { useChatActions } from '../../store';
-import { useSessionMessage } from '../../utils/vscode';
 import { CheckIcon, CloseIcon, ShieldIcon } from '../icons';
 import { Tooltip } from '../ui';
 
@@ -53,24 +52,7 @@ function getDisplayDetails(input: unknown, hideDetails?: boolean): string | null
 
 export const InlineToolAccessGate: React.FC<InlineToolAccessGateProps> = props => {
 	const { requestId, tool, input, className, messageId } = props;
-	const { postSessionMessage } = useSessionMessage();
-	const { updateMessage } = useChatActions();
-
-	const handleResponse = (isApproved: boolean, alwaysAllow = false) => {
-		postSessionMessage({
-			type: 'accessResponse',
-			id: requestId,
-			toolName: tool,
-			approved: isApproved,
-			alwaysAllow,
-			response: isApproved ? (alwaysAllow ? 'always' : 'once') : 'reject',
-		});
-
-		// Optimistically resolve to hide the gate immediately (backend will also emit session_event(access)).
-		if (messageId) {
-			updateMessage(messageId, { resolved: true, approved: isApproved });
-		}
-	};
+	const handleResponse = useAccessResponse({ requestId, tool, messageId });
 
 	const details = getDisplayDetails(input, props.hideDetails);
 
