@@ -10,7 +10,6 @@
  *              Uses atomic writes to prevent config corruption.
  */
 
-import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { Value } from '@sinclair/typebox/value';
 import * as vscode from 'vscode';
@@ -96,8 +95,9 @@ export class AgentsSyncService {
 		schema?: import('@sinclair/typebox').TSchema,
 	): Promise<T | null> {
 		try {
-			const content = await fs.readFile(filePath, 'utf8');
-			const raw = JSON.parse(content) as unknown;
+			const uri = vscode.Uri.file(filePath);
+			const bytes = await vscode.workspace.fs.readFile(uri);
+			const raw = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
 
 			if (schema && !Value.Check(schema, raw)) {
 				const errors = [...Value.Errors(schema, raw)];
@@ -118,27 +118,20 @@ export class AgentsSyncService {
 	 * This prevents config corruption if the process crashes during write.
 	 */
 	private async _writeJsonFile(filePath: string, data: unknown): Promise<void> {
-		const dir = path.dirname(filePath);
-		const tempPath = `${filePath}.tmp.${Date.now()}`;
-
+		const uri = vscode.Uri.file(filePath);
+		const dirUri = vscode.Uri.file(path.dirname(filePath));
 		try {
-			await fs.mkdir(dir, { recursive: true });
-			await fs.writeFile(tempPath, JSON.stringify(data, null, 2), 'utf8');
-			await fs.rename(tempPath, filePath);
-		} catch (error) {
-			// Try to cleanup temp file if rename failed
-			try {
-				await fs.unlink(tempPath);
-			} catch {
-				// Ignore cleanup error
-			}
-			throw error;
+			await vscode.workspace.fs.createDirectory(dirUri);
+		} catch {
+			/* may already exist */
 		}
+		const content = new TextEncoder().encode(JSON.stringify(data, null, 2));
+		await vscode.workspace.fs.writeFile(uri, content);
 	}
 
 	private async _fileExists(filePath: string): Promise<boolean> {
 		try {
-			await fs.access(filePath);
+			await vscode.workspace.fs.stat(vscode.Uri.file(filePath));
 			return true;
 		} catch {
 			return false;
@@ -169,16 +162,20 @@ export class AgentsSyncService {
 		if (!exists) return null;
 
 		try {
-			await fs.mkdir(backupsDir, { recursive: true });
+			const backupsDirUri = vscode.Uri.file(backupsDir);
+			try {
+				await vscode.workspace.fs.createDirectory(backupsDirUri);
+			} catch {
+				/* may exist */
+			}
 
-			// Create timestamped backup filename
 			const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 			const backupFileName = `${backupName}_${timestamp}.json`;
 			const backupPath = path.join(backupsDir, backupFileName);
 
-			// Copy file to backup
-			const content = await fs.readFile(sourcePath, 'utf8');
-			await fs.writeFile(backupPath, content, 'utf8');
+			const sourceUri = vscode.Uri.file(sourcePath);
+			const backupUri = vscode.Uri.file(backupPath);
+			await vscode.workspace.fs.copy(sourceUri, backupUri, { overwrite: true });
 
 			logger.info(`[AgentsSyncService] Created backup: ${backupFileName}`);
 			return backupPath;
@@ -222,29 +219,31 @@ export class AgentsSyncService {
 		if (!backupsDir) return;
 
 		try {
+			const backupsDirUri = vscode.Uri.file(backupsDir);
 			const exists = await this._fileExists(backupsDir);
 			if (!exists) return;
 
-			const files = await fs.readdir(backupsDir);
-			const jsonFiles = files.filter(f => f.endsWith('.json'));
+			const entries = await vscode.workspace.fs.readDirectory(backupsDirUri);
+			const jsonFiles = entries
+				.filter(([name, type]) => type === vscode.FileType.File && name.endsWith('.json'))
+				.map(([name]) => name);
 
 			if (jsonFiles.length <= MAX_BACKUPS) return;
 
 			// Sort by modification time (oldest first)
 			const fileStats = await Promise.all(
 				jsonFiles.map(async f => {
-					const filePath = path.join(backupsDir, f);
-					const stat = await fs.stat(filePath);
-					return { name: f, path: filePath, mtime: stat.mtime.getTime() };
+					const fileUri = vscode.Uri.joinPath(backupsDirUri, f);
+					const stat = await vscode.workspace.fs.stat(fileUri);
+					return { name: f, uri: fileUri, mtime: stat.mtime };
 				}),
 			);
 
 			fileStats.sort((a, b) => a.mtime - b.mtime);
 
-			// Remove oldest files
 			const toRemove = fileStats.slice(0, fileStats.length - MAX_BACKUPS);
 			for (const file of toRemove) {
-				await fs.unlink(file.path);
+				await vscode.workspace.fs.delete(file.uri);
 				logger.debug(`[AgentsSyncService] Removed old backup: ${file.name}`);
 			}
 		} catch (error) {
@@ -263,18 +262,20 @@ export class AgentsSyncService {
 			const exists = await this._fileExists(backupsDir);
 			if (!exists) return [];
 
-			const files = await fs.readdir(backupsDir);
-			const jsonFiles = files.filter(f => f.endsWith('.json'));
+			const backupsDirUri = vscode.Uri.file(backupsDir);
+			const entries = await vscode.workspace.fs.readDirectory(backupsDirUri);
+			const jsonEntries = entries.filter(
+				([name, type]) => type === vscode.FileType.File && name.endsWith('.json'),
+			);
 
 			const backups = await Promise.all(
-				jsonFiles.map(async f => {
-					const filePath = path.join(backupsDir, f);
-					const stat = await fs.stat(filePath);
-					return { name: f, path: filePath, date: stat.mtime };
+				jsonEntries.map(async ([name]) => {
+					const fileUri = vscode.Uri.joinPath(backupsDirUri, name);
+					const stat = await vscode.workspace.fs.stat(fileUri);
+					return { name, path: path.join(backupsDir, name), date: new Date(stat.mtime) };
 				}),
 			);
 
-			// Sort by date (newest first)
 			backups.sort((a, b) => b.date.getTime() - a.date.getTime());
 			return backups;
 		} catch {

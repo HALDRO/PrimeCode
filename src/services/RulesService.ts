@@ -5,8 +5,8 @@
  *              Auto-syncs to CLI directories and generates `AGENTS.md` + `.opencode/memories/`
  */
 
-import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import * as vscode from 'vscode';
 import { PATHS } from '../common/constants';
 import { logger } from '../utils/logger';
 import { normalizeToPosixPath } from '../utils/path';
@@ -68,18 +68,22 @@ export class RulesService {
 	 */
 	public async createRule(name: string, content: string): Promise<Rule> {
 		const safeName = name.endsWith('.md') ? name : `${name}.md`;
-		const rulesDir = path.join(this._workspaceRoot, PATHS.AGENTS_RULES_DIR);
-		await fs.mkdir(rulesDir, { recursive: true });
+		const rulesDirUri = vscode.Uri.file(path.join(this._workspaceRoot, PATHS.AGENTS_RULES_DIR));
+		try {
+			await vscode.workspace.fs.createDirectory(rulesDirUri);
+		} catch {
+			/* may exist */
+		}
 
-		const filePath = path.join(rulesDir, safeName);
-		await fs.writeFile(filePath, content, 'utf8');
+		const fileUri = vscode.Uri.joinPath(rulesDirUri, safeName);
+		await vscode.workspace.fs.writeFile(fileUri, new TextEncoder().encode(content));
 
 		// Auto-sync to CLI formats
 		await this._autoSync();
 
 		return {
 			name: safeName,
-			path: normalizeToPosixPath(path.relative(this._workspaceRoot, filePath)),
+			path: normalizeToPosixPath(path.join(PATHS.AGENTS_RULES_DIR, safeName)),
 			isEnabled: true,
 			source: 'opencode',
 		};
@@ -94,14 +98,25 @@ export class RulesService {
 		const fullPath = path.join(this._workspaceRoot, rulePath);
 		const fileName = path.basename(rulePath);
 
-		await fs.mkdir(rulesDir, { recursive: true });
-		await fs.mkdir(disabledDir, { recursive: true });
+		const rulesDirUri = vscode.Uri.file(rulesDir);
+		const disabledDirUri = vscode.Uri.file(disabledDir);
+		try {
+			await vscode.workspace.fs.createDirectory(rulesDirUri);
+		} catch {
+			/* may exist */
+		}
+		try {
+			await vscode.workspace.fs.createDirectory(disabledDirUri);
+		} catch {
+			/* may exist */
+		}
 
 		const targetDir = enabled ? rulesDir : disabledDir;
-		const targetPath = path.join(targetDir, fileName);
+		const sourceUri = vscode.Uri.file(fullPath);
+		const targetUri = vscode.Uri.file(path.join(targetDir, fileName));
 
 		try {
-			await fs.rename(fullPath, targetPath);
+			await vscode.workspace.fs.rename(sourceUri, targetUri, { overwrite: true });
 			await this._autoSync();
 		} catch (error) {
 			logger.error(`[RulesService] Failed to toggle rule ${rulePath}:`, error);
@@ -113,9 +128,9 @@ export class RulesService {
 	 * Delete rule and auto-sync
 	 */
 	public async deleteRule(rulePath: string): Promise<void> {
-		const fullPath = path.join(this._workspaceRoot, rulePath);
+		const fileUri = vscode.Uri.file(path.join(this._workspaceRoot, rulePath));
 		try {
-			await fs.unlink(fullPath);
+			await vscode.workspace.fs.delete(fileUri);
 			await this._autoSync();
 		} catch (error) {
 			logger.error(`[RulesService] Failed to delete rule ${rulePath}:`, error);
@@ -142,8 +157,8 @@ export class RulesService {
 
 	private async _dirExists(dirPath: string): Promise<boolean> {
 		try {
-			const stat = await fs.stat(dirPath);
-			return stat.isDirectory();
+			const stat = await vscode.workspace.fs.stat(vscode.Uri.file(dirPath));
+			return (stat.type & vscode.FileType.Directory) !== 0;
 		} catch {
 			return false;
 		}
@@ -151,15 +166,16 @@ export class RulesService {
 
 	private async _findMdFiles(dir: string, recursive: boolean): Promise<string[]> {
 		try {
-			const entries = await fs.readdir(dir, { withFileTypes: true });
+			const dirUri = vscode.Uri.file(dir);
+			const entries = await vscode.workspace.fs.readDirectory(dirUri);
 			const files: string[] = [];
 
-			for (const entry of entries) {
-				if (entry.isFile() && entry.name.endsWith('.md')) {
-					files.push(entry.name);
-				} else if (recursive && entry.isDirectory()) {
-					const subFiles = await this._findMdFiles(path.join(dir, entry.name), true);
-					files.push(...subFiles.map(f => path.join(entry.name, f)));
+			for (const [name, type] of entries) {
+				if (type === vscode.FileType.File && name.endsWith('.md')) {
+					files.push(name);
+				} else if (recursive && type === vscode.FileType.Directory) {
+					const subFiles = await this._findMdFiles(path.join(dir, name), true);
+					files.push(...subFiles.map(f => path.join(name, f)));
 				}
 			}
 			return files;

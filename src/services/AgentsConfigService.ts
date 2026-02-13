@@ -7,7 +7,6 @@
  *              Includes runtime schema validation for config files.
  */
 
-import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { TSchema } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
@@ -214,7 +213,7 @@ export class AgentsConfigService {
 	 */
 	private async _ensureDir(dirPath: string): Promise<void> {
 		try {
-			await fs.mkdir(dirPath, { recursive: true });
+			await vscode.workspace.fs.createDirectory(vscode.Uri.file(dirPath));
 		} catch (error) {
 			logger.error(`[AgentsConfigService] Failed to create directory ${dirPath}:`, error);
 		}
@@ -223,11 +222,10 @@ export class AgentsConfigService {
 	/**
 	 * Read JSON file safely with optional schema validation
 	 */
-	// biome-ignore lint/suspicious/noExplicitAny: TSchema import issues
 	private async _readJsonFile<T>(filePath: string, schema?: any): Promise<T | null> {
 		try {
-			const content = await fs.readFile(filePath, 'utf8');
-			const data = JSON.parse(content);
+			const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(filePath));
+			const data = JSON.parse(new TextDecoder().decode(bytes));
 
 			// Runtime validation if schema is provided
 			if (schema && !Value.Check(schema as TSchema, data)) {
@@ -236,14 +234,12 @@ export class AgentsConfigService {
 				for (const error of errors) {
 					logger.debug(`[AgentsConfigService] Validation error at ${error.path}: ${error.message}`);
 				}
-				// Return null if validation fails to prevent using corrupted config
 				return null;
 			}
 
 			return data as T;
 		} catch (error) {
-			// Don't log error for missing file (common case)
-			if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+			if ((error as vscode.FileSystemError).code !== 'FileNotFound') {
 				logger.warn(`[AgentsConfigService] Failed to read/parse ${filePath}:`, error);
 			}
 			return null;
@@ -258,7 +254,8 @@ export class AgentsConfigService {
 	private async _writeJsonFile(filePath: string, data: unknown): Promise<void> {
 		const dir = path.dirname(filePath);
 		await this._ensureDir(dir);
-		await fs.writeFile(filePath, JSON.stringify(data, null, 2), 'utf8');
+		const content = new TextEncoder().encode(JSON.stringify(data, null, 2));
+		await vscode.workspace.fs.writeFile(vscode.Uri.file(filePath), content);
 	}
 
 	/**
@@ -266,7 +263,7 @@ export class AgentsConfigService {
 	 */
 	private async _fileExists(filePath: string): Promise<boolean> {
 		try {
-			await fs.access(filePath);
+			await vscode.workspace.fs.stat(vscode.Uri.file(filePath));
 			return true;
 		} catch {
 			return false;

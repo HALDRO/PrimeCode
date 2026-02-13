@@ -2,6 +2,9 @@ import type { CommandOf, WebviewCommand } from '../../common';
 import { logger } from '../../utils/logger';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
+/** Maximum time (ms) to wait for the initial SSE connection before giving up. */
+const SSE_CONNECT_TIMEOUT_MS = 15_000;
+
 export class SseHandler implements WebviewMessageHandler {
 	private connections = new Map<string, { close: () => void }>();
 
@@ -56,12 +59,20 @@ export class SseHandler implements WebviewMessageHandler {
 
 		const controller = new AbortController();
 
+		// Connection timeout: abort if no response within the limit
+		const connectTimer = setTimeout(() => {
+			controller.abort();
+			this.sendError(id, `SSE connection timed out after ${SSE_CONNECT_TIMEOUT_MS}ms`);
+			this.connections.delete(id);
+		}, SSE_CONNECT_TIMEOUT_MS);
+
 		// Start the fetch connection
 		fetch(url, {
 			headers: { Accept: 'text/event-stream' },
 			signal: controller.signal,
 		})
 			.then(async res => {
+				clearTimeout(connectTimer);
 				if (!res.ok || !res.body) {
 					this.sendError(id, `SSE connection failed: ${res.status}`);
 					return;
@@ -106,6 +117,7 @@ export class SseHandler implements WebviewMessageHandler {
 				}
 			})
 			.catch(err => {
+				clearTimeout(connectTimer);
 				if ((err as Error).name !== 'AbortError') {
 					logger.error('[SseHandler] SSE connection failed', { url, err });
 					this.sendError(id, String((err as Error)?.message ?? err));
@@ -113,7 +125,12 @@ export class SseHandler implements WebviewMessageHandler {
 				this.connections.delete(id);
 			});
 
-		this.connections.set(id, { close: () => controller.abort() });
+		this.connections.set(id, {
+			close: () => {
+				clearTimeout(connectTimer);
+				controller.abort();
+			},
+		});
 		logger.info('[SseHandler] SSE subscription started:', id);
 	}
 

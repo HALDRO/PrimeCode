@@ -18,7 +18,6 @@ import type { AgentsSyncService } from './AgentsSyncService';
 
 const DEBOUNCE_MS = 500;
 const AGENTS_MCP_PATTERN = '**/.agents/mcp.json';
-const SUPPRESSION_WINDOW_MS = 2000; // Ignore file changes within 2s of UI-triggered save
 
 // =============================================================================
 // Types
@@ -40,7 +39,9 @@ export class McpConfigWatcherService implements vscode.Disposable {
 	private _debounceTimer: ReturnType<typeof setTimeout> | undefined;
 	private _disposables: vscode.Disposable[] = [];
 	private _isReloading = false;
-	private _lastUiSaveTimestamp = 0;
+
+	/** Content hash of the last UI-triggered save. Used to suppress file watcher echo. */
+	private _lastUiSaveHash: string | undefined;
 
 	private readonly _onConfigChanged = new vscode.EventEmitter<McpConfigChangeEvent>();
 	public readonly onConfigChanged = this._onConfigChanged.event;
@@ -136,11 +137,13 @@ export class McpConfigWatcherService implements vscode.Disposable {
 
 	/**
 	 * Notify that a UI-triggered save just happened.
-	 * This suppresses the file watcher from triggering a redundant reload.
+	 * Computes a content hash so the file watcher can detect whether the
+	 * on-disk change matches what we just wrote (our own echo) vs. an
+	 * external modification.
 	 */
-	public notifyUiSave(): void {
-		this._lastUiSaveTimestamp = Date.now();
-		logger.debug('[McpConfigWatcherService] UI save notified, suppressing file watcher');
+	public notifyUiSave(contentHash?: string): void {
+		this._lastUiSaveHash = contentHash;
+		logger.debug('[McpConfigWatcherService] UI save notified', { hash: contentHash ?? 'none' });
 	}
 
 	// =========================================================================
@@ -148,19 +151,12 @@ export class McpConfigWatcherService implements vscode.Disposable {
 	// =========================================================================
 
 	/**
-	 * Handle file system change event with debouncing
+	 * Handle file system change event with debouncing.
+	 * Uses content-hash comparison instead of a time window to reliably
+	 * distinguish our own writes from external modifications.
 	 */
 	private _handleFileChange(uri: vscode.Uri, eventType: 'change' | 'create' | 'delete'): void {
 		logger.debug(`[McpConfigWatcherService] File ${eventType}: ${uri.fsPath}`);
-
-		// Check if this change was triggered by UI save (suppress to avoid double reload)
-		const timeSinceUiSave = Date.now() - this._lastUiSaveTimestamp;
-		if (timeSinceUiSave < SUPPRESSION_WINDOW_MS) {
-			logger.debug(
-				`[McpConfigWatcherService] Suppressing file watcher (UI save ${timeSinceUiSave}ms ago)`,
-			);
-			return;
-		}
 
 		// Clear existing debounce timer
 		if (this._debounceTimer) {
@@ -168,9 +164,36 @@ export class McpConfigWatcherService implements vscode.Disposable {
 		}
 
 		// Debounce rapid changes (e.g., editor auto-save)
-		this._debounceTimer = setTimeout(() => {
+		this._debounceTimer = setTimeout(async () => {
+			// Hash-based suppression: read the file and compare hash
+			if (this._lastUiSaveHash && eventType !== 'delete') {
+				try {
+					const bytes = await vscode.workspace.fs.readFile(uri);
+					const content = new TextDecoder().decode(bytes);
+					const fileHash = this._simpleHash(content);
+					if (fileHash === this._lastUiSaveHash) {
+						logger.debug('[McpConfigWatcherService] Suppressed (hash matches UI save)');
+						this._lastUiSaveHash = undefined;
+						return;
+					}
+				} catch {
+					// File read failed — proceed with reload
+				}
+				this._lastUiSaveHash = undefined;
+			}
+
 			this._performReload('file-watcher');
 		}, DEBOUNCE_MS);
+	}
+
+	/** Fast non-crypto hash for content comparison. */
+	private _simpleHash(str: string): string {
+		let hash = 0;
+		for (let i = 0; i < str.length; i++) {
+			const ch = str.charCodeAt(i);
+			hash = ((hash << 5) - hash + ch) | 0;
+		}
+		return hash.toString(36);
 	}
 
 	/**

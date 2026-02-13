@@ -175,7 +175,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 	private async onGetCommands(): Promise<void> {
 		this.context.view.postMessage({ type: 'commandsList', data: { custom: [], isLoading: true } });
 		try {
-			const commands = await this.context.services.agentsCommands.getCommands();
+			const commands = await this.context.services.agentsCommands.getAll();
 			this.context.view.postMessage({
 				type: 'commandsList',
 				data: { custom: commands, isLoading: false },
@@ -195,7 +195,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 	private async onGetSkills(): Promise<void> {
 		this.context.view.postMessage({ type: 'skillsList', data: { skills: [], isLoading: true } });
 		try {
-			const skills = await this.context.services.agentsSkills.getSkills();
+			const skills = await this.context.services.agentsSkills.getAll();
 			this.context.view.postMessage({
 				type: 'skillsList',
 				data: { skills, isLoading: false },
@@ -215,7 +215,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 	private async onGetHooks(): Promise<void> {
 		this.context.view.postMessage({ type: 'hooksList', data: { hooks: [], isLoading: true } });
 		try {
-			const hooks = await this.context.services.agentsHooks.getHooks();
+			const hooks = await this.context.services.agentsHooks.getAll();
 			this.context.view.postMessage({
 				type: 'hooksList',
 				data: { hooks, isLoading: false },
@@ -238,7 +238,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 			data: { subagents: [], isLoading: true },
 		});
 		try {
-			const subagents = await this.context.services.agentsSubagents.getSubagents();
+			const subagents = await this.context.services.agentsSubagents.getAll();
 			this.context.view.postMessage({
 				type: 'subagentsList',
 				data: { subagents, isLoading: false },

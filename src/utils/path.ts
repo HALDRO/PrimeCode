@@ -8,10 +8,3 @@
 export function normalizeToPosixPath(input: string): string {
 	return input.replace(/\\/g, '/');
 }
-
-export function isAbsolutePath(filePath: string): boolean {
-	// Windows drive path: C:\...
-	if (/^[a-zA-Z]:\\/.test(filePath) || /^[a-zA-Z]:\//.test(filePath)) return true;
-	// POSIX absolute path
-	return filePath.startsWith('/');
-}

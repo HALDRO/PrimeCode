@@ -1,3 +1,4 @@
+import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { SessionEventMessage } from '../common';
 import { computeDiffStats } from '../common/diffStats';
@@ -6,6 +7,7 @@ import { type CLIEvent, CLIRunner } from '../core/CLIRunner';
 import type { ServiceRegistry } from '../core/ServiceRegistry';
 import { SessionGraph, SessionState } from '../core/SessionManager';
 import { Settings } from '../core/Settings';
+import { getWorkspacePath, searchWorkspaceFiles } from '../services/fileSearch';
 import { logger } from '../utils/logger';
 import { getHtml } from '../utils/webviewHtml';
 import { FileHandler } from './handlers/FileHandler';
@@ -424,25 +426,64 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				// Abort not fully implemented — fetch is promise-based
 				return { handleMessage: async () => {} };
 
+			case 'openCommandFile':
+			case 'openSkillFile':
+			case 'openHookFile':
+			case 'openSubagentFile': {
+				const services = this.services;
+				const name = (msg as { name: string }).name;
+				return {
+					async handleMessage() {
+						const root = vscode.workspace.workspaceFolders?.[0]?.uri;
+						if (!root || !name) return;
+						let relativePath: string | undefined;
+						switch (msg.type) {
+							case 'openCommandFile': {
+								const items = await services.agentsCommands.getAll();
+								relativePath = items.find(c => c.name === name)?.path;
+								break;
+							}
+							case 'openSkillFile': {
+								const items = await services.agentsSkills.getAll();
+								relativePath = items.find(s => s.name === name)?.path;
+								break;
+							}
+							case 'openHookFile': {
+								const items = await services.agentsHooks.getAll();
+								relativePath = items.find(h => h.name === name)?.path;
+								break;
+							}
+							case 'openSubagentFile': {
+								const items = await services.agentsSubagents.getAll();
+								relativePath = items.find(s => s.name === name)?.path;
+								break;
+							}
+						}
+						if (!relativePath) {
+							logger.warn(`[ChatProvider] Resource not found: ${msg.type} name=${name}`);
+							return;
+						}
+						const fileUri = vscode.Uri.joinPath(root, relativePath);
+						await vscode.window.showTextDocument(fileUri);
+					},
+				};
+			}
+
 			// TODO: Agents CRUD — not yet implemented
 			case 'createSkill':
 			case 'deleteSkill':
-			case 'openSkillFile':
 			case 'importSkillsFromCLI':
 			case 'syncSkillsToCLI':
 			case 'createHook':
 			case 'deleteHook':
-			case 'openHookFile':
 			case 'importHooksFromCLI':
 			case 'syncHooksToCLI':
 			case 'createCommand':
 			case 'deleteCommand':
-			case 'openCommandFile':
 			case 'importCommandsFromCLI':
 			case 'syncCommandsToCLI':
 			case 'createSubagent':
 			case 'deleteSubagent':
-			case 'openSubagentFile':
 			case 'importSubagentsFromCLI':
 			case 'syncSubagentsToCLI':
 			case 'toggleRule':
@@ -453,8 +494,24 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			case 'copyAllMessages':
 			case 'copyLastDiffs':
 			case 'copyAllDiffs':
+			case 'getWorkspaceFiles': {
+				const self = this;
+				return {
+					async handleMessage() {
+						const wsPath = getWorkspacePath();
+						if (!wsPath) return;
+						const searchTerm = (msg as { searchTerm?: string }).searchTerm ?? '';
+						const results = await searchWorkspaceFiles(searchTerm, wsPath, 50);
+						const files = results.map(r => ({
+							name: r.label,
+							path: r.path,
+							fsPath: path.join(wsPath, r.path),
+						}));
+						self.postMessage({ type: 'workspaceFiles', data: files });
+					},
+				};
+			}
 			// TODO: Missing handlers
-			case 'getWorkspaceFiles':
 			case 'clearAllConversations':
 				logger.warn(`[ChatProvider] Unimplemented message type: ${msg.type}`);
 				return null;
