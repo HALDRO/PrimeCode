@@ -437,13 +437,10 @@ export const SettingsPage: React.FC = () => {
 	return (
 		<div
 			className="fixed inset-0 z-50 text-vscode-editor-foreground font-(family-name:--vscode-font-family) overflow-hidden flex flex-col"
-			style={{ backgroundColor: 'var(--vscode-editor-background)' }}
+			style={{ backgroundColor: 'var(--surface-base)' }}
 		>
 			{/* Top navigation (moved from left sidebar) */}
-			<div
-				className="shrink-0 px-1 pt-2 pb-1"
-				style={{ backgroundColor: 'var(--vscode-editor-background)' }}
-			>
+			<div className="shrink-0 px-1 pt-2 pb-1" style={{ backgroundColor: 'var(--surface-base)' }}>
 				<div ref={navContainerRef} className="relative">
 					{/* Hidden measurement nav (always full labels) */}
 					<nav
@@ -510,7 +507,7 @@ export const SettingsPage: React.FC = () => {
 			</ScrollContainer>
 
 			{/* CLI Status fixed at the bottom */}
-			<div className="shrink-0 pb-2" style={{ backgroundColor: 'var(--vscode-editor-background)' }}>
+			<div className="shrink-0 pb-2" style={{ backgroundColor: 'var(--surface-base)' }}>
 				<div className="max-w-(--modal-width-md) mx-auto px-3">
 					<OpenCodeCLIStatus />
 				</div>

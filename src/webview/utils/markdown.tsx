@@ -210,7 +210,7 @@ const components: Components = {
 
 	// Blockquotes
 	blockquote: ({ children }) => (
-		<blockquote className="border-l-2 border-vscode-textLink-foreground/50 bg-vscode-textBlockQuote-background px-2 py-0.5 my-0.5 rounded-r text-vscode-descriptionForeground italic text-base">
+		<blockquote className="border-l-2 border-vscode-textLink-foreground/50 bg-vscode-textBlockQuote-background px-2 py-0.5 my-0.5 rounded-l text-vscode-descriptionForeground italic text-base">
 			{children}
 		</blockquote>
 	),
@@ -352,7 +352,7 @@ const components: Components = {
 		</tr>
 	),
 	th: ({ children }) => (
-		<th className="px-(--tool-content-padding) py-1.5 text-left font-medium text-sm text-vscode-descriptionForeground border-r border-(--border-subtle) last:border-r-0">
+		<th className="px-(--tool-content-padding) py-1.5 text-left font-medium text-sm text-vscode-foreground border-r border-(--border-subtle) last:border-r-0">
 			{children}
 		</th>
 	),

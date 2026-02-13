@@ -371,7 +371,7 @@ export const SettingsBadge: React.FC<SettingsBadgeProps> = ({
 	className,
 }) => {
 	const variantClasses = {
-		default: 'bg-(--alpha-10) text-vscode-descriptionForeground',
+		default: 'text-vscode-descriptionForeground',
 		blue: 'bg-(--alpha-10) text-vscode-button-background',
 		purple: 'bg-(--alpha-10) text-vscode-focusBorder',
 		green: 'bg-(--alpha-10) text-vscode-editorGutter-addedBackground',

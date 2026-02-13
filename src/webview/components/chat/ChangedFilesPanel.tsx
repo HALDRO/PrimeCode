@@ -408,25 +408,6 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 								size={20}
 							/>
 
-							<Tooltip content="Undo all changes" position="top" delay={200}>
-								<button
-									type="button"
-									className="bg-transparent border-none px-1.5 py-0.5 rounded-sm cursor-pointer text-vscode-foreground opacity-70 transition-all duration-100 ease-out text-sm font-(family-name:--vscode-font-family) hover:bg-white/10 hover:opacity-100 whitespace-nowrap"
-									onClick={e => {
-										e.stopPropagation();
-										showConfirmDialog({
-											title: 'Undo All Changes',
-											message: `This will undo all changes to ${uniqueFileCount} file${uniqueFileCount > 1 ? 's' : ''}.`,
-											confirmLabel: 'Undo All',
-											cancelLabel: 'Cancel',
-											onConfirm: handleUndoAll,
-										});
-									}}
-								>
-									Undo All
-								</button>
-							</Tooltip>
-
 							<Tooltip content="Keep all changes" position="top" delay={200}>
 								<button
 									type="button"
@@ -436,13 +417,32 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 										showConfirmDialog({
 											title: 'Keep All Changes',
 											message: `This will accept all changes to ${uniqueFileCount} file${uniqueFileCount > 1 ? 's' : ''}.`,
-											confirmLabel: 'Keep All',
+											confirmLabel: 'Keep',
 											cancelLabel: 'Cancel',
 											onConfirm: handleKeepAll,
 										});
 									}}
 								>
-									Keep All
+									Keep
+								</button>
+							</Tooltip>
+
+							<Tooltip content="Undo all changes" position="top" delay={200}>
+								<button
+									type="button"
+									className="bg-transparent border-none px-1.5 py-0.5 rounded-sm cursor-pointer text-vscode-foreground opacity-70 transition-all duration-100 ease-out text-sm font-(family-name:--vscode-font-family) hover:bg-white/10 hover:opacity-100 whitespace-nowrap"
+									onClick={e => {
+										e.stopPropagation();
+										showConfirmDialog({
+											title: 'Undo All Changes',
+											message: `This will undo all changes to ${uniqueFileCount} file${uniqueFileCount > 1 ? 's' : ''}.`,
+											confirmLabel: 'Undo',
+											cancelLabel: 'Cancel',
+											onConfirm: handleUndoAll,
+										});
+									}}
+								>
+									Undo
 								</button>
 							</Tooltip>
 						</div>
