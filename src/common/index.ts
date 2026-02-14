@@ -42,3 +42,23 @@ export * from './webviewCommands';
 export function generateId(prefix: string): string {
 	return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
+
+/**
+ * Normalize a user-provided proxy base URL to the canonical form expected by
+ * `@ai-sdk/openai-compatible`, which appends `/chat/completions` directly.
+ *
+ * Handles common user mistakes:
+ *   http://host:port            → http://host:port/v1
+ *   http://host:port/           → http://host:port/v1
+ *   http://host:port///         → http://host:port/v1
+ *   http://host:port/v1         → http://host:port/v1
+ *   http://host:port/v1/        → http://host:port/v1
+ *   http://host:port/v1/models  → http://host:port/v1
+ *   http://host:port/v1/chat/completions → http://host:port/v1
+ */
+export function normalizeProxyBaseUrl(raw: string): string {
+	return `${raw
+		.trim()
+		.replace(/\/+$/, '')
+		.replace(/\/v1(?:\/.*)?$/, '')}/v1`;
+}

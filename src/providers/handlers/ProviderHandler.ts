@@ -1,4 +1,6 @@
-import type { OpenCodeProviderData } from '../../common';
+import * as vscode from 'vscode';
+import { normalizeProxyBaseUrl, type OpenCodeProviderData } from '../../common';
+import { OPENAI_COMPATIBLE_PROVIDER_ID } from '../../common/constants';
 import type { CommandOf, WebviewCommand } from '../../common/webviewCommands';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
@@ -258,10 +260,10 @@ export class ProviderHandler implements WebviewMessageHandler {
 			if (typeof setting === 'string') apiKeyRaw = setting;
 		}
 
-		const baseUrl = baseUrlRaw.trim().replace(/\/+$/g, '');
+		const baseUrl = normalizeProxyBaseUrl(baseUrlRaw);
 		const apiKey = apiKeyRaw.trim();
 
-		if (!baseUrl) {
+		if (!baseUrl || baseUrl === '/v1') {
 			this.context.view.postMessage({
 				type: 'proxyModels',
 				data: { enabled: false, models: [], error: 'Missing proxy baseUrl' },
@@ -273,7 +275,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 
 		let url: URL;
 		try {
-			url = new URL(`${baseUrl}/v1/models`);
+			url = new URL(`${baseUrl}/models`);
 		} catch {
 			this.context.view.postMessage({
 				type: 'proxyModels',
@@ -352,6 +354,24 @@ export class ProviderHandler implements WebviewMessageHandler {
 					baseUrl,
 				},
 			});
+
+			// Sync oai provider config to project-level opencode.json
+			// so the OpenCode server picks up the proxy models.
+			try {
+				const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+				if (workspaceRoot) {
+					await this.context.services.openCodeClient.syncProxyProviderToProjectConfig(
+						workspaceRoot,
+						OPENAI_COMPATIBLE_PROVIDER_ID,
+						baseUrl,
+						apiKey,
+						models,
+					);
+				}
+			} catch (syncErr) {
+				// Non-fatal — proxy models are loaded in UI, config sync is best-effort
+				console.warn('[ProviderHandler] Failed to sync proxy provider to opencode.json:', syncErr);
+			}
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);
 			this.context.view.postMessage({
