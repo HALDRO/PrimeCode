@@ -68,6 +68,7 @@ export function useSubtaskThread(
 	groupedChildren: (Message | Message[])[];
 	totalDurationMs: number;
 	tokenStats: SubtaskTokenStats | null;
+	childModelId: string | undefined;
 } {
 	const message = useChatStore(state => {
 		const sid = state.activeSessionId;
@@ -111,11 +112,18 @@ export function useSubtaskThread(
 		return { input: tokenInput, output: tokenOutput, total: tokenInput + tokenOutput };
 	}, [tokenInput, tokenOutput]);
 
+	// Read child session's activeModelID for display in SubtaskItem header
+	const childModelId = useChatStore(state => {
+		if (!contextId || contextId === state.activeSessionId) return undefined;
+		return state.sessionsById[contextId]?.activeModelID;
+	});
+
 	return {
 		message,
 		children,
 		groupedChildren,
 		totalDurationMs,
 		tokenStats,
+		childModelId,
 	};
 }

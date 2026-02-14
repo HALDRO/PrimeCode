@@ -8,12 +8,14 @@
 
 import type React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { NormalizedEntry } from '../../../common/normalizedEvents';
 import { useSubtaskThread } from '../../hooks/useSubtaskChildren';
 import type { Message } from '../../store/chatStore';
 import { useMcpServers } from '../../store/selectors';
 import { formatDuration, formatNumber, formatToolName } from '../../utils/format';
 import { Markdown } from '../../utils/markdown';
 import {
+	BotIcon,
 	ChevronDownIcon,
 	ListIcon,
 	TimerIcon,
@@ -21,8 +23,10 @@ import {
 	TodoPendingIcon,
 	TodoProgressIcon,
 	TokensIcon,
+	WandIcon,
 } from '../icons';
 import {
+	InlineToolLine,
 	SimpleTool,
 	shouldCollapseGroupedItem,
 	ThinkingMessage,
@@ -60,37 +64,101 @@ const cleanSubtaskResult = (raw: string): string => {
 	return text.trim();
 };
 
+type SubtaskExpandState = 'collapsed' | 'result' | 'expanded';
+
 const SubtaskItem: React.FC<{
 	message: Extract<Message, { type: 'subtask' }>;
 	ctx: MessageItemContext;
 }> = ({ message, ctx }) => {
-	const [expanded, setExpanded] = useState(message.status === 'running');
+	const [expandState, setExpandState] = useState<SubtaskExpandState>(
+		message.status === 'running' ? 'expanded' : 'result',
+	);
+	const [promptExpanded, setPromptExpanded] = useState(false);
 	const mcpServers = useMcpServers();
 	const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
-	const { groupedChildren, totalDurationMs, tokenStats } = useSubtaskThread(
-		message.id || '',
-		mcpServerNames,
-	);
+	const {
+		groupedChildren: rawGroupedChildren,
+		totalDurationMs,
+		tokenStats,
+		childModelId,
+	} = useSubtaskThread(message.id || '', mcpServerNames);
+
+	// Strip trailing assistant message that duplicates the subtask result
+	const groupedChildren = useMemo(() => {
+		if (message.status === 'completed' && message.result && rawGroupedChildren.length > 0) {
+			const last = rawGroupedChildren[rawGroupedChildren.length - 1];
+			if (!Array.isArray(last) && last.type === 'assistant') {
+				return rawGroupedChildren.slice(0, -1);
+			}
+		}
+		return rawGroupedChildren;
+	}, [rawGroupedChildren, message.status, message.result]);
+
+	// Build TaskResult normalizedEntry from the subtask's own normalizedEntry or result text
+	const taskResultEntry = useMemo((): NormalizedEntry | undefined => {
+		if (message.status !== 'completed' || !message.result) return undefined;
+		const existing = (message as unknown as { normalizedEntry?: NormalizedEntry }).normalizedEntry;
+		if (
+			existing?.entryType &&
+			typeof existing.entryType === 'object' &&
+			'actionType' in existing.entryType &&
+			existing.entryType.actionType.type === 'TaskResult'
+		) {
+			return existing;
+		}
+		const cleaned = cleanSubtaskResult(message.result);
+		return {
+			timestamp: message.timestamp || new Date().toISOString(),
+			entryType: {
+				type: 'ToolUse',
+				toolName: 'task',
+				actionType: {
+					type: 'TaskResult',
+					description: message.description || '',
+					result: cleaned,
+					status: 'completed',
+				},
+				status: 'success',
+			},
+			content: cleaned,
+		};
+	}, [message.status, message.result, message.description, message.timestamp, message]);
 
 	// Live elapsed timer while subtask is running
 	const isRunning = message.status === 'running';
 	const liveElapsed = useElapsedTimer(isRunning);
 	const displayDuration = isRunning ? liveElapsed : totalDurationMs;
 
-	// Build the header description: prefer description, fall back to cleaned result
-	const headerDescription = useMemo(() => {
-		if (message.description) return message.description;
-		if (message.status === 'completed' && message.result) {
-			const cleaned = cleanSubtaskResult(message.result);
-			// Take first line only for the header
-			const firstLine = cleaned.split('\n')[0] || '';
-			return firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine;
-		}
-		return 'Running...';
-	}, [message.description, message.result, message.status]);
+	// Agent display name for the header
+	const agentLabel =
+		message.agent && message.agent !== 'subagent'
+			? message.agent.charAt(0).toUpperCase() + message.agent.slice(1)
+			: 'SubAgent';
 
-	// Show subagent_type as a secondary label if it's meaningful (not just "subagent")
-	const agentType = message.agent && message.agent !== 'subagent' ? message.agent : undefined;
+	// Cycle: result ↔ expanded (no fully collapsed state for subtasks)
+	const cycleExpand = () => {
+		setExpandState(prev => (prev === 'result' ? 'expanded' : 'result'));
+	};
+
+	// Meta info block (model, task description) — reused in result & expanded
+	const metaBlock =
+		childModelId || message.description ? (
+			<div className="text-sm text-vscode-descriptionForeground mb-2 flex flex-col gap-1">
+				{childModelId && (
+					<div className="flex items-center gap-2">
+						<BotIcon size={14} className="shrink-0" />
+						<span className="font-semibold text-vscode-foreground opacity-80">{childModelId}</span>
+					</div>
+				)}
+				{message.description && (
+					<div className="flex items-start gap-2">
+						<span className="shrink-0 opacity-60">Task</span>
+						<span className="text-vscode-descriptionForeground">·</span>
+						<span>{message.description}</span>
+					</div>
+				)}
+			</div>
+		) : null;
 
 	return (
 		<ToolCard
@@ -100,15 +168,7 @@ const SubtaskItem: React.FC<{
 						{subtaskStatusIcon(message.status)}
 					</span>
 					<span className="text-sm font-medium px-1.5 py-0.5 rounded-sm bg-vscode-badge-background text-vscode-badge-foreground whitespace-nowrap">
-						SubAgent
-					</span>
-					{agentType && (
-						<span className="text-sm text-vscode-foreground opacity-50 whitespace-nowrap">
-							{agentType.charAt(0).toUpperCase() + agentType.slice(1)}
-						</span>
-					)}
-					<span className="text-sm text-vscode-foreground opacity-80 truncate">
-						{headerDescription}
+						{agentLabel}
 					</span>
 				</>
 			}
@@ -134,12 +194,27 @@ const SubtaskItem: React.FC<{
 				) : undefined
 			}
 			isCollapsible
-			expanded={expanded}
-			onToggle={() => setExpanded(prev => !prev)}
+			expanded={expandState !== 'collapsed'}
+			onToggle={cycleExpand}
 			className="my-2"
 			body={
-				expanded ? (
+				expandState === 'expanded' ? (
 					<div className="px-(--tool-content-padding) py-2 bg-(--tool-bg-header)">
+						{metaBlock}
+						{message.prompt && message.prompt !== message.description && (
+							<SimpleTool
+								icon={<WandIcon size={14} />}
+								label="Prompt"
+								meta={!promptExpanded ? message.prompt : undefined}
+								expanded={promptExpanded}
+								onToggle={() => setPromptExpanded(prev => !prev)}
+								className="mb-2"
+							>
+								<div className="text-sm text-vscode-descriptionForeground whitespace-pre-wrap">
+									{message.prompt}
+								</div>
+							</SimpleTool>
+						)}
 						{message.command && (
 							<div className="text-xs font-mono opacity-50 truncate mb-2">$ {message.command}</div>
 						)}
@@ -152,14 +227,45 @@ const SubtaskItem: React.FC<{
 									key={key}
 									item={child}
 									ctx={ctx}
-									collapseGroupedTools={shouldCollapseGroupedItem(groupedChildren, idx)}
+									collapseGroupedTools={Array.isArray(child) || shouldCollapseGroupedItem(groupedChildren, idx)}
 								/>
 							);
 						})}
-						{groupedChildren.length === 0 && message.status === 'completed' && message.result && (
-							<pre className="m-0 text-sm leading-(--line-height-code) whitespace-pre-wrap text-vscode-foreground opacity-80">
-								{cleanSubtaskResult(message.result)}
-							</pre>
+						{taskResultEntry && (
+							<InlineToolLine
+								toolName="task"
+								rawInput={{}}
+								content={cleanSubtaskResult(message.result || '')}
+								isError={false}
+								normalizedEntry={taskResultEntry}
+							/>
+						)}
+					</div>
+				) : expandState === 'result' ? (
+					<div className="px-(--tool-content-padding) py-2 bg-(--tool-bg-header)">
+						{metaBlock}
+						{message.prompt && message.prompt !== message.description && (
+							<SimpleTool
+								icon={<WandIcon size={14} />}
+								label="Prompt"
+								meta={!promptExpanded ? message.prompt : undefined}
+								expanded={promptExpanded}
+								onToggle={() => setPromptExpanded(prev => !prev)}
+								className="mb-2"
+							>
+								<div className="text-sm text-vscode-descriptionForeground whitespace-pre-wrap">
+									{message.prompt}
+								</div>
+							</SimpleTool>
+						)}
+						{taskResultEntry && (
+							<InlineToolLine
+								toolName="task"
+								rawInput={{}}
+								content={cleanSubtaskResult(message.result || '')}
+								isError={false}
+								normalizedEntry={taskResultEntry}
+							/>
 						)}
 					</div>
 				) : undefined

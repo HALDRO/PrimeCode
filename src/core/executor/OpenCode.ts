@@ -585,6 +585,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			let lastCacheRead = 0;
 			let assistantCount = 0;
 			let totalModelDuration = 0;
+			let lastModelID: string | undefined;
+			let lastProviderID: string | undefined;
 
 			// Track per-turn token deltas keyed by parent user message ID.
 			// SDK gives cumulative input tokens, so we compute deltas between user turns.
@@ -615,6 +617,10 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 					if (tokens.input > 0) lastInput = tokens.input;
 					if (tokens.output > 0) lastOutput = tokens.output;
 					if (tokens.cache.read > 0) lastCacheRead = tokens.cache.read;
+
+					// Track model info from assistant messages for replay
+					if (info.modelID) lastModelID = info.modelID;
+					if (info.providerID) lastProviderID = info.providerID;
 
 					// Sum individual model response times (matches live behavior)
 					const created = info.time?.created;
@@ -809,6 +815,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 							requestCount: assistantCount,
 							...(totalModelDuration > 0 ? { totalDuration: totalModelDuration } : {}),
 						},
+						modelID: lastModelID,
+						providerID: lastProviderID,
 					},
 					sessionId,
 				});
@@ -1262,7 +1270,12 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 			this.lastMessageTokens.set(info.id, { input, output, cacheRead });
 
-			// Only emit if there's actual token delta
+			// Always emit modelID/providerID when present (even if token deltas are zero)
+			// so the UI can display the active model from the very first SSE event.
+			const modelID = info.modelID || undefined;
+			const providerID = info.providerID || undefined;
+
+			// Only emit token stats if there's actual token delta
 			if (deltaInput > 0 || deltaOutput > 0 || deltaCacheRead > 0) {
 				this.emit('event', {
 					type: 'session_updated',
@@ -1273,7 +1286,16 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 							totalTokens: total,
 							cacheReadTokens: cacheRead,
 						},
+						modelID,
+						providerID,
 					},
+					sessionId,
+				});
+			} else if (modelID) {
+				// No token delta but we have model info — emit it standalone
+				this.emit('event', {
+					type: 'session_updated',
+					data: { modelID, providerID },
 					sessionId,
 				});
 			}
@@ -1291,6 +1313,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 							requestCount: 1,
 							currentDuration: durationMs,
 						},
+						modelID,
+						providerID,
 					},
 					sessionId,
 				});
@@ -1436,11 +1460,34 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 		if ((status === 'completed' || status === 'error') && !this.completedToolCalls.has(callID)) {
 			this.completedToolCalls.add(callID);
-			const resultNormalized = this.logNormalizer.normalizeToolUse(
-				name,
-				(state?.input ?? {}) as Record<string, unknown>,
-				callID,
-			);
+			const isTask = name === 'task' || name === 'Task';
+			const taskInput = isTask ? (state?.input as unknown) : undefined;
+			const taskInputRecord =
+				taskInput && typeof taskInput === 'object'
+					? (taskInput as Record<string, unknown>)
+					: undefined;
+			const description =
+				(isTask && taskInputRecord && typeof taskInputRecord.description === 'string'
+					? taskInputRecord.description
+					: undefined) ??
+				(isTask && taskInputRecord && typeof taskInputRecord.prompt === 'string'
+					? taskInputRecord.prompt
+					: undefined) ??
+				'';
+			const outputText = typeof state?.output === 'string' ? state.output : '';
+
+			const resultNormalized = isTask
+				? this.logNormalizer.normalizeTaskResult(
+						callID,
+						description,
+						outputText,
+						status === 'error',
+					)
+				: this.logNormalizer.normalizeToolUse(
+						name,
+						(state?.input ?? {}) as Record<string, unknown>,
+						callID,
+					);
 			this.emit('event', {
 				type: 'tool_result',
 				data: {

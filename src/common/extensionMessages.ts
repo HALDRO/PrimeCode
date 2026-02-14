@@ -137,6 +137,10 @@ export interface SessionStatusPayload {
 export interface SessionStatsPayload {
 	eventType: 'stats';
 	totalStats?: Partial<TotalStats>;
+	/** Model identifier from the backend (e.g. "claude-sonnet-4-20250514"). */
+	modelID?: string;
+	/** Provider identifier from the backend (e.g. "anthropic"). */
+	providerID?: string;
 }
 
 export interface SessionCompletePayload {

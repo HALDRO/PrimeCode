@@ -1,7 +1,6 @@
 import type React from 'react';
 import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
-// @ts-expect-error - normalizedEvents path issue in webview tsconfig
-import type { NormalizedEntry } from '../../../../common/normalizedEvents';
+import type { NormalizedEntry } from '../../../common/normalizedEvents';
 import { isMcpTool, isToolInList, NON_GROUPABLE_TOOLS } from '../../constants';
 import { cn } from '../../lib/cn';
 
@@ -14,6 +13,7 @@ import { Markdown } from '../../utils/markdown';
 import { useVSCode } from '../../utils/vscode';
 import {
 	BrainSideIcon,
+	CheckCircleIcon,
 	FileTextIcon,
 	FolderOpenIcon,
 	SearchIcon,
@@ -80,7 +80,7 @@ export const SimpleTool: React.FC<SimpleToolProps> = ({
 				aria-expanded={hasContent ? expanded : undefined}
 				aria-controls={hasContent ? contentId : undefined}
 				className={cn(
-					'group flex items-center gap-2 w-full text-left bg-transparent border-none p-0',
+					'group flex items-center gap-2 w-full min-w-0 overflow-hidden text-left bg-transparent border-none p-0',
 					'cursor-pointer hover:bg-vscode-toolbar-hoverBackground rounded px-1 -mx-1 py-0.5 select-none',
 					'outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder',
 					!hasContent && 'cursor-default hover:bg-transparent',
@@ -272,7 +272,17 @@ export const shouldTriggerCollapse = (msg: Message): boolean => {
 
 	if (msg.type === 'tool_use') {
 		const toolName = msg.toolName || '';
-		return isToolInList(toolName, NON_GROUPABLE_TOOLS);
+		if (isToolInList(toolName, NON_GROUPABLE_TOOLS)) return true;
+		// TaskResult (via normalizedEntry) should also trigger collapse
+		const entry = (msg as { normalizedEntry?: NormalizedEntry }).normalizedEntry;
+		if (
+			entry?.entryType &&
+			typeof entry.entryType === 'object' &&
+			'actionType' in entry.entryType &&
+			entry.entryType.actionType.type === 'TaskResult'
+		) {
+			return true;
+		}
 	}
 
 	return false;
@@ -411,6 +421,7 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 		isTodoWrite,
 		isRead,
 		isSearch,
+		isTaskResult,
 		readOffset,
 		readLimit,
 	} = useMemo(() => {
@@ -424,6 +435,7 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 		const isLs = toolLower === 'ls' || toolLower === 'list_dir' || toolLower === 'serena_list_dir';
 		const isRead = action?.type === 'FileRead' || toolLower.includes('read');
 		const isTodo = action?.type === 'TodoManagement' || toolLower === 'todowrite';
+		const isTaskResult = action?.type === 'TaskResult';
 		const isSearch =
 			action?.type === 'Search' ||
 			toolLower === 'grep' ||
@@ -454,6 +466,9 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 				meta = action.url;
 			} else if (action.type === 'TaskCreate') {
 				label = 'Task';
+				meta = action.description;
+			} else if (action.type === 'TaskResult') {
+				label = action.status === 'error' ? 'Task Failed' : 'Task Done';
 				meta = action.description;
 			} else if (action.type === 'TodoManagement') {
 				label = 'Todo';
@@ -506,6 +521,7 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 			isTodoWrite: isTodo,
 			isRead,
 			isSearch,
+			isTaskResult,
 			readOffset,
 			readLimit,
 		};
@@ -536,11 +552,26 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 		return <Badge label={metaDisplay} title={meta} className="max-w-full min-w-0 shrink" />;
 	}, [isListDir, isRead, meta, metaDisplay, postMessage]);
 
-	const fullText = content || '';
+	// For TaskResult, prefer the result text from the actionType over the raw content prop
+	const taskResultText = useMemo(() => {
+		if (!isTaskResult) return '';
+		const entry = normalizedEntry;
+		if (
+			entry?.entryType &&
+			typeof entry.entryType === 'object' &&
+			'actionType' in entry.entryType &&
+			entry.entryType.actionType.type === 'TaskResult'
+		) {
+			return entry.entryType.actionType.result || '';
+		}
+		return '';
+	}, [isTaskResult, normalizedEntry]);
+
+	const fullText = isTaskResult ? taskResultText || content || '' : content || '';
 	const hasBody = !isRead && fullText.trim().length > 0;
 
-	const lines = useMemo(() => (content || '').split('\n'), [content]);
-	const nonEmptyLineCount = lines.filter(l => l.length > 0).length;
+	const lines = useMemo((): string[] => fullText.split('\n'), [fullText]);
+	const nonEmptyLineCount = lines.filter((l: string) => l.length > 0).length;
 
 	const todos = useMemo((): Array<{ content: string; status: string }> => {
 		if (!isTodoWrite) return [];
@@ -594,6 +625,7 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 
 	const ToolIcon = useMemo(() => {
 		if (toolName === 'thinking') return BrainSideIcon;
+		if (isTaskResult) return CheckCircleIcon;
 		if (isTodoWrite) return TodoListIcon;
 		if (isRead) return FileTextIcon;
 		if (isListDir) return FolderOpenIcon;
@@ -605,7 +637,7 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 		)
 			return SearchIcon;
 		return WandIcon;
-	}, [toolName, isTodoWrite, isRead, isListDir]);
+	}, [toolName, isTodoWrite, isRead, isListDir, isTaskResult]);
 
 	return (
 		<SimpleTool
@@ -654,7 +686,12 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 				</>
 			}
 		>
-			{isTodoWrite ? (
+			{isTaskResult && fullText.trim() ? (
+				<Markdown
+					content={fullText}
+					className="[&_p]:!text-sm [&_p]:!text-vscode-descriptionForeground [&_li]:!text-sm [&_li]:!text-vscode-descriptionForeground [&_ul]:!text-sm [&_ol]:!text-sm !text-vscode-descriptionForeground"
+				/>
+			) : isTodoWrite ? (
 				<div className="flex flex-col gap-1">
 					{todos.map((todo, idx) => (
 						<div

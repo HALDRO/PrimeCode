@@ -46,6 +46,7 @@ export type ActionType =
 	| { type: 'WebFetch'; url: string }
 	| { type: 'Tool'; toolName: string; arguments?: unknown; result?: ToolResult }
 	| { type: 'TaskCreate'; description: string }
+	| { type: 'TaskResult'; description: string; result: string; status: 'completed' | 'error' }
 	| { type: 'PlanPresentation'; plan: string }
 	| { type: 'TodoManagement'; todos: TodoItem[]; operation: string }
 	| { type: 'Other'; description: string };

@@ -5,8 +5,7 @@
  */
 
 import React, { type ReactNode, useMemo, useState } from 'react';
-// @ts-expect-error - normalizedEvents path issue in webview tsconfig
-import type { NormalizedEntry } from '../../../../common/normalizedEvents';
+import type { NormalizedEntry } from '../../../common/normalizedEvents';
 
 import { isMcpTool, isToolMatch } from '../../constants';
 import { cn } from '../../lib/cn';
@@ -146,7 +145,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 			.normalizedEntry;
 
 		const isError = toolResult?.isError ?? false;
-		const content = toolResult?.content ?? '';
+		const content = toolResult?.content || '';
 
 		// --- Logic Simplification: Determine Card Type ---
 		// 1. Check NormalizedEntry

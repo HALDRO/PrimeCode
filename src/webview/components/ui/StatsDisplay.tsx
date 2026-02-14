@@ -8,7 +8,7 @@
 import type React from 'react';
 import { type CSSProperties, type ReactNode, useMemo } from 'react';
 import { cn } from '../../lib/cn';
-import { useModelContextWindow, useTotalStats } from '../../store';
+import { useActiveModelID, useModelContextWindow, useTotalStats } from '../../store';
 import { formatCost, formatDuration, formatNumber } from '../../utils/format';
 import { BotIcon, HashIcon, TagIcon, TimerIcon, TokensIcon, ZapIcon } from '../icons';
 import { Tooltip } from './Tooltip';
@@ -106,6 +106,7 @@ export const SessionStatsDisplay: React.FC<{
 }> = ({ mode, style, className }) => {
 	const totalStats = useTotalStats();
 	const contextLimit = useModelContextWindow();
+	const activeModelID = useActiveModelID();
 
 	const items = useMemo<StatItem[]>(() => {
 		// Context window usage: total tokens (input + output) from CLI
@@ -120,14 +121,23 @@ export const SessionStatsDisplay: React.FC<{
 		tokenParts.push(`(${percentage.toFixed(1)}%)`);
 		if (totalOut > 0) tokenParts.push(`↓${formatNumber(totalOut)}`);
 
-		const result: StatItem[] = [
-			{
-				key: 'tokens',
-				icon: <TokensIcon size={11} />,
-				value: tokenParts.join(' '),
-				tooltip: `Context window (in+out) / limit · ↓ cumulative output`,
-			},
-		];
+		const result: StatItem[] = [];
+
+		if (activeModelID) {
+			result.push({
+				key: 'model',
+				icon: <BotIcon size={11} />,
+				value: activeModelID,
+				tooltip: 'Active model',
+			});
+		}
+
+		result.push({
+			key: 'tokens',
+			icon: <TokensIcon size={11} />,
+			value: tokenParts.join(' '),
+			tooltip: `Context window (in+out) / limit · ↓ cumulative output`,
+		});
 
 		if (totalStats.cacheReadTokens > 0) {
 			result.push({
@@ -175,7 +185,7 @@ export const SessionStatsDisplay: React.FC<{
 		}
 
 		return result;
-	}, [totalStats, contextLimit]);
+	}, [totalStats, contextLimit, activeModelID]);
 
 	return <StatsDisplay mode={mode} items={items} style={style} className={className} />;
 };

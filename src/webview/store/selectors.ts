@@ -83,6 +83,10 @@ export const useTotalStats = () =>
 		useShallow((state: ChatState) => getActiveSession(state)?.totalStats ?? DEFAULT_TOTAL_STATS),
 	);
 
+/** Select active model ID reported by the backend */
+export const useActiveModelID = () =>
+	useChatStore((state: ChatState) => getActiveSession(state)?.activeModelID);
+
 /** Select per-turn token data for active session */
 const EMPTY_TURN_TOKENS: Record<
 	string,

@@ -13,3 +13,5 @@ docs/.*
 scripts/.*
 AGENTS.md
 opencode.json
+docs/debug/*
+.opencode/*

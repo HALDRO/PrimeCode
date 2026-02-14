@@ -14,6 +14,14 @@ import type { CLIEvent } from '../../core/executor/types';
 import { logger } from '../../utils/logger';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
+const asRecord = (value: unknown): Record<string, unknown> | undefined =>
+	value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
+
+const getStringProp = (record: Record<string, unknown>, key: string): string | undefined => {
+	const value = record[key];
+	return typeof value === 'string' ? value : undefined;
+};
+
 export class SessionHandler implements WebviewMessageHandler {
 	private readonly logNormalizer = new LogNormalizer();
 	private sessionTotalsByUiSession = new Map<
@@ -171,14 +179,10 @@ export class SessionHandler implements WebviewMessageHandler {
 	}
 
 	public handleSessionUpdatedEvent(data: unknown, eventSessionId?: string): void {
-		const record = (
-			data && typeof data === 'object' ? (data as Record<string, unknown>) : {}
-		) as Record<string, unknown>;
+		const record = asRecord(data) ?? {};
 
 		// Resolve target session: event-level sessionId > data.sessionId > activeSessionId
-		const backendSessionId =
-			eventSessionId ||
-			(typeof record.sessionId === 'string' ? (record.sessionId as string) : undefined);
+		const backendSessionId = eventSessionId || getStringProp(record, 'sessionId');
 		const targetSessionId = backendSessionId || this.context.sessionState.activeSessionId;
 		if (!targetSessionId) return;
 
@@ -231,7 +235,8 @@ export class SessionHandler implements WebviewMessageHandler {
 			} satisfies SessionEventMessage);
 		}
 
-		const totalStatsPatch = record.totalStats as Partial<TotalStats> | undefined;
+		const totalStatsRecord = asRecord(record.totalStats);
+		const totalStatsPatch = totalStatsRecord as Partial<TotalStats> | undefined;
 
 		// Aggregate only truly cumulative counters per UI session
 		this.initializeSessionStats(targetSessionId);
@@ -275,6 +280,8 @@ export class SessionHandler implements WebviewMessageHandler {
 				totalInputTokens: totals.totalInputTokens,
 				totalOutputTokens: totals.totalOutputTokens,
 			},
+			modelID: getStringProp(record, 'modelID'),
+			providerID: getStringProp(record, 'providerID'),
 		});
 
 		this.context.view.postMessage({
@@ -817,6 +824,9 @@ export class SessionHandler implements WebviewMessageHandler {
 			childDurations?: Map<string, number>;
 		},
 	): void {
+		// Track subtask metadata from tool_use so tool_result can carry it forward
+		const subtaskMeta = new Map<string, { description: string; prompt: string; agent: string }>();
+
 		for (const event of history) {
 			if (event.type === 'message') {
 				const data = event.data as {
@@ -950,13 +960,18 @@ export class SessionHandler implements WebviewMessageHandler {
 					const subtaskDuration = childSessionId
 						? options.childDurations?.get(childSessionId)
 						: undefined;
+					const agent = typeof input.subagent_type === 'string' ? input.subagent_type : 'subagent';
+					const prompt = typeof input.prompt === 'string' ? input.prompt : '';
+					const description = typeof input.description === 'string' ? input.description : 'Subtask';
+					// Save metadata so tool_result replay can carry it forward
+					subtaskMeta.set(toolUseId, { description, prompt, agent });
 					this.postSessionMessage(
 						{
 							id: toolUseId,
 							type: 'subtask',
-							agent: typeof input.subagent_type === 'string' ? input.subagent_type : 'subagent',
-							prompt: typeof input.prompt === 'string' ? input.prompt : '',
-							description: typeof input.description === 'string' ? input.description : 'Subtask',
+							agent,
+							prompt,
+							description,
 							status: 'running',
 							contextId: childSessionId,
 							metadata: childSessionId ? { childSessionId } : undefined,
@@ -1052,6 +1067,8 @@ export class SessionHandler implements WebviewMessageHandler {
 					const subtaskDuration = childSessionId
 						? options.childDurations?.get(childSessionId)
 						: undefined;
+					// Carry forward metadata saved from tool_use replay
+					const savedMeta = subtaskMeta.get(toolUseId);
 					this.postSessionMessage(
 						{
 							id: toolUseId,
@@ -1062,6 +1079,7 @@ export class SessionHandler implements WebviewMessageHandler {
 							metadata: childSessionId ? { childSessionId } : undefined,
 							timestamp: data.timestamp || new Date().toISOString(),
 							...(subtaskDuration ? { durationMs: subtaskDuration } : {}),
+							...(savedMeta ?? {}),
 						},
 						sessionId,
 					);
@@ -1475,7 +1493,10 @@ export class SessionHandler implements WebviewMessageHandler {
 		} satisfies SessionLifecycleMessage);
 	}
 
-	private postStats(sessionId: string, payload: { totalStats?: Partial<TotalStats> }): void {
+	private postStats(
+		sessionId: string,
+		payload: { totalStats?: Partial<TotalStats>; modelID?: string; providerID?: string },
+	): void {
 		this.context.view.postMessage({
 			type: 'session_event',
 			targetId: sessionId,

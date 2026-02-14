@@ -31,6 +31,7 @@ import type {
 	TotalStats,
 } from '../../common';
 import { generateId } from '../../common';
+import type { NormalizedEntry } from '../../common/normalizedEvents';
 
 export type { CommitInfo, ConversationMessage, SubtaskMessage, TotalStats };
 
@@ -47,7 +48,7 @@ export interface ChangedFile {
 	timestamp: number;
 }
 
-export type Message = ConversationMessage;
+export type Message = ConversationMessage & { normalizedEntry?: NormalizedEntry };
 
 export type MessageInput = Partial<ConversationMessage> & {
 	type: ConversationMessage['type'];
@@ -57,6 +58,10 @@ export interface ChatSession {
 	id: string;
 	/** Per-session model override. Undefined means "use workspace default". */
 	model?: string;
+	/** Model ID reported by the backend for the current/last request. */
+	activeModelID?: string;
+	/** Provider ID reported by the backend for the current/last request. */
+	activeProviderID?: string;
 	messages: Message[];
 	input: string;
 	status: string;
@@ -414,7 +419,30 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 									// For non-delta merges, also preserve startTime if already set
 									const preservedStartTime =
 										'startTime' in existing ? existing.startTime : undefined;
+									const preservedSubtaskMeta =
+										existing.type === 'subtask'
+											? {
+													description: existing.description,
+													prompt: existing.prompt,
+													agent: existing.agent,
+													startTime: existing.startTime,
+												}
+											: undefined;
 									Object.assign(existing, message);
+									if (existing.type === 'subtask' && preservedSubtaskMeta) {
+										if (!existing.description && preservedSubtaskMeta.description) {
+											existing.description = preservedSubtaskMeta.description;
+										}
+										if (!existing.prompt && preservedSubtaskMeta.prompt) {
+											existing.prompt = preservedSubtaskMeta.prompt;
+										}
+										if (!existing.agent && preservedSubtaskMeta.agent) {
+											existing.agent = preservedSubtaskMeta.agent;
+										}
+										if (!existing.startTime && preservedSubtaskMeta.startTime) {
+											existing.startTime = preservedSubtaskMeta.startTime;
+										}
+									}
 									if (preservedStartTime !== undefined && 'startTime' in existing) {
 										(existing as { startTime: number }).startTime = preservedStartTime as number;
 									}
@@ -447,6 +475,8 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 						case 'stats': {
 							const s = payload as SessionStatsPayload;
 							if (s.totalStats) Object.assign(targetSession.totalStats, s.totalStats);
+							if (s.modelID) targetSession.activeModelID = s.modelID;
+							if (s.providerID) targetSession.activeProviderID = s.providerID;
 							break;
 						}
 

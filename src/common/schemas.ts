@@ -162,32 +162,6 @@ export const InstalledMcpServerMetadataSchema = Type.Object({
 });
 export type InstalledMcpServerMetadata = Static<typeof InstalledMcpServerMetadataSchema>;
 
-// =============================================================================
-// Token Usage Types
-// =============================================================================
-
-export const TokenUsageAPISchema = Type.Object({
-	input_tokens: Type.Optional(Type.Number()),
-	output_tokens: Type.Optional(Type.Number()),
-	cache_creation_input_tokens: Type.Optional(Type.Number()),
-	cache_read_input_tokens: Type.Optional(Type.Number()),
-	reasoning_tokens: Type.Optional(Type.Number()),
-});
-export type TokenUsageAPI = Static<typeof TokenUsageAPISchema>;
-
-/**
- * Per-event delta stats — used for streaming updates.
- * Fields are incremental deltas from the last event, NOT cumulative.
- */
-export const TokenStatsSchema = Type.Object({
-	currentInputTokens: Type.Optional(Type.Number()),
-	currentOutputTokens: Type.Optional(Type.Number()),
-	cacheReadTokens: Type.Optional(Type.Number()),
-	cacheCreationTokens: Type.Optional(Type.Number()),
-	reasoningTokens: Type.Optional(Type.Number()),
-});
-export type TokenStats = Static<typeof TokenStatsSchema>;
-
 /**
  * Cumulative session-level stats — full state, not deltas.
  * CLI returns absolute values per request; we store the latest snapshot.

@@ -66,6 +66,38 @@ export class LogNormalizer extends EventEmitter {
 	}
 
 	/**
+	 * Convert a `task` tool_result into a `NormalizedEntry` with `ActionType.TaskResult`.
+	 *
+	 * Note: we keep `toolName: 'task'` so UI components can treat this as a regular task tool run,
+	 * while the `actionType` carries the semantic meaning (result + status).
+	 */
+	public normalizeTaskResult(
+		toolCallId: string,
+		description: string,
+		result: string,
+		isError: boolean,
+	): NormalizedEntry {
+		const actionType: ActionType = {
+			type: 'TaskResult',
+			description,
+			result,
+			status: isError ? 'error' : 'completed',
+		};
+
+		return {
+			timestamp: new Date().toISOString(),
+			entryType: {
+				type: 'ToolUse',
+				toolName: 'task',
+				actionType,
+				status: isError ? 'failed' : 'success',
+			},
+			content: result,
+			metadata: { toolCallId },
+		};
+	}
+
+	/**
 	 * Convert a raw tool use event into a NormalizedEntry with ActionType.
 	 * This mirrors the 'build_action_type' logic from the reference.
 	 */
