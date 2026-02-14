@@ -852,28 +852,7 @@ const SCENARIO_1_RESEARCHER: MockMessage[] = (() => {
 			timestamp: Date.now(),
 			delay: 1000,
 		},
-		// Token stats
-		{
-			type: 'session_event',
-			targetId: mockActiveSessionId,
-			eventType: 'stats',
-			payload: {
-				eventType: 'stats',
-				tokenStats: {
-					totalTokensInput: 128000,
-					totalTokensOutput: 12000,
-					currentInputTokens: 128000,
-					currentOutputTokens: 12000,
-					cacheCreationTokens: 40000,
-					cacheReadTokens: 78000,
-					reasoningTokens: 156,
-					totalReasoningTokens: 156,
-				},
-			},
-			timestamp: Date.now(),
-			delay: 200,
-		},
-		// Total stats
+		// Stats
 		{
 			type: 'session_event',
 			targetId: mockActiveSessionId,
@@ -881,16 +860,19 @@ const SCENARIO_1_RESEARCHER: MockMessage[] = (() => {
 			payload: {
 				eventType: 'stats',
 				totalStats: {
+					contextTokens: 128000,
+					outputTokens: 12000,
+					totalTokens: 140000,
+					cacheReadTokens: 78000,
+					cacheCreationTokens: 40000,
+					reasoningTokens: 156,
 					totalCost: 0.158,
-					totalTokensInput: 128000,
-					totalTokensOutput: 12000,
-					totalReasoningTokens: 156,
 					requestCount: 24,
 					totalDuration: 45000,
 				},
 			},
 			timestamp: Date.now(),
-			delay: 100,
+			delay: 200,
 		},
 	];
 })();
@@ -1852,15 +1834,12 @@ const mockVSCodeApi: VSCodeApi = {
 					eventType: 'stats',
 					payload: {
 						eventType: 'stats',
-						tokenStats: {
-							totalTokensInput: 500,
-							totalTokensOutput: 150,
-							currentInputTokens: 500,
-							currentOutputTokens: 150,
-							cacheCreationTokens: 0,
+						totalStats: {
+							contextTokens: 500,
+							outputTokens: 150,
+							totalTokens: 650,
 							cacheReadTokens: 0,
 							reasoningTokens: 52,
-							totalReasoningTokens: 52,
 						},
 					},
 					timestamp: Date.now(),
@@ -2003,10 +1982,11 @@ const mockVSCodeApi: VSCodeApi = {
 				dispatchSessionLifecycle('switched', mockActiveSessionId, {
 					isProcessing: false,
 					totalStats: {
-						totalCost: 0,
-						totalTokensInput: 0,
-						totalTokensOutput: 0,
-						totalReasoningTokens: 0,
+						contextTokens: 0,
+						outputTokens: 0,
+						totalTokens: 0,
+						cacheReadTokens: 0,
+						reasoningTokens: 0,
 						requestCount: 0,
 						totalDuration: 0,
 					},

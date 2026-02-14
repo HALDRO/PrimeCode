@@ -5,7 +5,6 @@ import type {
 	SessionEventMessage,
 	SessionLifecycleMessage,
 	SessionMessageData,
-	TokenStats,
 	TotalStats,
 } from '../../common';
 import { generateId } from '../../common';
@@ -20,12 +19,16 @@ export class SessionHandler implements WebviewMessageHandler {
 	private sessionTotalsByUiSession = new Map<
 		string,
 		{
-			startedAtMs: number;
-			totalTokensInput: number;
-			totalTokensOutput: number;
-			totalReasoningTokens: number;
 			requestCount: number;
 			totalDuration: number;
+			subagentTokensInput: number;
+			subagentTokensOutput: number;
+			subagentCount: number;
+			totalInputTokens: number;
+			totalOutputTokens: number;
+			/** Previous snapshot values for computing deltas */
+			_prevContextTokens: number;
+			_prevOutputTokens: number;
 		}
 	>();
 
@@ -135,6 +138,38 @@ export class SessionHandler implements WebviewMessageHandler {
 		} satisfies SessionEventMessage);
 	}
 
+	public postTurnTokens(
+		data: {
+			inputTokens: number;
+			outputTokens: number;
+			totalTokens: number;
+			cacheReadTokens: number;
+			durationMs?: number;
+			userMessageId?: string;
+		},
+		sessionId?: string,
+	): void {
+		const targetId = sessionId || this.context.sessionState.activeSessionId;
+		if (!targetId) return;
+
+		this.context.view.postMessage({
+			type: 'session_event',
+			targetId,
+			eventType: 'turn_tokens',
+			payload: {
+				eventType: 'turn_tokens',
+				inputTokens: data.inputTokens,
+				outputTokens: data.outputTokens,
+				totalTokens: data.totalTokens,
+				cacheReadTokens: data.cacheReadTokens,
+				...(data.durationMs ? { durationMs: data.durationMs } : {}),
+				...(data.userMessageId ? { userMessageId: data.userMessageId } : {}),
+			},
+			timestamp: Date.now(),
+			sessionId: targetId,
+		} satisfies SessionEventMessage);
+	}
+
 	public handleSessionUpdatedEvent(data: unknown, eventSessionId?: string): void {
 		const record = (
 			data && typeof data === 'object' ? (data as Record<string, unknown>) : {}
@@ -196,44 +231,49 @@ export class SessionHandler implements WebviewMessageHandler {
 			} satisfies SessionEventMessage);
 		}
 
-		const tokenStats = record.tokenStats as Partial<TokenStats> | undefined;
 		const totalStatsPatch = record.totalStats as Partial<TotalStats> | undefined;
 
-		// Aggregate per-session totals
+		// Aggregate only truly cumulative counters per UI session
 		this.initializeSessionStats(targetSessionId);
 		const totals = this.sessionTotalsByUiSession.get(targetSessionId);
 		if (!totals) return;
 
-		let totalTokensPatch: Partial<TotalStats> | undefined;
-		if (tokenStats) {
-			totals.totalTokensInput += tokenStats.currentInputTokens ?? 0;
-			totals.totalTokensOutput += tokenStats.currentOutputTokens ?? 0;
-			totals.totalReasoningTokens += tokenStats.reasoningTokens ?? 0;
-
-			totalTokensPatch = {
-				totalTokensInput: totals.totalTokensInput,
-				totalTokensOutput: totals.totalTokensOutput,
-				totalReasoningTokens: totals.totalReasoningTokens,
-			};
-		}
-
-		let durationPatch: Partial<TotalStats> | undefined;
 		if (totalStatsPatch?.currentDuration) {
 			totals.totalDuration += totalStatsPatch.currentDuration;
-			durationPatch = { totalDuration: totals.totalDuration };
+		} else if (totalStatsPatch?.totalDuration && totals.totalDuration === 0) {
+			// History replay sends pre-computed totalDuration (not incremental)
+			totals.totalDuration = totalStatsPatch.totalDuration;
 		}
 
 		if (typeof totalStatsPatch?.requestCount === 'number') {
 			totals.requestCount += totalStatsPatch.requestCount;
 		}
 
+		if (typeof totalStatsPatch?.subagentCount === 'number') {
+			totals.subagentCount += totalStatsPatch.subagentCount;
+		}
+
+		// Accumulate token deltas: contextTokens/outputTokens are snapshots (last API call),
+		// so we compute deltas from previous snapshot to get cumulative totals.
+		if (typeof totalStatsPatch?.contextTokens === 'number' && totalStatsPatch.contextTokens > 0) {
+			const delta = Math.max(0, totalStatsPatch.contextTokens - totals._prevContextTokens);
+			totals.totalInputTokens += delta;
+			totals._prevContextTokens = totalStatsPatch.contextTokens;
+		}
+		if (typeof totalStatsPatch?.outputTokens === 'number' && totalStatsPatch.outputTokens > 0) {
+			const delta = Math.max(0, totalStatsPatch.outputTokens - totals._prevOutputTokens);
+			totals.totalOutputTokens += delta;
+			totals._prevOutputTokens = totalStatsPatch.outputTokens;
+		}
+
 		this.postStats(targetSessionId, {
-			tokenStats,
 			totalStats: {
 				...(totalStatsPatch ?? {}),
-				...(totalTokensPatch ?? {}),
-				...(durationPatch ?? {}),
 				requestCount: totals.requestCount,
+				totalDuration: totals.totalDuration,
+				subagentCount: totals.subagentCount,
+				totalInputTokens: totals.totalInputTokens,
+				totalOutputTokens: totals.totalOutputTokens,
 			},
 		});
 
@@ -351,15 +391,28 @@ export class SessionHandler implements WebviewMessageHandler {
 		// Register all parent↔child links in the graph (single source of truth)
 		graph.registerChildrenFromHistory(sessionId, taskToolUseIds, childSessionIds);
 
-		// Replay child sessions into their own buckets
+		// Replay child sessions into their own buckets and compute durations
+		const childDurations = new Map<string, number>();
 		for (const child of childSessions) {
 			const childHistory = await this.context.cli.getHistory(child.id, config);
 			this.replayHistoryIntoSession(child.id, childHistory);
+
+			// Compute child session duration from first/last event timestamps
+			if (childHistory.length > 0) {
+				const firstTs = (childHistory[0].data as { timestamp?: string })?.timestamp;
+				const lastTs = (childHistory[childHistory.length - 1].data as { timestamp?: string })
+					?.timestamp;
+				if (firstTs && lastTs) {
+					const duration = new Date(lastTs).getTime() - new Date(firstTs).getTime();
+					if (duration > 0) childDurations.set(child.id, duration);
+				}
+			}
 		}
 
 		// Surface child sessions as subtask cards if parent history is compacted
 		if (taskToolUseIds.length === 0 && childSessions.length > 0) {
 			for (const child of childSessions) {
+				const duration = childDurations.get(child.id);
 				this.postSessionMessage(
 					{
 						id: `hist-subtask-${child.id}`,
@@ -370,6 +423,7 @@ export class SessionHandler implements WebviewMessageHandler {
 						contextId: child.id,
 						metadata: { childSessionId: child.id },
 						timestamp: new Date().toISOString(),
+						...(duration ? { durationMs: duration } : {}),
 					},
 					sessionId,
 				);
@@ -384,6 +438,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			this.replayHistoryIntoSession(sessionId, parentHistory, {
 				mode: 'parent',
 				parentSessionId: sessionId,
+				childDurations,
 			});
 		}
 	}
@@ -759,18 +814,24 @@ export class SessionHandler implements WebviewMessageHandler {
 		options?: {
 			mode?: 'default' | 'parent';
 			parentSessionId?: string;
+			childDurations?: Map<string, number>;
 		},
 	): void {
 		for (const event of history) {
 			if (event.type === 'message') {
-				const data = event.data as { content?: string; partId?: string; isDelta?: boolean };
+				const data = event.data as {
+					content?: string;
+					partId?: string;
+					isDelta?: boolean;
+					timestamp?: string;
+				};
 				this.postSessionMessage(
 					{
 						id: data.partId ? `msg-${data.partId}` : `hist-msg-${Math.random()}`,
 						type: 'assistant',
 						content: data.content || '',
 						isDelta: false,
-						timestamp: new Date().toISOString(),
+						timestamp: data.timestamp || new Date().toISOString(),
 						normalizedEntry: event.normalizedEntry,
 					},
 					sessionId,
@@ -784,13 +845,21 @@ export class SessionHandler implements WebviewMessageHandler {
 					content?: string;
 					timestamp?: string;
 					messageId?: string;
+					attachments?: {
+						files?: string[];
+						codeSnippets?: Array<{
+							filePath: string;
+							startLine: number;
+							endLine: number;
+							content: string;
+						}>;
+						images?: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
+					};
 				};
 				if (data.role === 'user') {
-					const stableId =
-						typeof data.messageId === 'string' && data.messageId.trim()
-							? data.messageId
-							: undefined;
-					const userMsgId = stableId ?? `msg-local-${Math.random().toString(36).slice(2, 9)}`;
+					const userMsgId =
+						data.messageId?.trim() || `msg-local-${Math.random().toString(36).slice(2, 9)}`;
+					const { attachments } = data;
 					this.postSessionMessage(
 						{
 							id: userMsgId,
@@ -798,6 +867,7 @@ export class SessionHandler implements WebviewMessageHandler {
 							content: data.content || '',
 							timestamp: data.timestamp || new Date().toISOString(),
 							normalizedEntry: event.normalizedEntry,
+							...(attachments ? { attachments } : {}),
 						},
 						sessionId,
 					);
@@ -834,14 +904,21 @@ export class SessionHandler implements WebviewMessageHandler {
 			}
 
 			if (event.type === 'thinking') {
-				const data = event.data as { content?: string; partId?: string; timestamp?: string };
+				const data = event.data as {
+					content?: string;
+					partId?: string;
+					timestamp?: string;
+					durationMs?: number;
+				};
 				this.postSessionMessage(
 					{
 						id: data.partId ? `thinking-${data.partId}` : `hist-thinking-${Math.random()}`,
 						type: 'thinking',
 						content: data.content || '',
 						isDelta: false,
+						isStreaming: false,
 						timestamp: data.timestamp || new Date().toISOString(),
+						...(data.durationMs ? { durationMs: data.durationMs } : {}),
 					},
 					sessionId,
 				);
@@ -870,6 +947,9 @@ export class SessionHandler implements WebviewMessageHandler {
 				if (options?.mode === 'parent' && toolName === 'task') {
 					const graph = this.context.sessionGraph;
 					const childSessionId = graph.getChildByTaskId(toolUseId);
+					const subtaskDuration = childSessionId
+						? options.childDurations?.get(childSessionId)
+						: undefined;
 					this.postSessionMessage(
 						{
 							id: toolUseId,
@@ -881,6 +961,8 @@ export class SessionHandler implements WebviewMessageHandler {
 							contextId: childSessionId,
 							metadata: childSessionId ? { childSessionId } : undefined,
 							timestamp: data.timestamp || new Date().toISOString(),
+							startTime: data.timestamp || new Date().toISOString(),
+							...(subtaskDuration ? { durationMs: subtaskDuration } : {}),
 						},
 						sessionId,
 					);
@@ -967,6 +1049,9 @@ export class SessionHandler implements WebviewMessageHandler {
 				if (options?.mode === 'parent' && toolName === 'task') {
 					const graph = this.context.sessionGraph;
 					const childSessionId = graph.getChildByTaskId(toolUseId);
+					const subtaskDuration = childSessionId
+						? options.childDurations?.get(childSessionId)
+						: undefined;
 					this.postSessionMessage(
 						{
 							id: toolUseId,
@@ -976,6 +1061,7 @@ export class SessionHandler implements WebviewMessageHandler {
 							contextId: childSessionId,
 							metadata: childSessionId ? { childSessionId } : undefined,
 							timestamp: data.timestamp || new Date().toISOString(),
+							...(subtaskDuration ? { durationMs: subtaskDuration } : {}),
 						},
 						sessionId,
 					);
@@ -994,6 +1080,22 @@ export class SessionHandler implements WebviewMessageHandler {
 						metadata,
 						timestamp: data.timestamp || new Date().toISOString(),
 						normalizedEntry: event.normalizedEntry,
+					},
+					sessionId,
+				);
+				continue;
+			}
+
+			// Replay per-turn token stats so the UI shows real token counts
+			if (event.type === 'turn_tokens') {
+				this.postTurnTokens(
+					event.data as {
+						inputTokens: number;
+						outputTokens: number;
+						totalTokens: number;
+						cacheReadTokens: number;
+						durationMs?: number;
+						userMessageId?: string;
 					},
 					sessionId,
 				);
@@ -1270,37 +1372,33 @@ export class SessionHandler implements WebviewMessageHandler {
 			return;
 		}
 		this.sessionTotalsByUiSession.set(sessionId, {
-			startedAtMs: Date.now(),
-			totalTokensInput: 0,
-			totalTokensOutput: 0,
-			totalReasoningTokens: 0,
 			requestCount: 0,
 			totalDuration: 0,
+			subagentTokensInput: 0,
+			subagentTokensOutput: 0,
+			subagentCount: 0,
+			totalInputTokens: 0,
+			totalOutputTokens: 0,
+			_prevContextTokens: 0,
+			_prevOutputTokens: 0,
 		});
 
 		this.postStats(sessionId, {
-			tokenStats: {
-				totalTokensInput: 0,
-				totalTokensOutput: 0,
-				currentInputTokens: 0,
-				currentOutputTokens: 0,
-				cacheCreationTokens: 0,
-				cacheReadTokens: 0,
-				reasoningTokens: 0,
-				totalReasoningTokens: 0,
-				subagentTokensInput: 0,
-				subagentTokensOutput: 0,
-			},
 			totalStats: {
-				totalCost: 0,
-				totalTokensInput: 0,
-				totalTokensOutput: 0,
-				totalReasoningTokens: 0,
+				contextTokens: 0,
+				outputTokens: 0,
+				totalTokens: 0,
+				cacheReadTokens: 0,
+				cacheCreationTokens: 0,
+				reasoningTokens: 0,
 				requestCount: 0,
 				totalDuration: 0,
-				currentCost: 0,
-				currentDuration: 0,
-				currentTurns: 0,
+				totalCost: 0,
+				subagentTokensInput: 0,
+				subagentTokensOutput: 0,
+				subagentCount: 0,
+				totalInputTokens: 0,
+				totalOutputTokens: 0,
 			},
 		});
 	}
@@ -1377,10 +1475,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		} satisfies SessionLifecycleMessage);
 	}
 
-	private postStats(
-		sessionId: string,
-		payload: { tokenStats?: Partial<TokenStats>; totalStats?: Partial<TotalStats> },
-	): void {
+	private postStats(sessionId: string, payload: { totalStats?: Partial<TotalStats> }): void {
 		this.context.view.postMessage({
 			type: 'session_event',
 			targetId: sessionId,

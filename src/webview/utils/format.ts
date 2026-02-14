@@ -14,10 +14,10 @@ export const formatDuration = (ms: number): string => {
 	const seconds = totalSeconds % 60;
 
 	if (hours > 0) {
-		return `${hours}h ${minutes}m ${seconds.toFixed(2)}s`;
+		return `${hours}h ${minutes}m ${Math.floor(seconds)}s`;
 	}
 	if (minutes > 0) {
-		return `${minutes}m ${seconds.toFixed(2)}s`;
+		return `${minutes}m ${Math.floor(seconds)}s`;
 	}
 	return `${seconds.toFixed(2)}s`;
 };

@@ -146,6 +146,10 @@ interface ThinkingMessageProps {
 	defaultExpanded?: boolean;
 }
 
+import { useElapsedTimer } from '../../hooks/useElapsedTimer';
+// Re-export from shared hook for backward compatibility
+export { useElapsedTimer };
+
 export const ThinkingMessage: React.FC<ThinkingMessageProps> = ({
 	content,
 	durationMs,
@@ -155,6 +159,7 @@ export const ThinkingMessage: React.FC<ThinkingMessageProps> = ({
 	const preview = content.split('\n')[0]?.trim();
 	const [expanded, setExpanded] = useState(defaultExpanded ?? isStreaming ?? false);
 	const wasStreamingRef = useRef(isStreaming);
+	const liveElapsed = useElapsedTimer(isStreaming ?? false);
 
 	useEffect(() => {
 		if (isStreaming) {
@@ -165,6 +170,8 @@ export const ThinkingMessage: React.FC<ThinkingMessageProps> = ({
 		wasStreamingRef.current = isStreaming;
 	}, [isStreaming]);
 
+	const displayDuration = isStreaming ? liveElapsed : durationMs;
+
 	return (
 		<SimpleTool
 			icon={<BrainSideIcon size={17} className="text-vscode-descriptionForeground" />}
@@ -173,10 +180,11 @@ export const ThinkingMessage: React.FC<ThinkingMessageProps> = ({
 			expanded={expanded}
 			onToggle={() => setExpanded(prev => !prev)}
 			rightContent={
-				durationMs !== undefined && (
+				displayDuration !== undefined &&
+				displayDuration > 0 && (
 					<span className="flex items-center gap-1 text-sm font-bold text-vscode-descriptionForeground">
 						<TimerIcon size={11} />
-						{formatDuration(durationMs)}
+						{formatDuration(displayDuration)}
 					</span>
 				)
 			}

@@ -18,7 +18,7 @@ import { generateId } from '../../common';
 export type { ConversationIndexEntry, WorkspaceFile };
 
 // Re-export types from chatStore for backward compatibility
-export type { ChangedFile, CommitInfo, TokenStats, TotalStats } from './chatStore';
+export type { ChangedFile, CommitInfo, TotalStats } from './chatStore';
 
 export type ModalType = 'settings' | 'history' | 'access' | 'mcp' | null;
 

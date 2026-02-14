@@ -6,6 +6,12 @@ import { type Message, useChatStore } from '../store/chatStore';
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_GROUPED: (Message | Message[])[] = [];
 
+export interface SubtaskTokenStats {
+	input: number;
+	output: number;
+	total: number;
+}
+
 /**
  * Hook to retrieve all child messages for a given subtask using unified Context ID.
  * Resolves contextId from the subtask message and retrieves the corresponding session bucket.
@@ -61,6 +67,7 @@ export function useSubtaskThread(
 	children: Message[];
 	groupedChildren: (Message | Message[])[];
 	totalDurationMs: number;
+	tokenStats: SubtaskTokenStats | null;
 } {
 	const message = useChatStore(state => {
 		const sid = state.activeSessionId;
@@ -89,10 +96,26 @@ export function useSubtaskThread(
 		return duration;
 	}, [message?.durationMs, children]);
 
+	// Aggregate token stats from child session — read primitives to avoid new-object re-renders
+	const contextId = message?.contextId;
+	const tokenInput = useChatStore(state => {
+		if (!contextId || contextId === state.activeSessionId) return 0;
+		return state.sessionsById[contextId]?.totalStats?.totalInputTokens ?? 0;
+	});
+	const tokenOutput = useChatStore(state => {
+		if (!contextId || contextId === state.activeSessionId) return 0;
+		return state.sessionsById[contextId]?.totalStats?.totalOutputTokens ?? 0;
+	});
+	const tokenStats: SubtaskTokenStats | null = useMemo(() => {
+		if (tokenInput === 0 && tokenOutput === 0) return null;
+		return { input: tokenInput, output: tokenOutput, total: tokenInput + tokenOutput };
+	}, [tokenInput, tokenOutput]);
+
 	return {
 		message,
 		children,
 		groupedChildren,
 		totalDurationMs,
+		tokenStats,
 	};
 }

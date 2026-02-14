@@ -141,28 +141,36 @@ export const GenerationStatus: React.FC = () => {
 	return (
 		<div
 			className={cn(
-				'flex items-center justify-start gap-2 py-2',
+				'flex items-center justify-start gap-1.5 py-2',
 				'transition-all duration-300 ease-out',
 				visible && isProcessing ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-1',
 			)}
 		>
-			<div
-				className={cn(
-					'inline-flex items-center gap-2 px-2.5 py-1 rounded-md',
-					'bg-(--alpha-subtle)',
-				)}
+			<StatusIcon isThinking={isThinking} />
+			<span
+				className="text-xs relative inline-block"
+				style={{
+					background: isThinking
+						? 'linear-gradient(90deg, var(--vscode-descriptionForeground) 0%, var(--vscode-foreground) 50%, var(--vscode-descriptionForeground) 100%)'
+						: 'linear-gradient(90deg, var(--vscode-descriptionForeground) 0%, var(--vscode-foreground) 50%, var(--vscode-descriptionForeground) 100%)',
+					backgroundSize: '200% 100%',
+					backgroundClip: 'text',
+					WebkitBackgroundClip: 'text',
+					color: 'transparent',
+					animation: 'shimmer 3s linear infinite',
+				}}
 			>
-				<StatusIcon isThinking={isThinking} />
-				<span
-					className={cn(
-						'text-xs font-medium',
-						isThinking ? 'text-(--color-thinking)' : 'text-vscode-foreground opacity-60',
-					)}
-				>
-					{showStatus}
-					<TypingDots />
-				</span>
-			</div>
+				{showStatus}
+				<TypingDots />
+			</span>
+			<style>
+				{`
+					@keyframes shimmer {
+						0% { background-position: 200% 0; }
+						100% { background-position: -200% 0; }
+					}
+				`}
+			</style>
 		</div>
 	);
 };

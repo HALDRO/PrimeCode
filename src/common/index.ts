@@ -31,6 +31,7 @@ export type {
 	SessionStatus,
 	SessionStatusPayload,
 	SessionTerminalPayload,
+	SessionTurnTokensPayload,
 	ToolResultData,
 	ToolUseData,
 } from './extensionMessages';

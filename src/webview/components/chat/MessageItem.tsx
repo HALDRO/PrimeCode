@@ -11,7 +11,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSubtaskThread } from '../../hooks/useSubtaskChildren';
 import type { Message } from '../../store/chatStore';
 import { useMcpServers } from '../../store/selectors';
-import { formatDuration, formatToolName } from '../../utils/format';
+import { formatDuration, formatNumber, formatToolName } from '../../utils/format';
 import { Markdown } from '../../utils/markdown';
 import {
 	ChevronDownIcon,
@@ -20,8 +20,14 @@ import {
 	TodoCheckIcon,
 	TodoPendingIcon,
 	TodoProgressIcon,
+	TokensIcon,
 } from '../icons';
-import { SimpleTool, shouldCollapseGroupedItem, ThinkingMessage } from './SimpleTool';
+import {
+	SimpleTool,
+	shouldCollapseGroupedItem,
+	ThinkingMessage,
+	useElapsedTimer,
+} from './SimpleTool';
 import { ToolCard, ToolCardMessage } from './ToolCard';
 
 export interface MessageItemContext {
@@ -61,7 +67,15 @@ const SubtaskItem: React.FC<{
 	const [expanded, setExpanded] = useState(message.status === 'running');
 	const mcpServers = useMcpServers();
 	const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
-	const { groupedChildren, totalDurationMs } = useSubtaskThread(message.id || '', mcpServerNames);
+	const { groupedChildren, totalDurationMs, tokenStats } = useSubtaskThread(
+		message.id || '',
+		mcpServerNames,
+	);
+
+	// Live elapsed timer while subtask is running
+	const isRunning = message.status === 'running';
+	const liveElapsed = useElapsedTimer(isRunning);
+	const displayDuration = isRunning ? liveElapsed : totalDurationMs;
 
 	// Build the header description: prefer description, fall back to cleaned result
 	const headerDescription = useMemo(() => {
@@ -99,10 +113,23 @@ const SubtaskItem: React.FC<{
 				</>
 			}
 			headerRight={
-				totalDurationMs > 0 ? (
-					<span className="flex items-center gap-1 text-sm font-bold text-vscode-descriptionForeground">
-						<TimerIcon size={11} />
-						{formatDuration(totalDurationMs)}
+				tokenStats || displayDuration > 0 ? (
+					<span className="flex items-center gap-3 text-sm font-bold text-vscode-descriptionForeground">
+						{tokenStats && (
+							<span
+								className="flex items-center gap-1"
+								title={`Input: ${formatNumber(tokenStats.input)} · Output: ${formatNumber(tokenStats.output)}`}
+							>
+								<TokensIcon size={11} />
+								{formatNumber(tokenStats.total)}
+							</span>
+						)}
+						{displayDuration > 0 && (
+							<span className="flex items-center gap-1">
+								<TimerIcon size={11} />
+								{formatDuration(displayDuration)}
+							</span>
+						)}
 					</span>
 				) : undefined
 			}

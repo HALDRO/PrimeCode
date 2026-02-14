@@ -26,7 +26,6 @@ export {
 	type CommitInfo,
 	type ConversationIndexEntry,
 	type ModalType,
-	type TokenStats,
 	type TotalStats,
 	type TransientNotification,
 	type TransientNotificationInput,

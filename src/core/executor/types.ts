@@ -35,7 +35,8 @@ export interface CLIEvent {
 		| 'finished'
 		| 'permission'
 		| 'session_updated'
-		| 'normalized_log';
+		| 'normalized_log'
+		| 'turn_tokens';
 	data: unknown;
 	normalizedEntry?: NormalizedEntry;
 	sessionId?: string;

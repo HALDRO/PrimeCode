@@ -93,6 +93,17 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 	/** Per-session active assistant part IDs — avoids cross-contamination between concurrent subagents. */
 	private activeAssistantPartIds = new Map<string, string>();
+	/** Per-session active thinking part IDs — tracks thinking blocks for complete events. */
+	private activeThinkingPartIds = new Map<string, string>();
+
+	/** Complete and clear any active thinking block for a session. */
+	private completeActiveThinking(sessionId: string): void {
+		const thinkingPartId = this.activeThinkingPartIds.get(sessionId);
+		if (thinkingPartId) {
+			this.sessionHandler.postComplete(thinkingPartId, thinkingPartId, sessionId);
+			this.activeThinkingPartIds.delete(sessionId);
+		}
+	}
 	private sessionGraph = new SessionGraph();
 	private openCodeInitTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -724,7 +735,24 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				break;
 			}
 
+			case 'turn_tokens': {
+				this.sessionHandler.postTurnTokens(
+					event.data as {
+						inputTokens: number;
+						outputTokens: number;
+						totalTokens: number;
+						cacheReadTokens: number;
+						durationMs?: number;
+						userMessageId?: string;
+					},
+					targetSessionId,
+				);
+				break;
+			}
+
 			case 'finished': {
+				// Complete thinking block first (so durationMs is computed)
+				this.completeActiveThinking(targetSessionId);
 				const finishedPartId = this.activeAssistantPartIds.get(targetSessionId);
 				if (finishedPartId) {
 					this.sessionHandler.postComplete(finishedPartId, finishedPartId, targetSessionId);
@@ -737,6 +765,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			}
 
 			case 'message': {
+				// Complete any active thinking block when assistant message starts
+				this.completeActiveThinking(targetSessionId);
+
 				const e = event.data as { content?: string; partId?: string; isDelta?: boolean };
 				const partId =
 					e.partId || this.activeAssistantPartIds.get(targetSessionId) || `part-${now}`;
@@ -765,7 +796,17 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				const e = event.data as { content?: string; partId?: string; isDelta?: boolean };
 				const partId = e.partId || `thinking-${now}`;
 
+				// Complete previous thinking block if a new one starts
+				const prevThinkingPartId = this.activeThinkingPartIds.get(targetSessionId);
+				if (prevThinkingPartId && prevThinkingPartId !== partId) {
+					this.sessionHandler.postComplete(prevThinkingPartId, prevThinkingPartId, targetSessionId);
+				}
+				this.activeThinkingPartIds.set(targetSessionId, partId);
+
 				const thinkingId = partId.startsWith('thinking-') ? partId : `thinking-${partId}`;
+
+				// Only send startTime on the first chunk (when no previous partId or different partId)
+				const isFirstChunk = !prevThinkingPartId || prevThinkingPartId !== partId;
 
 				this.sessionHandler.postSessionMessage(
 					{
@@ -774,6 +815,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 						partId,
 						content: e.content || '',
 						isDelta: e.isDelta ?? false,
+						isStreaming: true,
+						...(isFirstChunk ? { startTime: Date.now() } : {}),
 						timestamp: new Date().toISOString(),
 						contextId: isChildSession ? targetSessionId : undefined,
 					},
@@ -783,6 +826,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			}
 
 			case 'tool_use': {
+				// Complete any active thinking block when tool_use starts
+				this.completeActiveThinking(targetSessionId);
 				this.handleToolUse(event, targetSessionId);
 				break;
 			}
@@ -964,6 +1009,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					prompt: (input.prompt as string) || '',
 					description: (input.description as string) || 'Running subtask...',
 					status: 'running',
+					startTime: new Date().toISOString(),
 					toolInput: e.input ? JSON.stringify(e.input) : '',
 					rawInput: input,
 					isRunning: true,

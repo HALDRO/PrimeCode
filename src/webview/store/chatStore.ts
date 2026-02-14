@@ -26,13 +26,13 @@ import type {
 	SessionRestorePayload,
 	SessionStatsPayload,
 	SessionStatusPayload,
+	SessionTurnTokensPayload,
 	SubtaskMessage,
-	TokenStats,
 	TotalStats,
 } from '../../common';
 import { generateId } from '../../common';
 
-export type { CommitInfo, ConversationMessage, SubtaskMessage, TokenStats, TotalStats };
+export type { CommitInfo, ConversationMessage, SubtaskMessage, TotalStats };
 
 // =============================================================================
 // Types
@@ -70,8 +70,11 @@ export interface ChatSession {
 	restoreCommits: CommitInfo[];
 	unrevertAvailable: boolean;
 	revertedFromMessageId: string | null;
-	tokenStats: TokenStats;
 	totalStats: TotalStats;
+	turnTokens: Record<
+		string,
+		{ input: number; output: number; total: number; cacheRead: number; durationMs?: number }
+	>;
 }
 
 export interface ChatState {
@@ -141,7 +144,6 @@ export interface ChatActions {
 	setUnrevertAvailable: (available: boolean, sessionId?: string) => void;
 
 	// Stats
-	setTokenStats: (stats: Partial<TokenStats>, sessionId?: string) => void;
 	setTotalStats: (stats: Partial<TotalStats>, sessionId?: string) => void;
 
 	// Subtask actions (active session)
@@ -172,26 +174,21 @@ export interface ChatActions {
 // Defaults (exported for use in selectors)
 // =============================================================================
 
-export const DEFAULT_TOKEN_STATS: TokenStats = {
-	totalTokensInput: 0,
-	totalTokensOutput: 0,
-	currentInputTokens: 0,
-	currentOutputTokens: 0,
-	cacheCreationTokens: 0,
-	cacheReadTokens: 0,
-	reasoningTokens: 0,
-	totalReasoningTokens: 0,
-	subagentTokensInput: 0,
-	subagentTokensOutput: 0,
-};
-
 export const DEFAULT_TOTAL_STATS: TotalStats = {
-	totalCost: 0,
-	totalTokensInput: 0,
-	totalTokensOutput: 0,
-	totalReasoningTokens: 0,
+	contextTokens: 0,
+	outputTokens: 0,
+	totalTokens: 0,
+	cacheReadTokens: 0,
+	cacheCreationTokens: 0,
+	reasoningTokens: 0,
 	requestCount: 0,
 	totalDuration: 0,
+	totalCost: 0,
+	subagentTokensInput: 0,
+	subagentTokensOutput: 0,
+	subagentCount: 0,
+	totalInputTokens: 0,
+	totalOutputTokens: 0,
 };
 
 const createEmptySession = (id: string): ChatSession => ({
@@ -210,8 +207,8 @@ const createEmptySession = (id: string): ChatSession => ({
 	restoreCommits: [],
 	unrevertAvailable: false,
 	revertedFromMessageId: null,
-	tokenStats: { ...DEFAULT_TOKEN_STATS },
 	totalStats: { ...DEFAULT_TOTAL_STATS },
+	turnTokens: {},
 });
 
 function resolveTargetSessionId(state: ChatState, sessionId?: string): string | undefined {
@@ -406,9 +403,21 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 									'content' in message
 								) {
 									existing.content = (existing.content || '') + (message.content || '');
+									// Preserve startTime from the first chunk — don't let subsequent deltas overwrite it
+									const preservedStartTime =
+										'startTime' in existing ? existing.startTime : undefined;
 									Object.assign(existing, { ...message, content: existing.content });
+									if (preservedStartTime !== undefined && 'startTime' in existing) {
+										(existing as { startTime: number }).startTime = preservedStartTime as number;
+									}
 								} else {
+									// For non-delta merges, also preserve startTime if already set
+									const preservedStartTime =
+										'startTime' in existing ? existing.startTime : undefined;
 									Object.assign(existing, message);
+									if (preservedStartTime !== undefined && 'startTime' in existing) {
+										(existing as { startTime: number }).startTime = preservedStartTime as number;
+									}
 								}
 							} else {
 								storageSession.messages.push(message);
@@ -437,8 +446,29 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
 						case 'stats': {
 							const s = payload as SessionStatsPayload;
-							if (s.tokenStats) Object.assign(targetSession.tokenStats, s.tokenStats);
 							if (s.totalStats) Object.assign(targetSession.totalStats, s.totalStats);
+							break;
+						}
+
+						case 'turn_tokens': {
+							const t = payload as SessionTurnTokensPayload;
+							// Use explicit userMessageId from history replay, or fall back to last user message
+							const turnMsgId =
+								t.userMessageId ||
+								[...targetSession.messages].reverse().find(m => m.type === 'user')?.id;
+							if (turnMsgId) {
+								const existing = targetSession.turnTokens[turnMsgId];
+								targetSession.turnTokens[turnMsgId] = {
+									input: t.inputTokens,
+									output: t.outputTokens,
+									total: t.totalTokens,
+									cacheRead: t.cacheReadTokens,
+									// Accumulate duration for live streaming (multiple turn_tokens per turn)
+									durationMs: t.durationMs
+										? (existing?.durationMs ?? 0) + t.durationMs
+										: existing?.durationMs,
+								};
+							}
 							break;
 						}
 
@@ -446,8 +476,13 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 							const completePartId = (payload as { partId?: string }).partId;
 							targetSession.messages.forEach(m => {
 								if ('partId' in m && m.partId === completePartId) {
-									// We need to check if the message supports isStreaming
-									if ((m.type === 'assistant' || m.type === 'thinking') && 'isStreaming' in m) {
+									if (m.type === 'thinking') {
+										m.isStreaming = false;
+										// Compute duration from startTime if not already set
+										if (!m.durationMs && m.startTime && typeof m.startTime === 'number') {
+											m.durationMs = Date.now() - m.startTime;
+										}
+									} else if (m.type === 'assistant') {
 										m.isStreaming = false;
 									}
 								}
@@ -584,10 +619,9 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 							break;
 						}
 
-						case 'terminal': {
+						case 'terminal':
 							// Terminal notifications are transient UI overlays; ignore in chat history.
 							break;
-						}
 					}
 				}),
 			);
@@ -640,6 +674,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 		clearMessages: sessionId =>
 			mutateSession(set, sessionId, s => {
 				s.messages = [];
+				s.turnTokens = {};
 			}),
 
 		updateMessage: (id, updates, sessionId) =>
@@ -654,6 +689,13 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 			mutateSession(set, sessionId, s => {
 				const idx = s.messages.findIndex(m => m.id === id);
 				if (idx !== -1) {
+					// Clean up turnTokens for removed user messages
+					const removed = s.messages.slice(idx + 1);
+					for (const msg of removed) {
+						if (msg.type === 'user' && msg.id) {
+							delete s.turnTokens[msg.id];
+						}
+					}
 					// Keep the message itself, delete everything AFTER it
 					s.messages = s.messages.slice(0, idx + 1);
 					// Also clear any revertedFromMessageId since we are actively editing
@@ -766,9 +808,6 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 		setUnrevertAvailable: (available, sessionId) =>
 			get().actions.updateSession({ unrevertAvailable: available }, sessionId),
 
-		setTokenStats: (stats, sessionId) =>
-			mutateSession(set, sessionId, s => Object.assign(s.tokenStats, stats)),
-
 		setTotalStats: (stats, sessionId) =>
 			mutateSession(set, sessionId, s => Object.assign(s.totalStats, stats)),
 
@@ -786,6 +825,12 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 					if (!msg || msg.type !== 'subtask') return;
 					msg.status = status;
 					msg.result = result;
+					// Compute duration from startTime if available
+					if (!msg.durationMs && msg.startTime) {
+						const start =
+							typeof msg.startTime === 'number' ? msg.startTime : new Date(msg.startTime).getTime();
+						if (start > 0) msg.durationMs = Date.now() - start;
+					}
 					// Archive context transcript
 					const contextId = msg.contextId;
 					if (contextId && state.sessionsById[contextId]) {

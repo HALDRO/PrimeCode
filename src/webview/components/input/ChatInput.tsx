@@ -24,7 +24,7 @@ import {
 } from '../../store';
 import { getShortFileName } from '../../utils/format';
 import { getMessageHighlights } from '../../utils/messageParser';
-import { STANDARD_MODELS } from '../../utils/models';
+
 import { useSessionMessage, useVSCode } from '../../utils/vscode';
 import {
 	AtSignIcon,
@@ -669,12 +669,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 	const getModelDisplayName = useCallback(() => {
 		if (selectedModel === 'default') {
 			return 'Default';
-		}
-
-		// Check standard models
-		const standardModel = STANDARD_MODELS.find(m => m.id === selectedModel);
-		if (standardModel) {
-			return standardModel.name;
 		}
 
 		// Check proxy models

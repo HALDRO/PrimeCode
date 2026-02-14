@@ -11,7 +11,6 @@ import {
 	type ChatSession,
 	type ChatState,
 	type CommitInfo,
-	DEFAULT_TOKEN_STATS,
 	DEFAULT_TOTAL_STATS,
 	type Message,
 	useChatStore,
@@ -78,17 +77,19 @@ export const useChatInputState = () =>
 /** Select chat actions only (stable references) */
 export const useChatActions = () => useChatStore((state: ChatState) => state.actions);
 
-/** Select token stats for active session */
-export const useTokenStats = () =>
-	useChatStore(
-		useShallow((state: ChatState) => getActiveSession(state)?.tokenStats ?? DEFAULT_TOKEN_STATS),
-	);
-
 /** Select total stats for active session */
 export const useTotalStats = () =>
 	useChatStore(
 		useShallow((state: ChatState) => getActiveSession(state)?.totalStats ?? DEFAULT_TOTAL_STATS),
 	);
+
+/** Select per-turn token data for active session */
+const EMPTY_TURN_TOKENS: Record<
+	string,
+	{ input: number; output: number; total: number; cacheRead: number; durationMs?: number }
+> = {};
+export const useTurnTokens = () =>
+	useChatStore((state: ChatState) => getActiveSession(state)?.turnTokens ?? EMPTY_TURN_TOKENS);
 
 /** Select restore commits for active session */
 export const useRestoreCommits = () =>
@@ -119,7 +120,6 @@ export const useChangedFilesState = () =>
 		useShallow((state: ChatState) => ({
 			changedFiles: getActiveSession(state)?.changedFiles ?? EMPTY_CHANGED_FILES,
 			totalStats: getActiveSession(state)?.totalStats ?? DEFAULT_TOTAL_STATS,
-			tokenStats: getActiveSession(state)?.tokenStats ?? DEFAULT_TOKEN_STATS,
 		})),
 	);
 

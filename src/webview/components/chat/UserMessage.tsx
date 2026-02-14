@@ -10,6 +10,8 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { useElapsedTimer } from '../../hooks/useElapsedTimer';
+
 import { cn } from '../../lib/cn';
 import {
 	type CommitInfo,
@@ -25,7 +27,7 @@ import { useUIActions } from '../../store/uiStore';
 import { formatDuration, formatTime, formatTokens, getShortFileName } from '../../utils/format';
 import type { SectionStats } from '../../utils/groupSections';
 import { parseMessageSegments } from '../../utils/messageParser';
-import { STANDARD_MODELS } from '../../utils/models';
+
 import { useSessionMessage, useVSCode } from '../../utils/vscode';
 import { ClockIcon, TimerIcon, TokensIcon, Undo2Icon } from '../icons';
 import { ChatInput } from '../input/ChatInput';
@@ -381,8 +383,17 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 		const fileChangesStats = stats.fileChanges;
 		const tokenStats = stats.tokenCount;
 
+		// Live timer for processing state (replaces forceUpdate pattern)
+		const isProcessingLastMessage = isProcessing && isLastUserMessage;
+		const liveElapsed = useElapsedTimer(isProcessingLastMessage);
+
 		// Calculate processing time locally
 		const processingTime = useMemo(() => {
+			// Prefer real duration from backend (turn_tokens event)
+			if (stats.durationMs && stats.durationMs > 0) {
+				return formatDuration(stats.durationMs);
+			}
+
 			const messageTimestamp = new Date(message.timestamp).getTime();
 
 			if (stats.nextUserMessageTs) {
@@ -393,16 +404,18 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 				return formatDuration(stats.lastResponseTs - messageTimestamp);
 			}
 
-			if (isProcessing && isLastUserMessage) {
-				return formatDuration(Date.now() - messageTimestamp);
+			// Live timer while processing
+			if (isProcessingLastMessage && liveElapsed > 0) {
+				return formatDuration(liveElapsed);
 			}
 
 			return null;
 		}, [
+			stats.durationMs,
 			stats.nextUserMessageTs,
 			stats.lastResponseTs,
-			isProcessing,
-			isLastUserMessage,
+			isProcessingLastMessage,
+			liveElapsed,
 			message.timestamp,
 		]);
 
@@ -435,12 +448,6 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 					return modelIdPart;
 				}
 
-				// For standard models
-				const standardModel = STANDARD_MODELS.find(m => m.id === modelId);
-				if (standardModel) {
-					return standardModel.name;
-				}
-
 				return modelId;
 			},
 			[opencodeProviders],
@@ -455,7 +462,6 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 		const [editText, setEditText] = useState(messageText); // Use parsed text without file paths
 		const contentRef = useRef<HTMLDivElement>(null);
 		const editContainerRef = useRef<HTMLDivElement>(null);
-		const [, forceUpdate] = useState(0);
 
 		const handleCancel = useCallback(() => {
 			setEditingMessageId(null);
@@ -483,14 +489,6 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 			}
 			return undefined;
 		}, [isEditing, messageText, handleCancel]);
-
-		useEffect(() => {
-			if (!isLastUserMessage || !isProcessing) {
-				return;
-			}
-			const interval = setInterval(() => forceUpdate(n => n + 1), 1000);
-			return () => clearInterval(interval);
-		}, [isLastUserMessage, isProcessing]);
 
 		const { showConfirmDialog } = useUIActions();
 

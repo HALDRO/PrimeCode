@@ -116,28 +116,24 @@ export const Header: React.FC = React.memo(() => {
 							)}
 							title={`Chat ${index + 1}`}
 						>
-							<div className="relative w-5 h-5 shrink-0 flex items-center justify-center">
-								<MessageIcon
-									size={18}
-									className={cn(
-										'transition-opacity duration-150',
-										session.id === activeSessionId
-											? 'opacity-100 group-hover:opacity-0'
-											: 'opacity-60 group-hover:opacity-0',
-									)}
-								/>
-								<button
-									type="button"
-									onClick={e => {
-										e.stopPropagation();
-										handleCloseSession(session.id);
-									}}
-									className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 rounded transition-all duration-150 hover:bg-(--alpha-10)"
-								>
-									<CloseIcon size={18} />
-								</button>
-							</div>
+							<MessageIcon
+								size={16}
+								className={cn(
+									'shrink-0',
+									session.id === activeSessionId ? 'opacity-100' : 'opacity-60',
+								)}
+							/>
 							<span className="text-sm font-medium shrink-0">{index + 1}</span>
+							<button
+								type="button"
+								onClick={e => {
+									e.stopPropagation();
+									handleCloseSession(session.id);
+								}}
+								className="opacity-0 group-hover:opacity-100 shrink-0 w-5 h-5 flex items-center justify-center rounded transition-opacity duration-150 hover:bg-(--alpha-20)"
+							>
+								<CloseIcon size={16} />
+							</button>
 						</div>
 					))}
 				</div>

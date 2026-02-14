@@ -21,6 +21,8 @@ export interface SectionStats {
 	fileChanges: { added: number; removed: number; files: number } | null;
 	/** Estimated token count for this turn */
 	tokenCount: number | null;
+	/** Real processing duration from backend (ms), or null if unavailable */
+	durationMs: number | null;
 }
 
 /**
@@ -53,6 +55,10 @@ export const groupMessagesIntoSections = (
 	mcpServerNames: string[],
 	revertedFromMessageId: string | null,
 	changedFiles: ChangedFile[] = [],
+	turnTokens: Record<
+		string,
+		{ input: number; output: number; total: number; cacheRead: number; durationMs?: number }
+	> = {},
 ): MessageSection[] => {
 	const visibleMsgs = msgs.filter(m => !('hidden' in m && m.hidden));
 	// Collect sections with their raw (ungrouped) responses
@@ -71,6 +77,7 @@ export const groupMessagesIntoSections = (
 					currentResponses,
 					changedFiles,
 					false,
+					turnTokens,
 				);
 				sections.push(currentSection);
 				currentResponses = [];
@@ -99,6 +106,7 @@ export const groupMessagesIntoSections = (
 			currentResponses,
 			changedFiles,
 			true,
+			turnTokens,
 		);
 		sections.push(currentSection);
 	}
@@ -120,6 +128,10 @@ function computeSectionStats(
 	rawResponses: Message[],
 	changedFiles: ChangedFile[],
 	isLast: boolean,
+	turnTokens: Record<
+		string,
+		{ input: number; output: number; total: number; cacheRead: number; durationMs?: number }
+	> = {},
 ): SectionStats {
 	const userTs = new Date(section.userMessage.timestamp).getTime();
 
@@ -156,22 +168,37 @@ function computeSectionStats(
 		}
 	}
 
-	// Token count: prefer message.tokenCount, fallback to estimatedTokens + content heuristic
+	// Token count: prefer real per-turn data from the backend, fall back to heuristic.
 	let tokenCount: number | null = null;
-	const userMsg = section.userMessage as Record<string, unknown>;
-	if (userMsg.tokenCount && typeof userMsg.tokenCount === 'number') {
-		tokenCount = userMsg.tokenCount;
+	const userMsgId = section.userMessage.id;
+	const realTokens = userMsgId ? turnTokens[userMsgId] : undefined;
+	if (realTokens) {
+		tokenCount = realTokens.total;
 	} else {
-		let total = 0;
-		for (const msg of rawResponses) {
-			if (msg.type === 'tool_result' && 'estimatedTokens' in msg && msg.estimatedTokens) {
-				total += msg.estimatedTokens;
+		const userMsg = section.userMessage as Record<string, unknown>;
+		if (userMsg.tokenCount && typeof userMsg.tokenCount === 'number') {
+			tokenCount = userMsg.tokenCount;
+		} else {
+			let total = 0;
+			for (const msg of rawResponses) {
+				if (msg.type === 'tool_result' && 'estimatedTokens' in msg && msg.estimatedTokens) {
+					total += msg.estimatedTokens;
+				}
+				if (msg.type === 'thinking' && 'reasoningTokens' in msg && msg.reasoningTokens) {
+					total += msg.reasoningTokens;
+				}
+				if (msg.type === 'assistant' && 'content' in msg && msg.content) {
+					total += Math.ceil(msg.content.length / 4);
+				}
 			}
-			if (msg.type === 'assistant' && 'content' in msg && msg.content) {
-				total += Math.ceil(msg.content.length / 4);
-			}
+			if (total > 0) tokenCount = total;
 		}
-		if (total > 0) tokenCount = total;
+	}
+
+	// Duration: prefer real per-turn data from the backend
+	let durationMs: number | null = null;
+	if (realTokens?.durationMs && realTokens.durationMs > 0) {
+		durationMs = realTokens.durationMs;
 	}
 
 	return {
@@ -181,5 +208,6 @@ function computeSectionStats(
 		lastResponseTs,
 		fileChanges,
 		tokenCount,
+		durationMs,
 	};
 }

@@ -28,6 +28,7 @@ import {
 	useMcpServers,
 	useMessages,
 	useRevertedFromMessageId,
+	useTurnTokens,
 } from './store';
 import { groupMessagesIntoSections, type MessageSection } from './utils/groupSections';
 
@@ -170,10 +171,18 @@ export const App: React.FC = () => {
 
 	const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
 	const { changedFiles } = useChangedFilesState();
+	const turnTokens = useTurnTokens();
 
 	const sections = useMemo(
-		() => groupMessagesIntoSections(messages, mcpServerNames, revertedFromMessageId, changedFiles),
-		[messages, mcpServerNames, revertedFromMessageId, changedFiles],
+		() =>
+			groupMessagesIntoSections(
+				messages,
+				mcpServerNames,
+				revertedFromMessageId,
+				changedFiles,
+				turnTokens,
+			),
+		[messages, mcpServerNames, revertedFromMessageId, changedFiles, turnTokens],
 	);
 
 	const virtuosoContext: VirtuosoContext = useMemo(

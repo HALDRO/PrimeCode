@@ -46,8 +46,9 @@ export const ContextBar: React.FC = () => {
 	const totalStats = useTotalStats();
 	const contextLimit = useModelContextWindow();
 
-	const totalTokens = totalStats.totalTokensInput + totalStats.totalTokensOutput;
-	const percentage = Math.min((totalTokens / contextLimit) * 100, 100);
+	// Context window is consumed by input tokens only — use latest API input
+	const contextTokens = totalStats.contextTokens ?? 0;
+	const percentage = Math.min((contextTokens / contextLimit) * 100, 100);
 
 	const { refs, floatingStyles, context } = useFloating({
 		open: isOpen,

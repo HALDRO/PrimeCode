@@ -175,46 +175,42 @@ export const TokenUsageAPISchema = Type.Object({
 });
 export type TokenUsageAPI = Static<typeof TokenUsageAPISchema>;
 
+/**
+ * Per-event delta stats — used for streaming updates.
+ * Fields are incremental deltas from the last event, NOT cumulative.
+ */
 export const TokenStatsSchema = Type.Object({
-	totalTokensInput: Type.Number(),
-	totalTokensOutput: Type.Number(),
-	currentInputTokens: Type.Number(),
-	currentOutputTokens: Type.Number(),
-	cacheCreationTokens: Type.Number(),
-	cacheReadTokens: Type.Number(),
-	reasoningTokens: Type.Number(),
-	totalReasoningTokens: Type.Number(),
-	// Subagent/child session token tracking
-	subagentTokensInput: Type.Optional(Type.Number()),
-	subagentTokensOutput: Type.Optional(Type.Number()),
+	currentInputTokens: Type.Optional(Type.Number()),
+	currentOutputTokens: Type.Optional(Type.Number()),
+	cacheReadTokens: Type.Optional(Type.Number()),
+	cacheCreationTokens: Type.Optional(Type.Number()),
+	reasoningTokens: Type.Optional(Type.Number()),
 });
 export type TokenStats = Static<typeof TokenStatsSchema>;
 
+/**
+ * Cumulative session-level stats — full state, not deltas.
+ * CLI returns absolute values per request; we store the latest snapshot.
+ * Only `requestCount`, `totalDuration`, `totalCost` and subagent counters are truly cumulative.
+ */
 export const TotalStatsSchema = Type.Object({
-	totalCost: Type.Number(),
-	totalTokensInput: Type.Number(),
-	totalTokensOutput: Type.Number(),
-	totalReasoningTokens: Type.Optional(Type.Number()),
-	requestCount: Type.Number(),
-	totalDuration: Type.Optional(Type.Number()),
-	currentCost: Type.Optional(Type.Number()),
-	currentDuration: Type.Optional(Type.Number()),
-	currentTurns: Type.Optional(Type.Number()),
+	contextTokens: Type.Number(), // Current context window size (last API input tokens).
+	outputTokens: Type.Number(), // Current output tokens (last API response).
+	totalTokens: Type.Number(), // Current total tokens (input + output) from CLI — context window usage.
+	cacheReadTokens: Type.Number(), // Cache read tokens (last API response).
+	cacheCreationTokens: Type.Number(), // Cache creation tokens (last API response).
+	reasoningTokens: Type.Number(), // Reasoning/thinking tokens (last API response).
+	requestCount: Type.Number(), // Total API requests in this session.
+	totalDuration: Type.Number(), // Total model processing time across all requests (ms).
+	totalCost: Type.Number(), // Total cost across all requests.
+	currentDuration: Type.Optional(Type.Number()), // Duration of the current/last request (ms).
+	subagentTokensInput: Type.Number(), // Cumulative input tokens from all subagent/child sessions.
+	subagentTokensOutput: Type.Number(), // Cumulative output tokens from all subagent/child sessions.
+	subagentCount: Type.Number(), // Total number of subagent invocations in this session.
+	totalInputTokens: Type.Number(), // Cumulative input tokens across all API requests.
+	totalOutputTokens: Type.Number(), // Cumulative output tokens across all API requests.
 });
 export type TotalStats = Static<typeof TotalStatsSchema>;
-
-/**
- * Transforms API token usage to UI-friendly token stats
- */
-export function apiTokensToStats(api: TokenUsageAPI): Partial<TokenStats> {
-	return {
-		currentInputTokens: api.input_tokens ?? 0,
-		currentOutputTokens: api.output_tokens ?? 0,
-		cacheCreationTokens: api.cache_creation_input_tokens ?? 0,
-		cacheReadTokens: api.cache_read_input_tokens ?? 0,
-		reasoningTokens: api.reasoning_tokens ?? 0,
-	};
-}
 
 // =============================================================================
 // Access Types

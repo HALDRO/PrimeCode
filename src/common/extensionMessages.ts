@@ -14,7 +14,6 @@ import type {
 	OpenCodeProviderData,
 	ParsedSubagent,
 	PlatformInfo,
-	TokenStats,
 	TotalStats,
 	WorkspaceFile,
 } from './schemas';
@@ -46,7 +45,8 @@ export type SessionEventType =
 	| 'message_removed'
 	| 'session_info'
 	| 'auth'
-	| 'terminal';
+	| 'terminal'
+	| 'turn_tokens';
 
 export type SessionStatus = 'idle' | 'busy' | 'error' | 'retrying';
 
@@ -102,7 +102,7 @@ export interface SessionMessageData {
 	messageID?: string;
 	/** Unified context ID (thread ID) for grouping messages */
 	contextId?: string;
-	startTime?: string;
+	startTime?: string | number;
 	reasoningTokens?: number;
 	requestId?: string;
 	tool?: string;
@@ -136,7 +136,6 @@ export interface SessionStatusPayload {
 
 export interface SessionStatsPayload {
 	eventType: 'stats';
-	tokenStats?: Partial<TokenStats>;
 	totalStats?: Partial<TotalStats>;
 }
 
@@ -227,6 +226,18 @@ export interface SessionTerminalPayload {
 	content?: string;
 }
 
+export interface SessionTurnTokensPayload {
+	eventType: 'turn_tokens';
+	inputTokens: number;
+	outputTokens: number;
+	totalTokens: number;
+	cacheReadTokens: number;
+	/** Processing duration for this turn in milliseconds. */
+	durationMs?: number;
+	/** When replaying history, the exact user message ID this turn belongs to. */
+	userMessageId?: string;
+}
+
 export type SessionEventPayload =
 	| SessionMessagePayload
 	| SessionStatusPayload
@@ -240,7 +251,8 @@ export type SessionEventPayload =
 	| SessionMessageRemovedPayload
 	| SessionInfoPayload
 	| SessionAuthPayload
-	| SessionTerminalPayload;
+	| SessionTerminalPayload
+	| SessionTurnTokensPayload;
 
 export interface SessionEventMessage {
 	type: 'session_event';

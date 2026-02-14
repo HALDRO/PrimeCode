@@ -8,9 +8,9 @@
 import type React from 'react';
 import { type CSSProperties, type ReactNode, useMemo } from 'react';
 import { cn } from '../../lib/cn';
-import { useModelContextWindow, useTokenStats, useTotalStats } from '../../store';
+import { useModelContextWindow, useTotalStats } from '../../store';
 import { formatCost, formatDuration, formatNumber } from '../../utils/format';
-import { HashIcon, TagIcon, TimerIcon, TokensIcon, ZapIcon } from '../icons';
+import { BotIcon, HashIcon, TagIcon, TimerIcon, TokensIcon, ZapIcon } from '../icons';
 import { Tooltip } from './Tooltip';
 
 export interface StatItem {
@@ -105,33 +105,35 @@ export const SessionStatsDisplay: React.FC<{
 	className?: string;
 }> = ({ mode, style, className }) => {
 	const totalStats = useTotalStats();
-	const tokenStats = useTokenStats();
 	const contextLimit = useModelContextWindow();
 
 	const items = useMemo<StatItem[]>(() => {
-		const totalTokens = totalStats.totalTokensInput + totalStats.totalTokensOutput;
-		const percentage = Math.min((totalTokens / contextLimit) * 100, 100);
+		// Context window usage: total tokens (input + output) from CLI
+		const windowUsed = totalStats.totalTokens ?? 0;
+		const percentage = Math.min((windowUsed / contextLimit) * 100, 100);
+
+		// Cumulative output tokens across all API calls
+		const totalOut = totalStats.totalOutputTokens ?? 0;
+
+		// Unified: currentWindow / limit (%) ↓totalOutput
+		const tokenParts = [`${formatNumber(windowUsed)} / ${formatNumber(contextLimit)}`];
+		tokenParts.push(`(${percentage.toFixed(1)}%)`);
+		if (totalOut > 0) tokenParts.push(`↓${formatNumber(totalOut)}`);
 
 		const result: StatItem[] = [
 			{
-				key: 'percentage',
-				icon: <TokensIcon size={11} />,
-				value: `${percentage.toFixed(1)}%`,
-				tooltip: 'Context window usage',
-			},
-			{
 				key: 'tokens',
 				icon: <TokensIcon size={11} />,
-				value: `${formatNumber(totalTokens)} / ${formatNumber(contextLimit)}`,
-				tooltip: 'Tokens used / Context limit',
+				value: tokenParts.join(' '),
+				tooltip: `Context window (in+out) / limit · ↓ cumulative output`,
 			},
 		];
 
-		if (tokenStats.cacheReadTokens > 0) {
+		if (totalStats.cacheReadTokens > 0) {
 			result.push({
 				key: 'cache',
 				icon: <ZapIcon size={11} />,
-				value: formatNumber(tokenStats.cacheReadTokens),
+				value: formatNumber(totalStats.cacheReadTokens),
 				tooltip: 'Cache read tokens',
 			});
 		}
@@ -154,6 +156,15 @@ export const SessionStatsDisplay: React.FC<{
 			});
 		}
 
+		if (totalStats.subagentCount > 0) {
+			result.push({
+				key: 'subagents',
+				icon: <BotIcon size={11} />,
+				value: `${totalStats.subagentCount} Sub`,
+				tooltip: 'Total subagent invocations',
+			});
+		}
+
 		if (totalStats.totalDuration && totalStats.totalDuration > 0) {
 			result.push({
 				key: 'duration',
@@ -164,7 +175,7 @@ export const SessionStatsDisplay: React.FC<{
 		}
 
 		return result;
-	}, [totalStats, tokenStats, contextLimit]);
+	}, [totalStats, contextLimit]);
 
 	return <StatsDisplay mode={mode} items={items} style={style} className={className} />;
 };

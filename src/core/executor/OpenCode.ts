@@ -73,6 +73,24 @@ type OpenCodePart =
 				metadata?: unknown;
 			};
 	  }
+	| {
+			type: 'file';
+			messageID?: string;
+			sessionID?: string;
+			mime: string;
+			url: string;
+			filename?: string;
+			source?: {
+				type: 'file' | 'symbol';
+				path: string;
+				text: { value: string; start: number; end: number };
+				range?: {
+					start: { line: number; character: number };
+					end: { line: number; character: number };
+				};
+				name?: string;
+			};
+	  }
 	| { type: 'other'; raw: unknown; sessionID?: string };
 
 // =============================================================================
@@ -561,11 +579,26 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 			if (!Array.isArray(messages)) return [];
 
-			// Aggregate token totals across all assistant messages for history restore
-			let totalInput = 0;
-			let totalOutput = 0;
-			let totalCacheRead = 0;
+			// Track last assistant message's full token snapshot + cumulative counters
+			let lastInput = 0;
+			let lastOutput = 0;
+			let lastCacheRead = 0;
 			let assistantCount = 0;
+			let totalModelDuration = 0;
+
+			// Track per-turn token deltas keyed by parent user message ID.
+			// SDK gives cumulative input tokens, so we compute deltas between user turns.
+			// We collect cumulative snapshots first, then convert to deltas after flatMap.
+			const turnCumulativeSnapshots: Array<{
+				turnKey: string;
+				input: number;
+				output: number;
+				total: number;
+				cacheRead: number;
+				durationMs: number;
+			}> = [];
+			// Track current user message ID for assistant messages without parentID
+			let currentUserMessageId: string | undefined;
 
 			const events = messages.flatMap((msg: SessionMessageEntry) => {
 				const { info, parts } = msg;
@@ -574,13 +607,73 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 					? new Date(info.time.created).toISOString()
 					: new Date().toISOString();
 
-				// Aggregate tokens from assistant messages
+				// Aggregate tokens and duration from assistant messages
 				if (info.role === 'assistant') {
 					const { tokens } = info;
-					totalInput += tokens.input;
-					totalOutput += tokens.output;
-					totalCacheRead += tokens.cache.read;
 					assistantCount++;
+					// Keep last assistant's full token snapshot (CLI gives absolute values)
+					if (tokens.input > 0) lastInput = tokens.input;
+					if (tokens.output > 0) lastOutput = tokens.output;
+					if (tokens.cache.read > 0) lastCacheRead = tokens.cache.read;
+
+					// Sum individual model response times (matches live behavior)
+					const created = info.time?.created;
+					const completed = info.time?.completed;
+					if (typeof created === 'number' && typeof completed === 'number' && completed > created) {
+						totalModelDuration += completed - created;
+					}
+
+					// Collect cumulative snapshot for this turn (deltas computed after flatMap)
+					const turnKey = info.parentID || currentUserMessageId;
+					if (turnKey && (tokens.input > 0 || tokens.output > 0)) {
+						const total =
+							((tokens as Record<string, unknown>).total as number | undefined) ??
+							tokens.input + tokens.output;
+						// Compute per-assistant-message duration
+						let msgDuration = 0;
+						const msgCreated = info.time?.created;
+						const msgCompleted = info.time?.completed;
+						if (
+							typeof msgCreated === 'number' &&
+							typeof msgCompleted === 'number' &&
+							msgCompleted > msgCreated
+						) {
+							msgDuration = msgCompleted - msgCreated;
+						}
+						turnCumulativeSnapshots.push({
+							turnKey,
+							input: tokens.input,
+							output: tokens.output,
+							total,
+							cacheRead: tokens.cache.read,
+							durationMs: msgDuration,
+						});
+					}
+				}
+
+				// For user messages, collect file parts to reconstruct attachments
+				if (role === 'user') {
+					currentUserMessageId = info.id;
+					const { content, attachments } = this.extractUserMessageParts(parts);
+
+					return [
+						{
+							type: 'normalized_log' as const,
+							data: {
+								role: 'user',
+								content,
+								timestamp,
+								messageId: info.id,
+								...(attachments ? { attachments } : {}),
+							},
+							normalizedEntry: {
+								entryType: 'UserMessage' as const,
+								content: content || '',
+								timestamp,
+							},
+							sessionId,
+						},
+					];
 				}
 
 				return parts.flatMap((sdkPart: Part) => {
@@ -588,28 +681,29 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 					const partEvents: CLIEvent[] = [];
 
 					if (part.type === 'text' && part.text) {
-						if (role === 'assistant') {
-							partEvents.push({
-								type: 'message' as const,
-								data: { content: part.text, partId: info.id, isDelta: false },
-								sessionId,
-							});
-						} else {
-							partEvents.push({
-								type: 'normalized_log' as const,
-								data: { role: 'user', content: part.text, timestamp, messageId: info.id },
-								normalizedEntry: {
-									entryType: 'UserMessage' as const,
-									content: part.text || '',
-									timestamp,
-								},
-								sessionId,
-							});
-						}
+						partEvents.push({
+							type: 'message' as const,
+							data: { content: part.text, partId: info.id, isDelta: false, timestamp },
+							sessionId,
+						});
 					} else if (part.type === 'reasoning' && part.text) {
+						// Extract thinking duration from SDK part's time.start/time.end
+						const rawTime = (sdkPart as Record<string, unknown>).time as
+							| { start?: number; end?: number }
+							| undefined;
+						const thinkingDurationMs =
+							rawTime?.start && rawTime?.end && rawTime.end > rawTime.start
+								? rawTime.end - rawTime.start
+								: undefined;
 						partEvents.push({
 							type: 'thinking' as const,
-							data: { content: part.text, partId: info.id, isDelta: false },
+							data: {
+								content: part.text,
+								partId: info.id,
+								isDelta: false,
+								timestamp,
+								...(thinkingDurationMs ? { durationMs: thinkingDurationMs } : {}),
+							},
 							sessionId,
 						});
 					} else if (part.type === 'tool' && part.callID) {
@@ -654,23 +748,66 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				});
 			});
 
-			// Append aggregated token stats so they can be restored during history replay
-			if (totalInput > 0 || totalOutput > 0 || totalCacheRead > 0) {
+			// Compute per-turn deltas from cumulative snapshots and emit turn_tokens events.
+			// SDK input tokens are cumulative (total context sent), output tokens are per-step.
+			// We deduplicate snapshots per turnKey (keep last), then compute input/cacheRead deltas.
+			const lastSnapshotByTurn = new Map<
+				string,
+				{ input: number; output: number; total: number; cacheRead: number; durationMs: number }
+			>();
+			const turnKeyOrder: string[] = [];
+			for (const snap of turnCumulativeSnapshots) {
+				if (!lastSnapshotByTurn.has(snap.turnKey)) {
+					turnKeyOrder.push(snap.turnKey);
+				}
+				const existing = lastSnapshotByTurn.get(snap.turnKey);
+				lastSnapshotByTurn.set(snap.turnKey, {
+					input: snap.input,
+					output: snap.output,
+					total: snap.total,
+					cacheRead: snap.cacheRead,
+					durationMs: (existing?.durationMs ?? 0) + snap.durationMs,
+				});
+			}
+
+			let prevInput = 0;
+			let prevCacheRead = 0;
+			for (const turnKey of turnKeyOrder) {
+				const snap = lastSnapshotByTurn.get(turnKey);
+				if (!snap) continue;
+				const deltaInput = Math.max(0, snap.input - prevInput);
+				const deltaCacheRead = Math.max(0, snap.cacheRead - prevCacheRead);
+				// output is already per-step from SDK, no delta needed
+				const deltaTotal = deltaInput + snap.output;
+				prevInput = snap.input;
+				prevCacheRead = snap.cacheRead;
+
+				events.push({
+					type: 'turn_tokens' as const,
+					data: {
+						inputTokens: deltaInput,
+						outputTokens: snap.output,
+						totalTokens: deltaTotal,
+						cacheReadTokens: deltaCacheRead,
+						...(snap.durationMs > 0 ? { durationMs: snap.durationMs } : {}),
+						userMessageId: turnKey,
+					},
+					sessionId,
+				});
+			}
+
+			// Append last token snapshot as totalStats for history replay
+			if (lastInput > 0 || lastOutput > 0 || lastCacheRead > 0) {
 				events.push({
 					type: 'session_updated' as const,
 					data: {
-						tokenStats: {
-							currentInputTokens: totalInput,
-							currentOutputTokens: totalOutput,
-							cacheReadTokens: totalCacheRead,
-							cacheCreationTokens: 0,
-							reasoningTokens: 0,
-							totalTokensInput: totalInput,
-							totalTokensOutput: totalOutput,
-							totalReasoningTokens: 0,
-						},
 						totalStats: {
+							contextTokens: lastInput,
+							outputTokens: lastOutput,
+							totalTokens: lastInput + lastOutput,
+							cacheReadTokens: lastCacheRead,
 							requestCount: assistantCount,
+							...(totalModelDuration > 0 ? { totalDuration: totalModelDuration } : {}),
 						},
 					},
 					sessionId,
@@ -1109,6 +1246,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			const { tokens } = info;
 			const input = tokens.input;
 			const output = tokens.output;
+			const total =
+				((tokens as Record<string, unknown>).total as number | undefined) ?? input + output;
 			const cacheRead = tokens.cache.read;
 
 			// Compute deltas from last known values (message.updated sends cumulative)
@@ -1128,15 +1267,11 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				this.emit('event', {
 					type: 'session_updated',
 					data: {
-						tokenStats: {
-							currentInputTokens: deltaInput,
-							currentOutputTokens: deltaOutput,
-							cacheReadTokens: deltaCacheRead,
-							cacheCreationTokens: 0,
-							reasoningTokens: 0,
-							totalTokensInput: input,
-							totalTokensOutput: output,
-							totalReasoningTokens: 0,
+						totalStats: {
+							contextTokens: input,
+							outputTokens: output,
+							totalTokens: total,
+							cacheReadTokens: cacheRead,
 						},
 					},
 					sessionId,
@@ -1155,8 +1290,20 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 						totalStats: {
 							requestCount: 1,
 							currentDuration: durationMs,
-							totalDuration: durationMs,
 						},
+					},
+					sessionId,
+				});
+
+				// Emit per-turn token snapshot so the UI can show real tokens per user turn
+				this.emit('event', {
+					type: 'turn_tokens',
+					data: {
+						inputTokens: input,
+						outputTokens: output,
+						totalTokens: total,
+						cacheReadTokens: cacheRead,
+						...(durationMs ? { durationMs } : {}),
 					},
 					sessionId,
 				});
@@ -1311,6 +1458,82 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 	}
 
+	private extractUserMessageParts(parts: Part[]): {
+		content: string;
+		attachments?: {
+			files?: string[];
+			codeSnippets?: Array<{
+				filePath: string;
+				startLine: number;
+				endLine: number;
+				content: string;
+			}>;
+			images?: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
+		};
+	} {
+		const textParts: string[] = [];
+		const files: string[] = [];
+		const codeSnippets: Array<{
+			filePath: string;
+			startLine: number;
+			endLine: number;
+			content: string;
+		}> = [];
+		const images: Array<{ id: string; name: string; dataUrl: string; path?: string }> = [];
+
+		for (const sdkPart of parts) {
+			const part = this.normalizePart(sdkPart);
+			if (part.type === 'text' && part.text) {
+				textParts.push(part.text);
+			} else if (part.type === 'file') {
+				if (part.mime.startsWith('image/')) {
+					images.push({
+						id: `img-${Math.random().toString(36).slice(2, 9)}`,
+						name: part.filename || 'image',
+						dataUrl: part.url,
+						path: part.source?.path,
+					});
+				} else if (part.source) {
+					const src = part.source;
+					if (src.type === 'symbol' || (src.text.start > 0 && src.text.end > 0)) {
+						codeSnippets.push({
+							filePath: src.path,
+							startLine: src.text.start,
+							endLine: src.text.end,
+							content: src.text.value,
+						});
+					} else {
+						files.push(src.path);
+					}
+				} else {
+					// Fallback: no source, extract path from URL
+					try {
+						const parsed = new URL(part.url);
+						files.push(decodeURIComponent(parsed.pathname).replace(/^\//, ''));
+					} catch {
+						const fp = part.url.startsWith('file://') ? part.url.replace('file://', '') : part.url;
+						files.push(decodeURIComponent(fp));
+					}
+				}
+			}
+		}
+
+		const content = textParts.join('\n');
+		const hasAttachments = files.length > 0 || codeSnippets.length > 0 || images.length > 0;
+		return {
+			content,
+			...(hasAttachments
+				? {
+						attachments: {
+							...(files.length > 0 ? { files } : {}),
+							...(codeSnippets.length > 0 ? { codeSnippets } : {}),
+							...(images.length > 0 ? { images } : {}),
+						},
+					}
+				: {}),
+		};
+	}
+
 	private normalizeSessionStatus(raw?: SdkSessionStatus): OpenCodeSessionStatus {
 		if (!raw) return { type: 'other' };
 		if (raw.type === 'retry' || raw.type === 'idle' || raw.type === 'busy') return raw;
@@ -1352,6 +1575,35 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 						'title' in toolPart.state ? (toolPart.state.title as string | undefined) : undefined,
 					metadata: 'metadata' in toolPart.state ? toolPart.state.metadata : undefined,
 				},
+			};
+		}
+		if (raw.type === 'file') {
+			const filePart = raw as {
+				messageID: string;
+				sessionID: string;
+				type: 'file';
+				mime: string;
+				url: string;
+				filename?: string;
+				source?: {
+					type: 'file' | 'symbol';
+					path: string;
+					text: { value: string; start: number; end: number };
+					range?: {
+						start: { line: number; character: number };
+						end: { line: number; character: number };
+					};
+					name?: string;
+				};
+			};
+			return {
+				type: 'file',
+				messageID: filePart.messageID,
+				sessionID: filePart.sessionID,
+				mime: filePart.mime,
+				url: filePart.url,
+				filename: filePart.filename,
+				source: filePart.source,
 			};
 		}
 		return { type: 'other', raw, sessionID: 'sessionID' in raw ? raw.sessionID : undefined };
