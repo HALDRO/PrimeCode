@@ -8,8 +8,7 @@
  */
 
 import * as vscode from 'vscode';
-import type { SessionEventMessage } from '../../common/extensionMessages';
-import type { CommandOf, WebviewCommand } from '../../common/webviewCommands';
+import type { CommandOf, SessionEventMessage, WebviewCommand } from '../../common/protocol';
 import { logger } from '../../utils/logger';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 

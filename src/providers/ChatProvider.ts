@@ -2,8 +2,9 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { SessionEventMessage } from '../common';
 
-import type { WebviewCommand } from '../common/webviewCommands';
-import { type CLIEvent, CLIRunner } from '../core/CLIRunner';
+import type { WebviewCommand } from '../common/protocol';
+import { OpenCodeExecutor } from '../core/executor/OpenCode';
+import type { CLIEvent } from '../core/executor/types';
 import type { ServiceRegistry } from '../core/ServiceRegistry';
 import { SessionGraph, SessionState } from '../core/SessionManager';
 import { Settings } from '../core/Settings';
@@ -86,7 +87,7 @@ function resolveToolPolicyCategory(tool: string): 'edit' | 'terminal' | 'network
 
 export class ChatProvider implements vscode.WebviewViewProvider {
 	private view?: vscode.WebviewView;
-	private cli: CLIRunner;
+	private cli: OpenCodeExecutor;
 	private settings: Settings;
 	private sessionState: SessionState;
 	private disposables: vscode.Disposable[] = [];
@@ -147,7 +148,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	) {
 		this.settings = new Settings();
 		this.sessionState = new SessionState();
-		this.cli = new CLIRunner();
+		this.cli = new OpenCodeExecutor();
 
 		// Initialize Handlers
 		// RestoreHandler is created first so its registerCheckpoint can be wired into the context
@@ -472,22 +473,22 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 						let relativePath: string | undefined;
 						switch (msg.type) {
 							case 'openCommandFile': {
-								const items = await services.agentsCommands.getAll();
+								const items = await services.agentResources.getAll('commands');
 								relativePath = items.find(c => c.name === name)?.path;
 								break;
 							}
 							case 'openSkillFile': {
-								const items = await services.agentsSkills.getAll();
+								const items = await services.agentResources.getAll('skills');
 								relativePath = items.find(s => s.name === name)?.path;
 								break;
 							}
 							case 'openHookFile': {
-								const items = await services.agentsHooks.getAll();
+								const items = await services.agentResources.getAll('hooks');
 								relativePath = items.find(h => h.name === name)?.path;
 								break;
 							}
 							case 'openSubagentFile': {
-								const items = await services.agentsSubagents.getAll();
+								const items = await services.agentResources.getAll('subagents');
 								relativePath = items.find(s => s.name === name)?.path;
 								break;
 							}

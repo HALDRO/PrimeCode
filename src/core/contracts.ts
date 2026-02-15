@@ -5,71 +5,7 @@
  *              (now correctly typed as string | undefined) and started sessions set.
  */
 
-import type { CLIEvent } from './executor/types';
-
 export type { ISettings } from './Settings';
-
-export interface ICLIConfig {
-	provider: 'opencode';
-	model?: string;
-	workspaceRoot: string;
-	yoloMode?: boolean;
-	agent?: string;
-	env?: Record<string, string>;
-	serverTimeoutMs?: number;
-	autoCompact?: boolean;
-}
-
-export interface ICLIRunner {
-	spawn(prompt: string, config: ICLIConfig): Promise<unknown>;
-	spawnFollowUp(
-		prompt: string,
-		sessionId: string,
-		config: ICLIConfig,
-		attachments?: {
-			files?: string[];
-			codeSnippets?: Array<{
-				filePath: string;
-				content: string;
-				startLine?: number;
-				endLine?: number;
-			}>;
-			images?: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
-		},
-	): Promise<unknown>;
-	/** Truncate session history at a specific message ID (OpenCode only; no-op for other providers). */
-	truncateSession(sessionId: string, messageId: string, config: ICLIConfig): Promise<void>;
-	spawnReview(prompt: string, config: ICLIConfig): Promise<unknown>;
-	createNewSession(prompt: string, config: ICLIConfig): Promise<unknown>;
-	/** Creates an empty session without sending a message. Returns the session ID. */
-	createEmptySession(config: ICLIConfig): Promise<string>;
-	respondToPermission(decision: {
-		requestId: string;
-		approved: boolean;
-		alwaysAllow?: boolean;
-		response?: 'once' | 'always' | 'reject';
-	}): Promise<void>;
-	kill(): Promise<void>;
-	getOpenCodeServerInfo(): { baseUrl: string; directory: string } | null;
-	/** Returns the SDK client instance if available (OpenCode only). */
-	getSdkClient(): import('@opencode-ai/sdk').OpencodeClient | null;
-	getProvider(): 'opencode';
-	listSessions(config: ICLIConfig): Promise<
-		Array<{
-			id: string;
-			title?: string;
-			lastModified?: number;
-			created?: number;
-			parentID?: string;
-		}>
-	>;
-	getHistory(sessionId: string, config: ICLIConfig): Promise<CLIEvent[]>;
-	deleteSession(sessionId: string, config: ICLIConfig): Promise<boolean>;
-	renameSession(sessionId: string, title: string, config: ICLIConfig): Promise<boolean>;
-	abort(): Promise<void>;
-	on(event: string, listener: (...args: unknown[]) => void): this;
-	off(event: string, listener: (...args: unknown[]) => void): this;
-}
 
 export interface IView {
 	postMessage(message: unknown): void;

@@ -1,6 +1,5 @@
 import type { SessionEventMessage } from '../../common';
-import type { PermissionPolicies } from '../../common/extensionMessages';
-import type { CommandOf, WebviewCommand } from '../../common/webviewCommands';
+import type { CommandOf, PermissionPolicies, WebviewCommand } from '../../common/protocol';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
 const VALID_POLICY_VALUES = new Set(['ask', 'allow', 'deny']);

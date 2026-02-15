@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { normalizeProxyBaseUrl, type OpenCodeProviderData } from '../../common';
 import { OPENAI_COMPATIBLE_PROVIDER_ID } from '../../common/constants';
-import type { CommandOf, WebviewCommand } from '../../common/webviewCommands';
+import type { CommandOf, WebviewCommand } from '../../common/protocol';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
 export class ProviderHandler implements WebviewMessageHandler {

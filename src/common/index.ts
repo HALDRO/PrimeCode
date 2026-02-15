@@ -4,9 +4,13 @@
  */
 
 export * from './constants';
-// Avoid name collisions (Rule / ParsedCommand) between schemas and extensionMessages.
+// Normalized event types (shared between extension and webview)
+export * from './normalizedTypes';
+// Protocol: unified Extension ↔ Webview message contract (named exports to avoid collisions with schemas)
 export type {
+	CommandOf,
 	ExtensionMessage,
+	PermissionPolicies,
 	SessionAccessPayload,
 	SessionDeleteMessagesAfterPayload,
 	SessionEventMessage,
@@ -23,9 +27,10 @@ export type {
 	SessionStatus,
 	SessionStatusPayload,
 	SessionTurnTokensPayload,
-} from './extensionMessages';
+	WebviewCommand,
+} from './protocol';
+// Schemas: runtime-validated types (TypeBox) — exported first as source of truth for Rule, ParsedCommand, etc.
 export * from './schemas';
-export * from './webviewCommands';
 
 /** Generate a unique ID with the given prefix: `{prefix}-{timestamp}-{random}` */
 export function generateId(prefix: string): string {

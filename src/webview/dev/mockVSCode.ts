@@ -6,7 +6,7 @@
  */
 
 import type { VSCodeApi } from '../../common';
-import type { NormalizedEntry } from '../../common/normalizedEvents';
+import type { NormalizedEntry } from '../../common/normalizedTypes';
 
 declare global {
 	interface Window {

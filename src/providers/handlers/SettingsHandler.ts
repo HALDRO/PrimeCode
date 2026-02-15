@@ -1,4 +1,4 @@
-import type { CommandOf, WebviewCommand } from '../../common/webviewCommands';
+import type { CommandOf, WebviewCommand } from '../../common/protocol';
 import type { RulesService } from '../../services/RulesService';
 import { logger } from '../../utils/logger';
 import type { HandlerContext, WebviewMessageHandler } from './types';
@@ -177,7 +177,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 		try {
 			// Fetch custom commands from .agents/ files and CLI commands from OpenCode server in parallel
 			const [commands, cliCommands] = await Promise.all([
-				this.context.services.agentsCommands.getAll(),
+				this.context.services.agentResources.getAll('commands'),
 				this.fetchCliCommands(),
 			]);
 			this.context.view.postMessage({
@@ -226,7 +226,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 	private async onGetSkills(): Promise<void> {
 		this.context.view.postMessage({ type: 'skillsList', data: { skills: [], isLoading: true } });
 		try {
-			const skills = await this.context.services.agentsSkills.getAll();
+			const skills = await this.context.services.agentResources.getAll('skills');
 			this.context.view.postMessage({
 				type: 'skillsList',
 				data: { skills, isLoading: false },
@@ -246,7 +246,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 	private async onGetHooks(): Promise<void> {
 		this.context.view.postMessage({ type: 'hooksList', data: { hooks: [], isLoading: true } });
 		try {
-			const hooks = await this.context.services.agentsHooks.getAll();
+			const hooks = await this.context.services.agentResources.getAll('hooks');
 			this.context.view.postMessage({
 				type: 'hooksList',
 				data: { hooks, isLoading: false },
@@ -269,7 +269,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 			data: { subagents: [], isLoading: true },
 		});
 		try {
-			const subagents = await this.context.services.agentsSubagents.getAll();
+			const subagents = await this.context.services.agentResources.getAll('subagents');
 			this.context.view.postMessage({
 				type: 'subagentsList',
 				data: { subagents, isLoading: false },

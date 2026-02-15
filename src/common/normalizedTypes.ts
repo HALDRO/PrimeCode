@@ -1,7 +1,8 @@
 /**
- * @file Normalized Events
- * @description Type definitions for normalized log entries and action types,
- * matching the reference implementation for rich history and status tracking.
+ * @file Normalized Event Types
+ * @description Pure type definitions for normalized log entries.
+ *              Shared between extension (core/) and webview — no Node.js imports.
+ *              Runtime logic lives in core/executor/LogNormalizer.ts.
  */
 
 export interface NormalizedEntry {
@@ -67,9 +68,7 @@ export type CommandExitStatus =
 	| { type: 'ExitCode'; code: number }
 	| { type: 'Success'; success: boolean };
 
-export type ToolResult =
-	| { type: 'Markdown'; value: string } // value is JSON string if mapped from rust
-	| { type: 'Json'; value: unknown };
+export type ToolResult = { type: 'Markdown'; value: string } | { type: 'Json'; value: unknown };
 
 export interface TodoItem {
 	content: string;

@@ -10,11 +10,12 @@ import * as vscode from 'vscode';
 import type { AgentsMcpServer, MCPServerConfig } from '../../common';
 import { logger } from '../../utils/logger';
 import {
-	AgentsConfigService,
+	type AgentsConfigService,
 	agentsServersToMcpConfigMap,
 	agentsServerToMcpConfig,
+	mcpConfigToAgentsServer,
 } from '../AgentsConfigService';
-import { AgentsSyncService } from '../AgentsSyncService';
+import type { AgentsSyncService } from '../AgentsSyncService';
 import { McpClientService } from './McpClientService.js';
 import type { McpMarketplaceService } from './McpMarketplaceService';
 import type { McpMetadataService } from './McpMetadataService';
@@ -34,33 +35,6 @@ const MCP_STATUS_CACHE_KEY = 'mcpStatusCache';
 type PostMessage = (msg: unknown) => void;
 type OnConfigSaved = () => void;
 
-/** Convert MCPServerConfig to AgentsMcpServer directly (no intermediate unified format) */
-function mcpConfigToAgentsServer(config: MCPServerConfig): AgentsMcpServer | null {
-	const type = config.type;
-	if (type === 'stdio' || (!type && config.command)) {
-		if (!config.command) return null;
-		return {
-			type: 'stdio',
-			command: [config.command, ...(config.args ?? [])],
-			env: config.env,
-			cwd: config.cwd,
-			enabled: config.enabled,
-			timeout: config.timeoutMs,
-		};
-	}
-	if (type === 'http' || type === 'sse' || (!type && config.url)) {
-		if (!config.url) return null;
-		return {
-			type: type === 'sse' ? 'sse' : 'http',
-			url: config.url,
-			headers: config.headers,
-			enabled: config.enabled,
-			timeout: config.timeoutMs,
-		};
-	}
-	return null;
-}
-
 export class McpManagementService {
 	private readonly _agentsConfig: AgentsConfigService;
 	private readonly _agentsSync: AgentsSyncService;
@@ -72,9 +46,11 @@ export class McpManagementService {
 		private readonly _mcpMarketplace: McpMarketplaceService,
 		private readonly _mcpMetadata: McpMetadataService,
 		private readonly _postMessage: PostMessage,
+		agentsConfig: AgentsConfigService,
+		agentsSync: AgentsSyncService,
 	) {
-		this._agentsConfig = new AgentsConfigService();
-		this._agentsSync = new AgentsSyncService(this._agentsConfig);
+		this._agentsConfig = agentsConfig;
+		this._agentsSync = agentsSync;
 		this._mcpClient = new McpClientService();
 	}
 

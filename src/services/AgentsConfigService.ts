@@ -128,6 +128,37 @@ export function agentsServerToMcpConfig(
 }
 
 /**
+ * Convert MCPServerConfig to AgentsMcpServer (inverse of agentsServerToMcpConfig)
+ */
+export function mcpConfigToAgentsServer(
+	config: import('../common').MCPServerConfig,
+): AgentsMcpServer | null {
+	const type = config.type;
+	if (type === 'stdio' || (!type && config.command)) {
+		if (!config.command) return null;
+		return {
+			type: 'stdio',
+			command: [config.command, ...(config.args ?? [])],
+			env: config.env,
+			cwd: config.cwd,
+			enabled: config.enabled,
+			timeout: config.timeoutMs,
+		};
+	}
+	if (type === 'http' || type === 'sse' || (!type && config.url)) {
+		if (!config.url) return null;
+		return {
+			type: type === 'sse' ? 'sse' : 'http',
+			url: config.url,
+			headers: config.headers,
+			enabled: config.enabled,
+			timeout: config.timeoutMs,
+		};
+	}
+	return null;
+}
+
+/**
  * Convert record of AgentsMcpServer to MCPServersMap
  */
 export function agentsServersToMcpConfigMap(

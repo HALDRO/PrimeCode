@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { CommandOf, WebviewCommand } from '../../common/webviewCommands';
+import type { CommandOf, WebviewCommand } from '../../common/protocol';
 import { ClipboardContextService } from '../../services/ClipboardContextService';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 

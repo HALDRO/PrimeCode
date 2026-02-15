@@ -10,7 +10,7 @@
 
 import { useCallback, useMemo } from 'react';
 import type { VSCodeApi } from '../../common';
-import type { WebviewCommand } from '../../common/webviewCommands';
+import type { WebviewCommand } from '../../common/protocol';
 import { useChatStore } from '../store/chatStore';
 
 // ============================================================================

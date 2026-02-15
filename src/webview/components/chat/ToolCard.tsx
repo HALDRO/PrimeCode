@@ -5,7 +5,7 @@
  */
 
 import React, { type ReactNode, useMemo, useState } from 'react';
-import type { NormalizedEntry } from '../../../common/normalizedEvents';
+import type { NormalizedEntry } from '../../../common/normalizedTypes';
 
 import { isMcpTool, isToolMatch } from '../../constants';
 import { cn } from '../../lib/cn';

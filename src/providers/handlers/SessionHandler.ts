@@ -8,7 +8,7 @@ import type {
 	TotalStats,
 } from '../../common';
 import { generateId } from '../../common';
-import type { CommandOf, WebviewCommand } from '../../common/webviewCommands';
+import type { CommandOf, WebviewCommand } from '../../common/protocol';
 import { LogNormalizer } from '../../core/executor/LogNormalizer';
 import type { CLIEvent } from '../../core/executor/types';
 import { logger } from '../../utils/logger';

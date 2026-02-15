@@ -8,7 +8,7 @@
 
 import type React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { NormalizedEntry } from '../../../common/normalizedEvents';
+import type { NormalizedEntry } from '../../../common/normalizedTypes';
 import { useSubtaskThread } from '../../hooks/useSubtaskChildren';
 import type { Message } from '../../store/chatStore';
 import { useMcpServers } from '../../store/selectors';

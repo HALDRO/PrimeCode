@@ -31,7 +31,7 @@ import type {
 	TotalStats,
 } from '../../common';
 import { generateId } from '../../common';
-import type { NormalizedEntry } from '../../common/normalizedEvents';
+import type { NormalizedEntry } from '../../common/normalizedTypes';
 
 export type { CommitInfo, ConversationMessage, SubtaskMessage, TotalStats };
 

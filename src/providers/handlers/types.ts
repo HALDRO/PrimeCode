@@ -1,13 +1,14 @@
 import type * as vscode from 'vscode';
-import type { WebviewCommand } from '../../common/webviewCommands';
-import type { ICLIRunner, ISessionState, ISettings, IView } from '../../core/contracts';
+import type { WebviewCommand } from '../../common/protocol';
+import type { ISessionState, ISettings, IView } from '../../core/contracts';
+import type { OpenCodeExecutor } from '../../core/executor/OpenCode';
 import type { ServiceRegistry } from '../../core/ServiceRegistry';
 import type { SessionGraph } from '../../core/SessionManager';
 
 export interface HandlerContext {
 	extensionContext: vscode.ExtensionContext;
 	settings: ISettings;
-	cli: ICLIRunner;
+	cli: OpenCodeExecutor;
 	view: IView;
 	sessionState: ISessionState;
 	services: ServiceRegistry;

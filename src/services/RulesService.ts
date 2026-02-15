@@ -148,7 +148,7 @@ export class RulesService {
 	 * Generate `AGENTS.md` (first enabled rule) + `.opencode/memories/` (rest)
 	 */
 	private async _syncToOpenCode(): Promise<void> {
-		// TODO: Implement OpenCode sync via CLIRunner if needed
+		// TODO: Implement OpenCode sync via OpenCodeExecutor if needed
 	}
 
 	// =========================================================================

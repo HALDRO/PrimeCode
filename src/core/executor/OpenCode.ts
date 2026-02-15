@@ -495,9 +495,15 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 	}
 
-	async listSessions(
-		config: CLIConfig,
-	): Promise<Array<{ id: string; title?: string; lastModified?: number; parentID?: string }>> {
+	async listSessions(config: CLIConfig): Promise<
+		Array<{
+			id: string;
+			title?: string;
+			lastModified?: number;
+			created?: number;
+			parentID?: string;
+		}>
+	> {
 		if (!this.serverUrl && config.workspaceRoot) {
 			try {
 				await this.ensureServer(config);
@@ -1734,5 +1740,21 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 	getSdkClient(): OpencodeClient | null {
 		return this.sdkClient;
+	}
+
+	// Aliases previously provided by CLIRunner facade
+	/** Alias for ensureServer — used by ChatProvider. */
+	async start(config: CLIConfig): Promise<void> {
+		return this.ensureServer(config);
+	}
+
+	/** Alias for getAdminInfo — used by handlers. */
+	getOpenCodeServerInfo(): { baseUrl: string; directory: string } | null {
+		return this.getAdminInfo();
+	}
+
+	/** Returns the provider type. Always 'opencode'. */
+	getProvider(): 'opencode' {
+		return 'opencode';
 	}
 }

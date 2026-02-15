@@ -1,10 +1,32 @@
 /**
  * @file Log Normalizer
  * @description Logic for normalizing raw CLI events and stderr output into structured NormalizedEntry objects.
+ *              Type definitions live in common/normalizedTypes.ts (shared with webview).
  */
 
 import { EventEmitter } from 'node:events';
-import type { ActionType, NormalizedEntry } from '../../common/normalizedEvents';
+
+// Re-export all types from the shared location so existing consumers keep working.
+export type {
+	ActionType,
+	CommandExitStatus,
+	CommandRunResult,
+	FileChange,
+	NormalizedEntry,
+	NormalizedEntryError,
+	NormalizedEntryType,
+	TodoItem,
+	TokenUsageInfo,
+	ToolResult,
+	ToolStatus,
+} from '../../common/normalizedTypes';
+
+import type {
+	ActionType,
+	FileChange,
+	NormalizedEntry,
+	NormalizedEntryType,
+} from '../../common/normalizedTypes';
 
 export class LogNormalizer extends EventEmitter {
 	private stderrBuffer: Array<{ timestamp: number; line: string }> = [];
@@ -45,7 +67,7 @@ export class LogNormalizer extends EventEmitter {
 	 * Process a text chunk (stdout) or message part, creating appropriate NormalizedEntries.
 	 */
 	public normalizeMessage(content: string, role: 'user' | 'assistant' | 'system'): NormalizedEntry {
-		let entryType: import('../../common/normalizedEvents').NormalizedEntryType;
+		let entryType: NormalizedEntryType;
 		switch (role) {
 			case 'user':
 				entryType = 'UserMessage';
@@ -165,7 +187,7 @@ export class LogNormalizer extends EventEmitter {
 					(input.newString as string) ||
 					'';
 
-				let change: import('../../common/normalizedEvents').FileChange;
+				let change: FileChange;
 
 				// Prefer diff if available
 				if (diff) {

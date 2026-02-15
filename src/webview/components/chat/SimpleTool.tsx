@@ -1,6 +1,6 @@
 import type React from 'react';
 import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
-import type { NormalizedEntry } from '../../../common/normalizedEvents';
+import type { NormalizedEntry } from '../../../common/normalizedTypes';
 import { isMcpTool, isToolInList, NON_GROUPABLE_TOOLS } from '../../constants';
 import { cn } from '../../lib/cn';
 

@@ -5,7 +5,7 @@
 
 import type { ChildProcess } from 'node:child_process';
 import type { EventEmitter } from 'node:events';
-import type { NormalizedEntry } from '../../common/normalizedEvents';
+import type { NormalizedEntry } from './LogNormalizer';
 
 export interface CLIConfig {
 	provider: 'opencode';

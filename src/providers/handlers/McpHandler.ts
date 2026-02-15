@@ -1,5 +1,5 @@
 import type * as vscode from 'vscode';
-import type { CommandOf, WebviewCommand } from '../../common/webviewCommands';
+import type { CommandOf, WebviewCommand } from '../../common/protocol';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
 export class McpHandler implements WebviewMessageHandler {
