@@ -6,7 +6,7 @@ import { type Message, useChatStore } from '../store/chatStore';
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_GROUPED: (Message | Message[])[] = [];
 
-export interface SubtaskTokenStats {
+interface SubtaskTokenStats {
 	input: number;
 	output: number;
 	total: number;
@@ -20,7 +20,7 @@ export interface SubtaskTokenStats {
  * to avoid unnecessary re-renders and potential recursive rendering when contextId
  * accidentally points to the parent session.
  */
-export function useSubtaskChildren(subtaskId: string): Message[] {
+function useSubtaskChildren(subtaskId: string): Message[] {
 	// 1. Get the subtask message from current active session messages
 	const message = useChatStore(state => {
 		const sid = state.activeSessionId;

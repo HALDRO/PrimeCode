@@ -159,7 +159,7 @@ export function getDiffContentHeight(
 /**
  * Best-effort parse for unified diff hunks ("@@ ... @@") into old/new snapshots.
  */
-export function parseUnifiedDiffSnapshots(
+function parseUnifiedDiffSnapshots(
 	diffText: string,
 ): { oldContent: string; newContent: string } | null {
 	const lines = diffText.split('\n');
@@ -200,7 +200,7 @@ export function parseUnifiedDiffSnapshots(
 // Diff data resolution (used by ToolCard)
 // ---------------------------------------------------------------------------
 
-export type ResolvedDiffData = {
+type ResolvedDiffData = {
 	oldContent: string;
 	newContent: string;
 	effectiveFilePath: string;
@@ -447,5 +447,3 @@ export const SimpleDiff: React.FC<SimpleDiffProps> = ({
 		</OverlayScrollbarsComponent>
 	);
 };
-
-export default SimpleDiff;

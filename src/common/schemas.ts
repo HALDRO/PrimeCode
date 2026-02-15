@@ -20,33 +20,32 @@ export type CLIProviderType = Static<typeof CLIProviderTypeSchema>;
 // Unified MCP Registry Types
 // =============================================================================
 
-export const UnifiedMcpTransportStdioSchema = Type.Object({
+const UnifiedMcpTransportStdioSchema = Type.Object({
 	type: Type.Literal('stdio'),
 	command: Type.Array(Type.String(), { minItems: 1 }),
 	env: Type.Optional(Type.Record(Type.String(), Type.String())),
 	cwd: Type.Optional(Type.String()),
 });
 
-export const UnifiedMcpTransportHttpSchema = Type.Object({
+const UnifiedMcpTransportHttpSchema = Type.Object({
 	type: Type.Literal('http'),
 	url: Type.String(),
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
 });
 
-export const UnifiedMcpTransportSseSchema = Type.Object({
+const UnifiedMcpTransportSseSchema = Type.Object({
 	type: Type.Literal('sse'),
 	url: Type.String(),
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
 });
 
-export const UnifiedMcpTransportSchema = Type.Union([
+const UnifiedMcpTransportSchema = Type.Union([
 	UnifiedMcpTransportStdioSchema,
 	UnifiedMcpTransportHttpSchema,
 	UnifiedMcpTransportSseSchema,
 ]);
-export type UnifiedMcpTransport = Static<typeof UnifiedMcpTransportSchema>;
 
-export const UnifiedMcpMetadataSchema = Type.Object({
+const UnifiedMcpMetadataSchema = Type.Object({
 	description: Type.Optional(Type.String()),
 	source: Type.Optional(
 		Type.Union([
@@ -60,7 +59,6 @@ export const UnifiedMcpMetadataSchema = Type.Object({
 	lastError: Type.Optional(Type.String()),
 	lastCheckedAt: Type.Optional(Type.String()),
 });
-export type UnifiedMcpMetadata = Static<typeof UnifiedMcpMetadataSchema>;
 
 export const UnifiedMcpServerSchema = Type.Object({
 	enabled: Type.Optional(Type.Boolean()),
@@ -100,12 +98,11 @@ export type AgentsMcpConfig = Static<typeof AgentsMcpConfigSchema>;
 // MCP Server Types
 // =============================================================================
 
-export const MCPServerTypeSchema = Type.Union([
+const MCPServerTypeSchema = Type.Union([
 	Type.Literal('http'),
 	Type.Literal('sse'),
 	Type.Literal('stdio'),
 ]);
-export type MCPServerType = Static<typeof MCPServerTypeSchema>;
 
 export const MCPServerConfigSchema = Type.Object({
 	command: Type.Optional(Type.String()),
@@ -197,28 +194,6 @@ export const AccessSchema = Type.Object({
 });
 export type Access = Static<typeof AccessSchema>;
 
-export const AccessStoreSchema = Type.Object({
-	alwaysAllow: Type.Record(Type.String(), Type.Union([Type.Boolean(), Type.Array(Type.String())])),
-});
-export type AccessStore = Static<typeof AccessStoreSchema>;
-
-export const AccessRequestSchema = Type.Object({
-	id: Type.String(),
-	tool: Type.String(),
-	input: Type.Record(Type.String(), Type.Unknown()),
-	timestamp: Type.String(),
-	toolUseId: Type.Optional(Type.String()),
-	sessionId: Type.Optional(Type.String()),
-});
-export type AccessRequest = Static<typeof AccessRequestSchema>;
-
-export const AccessResponseSchema = Type.Object({
-	id: Type.String(),
-	approved: Type.Boolean(),
-	timestamp: Type.String(),
-});
-export type AccessResponse = Static<typeof AccessResponseSchema>;
-
 // =============================================================================
 // Workspace & Files
 // =============================================================================
@@ -249,28 +224,25 @@ export type CommitInfo = Static<typeof CommitInfoSchema>;
 // Message Attachments
 // =============================================================================
 
-export const CodeSnippetAttachmentSchema = Type.Object({
+const CodeSnippetAttachmentSchema = Type.Object({
 	filePath: Type.String(),
 	startLine: Type.Number(),
 	endLine: Type.Number(),
 	content: Type.String(),
 });
-export type CodeSnippetAttachment = Static<typeof CodeSnippetAttachmentSchema>;
 
-export const ImageAttachmentSchema = Type.Object({
+const ImageAttachmentSchema = Type.Object({
 	id: Type.String(),
 	name: Type.String(),
 	dataUrl: Type.String(),
 	path: Type.Optional(Type.String()),
 });
-export type ImageAttachment = Static<typeof ImageAttachmentSchema>;
 
-export const MessageAttachmentsSchema = Type.Object({
+const MessageAttachmentsSchema = Type.Object({
 	files: Type.Optional(Type.Array(Type.String())),
 	codeSnippets: Type.Optional(Type.Array(CodeSnippetAttachmentSchema)),
 	images: Type.Optional(Type.Array(ImageAttachmentSchema)),
 });
-export type MessageAttachments = Static<typeof MessageAttachmentsSchema>;
 
 // =============================================================================
 // Conversation History
@@ -436,24 +408,6 @@ export const SubtaskMessageSchema = Type.Object({
 });
 export type SubtaskMessage = Static<typeof SubtaskMessageSchema>;
 
-export const ConversationDataSchema = Type.Object({
-	sessionId: Type.String(),
-	startTime: Type.Union([Type.String(), Type.Undefined()]),
-	endTime: Type.String(),
-	messageCount: Type.Number(),
-	totalCost: Type.Number(),
-	totalTokens: Type.Object({
-		input: Type.Number(),
-		output: Type.Number(),
-		reasoning: Type.Optional(Type.Number()),
-	}),
-	totalDuration: Type.Optional(Type.Number()),
-	requestCount: Type.Optional(Type.Number()),
-	messages: Type.Array(ConversationMessageSchema),
-	filename: Type.String(),
-});
-export type ConversationData = Static<typeof ConversationDataSchema>;
-
 export const ConversationIndexEntrySchema = Type.Object({
 	filename: Type.String(),
 	sessionId: Type.String(),
@@ -477,103 +431,7 @@ export const PlatformInfoSchema = Type.Object({
 });
 export type PlatformInfo = Static<typeof PlatformInfoSchema>;
 
-// =============================================================================
-// Settings
-// =============================================================================
-
-export const PrimeCodeSettingsSchema = Type.Object({
-	provider: Type.Optional(CLIProviderTypeSchema),
-	'proxy.baseUrl': Type.String(),
-	'proxy.apiKey': Type.String(),
-	'proxy.enabledModels': Type.Array(Type.String()),
-	'proxy.useSingleModel': Type.Optional(Type.Boolean()),
-	'proxy.haikuModel': Type.Optional(Type.String()),
-	'proxy.sonnetModel': Type.Optional(Type.String()),
-	'proxy.opusModel': Type.Optional(Type.String()),
-	'proxy.subagentModel': Type.Optional(Type.String()),
-	'opencode.autoStart': Type.Optional(Type.Boolean()),
-	'opencode.serverTimeout': Type.Optional(Type.Number()),
-	'opencode.agent': Type.Optional(Type.String()),
-	'opencode.enabledModels': Type.Array(Type.String()),
-	'providers.disabled': Type.Array(Type.String()),
-	'promptImprove.model': Type.Optional(Type.String()),
-	'promptImprove.template': Type.Optional(Type.String()),
-	'promptImprove.timeoutMs': Type.Optional(Type.Number()),
-});
-export type PrimeCodeSettings = Static<typeof PrimeCodeSettingsSchema>;
-
-// =============================================================================
-// Session Info
-// =============================================================================
-
-export const SessionInfoSchema = Type.Object({
-	sessionId: Type.String(),
-	tools: Type.Array(Type.String()),
-	mcpServers: Type.Array(Type.String()),
-});
-export type SessionInfo = Static<typeof SessionInfoSchema>;
-
-// =============================================================================
-// OpenCode Agent Types
-// =============================================================================
-
-export const OpenCodeAgentModeSchema = Type.Union([
-	Type.Literal('subagent'),
-	Type.Literal('primary'),
-	Type.Literal('all'),
-]);
-export type OpenCodeAgentMode = Static<typeof OpenCodeAgentModeSchema>;
-
-export const OpenCodeAgentSchema = Type.Object({
-	name: Type.String(),
-	description: Type.Optional(Type.String()),
-	mode: OpenCodeAgentModeSchema,
-	builtIn: Type.Boolean(),
-	options: Type.Optional(
-		Type.Object({
-			color: Type.Optional(Type.String()),
-		}),
-	),
-});
-export type OpenCodeAgent = Static<typeof OpenCodeAgentSchema>;
-
-export const OpenCodeSessionSchema = Type.Object({
-	id: Type.String(),
-	title: Type.String(),
-	projectID: Type.Optional(Type.String()),
-	directory: Type.Optional(Type.String()),
-	time: Type.Optional(
-		Type.Object({
-			created: Type.Number(),
-			updated: Type.Number(),
-		}),
-	),
-});
-export type OpenCodeSession = Static<typeof OpenCodeSessionSchema>;
-
-export const OpenCodeAccessSchema = Type.Object({
-	id: Type.String(),
-	type: Type.String(),
-	pattern: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())])),
-	sessionID: Type.String(),
-	messageID: Type.String(),
-	callID: Type.Optional(Type.String()),
-	title: Type.String(),
-	metadata: Type.Record(Type.String(), Type.Unknown()),
-	time: Type.Object({
-		created: Type.Number(),
-	}),
-});
-export type OpenCodeAccess = Static<typeof OpenCodeAccessSchema>;
-
-export const OpenCodeAccessResponseSchema = Type.Union([
-	Type.Literal('once'),
-	Type.Literal('always'),
-	Type.Literal('reject'),
-]);
-export type OpenCodeAccessResponse = Static<typeof OpenCodeAccessResponseSchema>;
-
-export const ProjectUpdatedSchema = Type.Object({
+const ProjectUpdatedSchema = Type.Object({
 	project: Type.Object({
 		id: Type.String(),
 		name: Type.Optional(Type.String()),
@@ -583,13 +441,7 @@ export const ProjectUpdatedSchema = Type.Object({
 });
 export type ProjectUpdated = Static<typeof ProjectUpdatedSchema>;
 
-export const MessagePartRemovedSchema = Type.Object({
-	messageId: Type.String(),
-	partId: Type.String(),
-});
-export type MessagePartRemoved = Static<typeof MessagePartRemovedSchema>;
-
-export const OpenCodeModelDataSchema = Type.Object({
+const OpenCodeModelDataSchema = Type.Object({
 	id: Type.String(),
 	name: Type.String(),
 	reasoning: Type.Optional(Type.Boolean()),
@@ -600,7 +452,6 @@ export const OpenCodeModelDataSchema = Type.Object({
 		}),
 	),
 });
-export type OpenCodeModelData = Static<typeof OpenCodeModelDataSchema>;
 
 export const OpenCodeProviderDataSchema = Type.Object({
 	id: Type.String(),
@@ -697,63 +548,6 @@ export const DiscoveryStatusSchema = Type.Object({
 	),
 });
 export type DiscoveryStatus = Static<typeof DiscoveryStatusSchema>;
-
-// =============================================================================
-// Webview Message
-// =============================================================================
-
-export const WebviewMessageSchema = Type.Object({
-	type: Type.String(),
-	data: Type.Optional(Type.Unknown()),
-	text: Type.Optional(Type.String()),
-	planMode: Type.Optional(Type.Boolean()),
-	model: Type.Optional(Type.String()),
-	command: Type.Optional(Type.String()),
-	filename: Type.Optional(Type.String()),
-	newTitle: Type.Optional(Type.String()),
-	filePaths: Type.Optional(Type.Array(Type.String())),
-	settings: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-	searchTerm: Type.Optional(Type.String()),
-	filePath: Type.Optional(Type.String()),
-	startLine: Type.Optional(Type.Number()),
-	endLine: Type.Optional(Type.Number()),
-	path: Type.Optional(Type.String()),
-	imageData: Type.Optional(Type.String()),
-	imageType: Type.Optional(Type.String()),
-	attachments: Type.Optional(MessageAttachmentsSchema),
-	id: Type.Optional(Type.String()),
-	approved: Type.Optional(Type.Boolean()),
-	alwaysAllow: Type.Optional(Type.Boolean()),
-	response: Type.Optional(OpenCodeAccessResponseSchema),
-	createPrimeCodeShim: Type.Optional(Type.Boolean()),
-	toolName: Type.Optional(Type.String()),
-	name: Type.Optional(Type.String()),
-	content: Type.Optional(Type.String()),
-	enabled: Type.Optional(Type.Boolean()),
-	source: Type.Optional(Type.Literal('opencode')),
-	messageId: Type.Optional(Type.String()),
-	policies: Type.Optional(
-		Type.Object({
-			edit: Type.Union([Type.Literal('ask'), Type.Literal('allow'), Type.Literal('deny')]),
-			terminal: Type.Union([Type.Literal('ask'), Type.Literal('allow'), Type.Literal('deny')]),
-			network: Type.Union([Type.Literal('ask'), Type.Literal('allow'), Type.Literal('deny')]),
-		}),
-	),
-	config: Type.Optional(MCPServerConfigSchema),
-	url: Type.Optional(Type.String()),
-	baseUrl: Type.Optional(Type.String()),
-	apiKey: Type.Optional(Type.String()),
-	mcpId: Type.Optional(Type.String()),
-	patch: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-	oldContent: Type.Optional(Type.String()),
-	newContent: Type.Optional(Type.String()),
-	meta: Type.Optional(InstalledMcpServerMetadataSchema),
-	sessionId: Type.Optional(Type.String()),
-	requestId: Type.Optional(Type.String()),
-	promptTemplate: Type.Optional(Type.String()),
-	timeoutMs: Type.Optional(Type.Number()),
-});
-export type WebviewMessage = Static<typeof WebviewMessageSchema>;
 
 // =============================================================================
 // VS Code API

@@ -65,7 +65,7 @@ export interface TransientNotification {
 	autoDismissMs?: number;
 }
 
-export type TransientNotificationInput = Omit<TransientNotification, 'id' | 'createdAt'> & {
+type TransientNotificationInput = Omit<TransientNotification, 'id' | 'createdAt'> & {
 	id?: string;
 	createdAt?: number;
 };

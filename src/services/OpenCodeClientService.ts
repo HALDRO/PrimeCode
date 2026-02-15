@@ -22,7 +22,7 @@ interface OpenCodeJsonConfig {
 	[key: string]: unknown;
 }
 
-export interface OpenCodeProviderModel {
+interface OpenCodeProviderModel {
 	id: string;
 	name: string;
 	reasoning: boolean;
@@ -32,14 +32,14 @@ export interface OpenCodeProviderModel {
 	};
 }
 
-export interface OpenCodeProvider {
+interface OpenCodeProvider {
 	id: string;
 	name: string;
 	isCustom: boolean;
 	models: OpenCodeProviderModel[];
 }
 
-export interface AvailableProvider {
+interface AvailableProvider {
 	id: string;
 	name: string;
 	env: string[];

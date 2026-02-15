@@ -11,7 +11,7 @@ import type React from 'react';
 import { cn } from '../../lib/cn';
 import { Tooltip, type TooltipPosition } from './Tooltip';
 
-export const buttonVariants = cva(
+const buttonVariants = cva(
 	'inline-flex items-center justify-center gap-(--gap-1-5) font-medium rounded cursor-pointer transition-colors duration-200 select-none border border-transparent font-(family-name:--vscode-font-family) focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder disabled:opacity-50 disabled:cursor-not-allowed',
 	{
 		variants: {
@@ -44,7 +44,7 @@ export const buttonVariants = cva(
 	},
 );
 
-export type ButtonVariantProps = VariantProps<typeof buttonVariants>;
+type ButtonVariantProps = VariantProps<typeof buttonVariants>;
 
 interface ButtonProps
 	extends React.ButtonHTMLAttributes<HTMLButtonElement>,

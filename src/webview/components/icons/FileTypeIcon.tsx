@@ -83,5 +83,3 @@ export const FileTypeIcon: React.FC<FileTypeIconProps> = ({
 		/>
 	);
 };
-
-export default FileTypeIcon;

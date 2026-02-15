@@ -31,6 +31,9 @@ export const CollapseOverlay: React.FC<CollapseOverlayProps> = ({
 		<div
 			className={cn(
 				'pointer-events-none absolute inset-x-0 bottom-0 flex justify-center',
+				'z-10',
+				'opacity-0 transition-opacity duration-150 ease-out',
+				'group-hover:opacity-100',
 				className,
 			)}
 		>

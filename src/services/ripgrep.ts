@@ -1,6 +1,5 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import * as vscode from 'vscode';
 
 const IS_WINDOWS = process.platform.startsWith('win');
 const BIN_NAME = IS_WINDOWS ? 'rg.exe' : 'rg';
@@ -32,11 +31,4 @@ export async function getBinPath(vscodeAppRoot: string): Promise<string | undefi
 	}
 
 	return undefined;
-}
-
-/**
- * Get ripgrep binary path using VS Code's app root
- */
-export async function getRipgrepPath(): Promise<string | undefined> {
-	return getBinPath(vscode.env.appRoot);
 }

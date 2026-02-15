@@ -7,7 +7,7 @@
 
 import { useCallback, useLayoutEffect, useState } from 'react';
 
-export interface UseElementHeightOptions {
+interface UseElementHeightOptions {
 	/** Fallback height used until the element is measured. */
 	fallbackHeight?: number;
 	/** Optional extra pixels to add (e.g. gap). */
@@ -47,23 +47,4 @@ export function useElementHeight<T extends HTMLElement>(options: UseElementHeigh
 	}, [node, fallbackHeight, extra]);
 
 	return { ref, height } as const;
-}
-
-/**
- * Hook to track viewport height reactively.
- * Updates on window resize.
- */
-export function useViewportHeight(fallback = 600): number {
-	const [height, setHeight] = useState(() =>
-		typeof window !== 'undefined' ? window.innerHeight : fallback,
-	);
-
-	useLayoutEffect(() => {
-		const update = () => setHeight(window.innerHeight);
-		update();
-		window.addEventListener('resize', update);
-		return () => window.removeEventListener('resize', update);
-	}, []);
-
-	return height;
 }

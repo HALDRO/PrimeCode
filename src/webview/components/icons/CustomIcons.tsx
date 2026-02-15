@@ -6,7 +6,6 @@
  */
 
 import type React from 'react';
-import { cn } from '../../lib/cn';
 
 interface IconProps {
 	size?: number;
@@ -42,92 +41,9 @@ export const ChevronIcon: React.FC<IconProps & { expanded: boolean }> = ({
 );
 
 /**
- * View mode toggle icon for diff viewer
- * Shows split or inline view indicator
- */
-export const ViewModeIcon: React.FC<IconProps & { sideBySide: boolean }> = ({
-	sideBySide,
-	size = 12,
-	style,
-	className,
-}) => (
-	<svg
-		width={size}
-		height={size}
-		viewBox="0 0 16 16"
-		fill="currentColor"
-		style={style}
-		className={className}
-		aria-hidden="true"
-	>
-		{sideBySide ? (
-			<>
-				<rect
-					x="1"
-					y="2"
-					width="6"
-					height="12"
-					rx="1"
-					fill="none"
-					stroke="currentColor"
-					strokeWidth="1.2"
-				/>
-				<rect
-					x="9"
-					y="2"
-					width="6"
-					height="12"
-					rx="1"
-					fill="none"
-					stroke="currentColor"
-					strokeWidth="1.2"
-				/>
-			</>
-		) : (
-			<>
-				<rect
-					x="2"
-					y="2"
-					width="12"
-					height="12"
-					rx="1"
-					fill="none"
-					stroke="currentColor"
-					strokeWidth="1.2"
-				/>
-				<line x1="2" y1="6" x2="14" y2="6" stroke="currentColor" strokeWidth="1" />
-				<line x1="2" y1="10" x2="14" y2="10" stroke="currentColor" strokeWidth="1" />
-			</>
-		)}
-	</svg>
-);
-
-/**
- * Diff/external link icon for opening diff editor
- */
-export const DiffIcon: React.FC<IconProps> = ({ size = 14, style, className }) => (
-	<svg
-		width={size}
-		height={size}
-		viewBox="0 0 16 16"
-		aria-hidden="true"
-		style={style}
-		className={className}
-	>
-		<path
-			d="M2 3.5A1.5 1.5 0 013.5 2h2a.5.5 0 010 1h-2a.5.5 0 00-.5.5v9a.5.5 0 00.5.5h9a.5.5 0 00.5-.5v-2a.5.5 0 011 0v2a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 12.5v-9z"
-			fill="currentColor"
-		/>
-		<path
-			d="M8.5 2a.5.5 0 000 1h3.793L7.146 8.146a.5.5 0 00.708.708L13 3.707V7.5a.5.5 0 001 0v-5a.5.5 0 00-.5-.5h-5z"
-			fill="currentColor"
-		/>
-	</svg>
-);
-
-/**
  * Accept/checkmark icon for file changes
  */
+
 export const AcceptIcon: React.FC<IconProps> = ({ size = 12, style }) => (
 	<svg
 		width={size}
@@ -162,33 +78,9 @@ export const RejectIcon: React.FC<IconProps> = ({ size = 12, style }) => (
 );
 
 /**
- * Expandable chevron for panels (rotates 90deg when expanded)
- */
-export const ExpandChevronIcon: React.FC<IconProps & { expanded: boolean }> = ({
-	expanded,
-	size = 10,
-	style,
-}) => (
-	<svg
-		width={size}
-		height={size}
-		viewBox="0 0 16 16"
-		fill="currentColor"
-		aria-hidden="true"
-		style={{
-			transition: 'transform 0.15s ease',
-			transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
-			opacity: 0.6,
-			...style,
-		}}
-	>
-		<path d="M6 4l4 4-4 4" stroke="currentColor" strokeWidth="1.5" fill="none" />
-	</svg>
-);
-
-/**
  * Small X icon for badges and removable items
  */
+
 export const SmallCloseIcon: React.FC<IconProps> = ({ size = 10, style }) => (
 	<svg
 		width={size}
@@ -202,34 +94,6 @@ export const SmallCloseIcon: React.FC<IconProps> = ({ size = 10, style }) => (
 	</svg>
 );
 
-/**
- * Expand/Collapse icon with up-down arrows for expandable panels
- */
-export const ExpandCollapseIcon: React.FC<IconProps> = ({ size = 12, style, className }) => (
-	<svg
-		width={size}
-		height={size}
-		viewBox="0 0 16 16"
-		fill="none"
-		stroke="currentColor"
-		strokeWidth="1.5"
-		strokeLinecap="round"
-		strokeLinejoin="round"
-		aria-hidden="true"
-		style={style}
-		className={cn('shrink-0', className)}
-	>
-		{/* Arrow up */}
-		<path d="M8 2L4 6M8 2L12 6" />
-		{/* Arrow down */}
-		<path d="M8 14L4 10M8 14L12 10" />
-	</svg>
-);
-
-/**
- * Brain side view icon for thinking/reasoning indicators
- * Based on Tabler Icons brain icon
- */
 export const BrainSideIcon: React.FC<IconProps> = ({ size = 14, style }) => (
 	<svg
 		xmlns="http://www.w3.org/2000/svg"

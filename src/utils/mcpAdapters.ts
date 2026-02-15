@@ -6,9 +6,9 @@
 
 import type { UnifiedMcpRegistry, UnifiedMcpServer } from '../common';
 
-export const INTERNAL_PERMISSIONS_SERVER_NAME = 'internal-permissions';
+const INTERNAL_PERMISSIONS_SERVER_NAME = 'internal-permissions';
 
-export type OpenCodeMcpConfig =
+type OpenCodeMcpConfig =
 	| {
 			type: 'local';
 			command: string[];
@@ -25,7 +25,7 @@ export type OpenCodeMcpConfig =
 			timeout?: number;
 	  };
 
-export function unifiedServerToOpenCodeConfig(server: UnifiedMcpServer): OpenCodeMcpConfig {
+function unifiedServerToOpenCodeConfig(server: UnifiedMcpServer): OpenCodeMcpConfig {
 	const enabled = server.enabled !== false;
 	const timeout = server.timeoutMs;
 

@@ -50,7 +50,7 @@ export interface ChangedFile {
 
 export type Message = ConversationMessage & { normalizedEntry?: NormalizedEntry };
 
-export type MessageInput = Partial<ConversationMessage> & {
+type MessageInput = Partial<ConversationMessage> & {
 	type: ConversationMessage['type'];
 };
 

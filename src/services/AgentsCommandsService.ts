@@ -83,5 +83,3 @@ export class AgentsCommandsService extends BaseAgentResourceService<ParsedComman
 		await this.syncToFlatDir(PATHS.OPENCODE_COMMAND_DIR);
 	}
 }
-
-export const agentsCommandsService = new AgentsCommandsService();

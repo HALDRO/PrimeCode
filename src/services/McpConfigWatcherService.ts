@@ -23,12 +23,12 @@ const AGENTS_MCP_PATTERN = '**/.agents/mcp.json';
 // Types
 // =============================================================================
 
-export interface McpConfigChangeEvent {
+interface McpConfigChangeEvent {
 	source: 'file-watcher' | 'manual';
 	timestamp: number;
 }
 
-export type ReloadCallback = () => Promise<void>;
+type ReloadCallback = () => Promise<void>;
 
 // =============================================================================
 // McpConfigWatcherService Class

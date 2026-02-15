@@ -204,5 +204,3 @@ export const SendButton: React.FC<SendButtonProps> = ({
 		</Tooltip>
 	);
 };
-
-export default SendButton;

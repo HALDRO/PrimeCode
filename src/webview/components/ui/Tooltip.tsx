@@ -26,7 +26,7 @@ import { createPortal } from 'react-dom';
 
 export type TooltipPosition = 'top' | 'bottom' | 'left' | 'right';
 
-export interface TooltipProps {
+interface TooltipProps {
 	/** Content to display in tooltip - can be string or JSX */
 	content: ReactNode;
 	/** Preferred position relative to children (auto-flips if needed) */

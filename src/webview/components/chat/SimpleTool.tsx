@@ -26,7 +26,7 @@ import {
 } from '../icons';
 import { Badge, PathChip } from '../ui';
 
-export interface SimpleToolProps {
+interface SimpleToolProps {
 	icon: ReactNode;
 	label: string;
 	meta?: ReactNode;
@@ -203,9 +203,9 @@ export const ThinkingMessage: React.FC<ThinkingMessageProps> = ({
 // Simple tool grouping helpers (UI-side)
 // -----------------------------------------------------------------------------
 
-export const MIN_SIMPLE_TOOL_GROUP_SIZE = 3;
+const MIN_SIMPLE_TOOL_GROUP_SIZE = 3;
 
-export const isGroupableTool = (msg: Message, mcpServerNames: string[]): boolean => {
+const isGroupableTool = (msg: Message, mcpServerNames: string[]): boolean => {
 	if (msg.type !== 'tool_use' && msg.type !== 'tool_result') {
 		return false;
 	}
@@ -265,7 +265,7 @@ export const groupToolMessages = (
 	return result;
 };
 
-export const shouldTriggerCollapse = (msg: Message): boolean => {
+const shouldTriggerCollapse = (msg: Message): boolean => {
 	if (msg.type === 'assistant' || msg.type === 'thinking') {
 		return true;
 	}
@@ -393,7 +393,7 @@ const fileRefFromLine = (
 	};
 };
 
-export interface InlineToolLineProps {
+interface InlineToolLineProps {
 	toolName: string;
 	rawInput: unknown;
 	content: string;

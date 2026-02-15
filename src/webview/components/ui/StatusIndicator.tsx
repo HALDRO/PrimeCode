@@ -9,7 +9,7 @@ import type React from 'react';
 import { cn } from '../../lib/cn';
 import { GlowDot } from './GlowDot';
 
-export type StatusVariant = 'success' | 'error' | 'warning' | 'info' | 'pending' | 'processing';
+type StatusVariant = 'success' | 'error' | 'warning' | 'info' | 'pending' | 'processing';
 
 interface StatusIndicatorProps {
 	variant: StatusVariant;
@@ -28,7 +28,7 @@ const ARIA_LABELS: Record<StatusVariant, string> = {
 	processing: 'Processing',
 };
 
-export const StatusIndicator: React.FC<StatusIndicatorProps> = ({
+const StatusIndicator: React.FC<StatusIndicatorProps> = ({
 	variant,
 	label,
 	showLabel = false,
@@ -51,3 +51,5 @@ export const StatusIndicator: React.FC<StatusIndicatorProps> = ({
 		</output>
 	);
 };
+
+export { StatusIndicator };

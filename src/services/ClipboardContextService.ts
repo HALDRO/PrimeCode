@@ -8,7 +8,7 @@
 import * as vscode from 'vscode';
 import { logger } from '../utils/logger';
 
-export interface ClipboardContext {
+interface ClipboardContext {
 	filePath: string;
 	startLine: number;
 	endLine: number;

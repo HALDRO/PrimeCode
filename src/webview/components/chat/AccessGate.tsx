@@ -14,7 +14,7 @@ import { Tooltip } from '../ui';
 // Shared types
 // ---------------------------------------------------------------------------
 
-export interface AccessGateProps {
+interface AccessGateProps {
 	/** Permission request id */
 	requestId: string;
 	/** Store message id (for optimistic update) */

@@ -283,7 +283,7 @@ export interface DropdownMenuSection<T = unknown> {
 	items: DropdownMenuItem<T>[];
 }
 
-export interface DropdownKeyHints {
+interface DropdownKeyHints {
 	navigate?: boolean;
 	select?: boolean;
 	rename?: boolean;

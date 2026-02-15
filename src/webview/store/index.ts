@@ -7,29 +7,16 @@
 // Base stores (use sparingly - prefer selectors)
 export {
 	type ChatSession,
-	type ChatState,
 	type Message,
-	type MessageInput,
 	useChatStore,
 } from './chatStore';
 // Optimized selectors (preferred)
 export * from './selectors';
-export {
-	type Access,
-	type MCPServersMap,
-	type PlatformInfo,
-	type SettingsState,
-	useSettingsStore,
-} from './settingsStore';
+export { useSettingsStore } from './settingsStore';
 export {
 	type ChangedFile,
 	type CommitInfo,
 	type ConversationIndexEntry,
-	type ModalType,
-	type TotalStats,
-	type TransientNotification,
-	type TransientNotificationInput,
-	type UIState,
 	useUIStore,
 	type WorkspaceFile,
 } from './uiStore';

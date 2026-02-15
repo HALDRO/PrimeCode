@@ -8,9 +8,9 @@ import { useCallback } from 'react';
 import { useChatActions } from '../store';
 import { useSessionMessage } from '../utils/vscode';
 
-export type AccessResponseType = 'once' | 'always' | 'reject';
+type AccessResponseType = 'once' | 'always' | 'reject';
 
-export interface UseAccessResponseOptions {
+interface UseAccessResponseOptions {
 	requestId: string;
 	tool: string;
 	messageId?: string;

@@ -22,7 +22,7 @@ import { vscode } from './vscode';
 // Types
 // ----------------------------------------------------------------------
 
-export interface MarkdownProps {
+interface MarkdownProps {
 	content: string;
 	className?: string;
 }

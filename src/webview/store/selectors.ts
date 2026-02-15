@@ -190,9 +190,6 @@ export const useAccessRequestByToolUseId = (toolUseId: string | undefined) =>
 
 export const useActiveModal = () => useUIStore((state: UIState) => state.activeModal);
 
-export const useWorkspaceFiles = () =>
-	useUIStore(useShallow((state: UIState) => state.workspaceFiles));
-
 export const useFilePickerState = () =>
 	useUIStore(
 		useShallow((state: UIState) => ({
@@ -302,10 +299,6 @@ export const useModelContextWindow = () =>
 		if (STANDARD_MODEL_CONTEXT[selectedModel]) return STANDARD_MODEL_CONTEXT[selectedModel];
 		return DEFAULT_CONTEXT_WINDOW;
 	});
-
-/** Latest transient notification (top overlay) */
-export const useLatestNotification = () =>
-	useUIStore((state: UIState) => state.notifications[0] ?? null);
 
 /** All transient notifications (top overlay) */
 export const useTransientNotifications = () =>

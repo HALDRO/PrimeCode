@@ -163,5 +163,3 @@ export class AgentsSkillsService extends BaseAgentResourceService<ParsedSkill> {
 		return count;
 	}
 }
-
-export const agentsSkillsService = new AgentsSkillsService();

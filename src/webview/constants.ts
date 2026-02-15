@@ -24,7 +24,7 @@ export interface CommandItem {
 
 export type SettingsTab = 'main' | 'agents' | 'permissions' | 'mcp';
 
-export interface NavItem {
+interface NavItem {
 	id: SettingsTab;
 	label: string;
 	iconName: 'settings' | 'server' | 'shield' | 'book' | 'sparkles' | 'plug' | 'key' | 'agents';
@@ -82,72 +82,9 @@ export const NON_GROUPABLE_TOOLS = [
 ] as const;
 
 /**
- * File edit tools that show diff view.
- * Tool names may come in different casings depending on source adapters.
- */
-export const FILE_EDIT_TOOLS = [
-	'Edit',
-	'Write',
-	'MultiEdit',
-	'Patch',
-	'edit',
-	'write',
-	'multiedit',
-	'patch',
-] as const;
-
-/**
- * Tools with collapsible output (Grep, Glob, LS, Serena listing tools).
- * Tool names may come in different casings depending on source adapters.
- */
-export const COLLAPSIBLE_OUTPUT_TOOLS = [
-	'Grep',
-	'Glob',
-	'LS',
-	'grep',
-	'glob',
-	'ls',
-	'Serena_list_dir',
-	'serena_list_dir',
-] as const;
-
-/**
- * "Think" tools - agent reasoning/reflection tools (e.g., Serena think_about_*)
- * These display collapsible thought content
- */
-export const THINK_TOOLS_PATTERN = 'think_about' as const;
-
-/**
- * Check if a tool is a "think" tool (agent reasoning)
- */
-export const isThinkTool = (toolName: string): boolean =>
-	toolName.toLowerCase().includes(THINK_TOOLS_PATTERN);
-
-/**
- * Search/read tools that don't modify files.
- * Tool names may come in different casings depending on source adapters.
- */
-export const SEARCH_TOOLS = ['Read', 'Grep', 'Glob', 'LS', 'read', 'grep', 'glob', 'ls'] as const;
-
-/**
- * Action tools that modify files or execute commands.
- * Tool names may come in different casings depending on source adapters.
- */
-export const ACTION_TOOLS = [
-	'Edit',
-	'Write',
-	'Bash',
-	'MultiEdit',
-	'edit',
-	'write',
-	'bash',
-	'multiedit',
-] as const;
-
-/**
  * Normalize tool name to lowercase for comparison
  */
-export const normalizeToolName = (toolName: string | undefined): string =>
+const normalizeToolName = (toolName: string | undefined): string =>
 	toolName ? toolName.toLowerCase() : '';
 
 /**
@@ -166,16 +103,6 @@ export const isToolInList = (toolName: string | undefined, list: readonly string
 	const normalized = normalizeToolName(toolName);
 	return list.some(t => normalizeToolName(t) === normalized);
 };
-
-/**
- * Capitalize first letter of each word in tool name for display
- */
-export const formatToolNameForDisplay = (toolName: string): string =>
-	toolName
-		.replace(/([a-z])([A-Z])/g, '$1 $2')
-		.split(/[\s_-]+/)
-		.map(w => w.charAt(0).toUpperCase() + w.slice(1))
-		.join(' ');
 
 /**
  * Check if tool is an MCP tool based on naming conventions:
@@ -213,16 +140,6 @@ export const isMcpTool = (toolName: string | undefined, mcpServerNames?: string[
 // UI Configuration
 // ============================================================================
 
-/**
- * Default preview line count for collapsible content
- */
-export const PREVIEW_LINE_COUNT = 6;
-
-/**
- * Default thinking preview length in characters
- */
-export const THINKING_PREVIEW_LENGTH = 100;
-
 // ============================================================================
 // Timeout Configuration
 // ============================================================================
@@ -232,47 +149,5 @@ export const THINKING_PREVIEW_LENGTH = 100;
  * All timeouts are in milliseconds.
  * Re-exports from @shared to maintain synchronization with extension backend.
  */
-export { TIMEOUTS } from '../common/constants';
 
-/**
- * Language mapping for Monaco editor based on file extension
- */
-export const LANGUAGE_MAP: Record<string, string> = {
-	ts: 'typescript',
-	tsx: 'typescript',
-	js: 'javascript',
-	jsx: 'javascript',
-	py: 'python',
-	rb: 'ruby',
-	java: 'java',
-	go: 'go',
-	rs: 'rust',
-	cpp: 'cpp',
-	c: 'c',
-	cs: 'csharp',
-	php: 'php',
-	swift: 'swift',
-	kt: 'kotlin',
-	html: 'html',
-	css: 'css',
-	scss: 'scss',
-	json: 'json',
-	xml: 'xml',
-	yaml: 'yaml',
-	yml: 'yaml',
-	md: 'markdown',
-	sql: 'sql',
-	sh: 'shell',
-	bash: 'shell',
-};
-
-/**
- * Get language identifier for Monaco editor from file path
- */
-export const getLanguageFromPath = (filePath?: string): string => {
-	if (!filePath) {
-		return 'plaintext';
-	}
-	const ext = filePath.split('.').pop()?.toLowerCase();
-	return LANGUAGE_MAP[ext || ''] || 'plaintext';
-};
+// (intentionally no re-exports here; import TIMEOUTS from src/common/constants)

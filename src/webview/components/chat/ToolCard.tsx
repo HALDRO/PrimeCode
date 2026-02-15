@@ -15,7 +15,7 @@ import { formatToolName } from '../../utils/format';
 import { useVSCode } from '../../utils/vscode';
 import { ChevronDownIcon, CopyIcon, McpIcon, TerminalIcon, WandIcon } from '../icons';
 import { FileTypeIcon } from '../icons/FileTypeIcon';
-import { Button, IconButton, Tooltip } from '../ui';
+import { Button, CollapseOverlay, IconButton, Tooltip } from '../ui';
 import { AccessGate } from './AccessGate';
 import {
 	computeSimpleStats,
@@ -25,10 +25,10 @@ import {
 } from './SimpleDiff';
 import { InlineToolLine } from './SimpleTool';
 
-export const TOOL_CARD_CLASSES =
+const TOOL_CARD_CLASSES =
 	'bg-(--tool-bg-header) border border-(--tool-border-color) rounded-lg overflow-hidden';
 
-export const TOOL_CARD_HEADER_CLASSES =
+const TOOL_CARD_HEADER_CLASSES =
 	'flex items-center justify-between w-full h-(--tool-header-height) px-(--tool-header-padding) bg-(--tool-bg-header) select-none';
 
 const DEFAULT_TEXT_PREVIEW_LINES = 6;
@@ -57,12 +57,17 @@ const ToolCardLeadingIcon: React.FC<{ children: ReactNode; className?: string }>
 	</span>
 );
 
-export interface ToolCardProps {
+interface ToolCardProps {
 	headerLeft: ReactNode;
 	headerRight?: ReactNode;
 	body?: ReactNode;
 	isCollapsible?: boolean;
 	expanded?: boolean;
+	/**
+	 * Controls whether the bottom collapse overlay is allowed to appear.
+	 * Useful for “preview” modes where the card is open but should not show the overlay.
+	 */
+	showCollapseOverlay?: boolean;
 	onToggle?: () => void;
 	className?: string;
 }
@@ -73,6 +78,7 @@ export const ToolCard: React.FC<ToolCardProps> = ({
 	body,
 	isCollapsible = false,
 	expanded = false,
+	showCollapseOverlay = true,
 	onToggle,
 	className,
 }) => {
@@ -119,7 +125,14 @@ export const ToolCard: React.FC<ToolCardProps> = ({
 				</div>
 				<div className="flex items-center gap-1.5 shrink-0 ml-auto">{headerRight}</div>
 			</div>
-			{body}
+			{body && (
+				<div className="relative">
+					{body}
+					{canToggle && showCollapseOverlay && (
+						<CollapseOverlay visible={expanded} onCollapse={onToggle as () => void} />
+					)}
+				</div>
+			)}
 		</div>
 	);
 };
@@ -251,7 +264,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 							</Button>
 						}
 						isCollapsible={needsExpand || Boolean(showAccessGate)}
-						expanded={diffExpanded || Boolean(showAccessGate)}
+						expanded={diffExpanded}
 						onToggle={() => setDiffExpanded(prev => !prev)}
 						body={
 							<div className="relative">
@@ -373,7 +386,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 				isCollapsible={
 					(needsExpand && hasBody) || Boolean(showAccessGate) || Boolean(showAccessStatus)
 				}
-				expanded={expanded || Boolean(showAccessGate)}
+				expanded={expanded}
 				onToggle={() => setExpanded(prev => !prev)}
 				body={
 					hasBody || showAccessGate || showAccessStatus ? (
@@ -418,31 +431,3 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 );
 
 ToolCardMessage.displayName = 'ToolCardMessage';
-
-export const ToolCardGroup: React.FC<{ messages: WebviewMessage[] }> = ({ messages }) => {
-	const toolUseMessages = useMemo(
-		() => messages.filter(m => m.type === 'tool_use') as ToolUse[],
-		[messages],
-	);
-	const localToolResults = useMemo(() => {
-		const results: Record<string, ToolResult | undefined> = {};
-		for (const msg of messages) {
-			if (msg.type === 'tool_result' && msg.toolUseId) {
-				results[msg.toolUseId] = msg as ToolResult;
-			}
-		}
-		return results;
-	}, [messages]);
-
-	if (toolUseMessages.length === 0) return null;
-
-	return (
-		<>
-			{toolUseMessages.map(msg => (
-				<div key={msg.id} className="mb-(--tool-block-margin)">
-					<ToolCardMessage message={msg} toolResult={localToolResults[msg.toolUseId]} />
-				</div>
-			))}
-		</>
-	);
-};

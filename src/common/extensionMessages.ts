@@ -282,26 +282,6 @@ export interface SessionLifecycleMessage {
 }
 
 // =============================================================================
-// Helper Type Guards
-// =============================================================================
-
-export function isSessionEventMessage(message: unknown): message is SessionEventMessage {
-	return (
-		typeof message === 'object' &&
-		message !== null &&
-		(message as { type?: string }).type === 'session_event'
-	);
-}
-
-export function isSessionLifecycleMessage(message: unknown): message is SessionLifecycleMessage {
-	return (
-		typeof message === 'object' &&
-		message !== null &&
-		(message as { type?: string }).type === 'session_lifecycle'
-	);
-}
-
-// =============================================================================
 // Tool Data Interfaces (used by SessionMessageData)
 // =============================================================================
 

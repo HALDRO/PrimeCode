@@ -860,5 +860,3 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 		},
 	},
 }));
-
-export const useSettingsActions = () => useSettingsStore(state => state.actions);

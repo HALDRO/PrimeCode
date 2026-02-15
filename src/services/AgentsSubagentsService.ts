@@ -11,7 +11,7 @@ import { PATHS } from '../common/constants';
 import { stringifyFrontmatter } from '../utils/frontmatter';
 import { BaseAgentResourceService } from './BaseAgentResourceService';
 
-export interface ParsedSubagent {
+interface ParsedSubagent {
 	name: string;
 	description: string;
 	prompt: string;
@@ -113,5 +113,3 @@ export class AgentsSubagentsService extends BaseAgentResourceService<ParsedSubag
 		return { synced };
 	}
 }
-
-export const agentsSubagentsService = new AgentsSubagentsService();

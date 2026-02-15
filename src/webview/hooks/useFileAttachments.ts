@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useVSCode } from '../utils/vscode';
 
-export interface CodeSnippet {
+interface CodeSnippet {
 	id: string;
 	filePath: string;
 	startLine: number;
@@ -16,7 +16,7 @@ export interface CodeSnippet {
 	content: string;
 }
 
-export interface AttachedImage {
+interface AttachedImage {
 	id: string;
 	name: string;
 	dataUrl: string;
@@ -24,7 +24,7 @@ export interface AttachedImage {
 	path?: string;
 }
 
-export interface UseFileAttachmentsOptions {
+interface UseFileAttachmentsOptions {
 	initialFiles?: string[];
 	initialCodeSnippets?: Array<{
 		filePath: string;

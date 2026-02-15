@@ -10,7 +10,7 @@ import { cn } from '../../lib/cn';
 import { FileTypeIcon, SmallCloseIcon } from '../icons';
 import { Tooltip } from './Tooltip';
 
-export interface PathChipProps {
+interface PathChipProps {
 	path: string;
 	/** Override displayed label (default: leaf name of `path`) */
 	label?: string;

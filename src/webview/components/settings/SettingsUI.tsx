@@ -318,44 +318,6 @@ export const ModelItem: React.FC<ModelItemProps> = ({ name, id, children }) => (
 );
 
 // =============================================================================
-// Status Indicator - Colored dot with optional text
-// =============================================================================
-
-interface StatusIndicatorProps {
-	status: 'loading' | 'success' | 'error' | 'idle';
-	text?: string;
-	className?: string;
-}
-
-export const SettingsStatusIndicator: React.FC<StatusIndicatorProps> = ({
-	status,
-	text,
-	className,
-}) => {
-	const colorMap = {
-		loading: 'var(--vscode-descriptionForeground)',
-		success: 'var(--vscode-editorGutter-addedBackground)',
-		error: 'var(--vscode-errorForeground)',
-		idle: 'var(--vscode-descriptionForeground)',
-	};
-
-	const color = colorMap[status];
-
-	return (
-		<span className={cn('font-medium flex items-center gap-1', className)} style={{ color }}>
-			{status === 'loading' ? (
-				<RefreshIcon size={10} className="animate-spin" />
-			) : status === 'success' ? (
-				<CheckCircleIcon size={10} />
-			) : status === 'error' ? (
-				<AlertCircleIcon size={10} />
-			) : null}
-			{text && <span>{text}</span>}
-		</span>
-	);
-};
-
-// =============================================================================
 // Badge - Small label tag
 // =============================================================================
 
@@ -383,26 +345,6 @@ export const SettingsBadge: React.FC<SettingsBadgeProps> = ({
 		</span>
 	);
 };
-
-// =============================================================================
-// Error Box - Error message container
-// =============================================================================
-
-interface ErrorBoxProps {
-	children: React.ReactNode;
-	className?: string;
-}
-
-export const ErrorBox: React.FC<ErrorBoxProps> = ({ children, className }) => (
-	<div
-		className={cn(
-			'mx-2.5 mb-1.5 p-1.5 bg-vscode-errorForeground/10 border border-vscode-errorForeground/20 rounded text-xs text-vscode-errorForeground',
-			className,
-		)}
-	>
-		{children}
-	</div>
-);
 
 // =============================================================================
 // Empty State - Placeholder for empty lists

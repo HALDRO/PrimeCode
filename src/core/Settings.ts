@@ -44,7 +44,7 @@ export interface PrimeCodeSettings {
 	'promptImprove.timeoutMs'?: number;
 }
 
-export interface AgentsConfig {
+interface AgentsConfig {
 	commands: unknown[];
 	skills: unknown[];
 	hooks: unknown[];
@@ -52,7 +52,7 @@ export interface AgentsConfig {
 	rules: unknown[];
 }
 
-export interface McpConfig {
+interface McpConfig {
 	mcpServers: Record<string, unknown>;
 }
 

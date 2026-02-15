@@ -46,7 +46,7 @@ export class SessionState implements ISessionState {
 
 // ─── Session Graph ───────────────────────────────────────────────────────────
 
-export interface ChildSessionEntry {
+interface ChildSessionEntry {
 	childSessionId: string;
 	parentSessionId: string;
 	/** The tool_use ID of the `task` call that spawned this child. */

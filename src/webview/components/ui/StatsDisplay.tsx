@@ -23,7 +23,7 @@ export interface StatItem {
 	onClick?: () => void;
 }
 
-export interface StatsDisplayProps {
+interface StatsDisplayProps {
 	items: StatItem[];
 	mode?: 'message' | 'panel' | 'footer' | 'tooltip';
 	style?: CSSProperties;

@@ -26,6 +26,22 @@
 		"test:vscode": "vscode-test",
 		"dead-code": "knip --include exports,types,duplicates"
 	},
+	"knip": {
+		"entry": [
+			"src/extension.ts",
+			"src/webview/dev/main.tsx",
+			"src/**/*.test.ts",
+			"tests/**/*.ts"
+		],
+		"project": [
+			"src/**/*.{ts,tsx}",
+			"tests/**/*.ts"
+		],
+		"ignore": [
+			"docs/**",
+			"out/**"
+		]
+	},
 	"dependencies": {
 		"@floating-ui/react": "^0.27.16",
 		"@modelcontextprotocol/sdk": "^1.25.1",

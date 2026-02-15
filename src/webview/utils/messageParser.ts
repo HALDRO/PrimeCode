@@ -4,14 +4,14 @@
  *              Used by both ChatInput (for syntax highlighting) and UserMessage (for display).
  */
 
-export interface MessageHighlight {
+interface MessageHighlight {
 	start: number;
 	end: number;
 	content: string;
 	type: 'command' | 'subagent';
 }
 
-export interface TextSegment {
+interface TextSegment {
 	content: string;
 	type: 'text' | 'command' | 'subagent';
 }

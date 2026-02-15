@@ -14,7 +14,7 @@ import { EXCLUDE_PATTERNS } from '../common/constants';
 import { logger } from '../utils/logger';
 import { getBinPath } from './ripgrep';
 
-export interface FileSearchResult {
+interface FileSearchResult {
 	path: string;
 	type: 'file' | 'folder';
 	label: string;

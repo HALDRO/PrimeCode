@@ -273,5 +273,3 @@ export const NotificationOverlay: React.FC = () => {
 		</div>
 	);
 };
-
-export default NotificationOverlay;

@@ -56,5 +56,3 @@ export class AgentsHooksService extends BaseAgentResourceService<ParsedHook> {
 		};
 	}
 }
-
-export const agentsHooksService = new AgentsHooksService();

@@ -25,7 +25,7 @@ export const TIMEOUTS = {
 export const OPENAI_COMPATIBLE_PROVIDER_ID = 'oai' as const;
 
 /** Providers that are built-in and must not be disconnected from UI. */
-export const NON_DISCONNECTABLE_PROVIDER_IDS = ['opencode', 'opencode-zen', 'zen'] as const;
+const NON_DISCONNECTABLE_PROVIDER_IDS = ['opencode', 'opencode-zen', 'zen'] as const;
 
 export type NonDisconnectableProviderId = (typeof NON_DISCONNECTABLE_PROVIDER_IDS)[number];
 

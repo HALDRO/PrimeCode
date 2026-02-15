@@ -36,7 +36,7 @@ const CONFIG_VERSION = 1;
 /**
  * Convert AgentsMcpServer to UnifiedMcpServer format
  */
-export function agentsServerToUnified(server: AgentsMcpServer): UnifiedMcpServer {
+function agentsServerToUnified(server: AgentsMcpServer): UnifiedMcpServer {
 	if (server.type === 'stdio' && server.command) {
 		return {
 			enabled: server.enabled ?? true,
@@ -72,7 +72,7 @@ export function agentsServerToUnified(server: AgentsMcpServer): UnifiedMcpServer
 /**
  * Convert UnifiedMcpServer to AgentsMcpServer format
  */
-export function unifiedServerToAgents(server: UnifiedMcpServer): AgentsMcpServer {
+function unifiedServerToAgents(server: UnifiedMcpServer): AgentsMcpServer {
 	const transport = server.transport;
 
 	if (transport.type === 'stdio') {
@@ -157,7 +157,7 @@ export function agentsConfigToUnifiedRegistry(config: AgentsMcpConfig): UnifiedM
 /**
  * Convert UnifiedMcpRegistry to AgentsMcpConfig
  */
-export function unifiedRegistryToAgentsConfig(registry: UnifiedMcpRegistry): AgentsMcpConfig {
+function unifiedRegistryToAgentsConfig(registry: UnifiedMcpRegistry): AgentsMcpConfig {
 	const servers: Record<string, AgentsMcpServer> = {};
 	for (const [name, server] of Object.entries(registry)) {
 		servers[name] = unifiedServerToAgents(server);

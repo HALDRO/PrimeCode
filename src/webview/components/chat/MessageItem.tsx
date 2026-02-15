@@ -34,7 +34,7 @@ import {
 } from './SimpleTool';
 import { ToolCard, ToolCardMessage } from './ToolCard';
 
-export interface MessageItemContext {
+interface MessageItemContext {
 	isProcessing: boolean;
 	totalSections: number;
 }
@@ -195,6 +195,7 @@ const SubtaskItem: React.FC<{
 			}
 			isCollapsible
 			expanded={expandState !== 'collapsed'}
+			showCollapseOverlay={expandState === 'expanded'}
 			onToggle={cycleExpand}
 			className="my-2"
 			body={
@@ -227,7 +228,9 @@ const SubtaskItem: React.FC<{
 									key={key}
 									item={child}
 									ctx={ctx}
-									collapseGroupedTools={Array.isArray(child) || shouldCollapseGroupedItem(groupedChildren, idx)}
+									collapseGroupedTools={
+										Array.isArray(child) || shouldCollapseGroupedItem(groupedChildren, idx)
+									}
 								/>
 							);
 						})}
