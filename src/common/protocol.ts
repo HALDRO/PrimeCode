@@ -418,7 +418,7 @@ export type ClipboardContextNotFoundMessage = BaseExtensionMessage<
 	'clipboardContextNotFound',
 	never
 > & {
-	text: string;
+	text?: string;
 };
 
 // =============================================================================

@@ -86,7 +86,7 @@ export class SseHandler implements WebviewMessageHandler {
 					while (true) {
 						const { done, value } = await reader.read();
 						if (done) {
-							this.context.view.postMessage({ type: 'sseClosed', data: { id } });
+							this.context.bridge.data('sseClosed', { id });
 							this.connections.delete(id);
 							break;
 						}
@@ -101,10 +101,7 @@ export class SseHandler implements WebviewMessageHandler {
 							for (const line of lines) {
 								if (line.startsWith('data: ')) {
 									const data = line.slice(6);
-									this.context.view.postMessage({
-										type: 'sseEvent',
-										data: { id, data },
-									});
+									this.context.bridge.data('sseEvent', { id, data });
 								}
 							}
 						}
@@ -143,10 +140,7 @@ export class SseHandler implements WebviewMessageHandler {
 	}
 
 	private sendError(id: string, error: string) {
-		this.context.view.postMessage({
-			type: 'sseError',
-			data: { id, error },
-		});
+		this.context.bridge.data('sseError', { id, error });
 	}
 
 	dispose() {

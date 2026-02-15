@@ -1,15 +1,17 @@
 import type * as vscode from 'vscode';
 import type { WebviewCommand } from '../../common/protocol';
-import type { ISessionState, ISettings, IView } from '../../core/contracts';
+import type { ISessionState, ISettings } from '../../core/contracts';
 import type { OpenCodeExecutor } from '../../core/executor/OpenCode';
 import type { ServiceRegistry } from '../../core/ServiceRegistry';
 import type { SessionGraph } from '../../core/SessionManager';
+import type { OutboundBridge } from '../../transport/OutboundBridge';
 
 export interface HandlerContext {
 	extensionContext: vscode.ExtensionContext;
 	settings: ISettings;
 	cli: OpenCodeExecutor;
-	view: IView;
+	/** Typed outbound bridge for sending messages to webview. */
+	bridge: OutboundBridge;
 	sessionState: ISessionState;
 	services: ServiceRegistry;
 	/** Unified parent↔child session graph. Shared between ChatProvider and all handlers. */

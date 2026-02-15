@@ -173,7 +173,7 @@ export class FileHandler implements WebviewMessageHandler {
 		const name = maybeName || fileUri.path.split('/').pop() || 'image';
 		const id = maybeId || `img-${Date.now()}-${name}`;
 
-		this.context.view.postMessage({
+		this.context.bridge.send({
 			type: 'imageData',
 			id,
 			name,
@@ -185,14 +185,14 @@ export class FileHandler implements WebviewMessageHandler {
 	private async onGetClipboardContext(msg: CommandOf<'getClipboardContext'>): Promise<void> {
 		const { text } = msg;
 		if (!text) {
-			this.context.view.postMessage({ type: 'clipboardContextNotFound', data: {} });
+			this.context.bridge.send({ type: 'clipboardContextNotFound', text: '' });
 			return;
 		}
 		const ctx = this.clipboardContextService.getContextForText(text);
 		if (!ctx) {
-			this.context.view.postMessage({ type: 'clipboardContextNotFound', data: {} });
+			this.context.bridge.send({ type: 'clipboardContextNotFound', text });
 			return;
 		}
-		this.context.view.postMessage({ type: 'clipboardContext', data: ctx });
+		this.context.bridge.send({ type: 'clipboardContext', ...ctx });
 	}
 }

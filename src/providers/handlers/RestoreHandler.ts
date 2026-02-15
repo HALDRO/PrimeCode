@@ -8,7 +8,7 @@
  */
 
 import * as vscode from 'vscode';
-import type { CommandOf, SessionEventMessage, WebviewCommand } from '../../common/protocol';
+import type { CommandOf, WebviewCommand } from '../../common/protocol';
 import { logger } from '../../utils/logger';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
@@ -154,40 +154,24 @@ export class RestoreHandler implements WebviewMessageHandler {
 		sessionId: string,
 		opts: { canUnrevert: boolean; revertedFromMessageId?: string },
 	): void {
-		this.context.view.postMessage({
-			type: 'session_event',
-			targetId: sessionId,
-			eventType: 'restore',
-			payload: {
-				eventType: 'restore',
-				action: 'success',
-				canUnrevert: opts.canUnrevert,
-				revertedFromMessageId: opts.revertedFromMessageId,
-			},
-			timestamp: Date.now(),
-			sessionId,
-		} satisfies SessionEventMessage);
+		this.context.bridge.session.restore(sessionId, {
+			action: 'success',
+			canUnrevert: opts.canUnrevert,
+			revertedFromMessageId: opts.revertedFromMessageId,
+		});
 	}
 
 	private notifyUnrevertAvailable(sessionId: string, available: boolean): void {
-		this.context.view.postMessage({
-			type: 'session_event',
-			targetId: sessionId,
-			eventType: 'restore',
-			payload: { eventType: 'restore', action: 'unrevert_available', available },
-			timestamp: Date.now(),
-			sessionId,
-		} satisfies SessionEventMessage);
+		this.context.bridge.session.restore(sessionId, {
+			action: 'unrevert_available',
+			available,
+		});
 	}
 
 	private notifyError(sessionId: string, message: string): void {
-		this.context.view.postMessage({
-			type: 'session_event',
-			targetId: sessionId,
-			eventType: 'restore',
-			payload: { eventType: 'restore', action: 'error', message },
-			timestamp: Date.now(),
-			sessionId,
-		} as SessionEventMessage);
+		this.context.bridge.session.restore(sessionId, {
+			action: 'error',
+			message,
+		});
 	}
 }

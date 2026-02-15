@@ -75,36 +75,31 @@ export class ProviderHandler implements WebviewMessageHandler {
 	private async restoreSelectedModel(): Promise<void> {
 		const savedModel = await this.readSelectedModel();
 		if (!savedModel) return;
-		this.context.view.postMessage({ type: 'openCodeModelSet', data: { model: savedModel } });
+		this.context.bridge.data('openCodeModelSet', { model: savedModel });
 	}
 
 	private async onCheckOpenCodeStatus(): Promise<void> {
 		const info = this.context.cli.getOpenCodeServerInfo();
 		if (!info) {
-			this.context.view.postMessage({
-				type: 'openCodeStatus',
-				data: { installed: false, version: null, error: 'OpenCode server not running' },
+			this.context.bridge.data('openCodeStatus', {
+				installed: false,
+				version: null,
+				error: 'OpenCode server not running',
 			});
 			return;
 		}
 
 		// Version detection is intentionally omitted (depends on CLI/server implementation).
-		this.context.view.postMessage({
-			type: 'openCodeStatus',
-			data: { installed: true, version: null },
-		});
+		this.context.bridge.data('openCodeStatus', { installed: true, version: null });
 	}
 
 	private async onLoadOpenCodeProviders(): Promise<void> {
 		try {
 			const sdkClient = this.context.cli.getSdkClient();
 			if (!sdkClient) {
-				this.context.view.postMessage({
-					type: 'openCodeProviders',
-					data: {
-						providers: [],
-						config: { isLoading: false, error: 'OpenCode server not running' },
-					},
+				this.context.bridge.data('openCodeProviders', {
+					providers: [],
+					config: { isLoading: false, error: 'OpenCode server not running' },
 				});
 				return;
 			}
@@ -113,15 +108,12 @@ export class ProviderHandler implements WebviewMessageHandler {
 				sdkClient,
 			)) as OpenCodeProviderData[];
 
-			this.context.view.postMessage({
-				type: 'openCodeProviders',
-				data: { providers, config: { isLoading: false } },
-			});
+			this.context.bridge.data('openCodeProviders', { providers, config: { isLoading: false } });
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);
-			this.context.view.postMessage({
-				type: 'openCodeProviders',
-				data: { providers: [], config: { isLoading: false, error: msg } },
+			this.context.bridge.data('openCodeProviders', {
+				providers: [],
+				config: { isLoading: false, error: msg },
 			});
 		}
 	}
@@ -130,15 +122,15 @@ export class ProviderHandler implements WebviewMessageHandler {
 		try {
 			const sdkClient = this.context.cli.getSdkClient();
 			if (!sdkClient) {
-				this.context.view.postMessage({ type: 'availableProviders', data: { providers: [] } });
+				this.context.bridge.data('availableProviders', { providers: [] });
 				return;
 			}
 
 			const providers = await this.context.services.openCodeClient.getAvailableProviders(sdkClient);
 
-			this.context.view.postMessage({ type: 'availableProviders', data: { providers } });
+			this.context.bridge.data('availableProviders', { providers });
 		} catch {
-			this.context.view.postMessage({ type: 'availableProviders', data: { providers: [] } });
+			this.context.bridge.data('availableProviders', { providers: [] });
 		}
 	}
 
@@ -147,41 +139,34 @@ export class ProviderHandler implements WebviewMessageHandler {
 	): Promise<void> {
 		const { providerId, apiKey } = msg;
 		if (!providerId || !apiKey) {
-			this.context.view.postMessage({
-				type: 'openCodeAuthResult',
-				data: { success: false, error: 'Missing providerId or apiKey', providerId },
+			this.context.bridge.data('openCodeAuthResult', {
+				success: false,
+				error: 'Missing providerId or apiKey',
+				providerId,
 			});
 			return;
 		}
 
-		this.context.view.postMessage({
-			type: 'openCodeAuthResult',
-			data: { success: false, providerId, isLoading: true },
-		});
+		this.context.bridge.data('openCodeAuthResult', { success: false, providerId, isLoading: true });
 
 		try {
 			const sdkClient = this.context.cli.getSdkClient();
 			if (!sdkClient) {
-				this.context.view.postMessage({
-					type: 'openCodeAuthResult',
-					data: { success: false, error: 'OpenCode server not running', providerId },
+				this.context.bridge.data('openCodeAuthResult', {
+					success: false,
+					error: 'OpenCode server not running',
+					providerId,
 				});
 				return;
 			}
 
 			await this.context.services.openCodeClient.setProviderAuth(sdkClient, providerId, apiKey);
 
-			this.context.view.postMessage({
-				type: 'openCodeAuthResult',
-				data: { success: true, providerId },
-			});
+			this.context.bridge.data('openCodeAuthResult', { success: true, providerId });
 			await this.onReloadAllProviders();
 		} catch (error) {
 			const err = error instanceof Error ? error.message : String(error);
-			this.context.view.postMessage({
-				type: 'openCodeAuthResult',
-				data: { success: false, error: err, providerId },
-			});
+			this.context.bridge.data('openCodeAuthResult', { success: false, error: err, providerId });
 		}
 	}
 
@@ -190,9 +175,10 @@ export class ProviderHandler implements WebviewMessageHandler {
 	): Promise<void> {
 		const { providerId } = msg;
 		if (!providerId) {
-			this.context.view.postMessage({
-				type: 'openCodeDisconnectResult',
-				data: { success: false, error: 'Missing providerId', providerId },
+			this.context.bridge.data('openCodeDisconnectResult', {
+				success: false,
+				error: 'Missing providerId',
+				providerId,
 			});
 			return;
 		}
@@ -200,9 +186,10 @@ export class ProviderHandler implements WebviewMessageHandler {
 		try {
 			const info = this.context.cli.getOpenCodeServerInfo();
 			if (!info) {
-				this.context.view.postMessage({
-					type: 'openCodeDisconnectResult',
-					data: { success: false, error: 'OpenCode server not running', providerId },
+				this.context.bridge.data('openCodeDisconnectResult', {
+					success: false,
+					error: 'OpenCode server not running',
+					providerId,
 				});
 				return;
 			}
@@ -214,19 +201,17 @@ export class ProviderHandler implements WebviewMessageHandler {
 			);
 			// Note: disconnectProvider still uses fetch (no SDK method for DELETE /auth/{id})
 
-			this.context.view.postMessage({
-				type: 'openCodeDisconnectResult',
-				data: { success: true, providerId },
-			});
+			this.context.bridge.data('openCodeDisconnectResult', { success: true, providerId });
 
 			// Let UI prune models for this provider.
-			this.context.view.postMessage({ type: 'removeOpenCodeProvider', data: { providerId } });
+			this.context.bridge.data('removeOpenCodeProvider', { providerId });
 			await this.onReloadAllProviders();
 		} catch (error) {
 			const err = error instanceof Error ? error.message : String(error);
-			this.context.view.postMessage({
-				type: 'openCodeDisconnectResult',
-				data: { success: false, error: err, providerId },
+			this.context.bridge.data('openCodeDisconnectResult', {
+				success: false,
+				error: err,
+				providerId,
 			});
 		}
 	}
@@ -235,7 +220,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 		const { model } = msg;
 		if (model) {
 			await this.context.extensionContext.globalState.update(this.getSelectedModelKey(), model);
-			this.context.view.postMessage({ type: 'openCodeModelSet', data: { model } });
+			this.context.bridge.data('openCodeModelSet', { model });
 		}
 	}
 
@@ -243,7 +228,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 		const { model } = msg;
 		if (model) {
 			await this.context.extensionContext.globalState.update(this.getSelectedModelKey(), model);
-			this.context.view.postMessage({ type: 'modelSelected', model });
+			this.context.bridge.send({ type: 'modelSelected', model });
 		}
 	}
 
@@ -264,9 +249,10 @@ export class ProviderHandler implements WebviewMessageHandler {
 		const apiKey = apiKeyRaw.trim();
 
 		if (!baseUrl || baseUrl === '/v1') {
-			this.context.view.postMessage({
-				type: 'proxyModels',
-				data: { enabled: false, models: [], error: 'Missing proxy baseUrl' },
+			this.context.bridge.data('proxyModels', {
+				enabled: false,
+				models: [],
+				error: 'Missing proxy baseUrl',
 			});
 			return;
 		}
@@ -277,14 +263,11 @@ export class ProviderHandler implements WebviewMessageHandler {
 		try {
 			url = new URL(`${baseUrl}/models`);
 		} catch {
-			this.context.view.postMessage({
-				type: 'proxyModels',
-				data: {
-					enabled: false,
-					models: [],
-					baseUrl,
-					error: 'Invalid proxy baseUrl',
-				},
+			this.context.bridge.data('proxyModels', {
+				enabled: false,
+				models: [],
+				baseUrl,
+				error: 'Invalid proxy baseUrl',
 			});
 			return;
 		}
@@ -301,14 +284,11 @@ export class ProviderHandler implements WebviewMessageHandler {
 			if (!response.ok) {
 				const bodyText = await response.text().catch(() => '');
 				const detail = bodyText ? `: ${bodyText.slice(0, 400)}` : '';
-				this.context.view.postMessage({
-					type: 'proxyModels',
-					data: {
-						enabled: false,
-						models: [],
-						baseUrl,
-						error: `Proxy models request failed (${response.status})${detail}`,
-					},
+				this.context.bridge.data('proxyModels', {
+					enabled: false,
+					models: [],
+					baseUrl,
+					error: `Proxy models request failed (${response.status})${detail}`,
 				});
 				return;
 			}
@@ -334,25 +314,19 @@ export class ProviderHandler implements WebviewMessageHandler {
 				.filter(m => m.id.length > 0);
 
 			if (models.length === 0) {
-				this.context.view.postMessage({
-					type: 'proxyModels',
-					data: {
-						enabled: false,
-						models: [],
-						baseUrl,
-						error: 'No models returned by proxy',
-					},
+				this.context.bridge.data('proxyModels', {
+					enabled: false,
+					models: [],
+					baseUrl,
+					error: 'No models returned by proxy',
 				});
 				return;
 			}
 
-			this.context.view.postMessage({
-				type: 'proxyModels',
-				data: {
-					enabled: true,
-					models,
-					baseUrl,
-				},
+			this.context.bridge.data('proxyModels', {
+				enabled: true,
+				models,
+				baseUrl,
 			});
 
 			// Sync oai provider config to project-level opencode.json
@@ -374,14 +348,11 @@ export class ProviderHandler implements WebviewMessageHandler {
 			}
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);
-			this.context.view.postMessage({
-				type: 'proxyModels',
-				data: {
-					enabled: false,
-					models: [],
-					baseUrl,
-					error: `Proxy models fetch failed: ${msg}`,
-				},
+			this.context.bridge.data('proxyModels', {
+				enabled: false,
+				models: [],
+				baseUrl,
+				error: `Proxy models fetch failed: ${msg}`,
 			});
 		}
 	}

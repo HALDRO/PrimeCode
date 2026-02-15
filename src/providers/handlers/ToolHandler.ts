@@ -1,4 +1,3 @@
-import type { SessionEventMessage } from '../../common';
 import type { CommandOf, PermissionPolicies, WebviewCommand } from '../../common/protocol';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
@@ -70,12 +69,12 @@ export class ToolHandler implements WebviewMessageHandler {
 					'primeCode.alwaysAllowByTool',
 					this.alwaysAllowByTool,
 				);
-				this.context.view.postMessage({
-					type: 'accessData',
-					data: Object.entries(this.alwaysAllowByTool)
+				this.context.bridge.data(
+					'accessData',
+					Object.entries(this.alwaysAllowByTool)
 						.filter(([, allow]) => allow)
 						.map(([t]) => ({ toolName: t, allowAll: true })),
-				});
+				);
 			}
 		}
 
@@ -87,28 +86,16 @@ export class ToolHandler implements WebviewMessageHandler {
 		});
 
 		if (targetSessionId) {
-			this.context.view.postMessage({
-				type: 'session_event',
-				targetId: targetSessionId,
-				eventType: 'access',
-				payload: {
-					eventType: 'access',
-					action: 'response',
-					requestId,
-					approved,
-					alwaysAllow,
-				},
-				timestamp: Date.now(),
-				sessionId: targetSessionId,
-			} satisfies SessionEventMessage);
+			this.context.bridge.session.accessResponse(targetSessionId, {
+				requestId,
+				approved,
+				alwaysAllow,
+			});
 		}
 	}
 
 	private async onGetPermissions(): Promise<void> {
-		this.context.view.postMessage({
-			type: 'permissionsUpdated',
-			data: { policies: { ...this.policies } },
-		});
+		this.context.bridge.permissionsUpdated({ ...this.policies });
 	}
 
 	private async onSetPermissions(msg: CommandOf<'setPermissions'>): Promise<void> {
@@ -122,38 +109,32 @@ export class ToolHandler implements WebviewMessageHandler {
 			}
 		}
 		await this.context.extensionContext.workspaceState.update(POLICIES_KEY, this.policies);
-		this.context.view.postMessage({
-			type: 'permissionsUpdated',
-			data: { policies: { ...this.policies } },
-		});
+		this.context.bridge.permissionsUpdated({ ...this.policies });
 	}
 
 	private async onCheckDiscoveryStatus(): Promise<void> {
 		// Best-effort discovery based on existing files/services.
-		this.context.view.postMessage({
-			type: 'discoveryStatus',
-			data: {
-				rules: {
-					hasAgentsMd: true,
-					ruleFiles: [],
-				},
-				permissions: {},
-				skills: [],
-				hooks: [],
+		this.context.bridge.data('discoveryStatus', {
+			rules: {
+				hasAgentsMd: true,
+				ruleFiles: [],
 			},
+			permissions: {},
+			skills: [],
+			hooks: [],
 		});
 	}
 
 	private async onGetAccess(): Promise<void> {
-		this.context.view.postMessage({
-			type: 'accessData',
-			data: Object.entries(this.alwaysAllowByTool)
+		this.context.bridge.data(
+			'accessData',
+			Object.entries(this.alwaysAllowByTool)
 				.filter(([, allow]) => allow)
 				.map(([toolName]) => ({ toolName, allowAll: true })),
-		});
+		);
 	}
 
 	private async onCheckCliDiagnostics(): Promise<void> {
-		this.context.view.postMessage({ type: 'cliDiagnostics', data: null });
+		this.context.bridge.data('cliDiagnostics', null);
 	}
 }

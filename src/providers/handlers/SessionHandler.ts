@@ -2,8 +2,6 @@ import * as vscode from 'vscode';
 import type {
 	ConversationIndexEntry,
 	OpenCodeProviderData,
-	SessionEventMessage,
-	SessionLifecycleMessage,
 	SessionMessageData,
 	TotalStats,
 } from '../../common';
@@ -104,15 +102,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			});
 		}
 
-		this.context.view.postMessage({
-			type: 'session_event',
-			targetId,
-			eventType: 'message',
-			payload: { eventType: 'message', message },
-			timestamp: Date.now(),
-			sessionId: targetId,
-			normalizedEntry: message.normalizedEntry,
-		} satisfies SessionEventMessage);
+		this.context.bridge.session.message(targetId, message);
 	}
 
 	public postStatus(
@@ -121,29 +111,13 @@ export class SessionHandler implements WebviewMessageHandler {
 		statusText?: string,
 	): void {
 		if (!sessionId) return;
-
-		this.context.view.postMessage({
-			type: 'session_event',
-			targetId: sessionId,
-			eventType: 'status',
-			payload: { eventType: 'status', status, statusText },
-			timestamp: Date.now(),
-			sessionId,
-		} satisfies SessionEventMessage);
+		this.context.bridge.session.status(sessionId, status, statusText);
 	}
 
 	public postComplete(partId: string, toolUseId?: string, sessionId?: string): void {
 		const targetId = sessionId || this.context.sessionState.activeSessionId;
 		if (!targetId) return;
-
-		this.context.view.postMessage({
-			type: 'session_event',
-			targetId,
-			eventType: 'complete',
-			payload: { eventType: 'complete', partId, toolUseId },
-			timestamp: Date.now(),
-			sessionId: targetId,
-		} satisfies SessionEventMessage);
+		this.context.bridge.session.complete(targetId, partId, toolUseId);
 	}
 
 	public postTurnTokens(
@@ -159,23 +133,7 @@ export class SessionHandler implements WebviewMessageHandler {
 	): void {
 		const targetId = sessionId || this.context.sessionState.activeSessionId;
 		if (!targetId) return;
-
-		this.context.view.postMessage({
-			type: 'session_event',
-			targetId,
-			eventType: 'turn_tokens',
-			payload: {
-				eventType: 'turn_tokens',
-				inputTokens: data.inputTokens,
-				outputTokens: data.outputTokens,
-				totalTokens: data.totalTokens,
-				cacheReadTokens: data.cacheReadTokens,
-				...(data.durationMs ? { durationMs: data.durationMs } : {}),
-				...(data.userMessageId ? { userMessageId: data.userMessageId } : {}),
-			},
-			timestamp: Date.now(),
-			sessionId: targetId,
-		} satisfies SessionEventMessage);
+		this.context.bridge.session.turnTokens(targetId, data);
 	}
 
 	public handleSessionUpdatedEvent(data: unknown, eventSessionId?: string): void {
@@ -215,24 +173,12 @@ export class SessionHandler implements WebviewMessageHandler {
 			}
 			this.postStatus(targetSessionId, 'idle', 'Ready');
 		} else if (status?.type === 'retry') {
-			this.context.view.postMessage({
-				type: 'session_event',
-				targetId: targetSessionId,
-				eventType: 'status',
-				payload: {
-					eventType: 'status',
-					status: 'retrying',
-					statusText: 'Retrying…',
-					retryInfo: {
-						attempt: typeof status.attempt === 'number' ? status.attempt : 1,
-						message: typeof status.message === 'string' ? status.message : 'Retrying…',
-						nextRetryAt:
-							typeof status.next === 'number' ? new Date(status.next).toISOString() : undefined,
-					},
-				},
-				timestamp: Date.now(),
-				sessionId: targetSessionId,
-			} satisfies SessionEventMessage);
+			this.context.bridge.session.status(targetSessionId, 'retrying', 'Retrying…', {
+				attempt: typeof status.attempt === 'number' ? status.attempt : 1,
+				message: typeof status.message === 'string' ? status.message : 'Retrying…',
+				nextRetryAt:
+					typeof status.next === 'number' ? new Date(status.next).toISOString() : undefined,
+			});
 		}
 
 		const totalStatsRecord = asRecord(record.totalStats);
@@ -284,17 +230,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			providerID: getStringProp(record, 'providerID'),
 		});
 
-		this.context.view.postMessage({
-			type: 'session_event',
-			targetId: targetSessionId,
-			eventType: 'session_info',
-			payload: {
-				eventType: 'session_info',
-				data: { sessionId: targetSessionId, tools: [], mcpServers: [] },
-			},
-			timestamp: Date.now(),
-			sessionId: targetSessionId,
-		} satisfies SessionEventMessage);
+		this.context.bridge.session.info(targetSessionId, [], []);
 	}
 
 	// =============================================================================
@@ -678,24 +614,16 @@ export class SessionHandler implements WebviewMessageHandler {
 					isOpenCode,
 				});
 
-				this.context.view.postMessage({
-					type: 'session_event',
-					targetId: activeId,
-					eventType: 'restore',
-					payload: {
-						eventType: 'restore',
-						action: 'add_commit',
-						commit: {
-							id: commitId,
-							sha: commitId,
-							message: `Checkpoint before message`,
-							timestamp: new Date().toISOString(),
-							associatedMessageId: userMessageId,
-						},
+				this.context.bridge.session.restore(activeId, {
+					action: 'add_commit',
+					commit: {
+						id: commitId,
+						sha: commitId,
+						message: 'Checkpoint before message',
+						timestamp: new Date().toISOString(),
+						associatedMessageId: userMessageId,
 					},
-					timestamp: Date.now(),
-					sessionId: activeId,
-				} satisfies SessionEventMessage);
+				});
 			}
 
 			this.postStatus(activeId, 'busy', 'Working...');
@@ -746,16 +674,10 @@ export class SessionHandler implements WebviewMessageHandler {
 				count: conversations.length,
 				titles: conversations.slice(0, 5).map(c => c.customTitle || c.firstUserMessage),
 			});
-			this.context.view.postMessage({
-				type: 'conversationList',
-				data: conversations,
-			});
+			this.context.bridge.data('conversationList', conversations);
 		} catch (error) {
 			logger.error('[SessionHandler] Failed to get conversation list:', error);
-			this.context.view.postMessage({
-				type: 'conversationList',
-				data: [],
-			});
+			this.context.bridge.data('conversationList', []);
 		}
 	}
 
@@ -891,24 +813,16 @@ export class SessionHandler implements WebviewMessageHandler {
 						isOpenCode: true,
 					});
 
-					this.context.view.postMessage({
-						type: 'session_event',
-						targetId: sessionId,
-						eventType: 'restore',
-						payload: {
-							eventType: 'restore',
-							action: 'add_commit',
-							commit: {
-								id: replayCommitId,
-								sha: replayCommitId,
-								message: 'Checkpoint before message',
-								timestamp: data.timestamp || new Date().toISOString(),
-								associatedMessageId: userMsgId,
-							},
+					this.context.bridge.session.restore(sessionId, {
+						action: 'add_commit',
+						commit: {
+							id: replayCommitId,
+							sha: replayCommitId,
+							message: 'Checkpoint before message',
+							timestamp: data.timestamp || new Date().toISOString(),
+							associatedMessageId: userMsgId,
 						},
-						timestamp: Date.now(),
-						sessionId,
-					} satisfies SessionEventMessage);
+					});
 				}
 				continue;
 			}
@@ -1023,22 +937,13 @@ export class SessionHandler implements WebviewMessageHandler {
 					const oldLines = oldContent ? String(oldContent).split('\n').length : 0;
 					const newLines = newContent ? String(newContent).split('\n').length : 0;
 
-					this.context.view.postMessage({
-						type: 'session_event',
-						targetId: sessionId,
-						eventType: 'file',
-						payload: {
-							eventType: 'file',
-							action: 'changed',
-							filePath: filePathFromInput,
-							fileName: filePathFromInput.split(/[/\\]/).pop() || filePathFromInput,
-							linesAdded: Math.max(0, newLines - oldLines),
-							linesRemoved: Math.max(0, oldLines - newLines),
-							toolUseId,
-						},
-						timestamp: Date.now(),
-						sessionId,
-					} satisfies SessionEventMessage);
+					this.context.bridge.session.fileChanged(sessionId, {
+						filePath: filePathFromInput,
+						fileName: filePathFromInput.split(/[/\\]/).pop() || filePathFromInput,
+						linesAdded: Math.max(0, newLines - oldLines),
+						linesRemoved: Math.max(0, oldLines - newLines),
+						toolUseId,
+					});
 				}
 
 				continue;
@@ -1187,9 +1092,9 @@ export class SessionHandler implements WebviewMessageHandler {
 
 		if (!text.trim() || !requestId) {
 			logger.warn('[ImprovePrompt] Missing text or requestId');
-			this.context.view.postMessage({
-				type: 'improvePromptError',
-				data: { requestId: requestId || '', error: 'Missing text or requestId' },
+			this.context.bridge.data('improvePromptError', {
+				requestId: requestId || '',
+				error: 'Missing text or requestId',
 			});
 			return;
 		}
@@ -1226,10 +1131,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			logger.info(
 				`[ImprovePrompt] Success: requestId=${requestId}, resultLen=${improvedText.length}`,
 			);
-			this.context.view.postMessage({
-				type: 'improvePromptResult',
-				data: { requestId, improvedText },
-			});
+			this.context.bridge.data('improvePromptResult', { requestId, improvedText });
 		} catch (error) {
 			if (this.improvePromptActiveRequestId !== requestId) return;
 
@@ -1238,10 +1140,10 @@ export class SessionHandler implements WebviewMessageHandler {
 			logger.error(
 				`[ImprovePrompt] ${aborted ? 'Aborted' : 'Error'}: requestId=${requestId}, error=${err}`,
 			);
-			this.context.view.postMessage({
-				type: aborted ? 'improvePromptCancelled' : 'improvePromptError',
-				data: aborted ? { requestId } : { requestId, error: err },
-			});
+			this.context.bridge.data(
+				aborted ? 'improvePromptCancelled' : 'improvePromptError',
+				aborted ? { requestId } : { requestId, error: err },
+			);
 		} finally {
 			clearTimeout(timeout);
 			if (this.improvePromptActiveRequestId === requestId) {
@@ -1261,10 +1163,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		this.improvePromptController = null;
 		this.improvePromptActiveRequestId = null;
 
-		this.context.view.postMessage({
-			type: 'improvePromptCancelled',
-			data: { requestId: requestId || '' },
-		});
+		this.context.bridge.data('improvePromptCancelled', { requestId: requestId || '' });
 	}
 
 	/**
@@ -1481,29 +1380,30 @@ export class SessionHandler implements WebviewMessageHandler {
 	}
 
 	private postLifecycle(
-		action: SessionLifecycleMessage['action'],
+		action: 'created' | 'closed' | 'switched' | 'cleared',
 		sessionId: string,
-		data?: SessionLifecycleMessage['data'],
+		data?: { isProcessing?: boolean },
 	): void {
-		this.context.view.postMessage({
-			type: 'session_lifecycle',
-			action,
-			sessionId,
-			data,
-		} satisfies SessionLifecycleMessage);
+		switch (action) {
+			case 'created':
+				this.context.bridge.lifecycle.created(sessionId);
+				break;
+			case 'switched':
+				this.context.bridge.lifecycle.switched(sessionId, data?.isProcessing);
+				break;
+			case 'closed':
+				this.context.bridge.lifecycle.closed(sessionId);
+				break;
+			case 'cleared':
+				this.context.bridge.lifecycle.cleared(sessionId);
+				break;
+		}
 	}
 
 	private postStats(
 		sessionId: string,
 		payload: { totalStats?: Partial<TotalStats>; modelID?: string; providerID?: string },
 	): void {
-		this.context.view.postMessage({
-			type: 'session_event',
-			targetId: sessionId,
-			eventType: 'stats',
-			payload: { eventType: 'stats', ...payload },
-			timestamp: Date.now(),
-			sessionId,
-		} satisfies SessionEventMessage);
+		this.context.bridge.session.stats(sessionId, payload);
 	}
 }

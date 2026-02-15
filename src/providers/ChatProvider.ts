@@ -1,6 +1,4 @@
-import * as path from 'node:path';
 import * as vscode from 'vscode';
-import type { SessionEventMessage } from '../common';
 
 import type { WebviewCommand } from '../common/protocol';
 import { OpenCodeExecutor } from '../core/executor/OpenCode';
@@ -8,7 +6,8 @@ import type { CLIEvent } from '../core/executor/types';
 import type { ServiceRegistry } from '../core/ServiceRegistry';
 import { SessionGraph, SessionState } from '../core/SessionManager';
 import { Settings } from '../core/Settings';
-import { getWorkspacePath, searchWorkspaceFiles } from '../services/fileSearch';
+import { CommandRouter } from '../transport/CommandRouter';
+import { OutboundBridge } from '../transport/OutboundBridge';
 import { logger } from '../utils/logger';
 import { getHtml } from '../utils/webviewHtml';
 import { FileHandler } from './handlers/FileHandler';
@@ -19,7 +18,8 @@ import { SessionHandler } from './handlers/SessionHandler';
 import { SettingsHandler } from './handlers/SettingsHandler';
 import { SseHandler } from './handlers/SseHandler';
 import { ToolHandler } from './handlers/ToolHandler';
-import type { HandlerContext, WebviewMessageHandler } from './handlers/types';
+import type { HandlerContext } from './handlers/types';
+import { UtilityHandler } from './handlers/UtilityHandler';
 
 /**
  * Maps a tool name to its permission policy category (edit/terminal/network).
@@ -139,8 +139,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private fileHandler: FileHandler;
 	private sseHandler: SseHandler;
 	private restoreHandler: RestoreHandler;
+	private utilityHandler: UtilityHandler;
 
 	private pendingSyncAll = false;
+	private readonly bridge = new OutboundBridge();
+	private readonly router = new CommandRouter();
 
 	constructor(
 		private context: vscode.ExtensionContext,
@@ -150,26 +153,21 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.sessionState = new SessionState();
 		this.cli = new OpenCodeExecutor();
 
-		// Initialize Handlers
-		// RestoreHandler is created first so its registerCheckpoint can be wired into the context
-		this.restoreHandler = new RestoreHandler({
+		// Initialize Handlers — single shared context
+		// RestoreHandler is created first so registerCheckpoint can be wired into the context
+		const baseContext = {
 			extensionContext: this.context,
 			settings: this.settings,
 			cli: this.cli,
-			view: { postMessage: msg => this.postMessage(msg) },
+			bridge: this.bridge,
 			sessionState: this.sessionState,
 			services: this.services,
 			sessionGraph: this.sessionGraph,
-		});
+		};
+		this.restoreHandler = new RestoreHandler(baseContext);
 
 		const handlerContext: HandlerContext = {
-			extensionContext: this.context,
-			settings: this.settings,
-			cli: this.cli,
-			view: { postMessage: msg => this.postMessage(msg) },
-			sessionState: this.sessionState,
-			services: this.services,
-			sessionGraph: this.sessionGraph,
+			...baseContext,
 			registerCheckpoint: (commitId, record) =>
 				this.restoreHandler.registerCheckpoint(commitId, record),
 		};
@@ -181,8 +179,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.toolHandler = new ToolHandler(handlerContext);
 		this.fileHandler = new FileHandler(handlerContext);
 		this.sseHandler = new SseHandler(handlerContext);
+		this.utilityHandler = new UtilityHandler(handlerContext);
 
-		// Proxy Fetch Handler
+		// Build declarative command router
+		this.buildRouter();
+
 		// Single-point OpenCode initialization with retry polling
 		this.scheduleOpenCodeInit();
 
@@ -201,17 +202,14 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		// Wire up MCP messages from registry
 		this.disposables.push(
 			this.services.onMcpMessage(msg => {
-				this.postMessage(msg);
+				this.bridge.send(msg);
 			}),
 		);
 
 		// Wire up McpConfigWatcher config change events
 		this.disposables.push(
 			this.services.mcpConfigWatcher.onConfigChanged(e =>
-				this.postMessage({
-					type: 'mcpConfigReloaded',
-					data: { source: e.source, timestamp: e.timestamp },
-				}),
+				this.bridge.data('mcpConfigReloaded', { source: e.source, timestamp: e.timestamp }),
 			),
 		);
 
@@ -331,256 +329,134 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	}
 
 	/**
-	 * Maps a webview command to its handler via exhaustive switch.
-	 * Returns null for unimplemented types (logged as TODO).
+	 * Registers all command handlers in the declarative router.
+	 * Called once from the constructor after all handlers are created.
 	 */
-	private resolveHandler(msg: WebviewCommand): WebviewMessageHandler | null {
-		switch (msg.type) {
-			// Session
-			case 'webviewDidLaunch':
-			case 'createSession':
-			case 'switchSession':
-			case 'closeSession':
-			case 'sendMessage':
-			case 'stopRequest':
-			case 'improvePromptRequest':
-			case 'cancelImprovePrompt':
-			case 'getConversationList':
-			case 'loadConversation':
-			case 'deleteConversation':
-			case 'renameConversation':
-				return this.sessionHandler;
+	private buildRouter(): void {
+		const r = this.router;
 
-			// Settings
-			case 'getSettings':
-			case 'updateSettings':
-			case 'getCommands':
-			case 'getSkills':
-			case 'getHooks':
-			case 'getSubagents':
-			case 'getRules':
-				return this.settingsHandler;
+		// Session
+		r.register(
+			this.sessionHandler,
+			[
+				'webviewDidLaunch',
+				'createSession',
+				'switchSession',
+				'closeSession',
+				'sendMessage',
+				'stopRequest',
+				'improvePromptRequest',
+				'cancelImprovePrompt',
+				'getConversationList',
+				'loadConversation',
+				'deleteConversation',
+				'renameConversation',
+			],
+			'session',
+		);
 
-			// MCP
-			case 'loadMCPServers':
-			case 'fetchMcpMarketplaceCatalog':
-			case 'installMcpFromMarketplace':
-			case 'saveMCPServer':
-			case 'deleteMCPServer':
-			case 'openAgentsMcpConfig':
-			case 'importMcpFromCLI':
-			case 'syncAgentsToOpenCodeProject':
-				return this.mcpHandler;
+		// Settings
+		r.register(
+			this.settingsHandler,
+			[
+				'getSettings',
+				'updateSettings',
+				'getCommands',
+				'getSkills',
+				'getHooks',
+				'getSubagents',
+				'getRules',
+			],
+			'settings',
+		);
 
-			// Provider
-			case 'reloadAllProviders':
-			case 'checkOpenCodeStatus':
-			case 'loadOpenCodeProviders':
-			case 'loadAvailableProviders':
-			case 'setOpenCodeProviderAuth':
-			case 'disconnectOpenCodeProvider':
-			case 'setOpenCodeModel':
-			case 'selectModel':
-			case 'loadProxyModels':
-				return this.providerHandler;
+		// MCP
+		r.register(
+			this.mcpHandler,
+			[
+				'loadMCPServers',
+				'fetchMcpMarketplaceCatalog',
+				'installMcpFromMarketplace',
+				'saveMCPServer',
+				'deleteMCPServer',
+				'openAgentsMcpConfig',
+				'importMcpFromCLI',
+				'syncAgentsToOpenCodeProject',
+			],
+			'mcp',
+		);
 
-			// Tool / Access
-			case 'accessResponse':
-			case 'getPermissions':
-			case 'setPermissions':
-			case 'checkDiscoveryStatus':
-			case 'getAccess':
-			case 'checkCLIDiagnostics':
-				return this.toolHandler;
+		// Provider
+		r.register(
+			this.providerHandler,
+			[
+				'reloadAllProviders',
+				'checkOpenCodeStatus',
+				'loadOpenCodeProviders',
+				'loadAvailableProviders',
+				'setOpenCodeProviderAuth',
+				'disconnectOpenCodeProvider',
+				'setOpenCodeModel',
+				'selectModel',
+				'loadProxyModels',
+			],
+			'provider',
+		);
 
-			// File
-			case 'openFile':
-			case 'openFileDiff':
-			case 'openExternal':
-			case 'getImageData':
-			case 'getClipboardContext':
-				return this.fileHandler;
+		// Tool / Access
+		r.register(
+			this.toolHandler,
+			[
+				'accessResponse',
+				'getPermissions',
+				'setPermissions',
+				'checkDiscoveryStatus',
+				'getAccess',
+				'checkCLIDiagnostics',
+			],
+			'tool',
+		);
 
-			// SSE
-			case 'sseSubscribe':
-			case 'sseClose':
-				return this.sseHandler;
+		// File
+		r.register(
+			this.fileHandler,
+			['openFile', 'openFileDiff', 'openExternal', 'getImageData', 'getClipboardContext'],
+			'file',
+		);
 
-			// Restore
-			case 'restoreCommit':
-			case 'unrevert':
-				return this.restoreHandler;
+		// SSE
+		r.register(this.sseHandler, ['sseSubscribe', 'sseClose'], 'sse');
 
-			// Orchestration
-			case 'syncAll':
-				return {
-					handleMessage: async () => {
-						await this.syncAllOrDefer('webview-syncAll');
-					},
-				};
+		// Restore
+		r.register(this.restoreHandler, ['restoreCommit', 'unrevert'], 'restore');
 
-			// Proxy
-			case 'proxyFetch':
-				return {
-					handleMessage: async (m: WebviewCommand) => {
-						if (m.type !== 'proxyFetch') return;
-						try {
-							const { id, url, options } = m;
-							const response = await fetch(url, {
-								method: options?.method,
-								headers: options?.headers,
-								body: options?.body,
-							});
-							const bodyText = await response.text();
-							const headers: Record<string, string> = {};
-							response.headers.forEach((value, key) => {
-								headers[key] = value;
-							});
-							this.postMessage({
-								type: 'proxyFetchResult',
-								id,
-								ok: response.ok,
-								status: response.status,
-								statusText: response.statusText,
-								headers,
-								bodyText,
-							});
-						} catch (error) {
-							logger.error('[ChatProvider] proxyFetch failed:', error);
-							this.postMessage({
-								type: 'proxyFetchResult',
-								id: m.id,
-								ok: false,
-								error: String(error),
-							});
-						}
-					},
-				};
-			case 'proxyFetchAbort':
-				// Abort not fully implemented — fetch is promise-based
-				return { handleMessage: async () => {} };
+		// Orchestration
+		r.register(
+			{
+				handleMessage: async () => {
+					await this.syncAllOrDefer('webview-syncAll');
+				},
+			},
+			['syncAll'],
+			'orchestration',
+		);
 
-			case 'openCommandFile':
-			case 'openSkillFile':
-			case 'openHookFile':
-			case 'openSubagentFile': {
-				const services = this.services;
-				const name = (msg as { name: string }).name;
-				return {
-					async handleMessage() {
-						const root = vscode.workspace.workspaceFolders?.[0]?.uri;
-						if (!root || !name) return;
-						let relativePath: string | undefined;
-						switch (msg.type) {
-							case 'openCommandFile': {
-								const items = await services.agentResources.getAll('commands');
-								relativePath = items.find(c => c.name === name)?.path;
-								break;
-							}
-							case 'openSkillFile': {
-								const items = await services.agentResources.getAll('skills');
-								relativePath = items.find(s => s.name === name)?.path;
-								break;
-							}
-							case 'openHookFile': {
-								const items = await services.agentResources.getAll('hooks');
-								relativePath = items.find(h => h.name === name)?.path;
-								break;
-							}
-							case 'openSubagentFile': {
-								const items = await services.agentResources.getAll('subagents');
-								relativePath = items.find(s => s.name === name)?.path;
-								break;
-							}
-						}
-						if (!relativePath) {
-							logger.warn(`[ChatProvider] Resource not found: ${msg.type} name=${name}`);
-							return;
-						}
-						const fileUri = vscode.Uri.joinPath(root, relativePath);
-						await vscode.window.showTextDocument(fileUri);
-					},
-				};
-			}
-
-			// TODO: Agents CRUD — not yet implemented
-			case 'createSkill':
-			case 'deleteSkill':
-			case 'importSkillsFromCLI':
-			case 'syncSkillsToCLI':
-			case 'createHook':
-			case 'deleteHook':
-			case 'importHooksFromCLI':
-			case 'syncHooksToCLI':
-			case 'createCommand':
-			case 'deleteCommand':
-			case 'importCommandsFromCLI':
-			case 'syncCommandsToCLI':
-			case 'createSubagent':
-			case 'deleteSubagent':
-			case 'importSubagentsFromCLI':
-			case 'syncSubagentsToCLI':
-			case 'toggleRule':
-			// File actions: accept (git stage)
-			case 'acceptFile': {
-				const filePath = (msg as { filePath: string }).filePath;
-				return {
-					async handleMessage() {
-						try {
-							const uri = vscode.Uri.file(filePath);
-							await vscode.commands.executeCommand('git.stage', uri);
-							logger.info('[ChatProvider] Staged file', { filePath });
-						} catch (err) {
-							logger.error('[ChatProvider] Failed to stage file', { filePath, err });
-						}
-					},
-				};
-			}
-			case 'acceptAllFiles': {
-				const filePaths = (msg as { filePaths: string[] }).filePaths;
-				return {
-					async handleMessage() {
-						for (const fp of filePaths) {
-							try {
-								const uri = vscode.Uri.file(fp);
-								await vscode.commands.executeCommand('git.stage', uri);
-							} catch (err) {
-								logger.error('[ChatProvider] Failed to stage file', { filePath: fp, err });
-							}
-						}
-						logger.info('[ChatProvider] Staged all files', { count: filePaths.length });
-					},
-				};
-			}
-			// TODO: File actions — not yet implemented
-			case 'undoFileChanges':
-			case 'undoAllChanges':
-			case 'copyLastResponse':
-			case 'copyAllMessages':
-			case 'copyLastDiffs':
-			case 'copyAllDiffs':
-			case 'getWorkspaceFiles': {
-				const self = this;
-				return {
-					async handleMessage() {
-						const wsPath = getWorkspacePath();
-						if (!wsPath) return;
-						const searchTerm = (msg as { searchTerm?: string }).searchTerm ?? '';
-						const results = await searchWorkspaceFiles(searchTerm, wsPath, 50);
-						const files = results.map(r => ({
-							name: r.label,
-							path: r.path,
-							fsPath: path.join(wsPath, r.path),
-						}));
-						self.postMessage({ type: 'workspaceFiles', data: files });
-					},
-				};
-			}
-			// TODO: Missing handlers
-			case 'clearAllConversations':
-				logger.warn(`[ChatProvider] Unimplemented message type: ${msg.type}`);
-				return null;
-		}
+		// Utility (proxy fetch, resource files, git stage, workspace files)
+		r.register(
+			this.utilityHandler,
+			[
+				'proxyFetch',
+				'proxyFetchAbort',
+				'openCommandFile',
+				'openSkillFile',
+				'openHookFile',
+				'openSubagentFile',
+				'acceptFile',
+				'acceptAllFiles',
+				'getWorkspaceFiles',
+			],
+			'utility',
+		);
 	}
 
 	private async syncAllOrDefer(source: string): Promise<void> {
@@ -633,6 +509,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	resolveWebviewView(webviewView: vscode.WebviewView): void {
 		logger.info('[ChatProvider] resolveWebviewView called - webview is now initialized');
 		this.view = webviewView;
+		this.bridge.setView({ postMessage: msg => this.postMessage(msg) });
 
 		webviewView.webview.options = {
 			enableScripts: true,
@@ -660,7 +537,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		);
 
 		this.sendInitialState();
-		this.postMessage({ type: 'accessData', data: [] });
+		this.bridge.data('accessData', []);
 
 		// If OpenCode started before the webview mounted, run the deferred sync now.
 		if (this.pendingSyncAll) {
@@ -670,9 +547,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 	private async handleWebviewMessage(msg: WebviewCommand): Promise<void> {
 		try {
-			const handler = this.resolveHandler(msg);
-			if (handler) {
-				await handler.handleMessage(msg);
+			const handled = await this.router.dispatch(msg);
+			if (!handled) {
+				logger.warn(`[ChatProvider] Unhandled webview command: ${msg.type}`);
 			}
 		} catch (error) {
 			logger.error(`[ChatProvider] Error handling message:`, error);
@@ -936,20 +813,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					void this.cli
 						.respondToPermission({ requestId, approved, alwaysAllow })
 						.catch(error => logger.error('[ChatProvider] auto-response failed:', error));
-					this.postMessage({
-						type: 'session_event',
-						targetId: targetSessionId,
-						eventType: 'access',
-						payload: {
-							eventType: 'access',
-							action: 'response',
-							requestId,
-							approved,
-							...(alwaysAllow ? { alwaysAllow } : {}),
-						},
-						timestamp: Date.now(),
-						sessionId: targetSessionId,
-					} satisfies SessionEventMessage);
+					this.bridge.session.accessResponse(targetSessionId, {
+						requestId,
+						approved,
+						...(alwaysAllow ? { alwaysAllow } : {}),
+					});
 				};
 
 				// Auto-approve everything if yoloMode or autoApprove is enabled in settings.
@@ -1189,22 +1057,13 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					const oldLineCount = oldContent ? oldContent.split('\n').length : 0;
 					const newLineCount = newContent ? newContent.split('\n').length : 0;
 
-					this.postMessage({
-						type: 'session_event',
-						targetId: targetSessionId,
-						eventType: 'file',
-						payload: {
-							eventType: 'file',
-							action: 'changed',
-							filePath,
-							fileName: filePath.split(/[/\\]/).pop() || filePath,
-							linesAdded: Math.max(0, newLineCount - oldLineCount),
-							linesRemoved: Math.max(0, oldLineCount - newLineCount),
-							toolUseId,
-						},
-						timestamp: Date.now(),
-						sessionId: targetSessionId,
-					} satisfies SessionEventMessage);
+					this.bridge.session.fileChanged(targetSessionId, {
+						filePath,
+						fileName: filePath.split(/[/\\]/).pop() || filePath,
+						linesAdded: Math.max(0, newLineCount - oldLineCount),
+						linesRemoved: Math.max(0, oldLineCount - newLineCount),
+						toolUseId,
+					});
 					emittedFileChange = true;
 				}
 			}
@@ -1241,17 +1100,17 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 	private handleSettingsChange(): void {
 		this.settings.refresh();
-		this.postMessage({ type: 'configChanged' });
+		this.bridge.send({ type: 'configChanged' });
 	}
 
 	private sendInitialState(): void {
-		this.postMessage({ type: 'settingsData', data: this.settings.getAll() });
-		this.postMessage({
-			type: 'accessData',
-			data: Object.entries(this.toolHandler.getAlwaysAllowByTool())
+		this.bridge.data('settingsData', this.settings.getAll());
+		this.bridge.data(
+			'accessData',
+			Object.entries(this.toolHandler.getAlwaysAllowByTool())
 				.filter(([, allow]) => allow)
 				.map(([toolName]) => ({ toolName, allowAll: true })),
-		});
+		);
 	}
 
 	public postMessage(msg: unknown): void {

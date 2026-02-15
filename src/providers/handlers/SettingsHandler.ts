@@ -42,13 +42,13 @@ export class SettingsHandler implements WebviewMessageHandler {
 	}
 
 	private async onGetSettings(): Promise<void> {
-		this.context.view.postMessage({ type: 'settingsData', data: this.context.settings.getAll() });
+		this.context.bridge.data('settingsData', this.context.settings.getAll());
 	}
 
 	private async onUpdateSettings(msg: CommandOf<'updateSettings'>): Promise<void> {
 		await this.applyWebviewSettingsPatch(msg.settings);
 		this.context.settings.refresh();
-		this.context.view.postMessage({ type: 'settingsData', data: this.context.settings.getAll() });
+		this.context.bridge.data('settingsData', this.context.settings.getAll());
 	}
 
 	private async applyWebviewSettingsPatch(patch: Record<string, unknown>): Promise<void> {
@@ -173,25 +173,22 @@ export class SettingsHandler implements WebviewMessageHandler {
 	}
 
 	private async onGetCommands(): Promise<void> {
-		this.context.view.postMessage({ type: 'commandsList', data: { custom: [], isLoading: true } });
+		this.context.bridge.data('commandsList', { custom: [], isLoading: true });
 		try {
-			// Fetch custom commands from .agents/ files and CLI commands from OpenCode server in parallel
 			const [commands, cliCommands] = await Promise.all([
 				this.context.services.agentResources.getAll('commands'),
 				this.fetchCliCommands(),
 			]);
-			this.context.view.postMessage({
-				type: 'commandsList',
-				data: { custom: commands, cli: cliCommands, isLoading: false },
+			this.context.bridge.data('commandsList', {
+				custom: commands,
+				cli: cliCommands,
+				isLoading: false,
 			});
 		} catch (error) {
-			this.context.view.postMessage({
-				type: 'commandsList',
-				data: {
-					custom: [],
-					isLoading: false,
-					error: error instanceof Error ? error.message : String(error),
-				},
+			this.context.bridge.data('commandsList', {
+				custom: [],
+				isLoading: false,
+				error: error instanceof Error ? error.message : String(error),
 			});
 		}
 	}
@@ -224,80 +221,59 @@ export class SettingsHandler implements WebviewMessageHandler {
 	}
 
 	private async onGetSkills(): Promise<void> {
-		this.context.view.postMessage({ type: 'skillsList', data: { skills: [], isLoading: true } });
+		this.context.bridge.data('skillsList', { skills: [], isLoading: true });
 		try {
 			const skills = await this.context.services.agentResources.getAll('skills');
-			this.context.view.postMessage({
-				type: 'skillsList',
-				data: { skills, isLoading: false },
-			});
+			this.context.bridge.data('skillsList', { skills, isLoading: false });
 		} catch (error) {
-			this.context.view.postMessage({
-				type: 'skillsList',
-				data: {
-					skills: [],
-					isLoading: false,
-					error: error instanceof Error ? error.message : String(error),
-				},
+			this.context.bridge.data('skillsList', {
+				skills: [],
+				isLoading: false,
+				error: error instanceof Error ? error.message : String(error),
 			});
 		}
 	}
 
 	private async onGetHooks(): Promise<void> {
-		this.context.view.postMessage({ type: 'hooksList', data: { hooks: [], isLoading: true } });
+		this.context.bridge.data('hooksList', { hooks: [], isLoading: true });
 		try {
 			const hooks = await this.context.services.agentResources.getAll('hooks');
-			this.context.view.postMessage({
-				type: 'hooksList',
-				data: { hooks, isLoading: false },
-			});
+			this.context.bridge.data('hooksList', { hooks, isLoading: false });
 		} catch (error) {
-			this.context.view.postMessage({
-				type: 'hooksList',
-				data: {
-					hooks: [],
-					isLoading: false,
-					error: error instanceof Error ? error.message : String(error),
-				},
+			this.context.bridge.data('hooksList', {
+				hooks: [],
+				isLoading: false,
+				error: error instanceof Error ? error.message : String(error),
 			});
 		}
 	}
 
 	private async onGetSubagents(): Promise<void> {
-		this.context.view.postMessage({
-			type: 'subagentsList',
-			data: { subagents: [], isLoading: true },
-		});
+		this.context.bridge.data('subagentsList', { subagents: [], isLoading: true });
 		try {
 			const subagents = await this.context.services.agentResources.getAll('subagents');
-			this.context.view.postMessage({
-				type: 'subagentsList',
-				data: { subagents, isLoading: false },
-			});
+			this.context.bridge.data('subagentsList', { subagents, isLoading: false });
 		} catch (error) {
-			this.context.view.postMessage({
-				type: 'subagentsList',
-				data: {
-					subagents: [],
-					isLoading: false,
-					error: error instanceof Error ? error.message : String(error),
-				},
+			this.context.bridge.data('subagentsList', {
+				subagents: [],
+				isLoading: false,
+				error: error instanceof Error ? error.message : String(error),
 			});
 		}
 	}
 
 	private async onGetRules(): Promise<void> {
-		this.context.view.postMessage({ type: 'ruleList', data: { rules: [] } });
+		this.context.bridge.data('ruleList', { rules: [] });
 		if (!this.rulesService) {
-			this.context.view.postMessage({ type: 'ruleList', data: { rules: [] } });
+			this.context.bridge.data('ruleList', { rules: [] });
 			return;
 		}
 		try {
 			const rules = await this.rulesService.getRules();
-			this.context.view.postMessage({ type: 'ruleList', data: { rules } });
+			this.context.bridge.data('ruleList', { rules });
 		} catch (error) {
 			logger.error('[SettingsHandler] getRules failed:', error);
-			this.context.view.postMessage({ type: 'ruleList', data: { rules: [] } });
+			this.context.bridge.data('ruleList', { rules: [] });
 		}
 	}
 }

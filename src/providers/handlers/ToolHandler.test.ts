@@ -8,6 +8,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createMockExtensionContext } from '../../__mocks__/vscode';
 import { SessionGraph } from '../../core/SessionManager';
+import { OutboundBridge } from '../../transport/OutboundBridge';
 import { ToolHandler } from './ToolHandler';
 import type { HandlerContext } from './types';
 
@@ -34,15 +35,17 @@ function createMockHandlerContext(
 		getWorkspaceRoot: vi.fn().mockReturnValue('/mock/workspace'),
 	};
 
+	const bridge = new OutboundBridge();
+	// Intercept all outbound messages so tests can inspect them
+	vi.spyOn(bridge, 'send').mockImplementation((msg: unknown) => {
+		postedMessages.push(msg);
+	});
+
 	const ctx: HandlerContext = {
 		extensionContext: createMockExtensionContext() as any,
 		settings: mockSettings as any,
 		cli: mockCli as any,
-		view: {
-			postMessage: (msg: unknown) => {
-				postedMessages.push(msg);
-			},
-		},
+		bridge,
 		sessionState: {
 			activeSessionId: 'test-session-1',
 			startedSessions: new Set(['test-session-1']),
