@@ -1,17 +1,18 @@
 /**
  * @file Access gate component
- * @description Compact permission-request banner embedded inside ToolCards.
- *              All response logic is delegated to the shared `useAccessResponse` hook.
+ * @description Permission control shown under ToolCards.
+ *              Primary action is one-click allow; other actions are in a dropdown.
  */
 
 import type React from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useAccessResponse } from '../../hooks/useAccessResponse';
 import { cn } from '../../lib/cn';
-import { CheckIcon, CloseIcon, ShieldIcon } from '../icons';
-import { Tooltip } from '../ui';
+import { CheckIcon, ChevronDownIcon, CloseIcon, ShieldIcon } from '../icons';
+import { DropdownMenu } from '../ui';
 
 // ---------------------------------------------------------------------------
-// Shared types
+// Types
 // ---------------------------------------------------------------------------
 
 interface AccessGateProps {
@@ -30,87 +31,42 @@ interface AccessGateProps {
 	hideDetails?: boolean;
 }
 
+type GateAction = 'allow-once' | 'always-allow' | 'deny';
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Extract display-friendly details from tool input, filtering out large content fields. */
 function getDisplayDetails(input: unknown, hideDetails?: boolean): string | null {
-	if (hideDetails || !input || typeof input !== 'object') return null;
+	if (hideDetails) {
+		return null;
+	}
+	if (!input || typeof input !== 'object') {
+		return null;
+	}
 
+	const inputObj = input as Record<string, unknown>;
+
+	// Avoid huge content payloads; ToolCard already renders diff/command output separately.
 	const filtered = Object.fromEntries(
-		Object.entries(input as Record<string, unknown>).filter(
+		Object.entries(inputObj).filter(
 			([key]) => !['content', 'new_content', 'old_content', 'file_content'].includes(key),
 		),
 	);
 
-	return Object.keys(filtered).length > 0 ? JSON.stringify(filtered, null, 2) : null;
+	if (Object.keys(filtered).length === 0) {
+		return null;
+	}
+
+	try {
+		return JSON.stringify(filtered, null, 2);
+	} catch {
+		return null;
+	}
 }
 
 // ---------------------------------------------------------------------------
-// Internal layout
-// ---------------------------------------------------------------------------
-
-const InlineGate: React.FC<{
-	handleResponse: (approved: boolean, always?: boolean) => void;
-	details: string | null;
-	className?: string;
-}> = ({ handleResponse, details, className }) => (
-	<div className={cn('py-0', className)}>
-		<div className="flex items-center gap-3">
-			<div className="flex items-center gap-1.5 shrink-0">
-				<div className="flex items-center justify-center w-5 h-5 rounded bg-warning/15">
-					<ShieldIcon size={12} className="text-warning" />
-				</div>
-				<span className="text-sm text-warning font-medium font-(family-name:--vscode-font-family)">
-					Permission
-				</span>
-			</div>
-
-			<div className="flex items-center gap-2">
-				<Tooltip content="Allow once" position="top" delay={150}>
-					<button
-						type="button"
-						onClick={() => handleResponse(true)}
-						className="flex items-center gap-1 h-(--btn-height-sm) px-2.5 rounded text-sm font-medium bg-success/15 text-success hover:bg-success/25 transition-colors cursor-pointer border-none"
-					>
-						<CheckIcon size={12} />
-						<span>Allow</span>
-					</button>
-				</Tooltip>
-				<Tooltip content="Always allow this pattern" position="top" delay={150}>
-					<button
-						type="button"
-						onClick={() => handleResponse(true, true)}
-						className="flex items-center gap-1 h-(--btn-height-sm) px-2.5 rounded text-sm font-medium bg-info/15 text-info hover:bg-info/25 transition-colors cursor-pointer border-none"
-					>
-						<CheckIcon size={12} />
-						<span>Always</span>
-					</button>
-				</Tooltip>
-				<Tooltip content="Deny this action" position="top" delay={150}>
-					<button
-						type="button"
-						onClick={() => handleResponse(false)}
-						className="flex items-center gap-1 h-(--btn-height-sm) px-2.5 rounded text-sm font-medium bg-error/15 text-error hover:bg-error/25 transition-colors cursor-pointer border-none"
-					>
-						<CloseIcon size={12} />
-						<span>Deny</span>
-					</button>
-				</Tooltip>
-			</div>
-		</div>
-
-		{details && (
-			<div className="mt-1.5 p-1.5 rounded bg-black/20 text-xs font-mono text-vscode-foreground/70 whitespace-pre-wrap break-all max-h-(--content-max-height-sm) overflow-auto">
-				{details}
-			</div>
-		)}
-	</div>
-);
-
-// ---------------------------------------------------------------------------
-// Main component
+// Component
 // ---------------------------------------------------------------------------
 
 export const AccessGate: React.FC<AccessGateProps> = ({
@@ -118,16 +74,133 @@ export const AccessGate: React.FC<AccessGateProps> = ({
 	messageId,
 	tool,
 	input,
+	pattern: _pattern,
 	className,
 	hideDetails,
 }) => {
 	const handleResponse = useAccessResponse({ requestId, tool, messageId });
+	const [menuOpen, setMenuOpen] = useState(false);
+	const anchorRef = useRef<HTMLButtonElement>(null);
+
+	const details = useMemo(() => getDisplayDetails(input, hideDetails), [input, hideDetails]);
 
 	return (
-		<InlineGate
-			handleResponse={handleResponse}
-			details={getDisplayDetails(input, hideDetails)}
-			className={className}
-		/>
+		<div className={cn('px-(--tool-content-padding) pt-0 pb-1', className)}>
+			<div
+				className={cn(
+					'-mt-px flex items-center gap-2',
+					'bg-(--tool-bg-header) border border-(--tool-border-color) border-t-0',
+					'rounded-b-md rounded-t-none',
+					'px-2 py-1',
+				)}
+			>
+				{/* Left: access icon + actions (primary + split dropdown) */}
+				<div className="flex items-center gap-2 min-w-0 flex-1">
+					<div className="flex items-center justify-center w-5 h-5 shrink-0">
+						<ShieldIcon size={14} className="text-warning" />
+					</div>
+
+					<div className="flex items-center shrink-0">
+						<div
+							className={cn(
+								'inline-flex items-stretch overflow-hidden rounded-md',
+								'border border-(--tool-border-color)',
+							)}
+						>
+							<button
+								type="button"
+								onClick={() => handleResponse(true)}
+								className={cn(
+									'inline-flex items-center gap-1.5',
+									'h-[20px] px-2',
+									'bg-vscode-button-secondaryBackground text-vscode-button-secondaryForeground',
+									'hover:bg-vscode-button-secondaryHoverBackground',
+									'focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder',
+								)}
+								title="Allow once"
+							>
+								<CheckIcon size={14} />
+								<span className="text-sm font-medium">Allow</span>
+							</button>
+
+							<button
+								ref={anchorRef}
+								type="button"
+								onClick={() => setMenuOpen(prev => !prev)}
+								className={cn(
+									'inline-flex items-center justify-center',
+									'h-[20px] w-[20px]',
+									'bg-vscode-button-secondaryBackground text-vscode-button-secondaryForeground',
+									'hover:bg-vscode-button-secondaryHoverBackground',
+									'border-l border-(--tool-border-color)',
+									'focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder',
+								)}
+								aria-label="More permission actions"
+								title="More actions"
+							>
+								<ChevronDownIcon
+									size={14}
+									className={cn('transition-transform', menuOpen && 'rotate-180')}
+								/>
+							</button>
+						</div>
+
+						{menuOpen && (
+							<DropdownMenu<GateAction>
+								anchorElement={anchorRef.current}
+								onClose={() => setMenuOpen(false)}
+								position="top"
+								minWidth={180}
+								maxWidth={260}
+								disableKeyboardNav={false}
+								keyHints={{ navigate: true, select: true, close: true }}
+								items={[
+									{
+										id: 'allow-once',
+										label: 'Allow once',
+										data: 'allow-once',
+										icon: <CheckIcon size={14} />,
+									},
+									{
+										id: 'always-allow',
+										label: 'Always allow',
+										data: 'always-allow',
+										icon: <ShieldIcon size={14} />,
+										description: 'Remember this choice for the current pattern',
+									},
+									{
+										id: 'deny',
+										label: 'Deny',
+										data: 'deny',
+										icon: <CloseIcon size={14} />,
+										danger: true,
+									},
+								]}
+								onSelect={action => {
+									setMenuOpen(false);
+									switch (action) {
+										case 'allow-once':
+											handleResponse(true);
+											break;
+										case 'always-allow':
+											handleResponse(true, true);
+											break;
+										case 'deny':
+											handleResponse(false);
+											break;
+									}
+								}}
+							/>
+						)}
+					</div>
+				</div>
+			</div>
+
+			{details && (
+				<div className="mt-1.5 p-1.5 rounded border border-(--tool-border-color) bg-(--alpha-5) text-xs font-mono text-(--alpha-70) whitespace-pre-wrap break-all max-h-(--content-max-height-sm) overflow-auto">
+					{details}
+				</div>
+			)}
+		</div>
 	);
 };

@@ -98,7 +98,7 @@ export const SimpleTool: React.FC<SimpleToolProps> = ({
 
 				<span
 					className={cn(
-						'text-sm font-semibold whitespace-nowrap text-vscode-foreground opacity-80',
+						'text-sm font-medium whitespace-nowrap text-vscode-foreground opacity-80',
 						isError && 'text-error !opacity-100',
 					)}
 				>

@@ -25,8 +25,7 @@ import {
 } from './SimpleDiff';
 import { InlineToolLine } from './SimpleTool';
 
-const TOOL_CARD_CLASSES =
-	'bg-(--tool-bg-header) border border-(--tool-border-color) rounded-lg overflow-hidden';
+const TOOL_CARD_CLASSES = 'bg-(--tool-bg-header) border border-(--tool-border-color) rounded-lg';
 
 const TOOL_CARD_HEADER_CLASSES =
 	'flex items-center justify-between w-full h-(--tool-header-height) px-(--tool-header-padding) bg-(--tool-bg-header) select-none';
@@ -61,6 +60,7 @@ interface ToolCardProps {
 	headerLeft: ReactNode;
 	headerRight?: ReactNode;
 	body?: ReactNode;
+	accessGate?: ReactNode;
 	isCollapsible?: boolean;
 	expanded?: boolean;
 	/**
@@ -76,6 +76,7 @@ export const ToolCard: React.FC<ToolCardProps> = ({
 	headerLeft,
 	headerRight,
 	body,
+	accessGate,
 	isCollapsible = false,
 	expanded = false,
 	showCollapseOverlay = true,
@@ -84,55 +85,58 @@ export const ToolCard: React.FC<ToolCardProps> = ({
 }) => {
 	const canToggle = Boolean(isCollapsible && onToggle);
 	return (
-		<div className={cn(TOOL_CARD_CLASSES, 'group', className)}>
-			<div
-				role={canToggle ? 'button' : undefined}
-				tabIndex={canToggle ? 0 : undefined}
-				onClick={canToggle ? onToggle : undefined}
-				className={cn(
-					TOOL_CARD_HEADER_CLASSES,
-					canToggle && 'cursor-pointer hover:bg-vscode-toolbar-hoverBackground',
-					'group/toolcard-header',
-				)}
-			>
-				<div className="relative flex items-center gap-1.5 min-w-0">
-					{canToggle && (
+		<div className="relative">
+			<div className={cn(TOOL_CARD_CLASSES, 'group overflow-hidden', className)}>
+				<div
+					role={canToggle ? 'button' : undefined}
+					tabIndex={canToggle ? 0 : undefined}
+					onClick={canToggle ? onToggle : undefined}
+					className={cn(
+						TOOL_CARD_HEADER_CLASSES,
+						canToggle && 'cursor-pointer hover:bg-vscode-toolbar-hoverBackground',
+						'group/toolcard-header',
+					)}
+				>
+					<div className="relative flex items-center gap-1.5 min-w-0">
+						{canToggle && (
+							<div
+								className={cn(
+									'absolute left-0 top-1/2 -translate-y-1/2',
+									'flex items-center justify-center w-5 h-5',
+									'opacity-0 transition-opacity duration-150 ease-out',
+									'group-hover/toolcard-header:opacity-90',
+								)}
+							>
+								<ChevronDownIcon
+									size={14}
+									className={cn(
+										'transition-transform duration-150 ease-out',
+										expanded && 'rotate-180',
+									)}
+								/>
+							</div>
+						)}
 						<div
 							className={cn(
-								'absolute left-0 top-1/2 -translate-y-1/2',
-								'flex items-center justify-center w-5 h-5',
-								'opacity-0 transition-opacity duration-150 ease-out',
-								'group-hover/toolcard-header:opacity-90',
+								'flex items-center gap-1.5 min-w-0',
+								canToggle && 'group-hover/toolcard-header:[&_.toolcard-leading-icon]:opacity-0',
 							)}
 						>
-							<ChevronDownIcon
-								size={14}
-								className={cn(
-									'transition-transform duration-150 ease-out',
-									expanded && 'rotate-180',
-								)}
-							/>
+							{headerLeft}
 						</div>
-					)}
-					<div
-						className={cn(
-							'flex items-center gap-1.5 min-w-0',
-							canToggle && 'group-hover/toolcard-header:[&_.toolcard-leading-icon]:opacity-0',
-						)}
-					>
-						{headerLeft}
 					</div>
+					<div className="flex items-center gap-1.5 shrink-0 ml-auto">{headerRight}</div>
 				</div>
-				<div className="flex items-center gap-1.5 shrink-0 ml-auto">{headerRight}</div>
+				{body && (
+					<div className="relative">
+						{body}
+						{canToggle && showCollapseOverlay && (
+							<CollapseOverlay visible={expanded} onCollapse={onToggle as () => void} />
+						)}
+					</div>
+				)}
 			</div>
-			{body && (
-				<div className="relative">
-					{body}
-					{canToggle && showCollapseOverlay && (
-						<CollapseOverlay visible={expanded} onCollapse={onToggle as () => void} />
-					)}
-				</div>
-			)}
+			{accessGate}
 		</div>
 	);
 };
@@ -277,26 +281,6 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 										collapseUnchanged={!diffExpanded}
 									/>
 								</div>
-								{showAccessGate && (
-									<div className="px-(--tool-content-padding) py-2 border-t border-(--border-subtle)">
-										<AccessGate
-											requestId={accessRequest?.requestId}
-											messageId={accessRequest?.id}
-											tool={accessRequest?.tool || toolName}
-											input={accessRequest?.input || rawInput || {}}
-											pattern={accessRequest?.pattern}
-											className="py-1"
-											hideDetails={true}
-										/>
-									</div>
-								)}
-								{accessRequest?.resolved && (
-									<div className="px-(--tool-content-padding) py-1 border-t border-(--border-subtle)">
-										<span className="text-xs text-vscode-foreground opacity-60">
-											{accessRequest.approved ? 'Approved' : 'Denied'}
-										</span>
-									</div>
-								)}
 								<div
 									className={cn(
 										'absolute right-(--tool-content-padding) bottom-0',
@@ -315,6 +299,18 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 									/>
 								</div>
 							</div>
+						}
+						accessGate={
+							showAccessGate ? (
+								<AccessGate
+									requestId={accessRequest?.requestId}
+									messageId={accessRequest?.id}
+									tool={accessRequest?.tool || toolName}
+									input={accessRequest?.input || rawInput || {}}
+									pattern={accessRequest?.pattern}
+									hideDetails={true}
+								/>
+							) : undefined
 						}
 					/>
 				);
@@ -348,7 +344,6 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		const shownText = expanded || !needsExpand ? fullText : preview;
 		const hasBody = shownText.trim().length > 0;
 		const showAccessGate = accessRequest && !accessRequest.resolved && accessRequest.requestId;
-		const showAccessStatus = accessRequest?.resolved;
 
 		return (
 			<ToolCard
@@ -384,12 +379,12 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 					) : undefined
 				}
 				isCollapsible={
-					(needsExpand && hasBody) || Boolean(showAccessGate) || Boolean(showAccessStatus)
+					(needsExpand && hasBody) || Boolean(showAccessGate)
 				}
 				expanded={expanded}
 				onToggle={() => setExpanded(prev => !prev)}
 				body={
-					hasBody || showAccessGate || showAccessStatus ? (
+					hasBody ? (
 						<div className="flex flex-col">
 							{hasBody && (
 								<div className="p-(--tool-content-padding) bg-(--tool-bg-header)">
@@ -403,26 +398,19 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 									</pre>
 								</div>
 							)}
-							{showAccessGate && (
-								<div className="px-(--tool-content-padding) py-2 border-t border-(--border-subtle)">
-									<AccessGate
-										requestId={accessRequest?.requestId}
-										messageId={accessRequest?.id}
-										tool={accessRequest?.tool || toolName}
-										input={accessRequest?.input || rawInput || {}}
-										pattern={accessRequest?.pattern}
-										hideDetails={true}
-									/>
-								</div>
-							)}
-							{showAccessStatus && (
-								<div className="px-(--tool-content-padding) py-1 border-t border-(--border-subtle)">
-									<span className="text-xs text-vscode-foreground opacity-60">
-										{accessRequest?.approved ? 'Approved' : 'Denied'}
-									</span>
-								</div>
-							)}
 						</div>
+					) : undefined
+				}
+				accessGate={
+					showAccessGate ? (
+						<AccessGate
+							requestId={accessRequest?.requestId}
+							messageId={accessRequest?.id}
+							tool={accessRequest?.tool || toolName}
+							input={accessRequest?.input || rawInput || {}}
+							pattern={accessRequest?.pattern}
+							hideDetails={true}
+						/>
 					) : undefined
 				}
 			/>
