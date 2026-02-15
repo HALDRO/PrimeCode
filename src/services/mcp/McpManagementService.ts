@@ -3,11 +3,20 @@
  * @description Orchestrates MCP configuration lifecycle for the extension.
  *              Keeps project-level `.agents/mcp.json` as the source of truth,
  *              pings servers for tools/resources, integrates marketplace install flow,
- *              and syncs derived configs to individual project targets (OpenCode/Cursor).
+ *              and syncs derived configs to individual project targets (OpenCode).
+ *              Consolidates marketplace (Cline API), metadata (installed-mcp-meta.json),
+ *              and hub logic that were previously in separate services.
  */
 
+import * as path from 'node:path';
 import * as vscode from 'vscode';
-import type { AgentsMcpServer, MCPServerConfig } from '../../common';
+import type {
+	AgentsMcpServer,
+	InstalledMcpServerMetadata,
+	MCPServerConfig,
+	McpMarketplaceCatalog,
+	McpMarketplaceItem,
+} from '../../common';
 import { logger } from '../../utils/logger';
 import {
 	type AgentsConfigService,
@@ -17,8 +26,25 @@ import {
 } from '../AgentsConfigService';
 import type { AgentsSyncService } from '../AgentsSyncService';
 import { McpClientService } from './McpClientService.js';
-import type { McpMarketplaceService } from './McpMarketplaceService';
-import type { McpMetadataService } from './McpMetadataService';
+
+// =========================================================================
+// Marketplace types (previously in McpMarketplaceService)
+// =========================================================================
+
+export interface McpDownloadResponse {
+	mcpId: string;
+	githubUrl: string;
+	name: string;
+	author: string;
+	description: string;
+	readmeContent: string;
+	llmsInstallationContent: string;
+	requiresApiKey: boolean;
+}
+
+// =========================================================================
+// Internal types & constants
+// =========================================================================
 
 type McpStatusCache = Record<
 	string,
@@ -31,6 +57,12 @@ type McpStatusCache = Record<
 >;
 
 const MCP_STATUS_CACHE_KEY = 'mcpStatusCache';
+const MARKETPLACE_CACHE_KEY = 'mcpMarketplaceCatalog';
+const MARKETPLACE_API_BASE_URL = 'https://api.cline.bot/v1/mcp';
+const FETCH_TIMEOUT_MS = 15_000;
+const METADATA_DIR_NAME = 'mcp';
+const METADATA_FILENAME = 'installed-mcp-meta.json';
+const EMPTY_CATALOG: McpMarketplaceCatalog = { schemaVersion: 1, items: [] };
 
 type PostMessage = (msg: unknown) => void;
 type OnConfigSaved = () => void;
@@ -43,8 +75,6 @@ export class McpManagementService {
 
 	constructor(
 		private readonly _context: vscode.ExtensionContext,
-		private readonly _mcpMarketplace: McpMarketplaceService,
-		private readonly _mcpMetadata: McpMetadataService,
 		private readonly _postMessage: PostMessage,
 		agentsConfig: AgentsConfigService,
 		agentsSync: AgentsSyncService,
@@ -69,7 +99,7 @@ export class McpManagementService {
 
 		this._postMessage({ type: 'mcpServers', data: servers });
 
-		const metadata = await this._mcpMetadata.loadAll();
+		const metadata = await this._loadInstalledMetadata();
 		this._postMessage({ type: 'mcpInstalledMetadata', data: { metadata } });
 
 		const cachedStatus = this._getMcpStatusCache();
@@ -147,7 +177,7 @@ export class McpManagementService {
 
 	public async fetchMcpMarketplaceCatalog(forceRefresh = false): Promise<void> {
 		try {
-			const catalog = await this._mcpMarketplace.fetchCatalog(forceRefresh);
+			const catalog = await this._fetchCatalog(forceRefresh);
 			this._postMessage({ type: 'mcpMarketplaceCatalog', data: { catalog } });
 		} catch (error) {
 			this._postMessage({
@@ -162,9 +192,7 @@ export class McpManagementService {
 
 	public async installMcpFromMarketplace(mcpId: string): Promise<void> {
 		try {
-			const { McpHubService } = await import('./McpHubService.js');
-			const hub = new McpHubService(this._mcpMarketplace, this._mcpMetadata);
-			const result = await hub.downloadMcpForInstallation(mcpId);
+			const result = await this._downloadMcpForInstallation(mcpId);
 
 			if (!result.success) {
 				this._postMessage({
@@ -175,7 +203,7 @@ export class McpManagementService {
 			}
 
 			if (result.details) {
-				const prompt = hub.generateInstallationPrompt(result.details);
+				const prompt = this._generateInstallationPrompt(result.details);
 				this._postMessage({
 					type: 'mcpMarketplaceInstallResult',
 					data: {
@@ -243,9 +271,9 @@ export class McpManagementService {
 
 			await this._agentsConfig.saveServer(name, server);
 
-			const current = await this._mcpMetadata.loadAll();
+			const current = await this._loadInstalledMetadata();
 			if (!current[name]) {
-				await this._mcpMetadata.set(name, {
+				await this._setInstalledMetadata(name, {
 					source: 'custom',
 					displayName: name,
 					installedAt: new Date().toISOString(),
@@ -269,7 +297,7 @@ export class McpManagementService {
 			this._onConfigSaved?.();
 
 			await this._agentsConfig.deleteServer(name);
-			await this._mcpMetadata.delete(name);
+			await this._deleteInstalledMetadata(name);
 			this._postMessage({ type: 'mcpServerDeleted', data: { name } });
 			await this.loadMCPServers();
 		} catch (error) {
@@ -380,5 +408,186 @@ export class McpManagementService {
 		} catch (error) {
 			logger.error(`[McpManagementService] Failed to ping MCP server ${name}:`, error);
 		}
+	}
+
+	// =========================================================================
+	// Marketplace (previously McpMarketplaceService)
+	// =========================================================================
+
+	private async _fetchCatalog(forceRefresh = false): Promise<McpMarketplaceCatalog> {
+		if (!forceRefresh) {
+			const cached = this._context.globalState.get<McpMarketplaceCatalog>(MARKETPLACE_CACHE_KEY);
+			if (cached?.items?.length) return cached;
+		}
+
+		const controller = new AbortController();
+		const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+		try {
+			const response = await fetch(`${MARKETPLACE_API_BASE_URL}/marketplace`, {
+				method: 'GET',
+				headers: {
+					'Content-Type': 'application/json',
+					'User-Agent': 'primecode-vscode-extension',
+				},
+				signal: controller.signal,
+			});
+
+			if (!response.ok) {
+				throw new Error(`Marketplace request failed: ${response.status} ${response.statusText}`);
+			}
+
+			const data = (await response.json()) as unknown[];
+			const rawItems = Array.isArray(data) ? data : [];
+
+			const items: McpMarketplaceItem[] = rawItems
+				.filter((item): item is Record<string, unknown> => item != null && typeof item === 'object')
+				.map(item => ({
+					mcpId: String(item.mcpId ?? ''),
+					name: String(item.name ?? ''),
+					author: String(item.author ?? ''),
+					description: String(item.description ?? ''),
+					githubUrl: String(item.githubUrl ?? ''),
+					logoUrl: String(item.logoUrl ?? ''),
+					category: String(item.category ?? ''),
+					tags: Array.isArray(item.tags) ? (item.tags as string[]) : [],
+					requiresApiKey: Boolean(item.requiresApiKey),
+					isRecommended: Boolean(item.isRecommended),
+					githubStars: Number(item.githubStars ?? 0),
+					downloadCount: Number(item.downloadCount ?? 0),
+				}));
+
+			const catalog: McpMarketplaceCatalog = { schemaVersion: 1, items };
+			await this._context.globalState.update(MARKETPLACE_CACHE_KEY, catalog);
+			return catalog;
+		} catch {
+			return EMPTY_CATALOG;
+		} finally {
+			clearTimeout(timeoutId);
+		}
+	}
+
+	private async _downloadMcpDetails(mcpId: string): Promise<McpDownloadResponse | null> {
+		const controller = new AbortController();
+		const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+		try {
+			const response = await fetch(`${MARKETPLACE_API_BASE_URL}/download`, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'User-Agent': 'primecode-vscode-extension',
+				},
+				body: JSON.stringify({ mcpId }),
+				signal: controller.signal,
+			});
+
+			if (!response.ok) {
+				throw new Error(`Download request failed: ${response.status} ${response.statusText}`);
+			}
+			return (await response.json()) as McpDownloadResponse;
+		} catch (err) {
+			logger.error('[McpManagementService] Failed to download MCP details:', err);
+			return null;
+		} finally {
+			clearTimeout(timeoutId);
+		}
+	}
+
+	// =========================================================================
+	// Hub logic (previously McpHubService)
+	// =========================================================================
+
+	private async _downloadMcpForInstallation(mcpId: string): Promise<{
+		success: boolean;
+		details?: McpDownloadResponse;
+		item?: McpMarketplaceItem;
+		error?: string;
+	}> {
+		const catalog = await this._fetchCatalog(false);
+		const item = catalog.items.find(i => i.mcpId === mcpId);
+		if (!item) {
+			return { success: false, error: `Marketplace item '${mcpId}' not found` };
+		}
+
+		const details = await this._downloadMcpDetails(mcpId);
+		if (!details) {
+			if (item.githubUrl) {
+				return { success: true, item, details: undefined };
+			}
+			return { success: false, error: `Failed to download details for '${mcpId}'` };
+		}
+
+		return { success: true, details, item };
+	}
+
+	private _generateInstallationPrompt(details: McpDownloadResponse): string {
+		return `Set up the MCP server from ${details.githubUrl} while adhering to these MCP server installation rules:
+- Use "${details.mcpId}" as the server name in mcp-servers.json.
+- Create the directory for the new MCP server before starting installation.
+- Make sure you read the user's existing mcp-servers.json file before editing it with this new mcp, to not overwrite any existing servers.
+- Use commands aligned with the user's shell and operating system best practices.
+- The following README may contain instructions that conflict with the user's OS, in which case proceed thoughtfully.
+- Once installed, demonstrate the server's capabilities by using one of its tools.
+Here is the project's README to help you get started:
+
+${details.readmeContent}
+${details.llmsInstallationContent || ''}`;
+	}
+
+	// =========================================================================
+	// Metadata (previously McpMetadataService)
+	// =========================================================================
+
+	private _getMetaPath(storagePath: string): string {
+		return path.join(storagePath, METADATA_DIR_NAME, METADATA_FILENAME);
+	}
+
+	private async _loadInstalledMetadata(): Promise<Record<string, InstalledMcpServerMetadata>> {
+		const storagePath = this._context.storageUri?.fsPath;
+		if (!storagePath) return {};
+
+		try {
+			await vscode.workspace.fs.createDirectory(
+				vscode.Uri.file(path.join(storagePath, METADATA_DIR_NAME)),
+			);
+			const content = await vscode.workspace.fs.readFile(
+				vscode.Uri.file(this._getMetaPath(storagePath)),
+			);
+			return JSON.parse(new TextDecoder().decode(content));
+		} catch {
+			return {};
+		}
+	}
+
+	private async _setInstalledMetadata(
+		name: string,
+		meta: InstalledMcpServerMetadata,
+	): Promise<void> {
+		const storagePath = this._context.storageUri?.fsPath;
+		if (!storagePath) return;
+
+		await vscode.workspace.fs.createDirectory(
+			vscode.Uri.file(path.join(storagePath, METADATA_DIR_NAME)),
+		);
+		const all = await this._loadInstalledMetadata();
+		all[name] = meta;
+		await vscode.workspace.fs.writeFile(
+			vscode.Uri.file(this._getMetaPath(storagePath)),
+			new TextEncoder().encode(JSON.stringify(all, null, 2)),
+		);
+	}
+
+	private async _deleteInstalledMetadata(name: string): Promise<void> {
+		const storagePath = this._context.storageUri?.fsPath;
+		if (!storagePath) return;
+
+		await vscode.workspace.fs.createDirectory(
+			vscode.Uri.file(path.join(storagePath, METADATA_DIR_NAME)),
+		);
+		const all = await this._loadInstalledMetadata();
+		delete all[name];
+		await vscode.workspace.fs.writeFile(
+			vscode.Uri.file(this._getMetaPath(storagePath)),
+			new TextEncoder().encode(JSON.stringify(all, null, 2)),
+		);
 	}
 }
