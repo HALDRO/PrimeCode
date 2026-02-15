@@ -1,8 +1,7 @@
 /**
- * @file AgentResourceService
+ * @file ResourceService
  * @description Unified service for all agent resources (commands, skills, hooks, subagents).
- *              Replaces BaseAgentResourceService + 4 individual service classes with a single
- *              config-driven implementation. Uses vscode.workspace.fs for Remote Development.
+ *              Config-driven implementation. Uses vscode.workspace.fs for Remote Development.
  */
 
 import * as path from 'node:path';
@@ -187,7 +186,7 @@ const CONFIGS: Record<ResourceType, ResourceConfig<ResourceItem>> = {
 // Unified Service
 // =============================================================================
 
-export class AgentResourceService {
+export class ResourceService {
 	private _workspaceRoot: string | undefined;
 
 	public setWorkspaceRoot(root: string): void {
@@ -252,27 +251,44 @@ export class AgentResourceService {
 	// Flat layout (commands, hooks, subagents)
 	// =========================================================================
 
+	/**
+	 * Read and parse a single .md resource file.
+	 * Shared by both flat and subdir layouts to avoid duplication.
+	 */
+	private async _loadResource(
+		cfg: ResourceConfig<ResourceItem>,
+		uri: vscode.Uri,
+		identifier: string,
+		buildPath: (...s: string[]) => string,
+	): Promise<ResourceItem | null> {
+		try {
+			const content = await this.readTextFile(uri);
+			const { attributes, body } = parseFrontmatter(content);
+			return cfg.parse(attributes, body, identifier, buildPath);
+		} catch {
+			return null;
+		}
+	}
+
 	private async getAllFlat(
 		cfg: ResourceConfig<ResourceItem>,
 		dir: vscode.Uri,
 	): Promise<ResourceItem[]> {
 		const entries = await vscode.workspace.fs.readDirectory(dir);
-		const items: ResourceItem[] = [];
 		const buildPath = (...s: string[]) => normalizeToPosixPath(path.join(cfg.dir, ...s));
 
-		for (const [name, type] of entries) {
-			if (type !== vscode.FileType.File || !name.endsWith('.md')) continue;
-			try {
-				const uri = vscode.Uri.joinPath(dir, name);
-				const content = await this.readTextFile(uri);
-				const { attributes, body } = parseFrontmatter(content);
-				items.push(cfg.parse(attributes, body, name, buildPath));
-			} catch {
-				/* skip broken */
-			}
-		}
+		const results = await Promise.all(
+			entries
+				.filter(([name, type]) => type === vscode.FileType.File && name.endsWith('.md'))
+				.map(([name]) => {
+					const uri = vscode.Uri.joinPath(dir, name);
+					return this._loadResource(cfg, uri, name, buildPath);
+				}),
+		);
 
-		return items.sort((a, b) => a.name.localeCompare(b.name));
+		return results
+			.filter((item): item is ResourceItem => item !== null)
+			.sort((a, b) => a.name.localeCompare(b.name));
 	}
 
 	private async saveFlat(
@@ -296,23 +312,21 @@ export class AgentResourceService {
 		dir: vscode.Uri,
 	): Promise<ResourceItem[]> {
 		const entries = await vscode.workspace.fs.readDirectory(dir);
-		const items: ResourceItem[] = [];
 		const buildPath = (...s: string[]) => normalizeToPosixPath(path.join(cfg.dir, ...s));
 
-		for (const [name, type] of entries) {
-			if (type !== vscode.FileType.Directory) continue;
-			const skillFileUri = vscode.Uri.joinPath(dir, name, 'SKILL.md');
-			if (!(await this.fileExists(skillFileUri))) continue;
-			try {
-				const content = await this.readTextFile(skillFileUri);
-				const { attributes, body } = parseFrontmatter(content);
-				items.push(cfg.parse(attributes, body, name, buildPath));
-			} catch {
-				/* skip broken */
-			}
-		}
+		const results = await Promise.all(
+			entries
+				.filter(([, type]) => type === vscode.FileType.Directory)
+				.map(async ([name]) => {
+					const skillFileUri = vscode.Uri.joinPath(dir, name, 'SKILL.md');
+					if (!(await this.fileExists(skillFileUri))) return null;
+					return this._loadResource(cfg, skillFileUri, name, buildPath);
+				}),
+		);
 
-		return items.sort((a, b) => a.name.localeCompare(b.name));
+		return results
+			.filter((item): item is ResourceItem => item !== null)
+			.sort((a, b) => a.name.localeCompare(b.name));
 	}
 
 	private async saveSubdir(

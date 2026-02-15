@@ -1,15 +1,13 @@
 /**
  * @file SubagentsTab.tsx
- * @description Settings tab for managing subagents stored in .agents/subagents/.
- *              Provides UI for creating, editing, deleting, importing, and syncing subagents
- *              to/from CLI-specific directories (.opencode/agent/).
+ * @description Settings tab for managing subagents stored in .opencode/subagents/.
  */
 
 import type React from 'react';
 import { useEffect, useState } from 'react';
 import { useSettingsStore } from '../../../store';
 import { useVSCode } from '../../../utils/vscode';
-import { DownloadIcon, EditIcon, PlusIcon, RefreshIcon, TrashIcon } from '../../icons';
+import { EditIcon, PlusIcon, TrashIcon } from '../../icons';
 import { Button, Tooltip } from '../../ui';
 import {
 	EmptyState,
@@ -61,64 +59,15 @@ export const SubagentsTab: React.FC = () => {
 		postMessage({ type: 'openSubagentFile', name });
 	};
 
-	const handleImport = () => {
-		useSettingsStore.getState().actions.setAgentsOps({
-			lastAction: 'import',
-			status: 'working',
-			message: 'Importing subagents from CLI...',
-		});
-		postMessage({ type: 'importSubagentsFromCLI' });
-	};
-
-	const handleSync = () => {
-		useSettingsStore.getState().actions.setAgentsOps({
-			lastAction: 'sync',
-			status: 'working',
-			message: 'Syncing subagents to CLI...',
-		});
-		postMessage({ type: 'syncSubagentsToCLI' });
-	};
-
 	return (
 		<>
 			{/* Actions Bar */}
-			<GroupTitle>Import & Sync</GroupTitle>
+			<GroupTitle>Subagents</GroupTitle>
 			<SettingsGroup>
-				<SettingRow
-					title="Import from CLI"
-					tooltip="Import existing subagents from .opencode/agent/"
-				>
-					<Button
-						size="sm"
-						variant="secondary"
-						title="Import from .opencode into .agents"
-						onClick={handleImport}
-					>
-						<DownloadIcon size={12} className="mr-1" />
-						Import
-					</Button>
-				</SettingRow>
-
-				<SettingRow
-					title="Sync to CLI"
-					tooltip="Export subagents to .opencode/agent/"
-					last={isCreating}
-				>
-					<Button
-						size="sm"
-						variant="secondary"
-						title="Export from .agents to .opencode"
-						onClick={handleSync}
-					>
-						<RefreshIcon size={12} className="mr-1" />
-						Sync
-					</Button>
-				</SettingRow>
-
 				{!isCreating && (
 					<SettingRow
 						title="New Subagent"
-						tooltip="Create a new subagent under .agents/subagents/"
+						tooltip="Create a new subagent under .opencode/subagents/"
 						last
 					>
 						<Button size="sm" onClick={() => setIsCreating(true)}>
@@ -200,7 +149,7 @@ export const SubagentsTab: React.FC = () => {
 						Loading subagents...
 					</div>
 				) : subagents.items.length === 0 ? (
-					<EmptyState>No subagents found. Create one or import from CLI.</EmptyState>
+					<EmptyState>No subagents found. Create one above.</EmptyState>
 				) : (
 					subagents.items.map((subagent, idx) => (
 						<SettingRow

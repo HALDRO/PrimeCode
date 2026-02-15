@@ -2,7 +2,7 @@ import type React from 'react';
 import { useEffect, useState } from 'react';
 import { useSettingsStore } from '../../../store';
 import { useVSCode } from '../../../utils/vscode';
-import { DownloadIcon, EditIcon, PlusIcon, RefreshIcon, TrashIcon } from '../../icons';
+import { EditIcon, PlusIcon, TrashIcon } from '../../icons';
 import { Button, Tooltip } from '../../ui';
 import {
 	EmptyState,
@@ -48,58 +48,13 @@ export const SkillsTab: React.FC = () => {
 
 	const handleDeleteSkill = (name: string) => postMessage({ type: 'deleteSkill', name });
 	const handleOpenSkill = (name: string) => postMessage({ type: 'openSkillFile', name });
-	const handleImportSkills = () => {
-		useSettingsStore.getState().actions.setAgentsOps({
-			lastAction: 'import',
-			status: 'working',
-			message: 'Importing skills from CLI...',
-		});
-		postMessage({ type: 'importSkillsFromCLI' });
-	};
-	const handleSyncSkills = () => {
-		useSettingsStore.getState().actions.setAgentsOps({
-			lastAction: 'sync',
-			status: 'working',
-			message: 'Syncing skills to CLI...',
-		});
-		postMessage({ type: 'syncSkillsToCLI' });
-	};
 
 	return (
 		<>
-			<GroupTitle>Import & Sync</GroupTitle>
+			<GroupTitle>Skills</GroupTitle>
 			<SettingsGroup>
-				<SettingRow
-					title="Import from CLI"
-					tooltip="Import skills from .opencode/skill/ and .cursor/skills/ into .agents/skills/"
-				>
-					<Button
-						size="sm"
-						variant="secondary"
-						onClick={handleImportSkills}
-						title="Import from .opencode/.cursor into .agents"
-					>
-						<DownloadIcon size={12} className="mr-1" />
-						Import
-					</Button>
-				</SettingRow>
-				<SettingRow
-					title="Sync to CLI"
-					tooltip="Export skills from .agents/skills/ to .opencode/skill/ and .cursor/skills/"
-					last={isCreatingSkill}
-				>
-					<Button
-						size="sm"
-						variant="secondary"
-						onClick={handleSyncSkills}
-						title="Export from .agents to .opencode/.cursor"
-					>
-						<RefreshIcon size={12} className="mr-1" />
-						Sync
-					</Button>
-				</SettingRow>
 				{!isCreatingSkill && (
-					<SettingRow title="New Skill" tooltip="Create a new skill under .agents/skills/" last>
+					<SettingRow title="New Skill" tooltip="Create a new skill under .opencode/skills/" last>
 						<Button size="sm" onClick={() => setIsCreatingSkill(true)}>
 							<PlusIcon size={12} className="mr-1" />
 							New
@@ -178,7 +133,7 @@ export const SkillsTab: React.FC = () => {
 						Loading skills...
 					</div>
 				) : skills.items.length === 0 ? (
-					<EmptyState>No skills found. Create one or import from CLI.</EmptyState>
+					<EmptyState>No skills found. Create one above.</EmptyState>
 				) : (
 					skills.items.map((skill, i) => (
 						<SettingRow

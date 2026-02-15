@@ -378,9 +378,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 						</div>
 					) : undefined
 				}
-				isCollapsible={
-					(needsExpand && hasBody) || Boolean(showAccessGate)
-				}
+				isCollapsible={(needsExpand && hasBody) || Boolean(showAccessGate)}
 				expanded={expanded}
 				onToggle={() => setExpanded(prev => !prev)}
 				body={

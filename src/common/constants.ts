@@ -88,28 +88,22 @@ export const isModelInProxyList = (
 // =============================================================================
 
 /**
- * Project directory paths for unified CLI structure.
+ * Project directory paths for OpenCode native structure.
  * All paths are relative to workspace root.
  */
 export const PATHS = {
-	/** Unified directory for all CLI configurations */
-	AGENTS_DIR: '.agents',
+	/** OpenCode project config directory */
+	OPENCODE_DIR: '.opencode',
 
-	// Canonical structure
-	AGENTS_COMMANDS_DIR: '.agents/commands',
-	AGENTS_RULES_DIR: '.agents/rules',
-	AGENTS_SKILLS_DIR: '.agents/skills',
-	AGENTS_HOOKS_DIR: '.agents/hooks',
-	AGENTS_SUBAGENTS_DIR: '.agents/subagents',
+	/** OpenCode project config file */
+	OPENCODE_CONFIG: 'opencode.json',
 
-	// OpenCode compatibility
-	OPENCODE_COMMAND_DIR: '.opencode/command',
-	OPENCODE_AGENT_DIR: '.opencode/agent',
-	OPENCODE_SKILL_DIR: '.opencode/skill',
-
-	// Cursor compatibility (import-only)
-	CURSOR_COMMANDS_DIR: '.cursor/commands',
-	CURSOR_SKILLS_DIR: '.cursor/skills',
+	// Resource directories (OpenCode native)
+	OPENCODE_COMMANDS_DIR: '.opencode/commands',
+	OPENCODE_RULES_DIR: '.opencode/rules',
+	OPENCODE_SKILLS_DIR: '.opencode/skills',
+	OPENCODE_PLUGINS_DIR: '.opencode/plugins',
+	OPENCODE_AGENTS_DIR: '.opencode/agents',
 } as const;
 
 // =============================================================================

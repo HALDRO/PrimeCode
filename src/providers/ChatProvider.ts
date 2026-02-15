@@ -1,8 +1,6 @@
 import * as vscode from 'vscode';
 
-import type { WebviewCommand } from '../common/protocol';
 import { OpenCodeExecutor } from '../core/executor/OpenCode';
-import type { CLIEvent } from '../core/executor/types';
 import type { ServiceRegistry } from '../core/ServiceRegistry';
 import { SessionGraph, SessionState } from '../core/SessionManager';
 import { Settings } from '../core/Settings';
@@ -91,44 +89,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private settings: Settings;
 	private sessionState: SessionState;
 	private disposables: vscode.Disposable[] = [];
-
-	/** Per-session active assistant part IDs — avoids cross-contamination between concurrent subagents. */
-	private activeAssistantPartIds = new Map<string, string>();
-	/** Per-session active thinking part IDs — tracks thinking blocks for complete events. */
-	private activeThinkingPartIds = new Map<string, string>();
-
-	/** Complete and clear any active thinking block for a session. */
-	private completeActiveThinking(sessionId: string): void {
-		const thinkingPartId = this.activeThinkingPartIds.get(sessionId);
-		if (thinkingPartId) {
-			this.sessionHandler.postComplete(thinkingPartId, thinkingPartId, sessionId);
-			this.activeThinkingPartIds.delete(sessionId);
-		}
-	}
 	private sessionGraph = new SessionGraph();
 	private openCodeInitTimer: ReturnType<typeof setInterval> | null = null;
-
-	/**
-	 * Tracks pending subtask tool_use IDs that haven't been linked to a child session yet.
-	 * When a `task` tool_use arrives, the child session ID is unknown (event.sessionId is the parent).
-	 * We store the toolUseId here and link it when the first child event arrives.
-	 */
-	private pendingSubtaskToolIds = new Set<string>();
-
-	/**
-	 * Inactivity timeout for subtasks (ms). If no SSE event arrives from a child session
-	 * within this window, we abort the child and synthesize an error result so the parent continues.
-	 */
-	private static readonly SUBTASK_INACTIVITY_TIMEOUT_MS = 60_000;
-
-	/** toolUseId → inactivity timer handle */
-	private subtaskTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
-	/** toolUseId → parentSessionId */
-	private subtaskParentSessionByToolUseId = new Map<string, string>();
-
-	/** childSessionId → toolUseId (reverse lookup for resetting timers on child events) */
-	private childSessionToToolUseId = new Map<string, string>();
 
 	// Handlers
 	private sessionHandler: SessionHandler;
@@ -211,6 +173,32 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			this.services.mcpConfigWatcher.onConfigChanged(e =>
 				this.bridge.data('mcpConfigReloaded', { source: e.source, timestamp: e.timestamp }),
 			),
+		);
+
+		// Wire up ResourceWatcher — auto-refresh UI when .opencode/ resource files change
+		this.disposables.push(
+			this.services.resourceWatcher.onResourceChanged(async e => {
+				logger.info(`[ChatProvider] Resource changed: ${e.resourceType}, refreshing UI`);
+				try {
+					const items = await this.services.resources.getAll(e.resourceType);
+					const dataKeyMap = {
+						commands: 'commandsList',
+						skills: 'skillsList',
+						hooks: 'hooksList',
+						subagents: 'subagentsList',
+					} as const;
+					const key = dataKeyMap[e.resourceType];
+					const payloadKeyMap = {
+						commands: 'custom',
+						skills: 'skills',
+						hooks: 'hooks',
+						subagents: 'subagents',
+					} as const;
+					this.bridge.data(key, { [payloadKeyMap[e.resourceType]]: items, isLoading: false });
+				} catch (error) {
+					logger.error(`[ChatProvider] Failed to refresh ${e.resourceType}:`, error);
+				}
+			}),
 		);
 
 		// Keep services in sync when workspace folders change at runtime
@@ -366,6 +354,18 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				'getHooks',
 				'getSubagents',
 				'getRules',
+				// Resource CRUD
+				'createCommand',
+				'deleteCommand',
+				'createSkill',
+				'deleteSkill',
+				'createHook',
+				'deleteHook',
+				'createSubagent',
+				'deleteSubagent',
+				'toggleRule',
+				'createRule',
+				'deleteRule',
 			],
 			'settings',
 		);
@@ -379,9 +379,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				'installMcpFromMarketplace',
 				'saveMCPServer',
 				'deleteMCPServer',
-				'openAgentsMcpConfig',
-				'importMcpFromCLI',
-				'syncAgentsToOpenCodeProject',
+				'openMcpConfig',
 			],
 			'mcp',
 		);

@@ -49,23 +49,23 @@ import { handleSettingsData } from './settingsUtils';
 const handleLoadingMeta = (
 	meta: { operation?: string; message?: string } | undefined,
 	error: string | undefined,
-	setAgentsOps: (ops: Partial<SettingsState['agentsOps']>) => void,
+	setResourceOps: (ops: Partial<SettingsState['resourceOps']>) => void,
 ) => {
 	if (meta?.operation && meta.message) {
-		setAgentsOps({
+		setResourceOps({
 			lastAction: meta.operation,
 			status: 'success',
 			message: meta.message,
 		});
-		setTimeout(() => setAgentsOps({ status: 'idle' }), 3500);
+		setTimeout(() => setResourceOps({ status: 'idle' }), 3500);
 	}
 	if (error) {
-		setAgentsOps({
+		setResourceOps({
 			lastAction: 'error',
 			status: 'error',
 			message: error,
 		});
-		setTimeout(() => setAgentsOps({ status: 'idle' }), 6000);
+		setTimeout(() => setResourceOps({ status: 'idle' }), 6000);
 	}
 };
 
@@ -134,10 +134,10 @@ export interface SettingsActions {
 	// Permissions
 	setPolicies: (policies: PermissionPolicies) => void;
 	// Agents config
-	setAgentsConfigStatus: (status: Partial<SettingsState['agentsConfig']>) => void;
+	setMcpConfigStatus: (status: Partial<SettingsState['mcpConfig']>) => void;
 
 	// Import/Sync feedback in Settings (avoids noisy toasts)
-	setAgentsOps: (ops: Partial<SettingsState['agentsOps']>) => void;
+	setResourceOps: (ops: Partial<SettingsState['resourceOps']>) => void;
 
 	handleExtensionMessage: (message: ExtensionMessage) => void;
 }
@@ -300,16 +300,16 @@ export interface SettingsState {
 		error?: string;
 	};
 
-	// Import/Sync feedback in Settings (avoids noisy toasts)
-	agentsOps: {
+	// Resource operations feedback in Settings
+	resourceOps: {
 		lastAction?: string;
 		status: 'idle' | 'working' | 'success' | 'error';
 		message?: string;
 		updatedAt?: number;
 	};
 
-	// Agents config status (.agents/mcp.json)
-	agentsConfig: {
+	// MCP config status (opencode.json)
+	mcpConfig: {
 		hasProjectConfig: boolean;
 		projectPath?: string;
 	};
@@ -425,7 +425,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 		error: undefined,
 	},
 
-	agentsConfig: {
+	mcpConfig: {
 		hasProjectConfig: false,
 		projectPath: undefined,
 	},
@@ -441,7 +441,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 		isChecking: false,
 	},
 
-	agentsOps: {
+	resourceOps: {
 		lastAction: undefined,
 		status: 'idle',
 		message: undefined,
@@ -538,15 +538,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
 		setPolicies: policies => set({ policies }),
 
-		setAgentsConfigStatus: status =>
+		setMcpConfigStatus: status =>
 			set(state => ({
-				agentsConfig: { ...state.agentsConfig, ...status },
+				mcpConfig: { ...state.mcpConfig, ...status },
 			})),
 
-		setAgentsOps: ops =>
+		setResourceOps: ops =>
 			set(state => ({
-				agentsOps: {
-					...state.agentsOps,
+				resourceOps: {
+					...state.resourceOps,
 					...ops,
 					updatedAt: Date.now(),
 				},
@@ -566,7 +566,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 							meta?: { operation?: string; message?: string };
 						};
 						actions.setCommands({ custom, ...(cli !== undefined && { cli }), isLoading, error });
-						handleLoadingMeta(meta, error, actions.setAgentsOps);
+						handleLoadingMeta(meta, error, actions.setResourceOps);
 					}
 					break;
 
@@ -579,7 +579,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 							meta?: { operation?: string; message?: string };
 						};
 						actions.setSkills({ items: skills, isLoading, error });
-						handleLoadingMeta(meta, error, actions.setAgentsOps);
+						handleLoadingMeta(meta, error, actions.setResourceOps);
 					}
 					break;
 
@@ -592,7 +592,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 							meta?: { operation?: string; message?: string };
 						};
 						actions.setHooks({ items: hooks, isLoading, error });
-						handleLoadingMeta(meta, error, actions.setAgentsOps);
+						handleLoadingMeta(meta, error, actions.setResourceOps);
 					}
 					break;
 
@@ -605,7 +605,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 							meta?: { operation?: string; message?: string };
 						};
 						actions.setSubagents({ items: subagents, isLoading, error });
-						handleLoadingMeta(meta, error, actions.setAgentsOps);
+						handleLoadingMeta(meta, error, actions.setResourceOps);
 					}
 					break;
 
@@ -672,7 +672,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 						actions.setRules(message.data.rules);
 						const meta = (message.data as { meta?: { operation?: string; message?: string } })
 							?.meta;
-						handleLoadingMeta(meta, undefined, actions.setAgentsOps);
+						handleLoadingMeta(meta, undefined, actions.setResourceOps);
 					}
 					break;
 
@@ -828,13 +828,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 					}
 					break;
 
-				case 'agentsConfigStatus':
+				case 'mcpConfigStatus':
 					if (message.data) {
 						const data = message.data as {
 							hasProjectConfig?: boolean;
 							projectPath?: string;
 						};
-						actions.setAgentsConfigStatus({
+						actions.setMcpConfigStatus({
 							hasProjectConfig: data.hasProjectConfig ?? false,
 							projectPath: data.projectPath,
 						});

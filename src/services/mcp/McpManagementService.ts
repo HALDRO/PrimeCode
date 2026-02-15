@@ -1,30 +1,26 @@
 /**
  * @file McpManagementService
  * @description Orchestrates MCP configuration lifecycle for the extension.
- *              Keeps project-level `.agents/mcp.json` as the source of truth,
- *              pings servers for tools/resources, integrates marketplace install flow,
- *              and syncs derived configs to individual project targets (OpenCode).
- *              Consolidates marketplace (Cline API), metadata (installed-mcp-meta.json),
- *              and hub logic that were previously in separate services.
+ *              Reads/writes MCP config directly from `opencode.json` as the source of truth,
+ *              pings servers for tools/resources, integrates marketplace install flow.
  */
 
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type {
-	AgentsMcpServer,
 	InstalledMcpServerMetadata,
 	MCPServerConfig,
 	McpMarketplaceCatalog,
 	McpMarketplaceItem,
+	McpServer,
 } from '../../common';
 import { logger } from '../../utils/logger';
 import {
-	type AgentsConfigService,
-	agentsServersToMcpConfigMap,
-	agentsServerToMcpConfig,
-	mcpConfigToAgentsServer,
-} from '../AgentsConfigService';
-import type { AgentsSyncService } from '../AgentsSyncService';
+	configToMcpServer,
+	type McpConfigService,
+	mcpServersToConfigMap,
+	mcpServerToConfig,
+} from '../McpConfigService';
 import { McpClientService } from './McpClientService.js';
 
 // =========================================================================
@@ -68,19 +64,16 @@ type PostMessage = (msg: unknown) => void;
 type OnConfigSaved = () => void;
 
 export class McpManagementService {
-	private readonly _agentsConfig: AgentsConfigService;
-	private readonly _agentsSync: AgentsSyncService;
+	private readonly _agentsConfig: McpConfigService;
 	private readonly _mcpClient: McpClientService;
 	private _onConfigSaved: OnConfigSaved | undefined;
 
 	constructor(
 		private readonly _context: vscode.ExtensionContext,
 		private readonly _postMessage: PostMessage,
-		agentsConfig: AgentsConfigService,
-		agentsSync: AgentsSyncService,
+		agentsConfig: McpConfigService,
 	) {
 		this._agentsConfig = agentsConfig;
-		this._agentsSync = agentsSync;
 		this._mcpClient = new McpClientService();
 	}
 
@@ -95,7 +88,7 @@ export class McpManagementService {
 	public async loadMCPServers(): Promise<void> {
 		const agentsConfig = await this._agentsConfig.loadProjectConfig();
 
-		const servers = agentsConfig?.servers ? agentsServersToMcpConfigMap(agentsConfig.servers) : {};
+		const servers = agentsConfig?.mcp ? mcpServersToConfigMap(agentsConfig.mcp) : {};
 
 		this._postMessage({ type: 'mcpServers', data: servers });
 
@@ -121,9 +114,7 @@ export class McpManagementService {
 	public async pingMcpServers(): Promise<void> {
 		try {
 			const agentsConfig = await this._agentsConfig.loadProjectConfig();
-			const servers = agentsConfig?.servers
-				? agentsServersToMcpConfigMap(agentsConfig.servers)
-				: {};
+			const servers = agentsConfig?.mcp ? mcpServersToConfigMap(agentsConfig.mcp) : {};
 
 			const results = await this._mcpClient.pingServers(servers);
 
@@ -153,8 +144,8 @@ export class McpManagementService {
 	}
 
 	public async saveMCPServer(name: string, config: MCPServerConfig): Promise<void> {
-		const agentsServer = mcpConfigToAgentsServer(config);
-		if (!agentsServer) {
+		const mcpServer = configToMcpServer(config);
+		if (!mcpServer) {
 			this._postMessage({
 				type: 'mcpServerError',
 				data: { error: 'Invalid MCP server configuration' },
@@ -162,17 +153,17 @@ export class McpManagementService {
 			return;
 		}
 
-		await this.saveMCPServerToAgents(name, agentsServer);
+		await this.saveMCPServerToConfig(name, mcpServer);
 	}
 
 	public async deleteMCPServer(name: string): Promise<void> {
 		const agentsConfig = await this._agentsConfig.loadProjectConfig();
-		if (!agentsConfig?.servers[name]) {
+		if (!agentsConfig?.mcp?.[name]) {
 			this._postMessage({ type: 'mcpServerDeleted', data: { name } });
 			return;
 		}
 
-		await this._deleteMCPServerFromAgents(name);
+		await this._deleteMCPServerFromConfig(name);
 	}
 
 	public async fetchMcpMarketplaceCatalog(forceRefresh = false): Promise<void> {
@@ -244,7 +235,7 @@ export class McpManagementService {
 	public async checkAgentsConfig(): Promise<void> {
 		const hasProject = await this._agentsConfig.hasProjectConfig();
 		this._postMessage({
-			type: 'agentsConfigStatus',
+			type: 'mcpConfigStatus',
 			data: {
 				hasProjectConfig: hasProject,
 				projectPath: this._agentsConfig.getProjectMcpConfigPath(),
@@ -252,7 +243,7 @@ export class McpManagementService {
 		});
 	}
 
-	public async openAgentsMcpConfig(): Promise<void> {
+	public async openMcpConfig(): Promise<void> {
 		try {
 			const configPath = await this._agentsConfig.ensureProjectConfig();
 			if (configPath) {
@@ -260,11 +251,11 @@ export class McpManagementService {
 				await vscode.window.showTextDocument(uri);
 			}
 		} catch (error) {
-			logger.error('[McpManagementService] Failed to open .agents/mcp.json:', error);
+			logger.error('[McpManagementService] Failed to open opencode.json:', error);
 		}
 	}
 
-	public async saveMCPServerToAgents(name: string, server: AgentsMcpServer): Promise<void> {
+	public async saveMCPServerToConfig(name: string, server: McpServer): Promise<void> {
 		try {
 			// Notify watcher before save to suppress redundant reload
 			this._onConfigSaved?.();
@@ -291,7 +282,7 @@ export class McpManagementService {
 		}
 	}
 
-	private async _deleteMCPServerFromAgents(name: string): Promise<void> {
+	private async _deleteMCPServerFromConfig(name: string): Promise<void> {
 		try {
 			// Notify watcher before delete to suppress redundant reload
 			this._onConfigSaved?.();
@@ -308,69 +299,6 @@ export class McpManagementService {
 		}
 	}
 
-	public async syncAgentsToProject(target: 'opencode'): Promise<void> {
-		try {
-			await this._agentsSync.syncToOpenCodeProject();
-
-			this._postMessage({ type: 'agentsSyncResult', data: { target, success: true } });
-		} catch (error) {
-			this._postMessage({
-				type: 'agentsSyncResult',
-				data: {
-					target,
-					success: false,
-					error: error instanceof Error ? error.message : String(error),
-				},
-			});
-		}
-	}
-
-	/**
-	 * Import MCP configs from all CLI sources (.cursor/mcp.json, .mcp.json, opencode.json)
-	 * and merge them into .agents/mcp.json
-	 */
-	public async importFromAllSources(): Promise<void> {
-		try {
-			const result = await this._agentsSync.migrateToAgents();
-
-			if (result.migrated) {
-				logger.info(
-					`[McpManagementService] Imported MCP configs from: ${result.sources.join(', ')}`,
-				);
-				this._postMessage({
-					type: 'mcpImportResult',
-					data: {
-						success: true,
-						sources: result.sources,
-						backups: result.backups,
-					},
-				});
-				// Reload servers to reflect imported config
-				await this.loadMCPServers();
-				// Ping all servers to reconnect and cache their status/tools
-				await this.pingMcpServers();
-			} else {
-				this._postMessage({
-					type: 'mcpImportResult',
-					data: {
-						success: true,
-						sources: [],
-						message: 'No CLI configs found to import',
-					},
-				});
-			}
-		} catch (error) {
-			logger.error('[McpManagementService] Failed to import MCP configs:', error);
-			this._postMessage({
-				type: 'mcpImportResult',
-				data: {
-					success: false,
-					error: error instanceof Error ? error.message : String(error),
-				},
-			});
-		}
-	}
-
 	private _getMcpStatusCache(): McpStatusCache | undefined {
 		return this._context.globalState.get<McpStatusCache>(MCP_STATUS_CACHE_KEY);
 	}
@@ -381,11 +309,11 @@ export class McpManagementService {
 		await this._context.globalState.update(MCP_STATUS_CACHE_KEY, merged);
 	}
 
-	private async _pingSingleServer(name: string, server: AgentsMcpServer): Promise<void> {
+	private async _pingSingleServer(name: string, server: McpServer): Promise<void> {
 		if (server.enabled === false) return;
 
 		try {
-			const config = agentsServerToMcpConfig(server);
+			const config = mcpServerToConfig(server);
 			if (!config) return;
 
 			const info = await this._mcpClient.pingServer(name, config);

@@ -191,6 +191,7 @@ const DropdownContainer: React.FC<DropdownContainerProps> = ({
 					['--dd-maxw' as string]: `${maxWidth}px`,
 					['--dd-maxh' as string]: `${computedMaxHeight}px`,
 					transformOrigin,
+					width: 'fit-content',
 					maxWidth: `min(${maxWidth}px, calc(100vw - 24px))`,
 					minWidth: `min(${minWidth}px, calc(100vw - 24px))`,
 				} as React.CSSProperties
@@ -481,17 +482,18 @@ export function DropdownMenu<T>({
 					<Tooltip
 						content={item.description}
 						position="right"
-						delay={150}
-						display="block"
-						wrapperStyle={{ width: '100%' }}
+						delay={200}
+						display="flex"
+						interactive
+						sideOnly
+						maxHeight={240}
+						wrapperStyle={{ flex: 1, minWidth: 0, alignItems: 'center', gap: 'var(--gap-1-5)' }}
 					>
-						<div className="flex items-center gap-(--gap-1-5) w-full">
-							{item.icon && <span className="flex shrink-0 opacity-70">{item.icon}</span>}
-							<span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
-								{item.label}
-							</span>
-							{item.meta && <span className="shrink-0 text-(--alpha-40)">{item.meta}</span>}
-						</div>
+						{item.icon && <span className="flex shrink-0 opacity-70">{item.icon}</span>}
+						<span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
+							{item.label}
+						</span>
+						{item.meta && <span className="shrink-0 text-(--alpha-40)">{item.meta}</span>}
 					</Tooltip>
 				) : (
 					<>

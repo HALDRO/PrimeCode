@@ -29,7 +29,7 @@ export const RulesTab: React.FC = () => {
 			<SettingsGroup>
 				<SettingRow
 					title="AGENTS.md"
-					tooltip="Auto-generated from first enabled rule in .agents/rules/"
+					tooltip="Auto-generated from first enabled rule in .opencode/rules/"
 					last
 				>
 					<div className="flex items-center gap-2">
@@ -45,10 +45,10 @@ export const RulesTab: React.FC = () => {
 				</SettingRow>
 			</SettingsGroup>
 
-			<GroupTitle>Rules (.agents/rules/)</GroupTitle>
+			<GroupTitle>Rules (.opencode/rules/)</GroupTitle>
 			<SettingsGroup>
 				{rules.length === 0 ? (
-					<EmptyState>No rule files found in .agents/rules/</EmptyState>
+					<EmptyState>No rule files found in .opencode/rules/</EmptyState>
 				) : (
 					rules.map((rule, i) => (
 						<SettingRow

@@ -1,16 +1,16 @@
 import * as vscode from 'vscode';
-import { AgentResourceService } from '../services/AgentResourceService';
-import { AgentsConfigService } from '../services/AgentsConfigService';
-import { AgentsSyncService } from '../services/AgentsSyncService';
+import { McpConfigService } from '../services/McpConfigService';
 import { McpConfigWatcherService } from '../services/McpConfigWatcherService';
 import { McpManagementService } from '../services/mcp/McpManagementService';
 import { OpenCodeClientService } from '../services/OpenCodeClientService';
+import { ResourceService } from '../services/ResourceService';
+import { ResourceWatcherService } from '../services/ResourceWatcherService';
 import { RulesService } from '../services/RulesService';
 
 export class ServiceRegistry implements vscode.Disposable {
-	public readonly agentResources: AgentResourceService;
-	public readonly agentsConfig: AgentsConfigService;
-	public readonly agentsSync: AgentsSyncService;
+	public readonly resources: ResourceService;
+	public readonly resourceWatcher: ResourceWatcherService;
+	public readonly mcpConfig: McpConfigService;
 	public readonly mcpConfigWatcher: McpConfigWatcherService;
 	public readonly mcpManagement: McpManagementService;
 	public readonly openCodeClient: OpenCodeClientService;
@@ -19,19 +19,18 @@ export class ServiceRegistry implements vscode.Disposable {
 	private disposables: vscode.Disposable[] = [];
 
 	constructor(context: vscode.ExtensionContext) {
-		this.agentResources = new AgentResourceService();
-		this.agentsConfig = new AgentsConfigService();
+		this.resources = new ResourceService();
+		this.resourceWatcher = new ResourceWatcherService(this.resources);
+		this.mcpConfig = new McpConfigService();
 
-		this.agentsSync = new AgentsSyncService(this.agentsConfig);
-		this.mcpConfigWatcher = new McpConfigWatcherService(this.agentsConfig, this.agentsSync);
+		this.mcpConfigWatcher = new McpConfigWatcherService(this.mcpConfig);
 
 		this.openCodeClient = new OpenCodeClientService();
 
 		this.mcpManagement = new McpManagementService(
 			context,
 			msg => this._onMcpMessage.fire(msg),
-			this.agentsConfig,
-			this.agentsSync,
+			this.mcpConfig,
 		);
 
 		// Initialize workspace-scoped services if workspace is already open
@@ -42,18 +41,20 @@ export class ServiceRegistry implements vscode.Disposable {
 
 		// Start watchers
 		this.mcpConfigWatcher.start();
-		this.disposables.push(this.mcpConfigWatcher);
+		this.resourceWatcher.start();
+		this.disposables.push(this.mcpConfigWatcher, this.resourceWatcher);
 	}
 
 	private _onMcpMessage = new vscode.EventEmitter<unknown>();
 	public readonly onMcpMessage = this._onMcpMessage.event;
 
 	public setWorkspaceRoot(root: string) {
-		this.agentResources.setWorkspaceRoot(root);
+		this.resources.setWorkspaceRoot(root);
 		this.rules = new RulesService(root);
 
-		// Restart MCP config watcher if it wasn't started (workspace was missing at init)
+		// Restart watchers if they weren't started (workspace was missing at init)
 		this.mcpConfigWatcher.start();
+		this.resourceWatcher.start();
 	}
 
 	dispose() {

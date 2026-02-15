@@ -24,14 +24,8 @@ export class McpHandler implements WebviewMessageHandler {
 			case 'deleteMCPServer':
 				await this.onDeleteMcpServer(msg);
 				break;
-			case 'openAgentsMcpConfig':
-				await this.onOpenAgentsMcpConfig();
-				break;
-			case 'importMcpFromCLI':
-				await this.onImportMcpFromCli();
-				break;
-			case 'syncAgentsToOpenCodeProject':
-				await this.onSyncAgentsToProject();
+			case 'openMcpConfig':
+				await this.onOpenMcpConfig();
 				break;
 		}
 	}
@@ -61,16 +55,8 @@ export class McpHandler implements WebviewMessageHandler {
 		await this.context.services.mcpManagement.deleteMCPServer(msg.name);
 	}
 
-	private async onOpenAgentsMcpConfig(): Promise<void> {
-		await this.context.services.mcpManagement.openAgentsMcpConfig();
-	}
-
-	private async onImportMcpFromCli(): Promise<void> {
-		await this.context.services.mcpManagement.importFromAllSources();
-	}
-
-	private async onSyncAgentsToProject(): Promise<void> {
-		await this.context.services.mcpManagement.syncAgentsToProject('opencode');
+	private async onOpenMcpConfig(): Promise<void> {
+		await this.context.services.mcpManagement.openMcpConfig();
 	}
 
 	dispose() {

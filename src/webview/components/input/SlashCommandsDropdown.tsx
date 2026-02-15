@@ -32,7 +32,7 @@ const getTypeLabel = (type: string) => {
 		case 'cli':
 			return 'CLI';
 		case 'custom':
-			return 'Custom';
+			return 'Command';
 		case 'subagent':
 			return 'Subagent';
 		default:
@@ -168,13 +168,21 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 
 	const items = useMemo(
 		(): DropdownMenuItem<CommandItem>[] =>
-			filteredCommands.map(cmd => ({
-				id: `${cmd.type}-${cmd.id}`,
-				label: `/${cmd.name}`,
-				description: cmd.description,
-				meta: getTypeLabel(cmd.type),
-				data: cmd,
-			})),
+			filteredCommands.map(cmd => {
+				// Build full tooltip: description + prompt body
+				// For subagents, prompt is just "@name" — skip it, show only description
+				const parts: string[] = [];
+				if (cmd.description) parts.push(cmd.description);
+				if (cmd.prompt && cmd.type !== 'subagent') parts.push(cmd.prompt);
+				const tooltipContent = parts.length > 0 ? parts.join('\n\n') : undefined;
+				return {
+					id: `${cmd.type}-${cmd.id}`,
+					label: `/${cmd.name}`,
+					description: tooltipContent,
+					meta: getTypeLabel(cmd.type),
+					data: cmd,
+				};
+			}),
 		[filteredCommands],
 	);
 
@@ -191,8 +199,8 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 			keyHints={{}}
 			emptyMessage="No commands found"
 			position="top"
-			minWidth={280}
-			maxWidth={340}
+			minWidth={200}
+			maxWidth={400}
 			anchorElement={anchorElement}
 			anchorRect={anchorRect}
 		/>

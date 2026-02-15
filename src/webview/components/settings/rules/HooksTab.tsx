@@ -2,7 +2,7 @@ import type React from 'react';
 import { useEffect, useState } from 'react';
 import { useSettingsStore } from '../../../store';
 import { useVSCode } from '../../../utils/vscode';
-import { DownloadIcon, EditIcon, PlusIcon, RefreshIcon, TrashIcon } from '../../icons';
+import { EditIcon, PlusIcon, TrashIcon } from '../../icons';
 import { Button, Tooltip } from '../../ui';
 import {
 	EmptyState,
@@ -51,57 +51,15 @@ export const HooksTab: React.FC = () => {
 
 	const handleDeleteHook = (name: string) => postMessage({ type: 'deleteHook', name });
 	const handleOpenHook = (name: string) => postMessage({ type: 'openHookFile', name });
-	const handleImportHooks = () => {
-		useSettingsStore.getState().actions.setAgentsOps({
-			lastAction: 'import',
-			status: 'working',
-			message: 'Importing hooks from CLI...',
-		});
-		postMessage({ type: 'importHooksFromCLI' });
-	};
-	const handleSyncHooks = () => {
-		useSettingsStore.getState().actions.setAgentsOps({
-			lastAction: 'sync',
-			status: 'working',
-			message: 'Syncing hooks to CLI...',
-		});
-		postMessage({ type: 'syncHooksToCLI' });
-	};
 
 	return (
 		<>
-			<GroupTitle>Import & Sync</GroupTitle>
+			<GroupTitle>Hooks</GroupTitle>
 			<SettingsGroup>
-				<SettingRow title="Import from CLI" tooltip="Import hookify rules into .agents/hooks/">
-					<Button
-						size="sm"
-						variant="secondary"
-						onClick={handleImportHooks}
-						title="Import hookify.*.local.md into .agents"
-					>
-						<DownloadIcon size={12} className="mr-1" />
-						Import
-					</Button>
-				</SettingRow>
-				<SettingRow
-					title="Sync to CLI"
-					tooltip="Export hookify rules from .agents/hooks/ to CLI directories"
-					last={isCreatingHook}
-				>
-					<Button
-						size="sm"
-						variant="secondary"
-						onClick={handleSyncHooks}
-						title="Export hooks to CLI directories"
-					>
-						<RefreshIcon size={12} className="mr-1" />
-						Sync
-					</Button>
-				</SettingRow>
 				{!isCreatingHook && (
 					<SettingRow
 						title="New Hook"
-						tooltip="Create a new hookify rule under .agents/hooks/"
+						tooltip="Create a new hookify rule under .opencode/hooks/"
 						last
 					>
 						<Button size="sm" onClick={() => setIsCreatingHook(true)}>
@@ -195,7 +153,7 @@ export const HooksTab: React.FC = () => {
 						Loading hooks...
 					</div>
 				) : hooks.items.length === 0 ? (
-					<EmptyState>No hook rules found. Create one or import from CLI.</EmptyState>
+					<EmptyState>No hook rules found. Create one above.</EmptyState>
 				) : (
 					hooks.items.map((hook, i) => (
 						<SettingRow

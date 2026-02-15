@@ -2,7 +2,7 @@ import type React from 'react';
 import { useEffect, useState } from 'react';
 import { useSettingsStore } from '../../../store';
 import { useVSCode } from '../../../utils/vscode';
-import { DownloadIcon, EditIcon, PlusIcon, RefreshIcon, TrashIcon } from '../../icons';
+import { EditIcon, PlusIcon, TrashIcon } from '../../icons';
 import { Button, Tooltip } from '../../ui';
 import {
 	EmptyState,
@@ -57,57 +57,12 @@ export const CommandsTab: React.FC = () => {
 	return (
 		<>
 			{/* Actions Bar */}
-			<GroupTitle>Import & Sync</GroupTitle>
+			<GroupTitle>Commands</GroupTitle>
 			<SettingsGroup>
-				<SettingRow
-					title="Import from CLI"
-					tooltip="Import existing commands from .opencode/command/ or .cursor/commands/"
-				>
-					<Button
-						size="sm"
-						variant="secondary"
-						title="Import from .opencode/.cursor into .agents"
-						onClick={() => {
-							useSettingsStore.getState().actions.setAgentsOps({
-								lastAction: 'import',
-								status: 'working',
-								message: 'Importing commands from CLI...',
-							});
-							postMessage({ type: 'importCommandsFromCLI' });
-						}}
-					>
-						<DownloadIcon size={12} className="mr-1" />
-						Import
-					</Button>
-				</SettingRow>
-
-				<SettingRow
-					title="Sync to CLI"
-					tooltip="Export commands to .opencode/command/ and .cursor/commands/"
-					last={isCreating}
-				>
-					<Button
-						size="sm"
-						variant="secondary"
-						title="Export from .agents to .opencode/.cursor"
-						onClick={() => {
-							useSettingsStore.getState().actions.setAgentsOps({
-								lastAction: 'sync',
-								status: 'working',
-								message: 'Syncing commands to CLI...',
-							});
-							postMessage({ type: 'syncCommandsToCLI' });
-						}}
-					>
-						<RefreshIcon size={12} className="mr-1" />
-						Sync
-					</Button>
-				</SettingRow>
-
 				{!isCreating && (
 					<SettingRow
 						title="New Command"
-						tooltip="Create a new custom command under .agents/commands/"
+						tooltip="Create a new custom command under .opencode/commands/"
 						last
 					>
 						<Button size="sm" onClick={() => setIsCreating(true)}>
@@ -186,7 +141,7 @@ export const CommandsTab: React.FC = () => {
 						Loading commands...
 					</div>
 				) : commands.custom.length === 0 ? (
-					<EmptyState>No custom commands found. Create one or import from CLI.</EmptyState>
+					<EmptyState>No custom commands found. Create one above.</EmptyState>
 				) : (
 					commands.custom.map((cmd, idx) => (
 						<SettingRow

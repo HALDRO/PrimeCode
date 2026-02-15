@@ -1,8 +1,6 @@
 /**
  * @file Rules Service
- * @description Manages rule files with automatic sync to CLI formats.
- *              Single source of truth: `.agents/rules/` (active) and `.agents/rules/disabled/` (inactive)
- *              Auto-syncs to CLI directories and generates `AGENTS.md` + `.opencode/memories/`
+ * @description Manages rule files in `.opencode/rules/` (active) and `.opencode/rules/disabled/` (inactive).
  */
 
 import * as path from 'node:path';
@@ -23,11 +21,11 @@ export class RulesService {
 	constructor(private _workspaceRoot: string) {}
 
 	/**
-	 * Get all rules from `.agents/rules/` (active and disabled)
+	 * Get all rules from `.opencode/rules/` (active and disabled)
 	 */
 	public async getRules(): Promise<Rule[]> {
 		const rules: Rule[] = [];
-		const rulesDir = path.join(this._workspaceRoot, PATHS.AGENTS_RULES_DIR);
+		const rulesDir = path.join(this._workspaceRoot, PATHS.OPENCODE_RULES_DIR);
 		const disabledDir = path.join(rulesDir, 'disabled');
 
 		try {
@@ -37,7 +35,7 @@ export class RulesService {
 				for (const file of files) {
 					rules.push({
 						name: file,
-						path: normalizeToPosixPath(path.join(PATHS.AGENTS_RULES_DIR, file)),
+						path: normalizeToPosixPath(path.join(PATHS.OPENCODE_RULES_DIR, file)),
 						isEnabled: true,
 						source: 'opencode',
 					});
@@ -50,7 +48,7 @@ export class RulesService {
 				for (const file of files) {
 					rules.push({
 						name: file,
-						path: normalizeToPosixPath(path.join(PATHS.AGENTS_RULES_DIR, 'disabled', file)),
+						path: normalizeToPosixPath(path.join(PATHS.OPENCODE_RULES_DIR, 'disabled', file)),
 						isEnabled: false,
 						source: 'opencode',
 					});
@@ -68,7 +66,7 @@ export class RulesService {
 	 */
 	public async createRule(name: string, content: string): Promise<Rule> {
 		const safeName = name.endsWith('.md') ? name : `${name}.md`;
-		const rulesDirUri = vscode.Uri.file(path.join(this._workspaceRoot, PATHS.AGENTS_RULES_DIR));
+		const rulesDirUri = vscode.Uri.file(path.join(this._workspaceRoot, PATHS.OPENCODE_RULES_DIR));
 		try {
 			await vscode.workspace.fs.createDirectory(rulesDirUri);
 		} catch {
@@ -78,12 +76,9 @@ export class RulesService {
 		const fileUri = vscode.Uri.joinPath(rulesDirUri, safeName);
 		await vscode.workspace.fs.writeFile(fileUri, new TextEncoder().encode(content));
 
-		// Auto-sync to CLI formats
-		await this._autoSync();
-
 		return {
 			name: safeName,
-			path: normalizeToPosixPath(path.join(PATHS.AGENTS_RULES_DIR, safeName)),
+			path: normalizeToPosixPath(path.join(PATHS.OPENCODE_RULES_DIR, safeName)),
 			isEnabled: true,
 			source: 'opencode',
 		};
@@ -93,7 +88,7 @@ export class RulesService {
 	 * Toggle rule enabled/disabled and auto-sync
 	 */
 	public async toggleRule(rulePath: string, enabled: boolean): Promise<void> {
-		const rulesDir = path.join(this._workspaceRoot, PATHS.AGENTS_RULES_DIR);
+		const rulesDir = path.join(this._workspaceRoot, PATHS.OPENCODE_RULES_DIR);
 		const disabledDir = path.join(rulesDir, 'disabled');
 		const fullPath = path.join(this._workspaceRoot, rulePath);
 		const fileName = path.basename(rulePath);
@@ -117,7 +112,6 @@ export class RulesService {
 
 		try {
 			await vscode.workspace.fs.rename(sourceUri, targetUri, { overwrite: true });
-			await this._autoSync();
 		} catch (error) {
 			logger.error(`[RulesService] Failed to toggle rule ${rulePath}:`, error);
 			throw error;
@@ -131,24 +125,9 @@ export class RulesService {
 		const fileUri = vscode.Uri.file(path.join(this._workspaceRoot, rulePath));
 		try {
 			await vscode.workspace.fs.delete(fileUri);
-			await this._autoSync();
 		} catch (error) {
 			logger.error(`[RulesService] Failed to delete rule ${rulePath}:`, error);
 		}
-	}
-
-	/**
-	 * Auto-sync: `.agents/rules/` → `AGENTS.md` + `.opencode/memories/`
-	 */
-	private async _autoSync(): Promise<void> {
-		await this._syncToOpenCode();
-	}
-
-	/**
-	 * Generate `AGENTS.md` (first enabled rule) + `.opencode/memories/` (rest)
-	 */
-	private async _syncToOpenCode(): Promise<void> {
-		// TODO: Implement OpenCode sync via OpenCodeExecutor if needed
 	}
 
 	// =========================================================================

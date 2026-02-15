@@ -1,6 +1,6 @@
 /**
  * @file McpConfigWatcherService
- * @description Watches `.agents/mcp.json` for changes and triggers hot-reload of MCP configuration.
+ * @description Watches `opencode.json` for changes and triggers hot-reload of MCP configuration.
  *              Calls OpenCode SDK dispose callback so MCP config is reloaded without extension restart.
  *              Debounces rapid file changes to prevent excessive reloads.
  *              Emits events for UI notification about config changes.
@@ -9,15 +9,14 @@
 
 import * as vscode from 'vscode';
 import { logger } from '../utils/logger';
-import type { AgentsConfigService } from './AgentsConfigService';
-import type { AgentsSyncService } from './AgentsSyncService';
+import type { McpConfigService } from './McpConfigService';
 
 // =============================================================================
 // Constants
 // =============================================================================
 
 const DEBOUNCE_MS = 500;
-const AGENTS_MCP_PATTERN = '**/.agents/mcp.json';
+const MCP_CONFIG_PATTERN = '**/opencode.json';
 
 // =============================================================================
 // Types
@@ -49,10 +48,7 @@ export class McpConfigWatcherService implements vscode.Disposable {
 	// Callbacks for CLI providers
 	private _openCodeReloadCallback: ReloadCallback | undefined;
 
-	constructor(
-		readonly _agentsConfigService: AgentsConfigService,
-		private readonly _agentsSyncService: AgentsSyncService,
-	) {}
+	constructor(readonly _agentsConfigService: McpConfigService) {}
 
 	// =========================================================================
 	// Lifecycle
@@ -73,9 +69,9 @@ export class McpConfigWatcherService implements vscode.Disposable {
 			return;
 		}
 
-		// Watch for .agents/mcp.json changes
+		// Watch for opencode.json changes
 		this._watcher = vscode.workspace.createFileSystemWatcher(
-			new vscode.RelativePattern(workspaceRoot, AGENTS_MCP_PATTERN),
+			new vscode.RelativePattern(workspaceRoot, MCP_CONFIG_PATTERN),
 		);
 
 		this._watcher.onDidChange(uri => this._handleFileChange(uri, 'change'));
@@ -83,7 +79,7 @@ export class McpConfigWatcherService implements vscode.Disposable {
 		this._watcher.onDidDelete(uri => this._handleFileChange(uri, 'delete'));
 
 		this._disposables.push(this._watcher);
-		logger.info('[McpConfigWatcherService] Started watching .agents/mcp.json');
+		logger.info('[McpConfigWatcherService] Started watching opencode.json');
 	}
 
 	/**
@@ -211,17 +207,14 @@ export class McpConfigWatcherService implements vscode.Disposable {
 		try {
 			logger.info(`[McpConfigWatcherService] Reloading MCP config (source: ${source})`);
 
-			// 1. Sync canonical config to project files first
-			await this._agentsSyncService.syncAllProject();
-
-			// 2. Hot-reload OpenCode runtime if callback is registered
+			// 1. Hot-reload OpenCode runtime if callback is registered
 			if (this._openCodeReloadCallback) {
 				await this._openCodeReloadCallback().catch(error => {
 					logger.error('[McpConfigWatcherService] OpenCode reload failed:', error);
 				});
 			}
 
-			// 3. Emit change event for UI notification
+			// 2. Emit change event for UI notification
 			this._onConfigChanged.fire({
 				source,
 				timestamp: Date.now(),

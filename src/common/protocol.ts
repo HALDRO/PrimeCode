@@ -534,24 +534,12 @@ export type McpInstalledMetadataMessage = BaseExtensionMessage<
 >;
 
 // =============================================================================
-// Agents Config Messages (global)
+// MCP Config Status Messages (global)
 // =============================================================================
 
-export type AgentsConfigStatusMessage = BaseExtensionMessage<
-	'agentsConfigStatus',
+export type McpConfigStatusMessage = BaseExtensionMessage<
+	'mcpConfigStatus',
 	{ hasProjectConfig: boolean; projectPath: string }
->;
-
-export type AgentsSyncTarget = 'opencode' | 'cursor';
-
-export type AgentsSyncResultMessage = BaseExtensionMessage<
-	'agentsSyncResult',
-	{ target: AgentsSyncTarget; success: boolean; error?: string }
->;
-
-export type McpImportResultMessage = BaseExtensionMessage<
-	'mcpImportResult',
-	{ success: boolean; sources?: string[]; backups?: string[]; error?: string; message?: string }
 >;
 
 // =============================================================================
@@ -695,9 +683,7 @@ export type ExtensionMessage =
 	| McpServerDeletedMessage
 	| McpServerErrorMessage
 	| McpStatusMessage
-	| AgentsConfigStatusMessage
-	| AgentsSyncResultMessage
-	| McpImportResultMessage
+	| McpConfigStatusMessage
 	| CommandsListMessage
 	| SkillsListMessage
 	| HooksListMessage
@@ -852,14 +838,8 @@ export interface DeleteMCPServerCommand {
 	type: 'deleteMCPServer';
 	name: string;
 }
-export interface OpenAgentsMcpConfigCommand {
-	type: 'openAgentsMcpConfig';
-}
-export interface ImportMcpFromCLICommand {
-	type: 'importMcpFromCLI';
-}
-export interface SyncAgentsToOpenCodeProjectCommand {
-	type: 'syncAgentsToOpenCodeProject';
+export interface OpenMcpConfigCommand {
+	type: 'openMcpConfig';
 }
 
 // =============================================================================
@@ -1030,12 +1010,6 @@ export interface OpenSkillFileCommand {
 	type: 'openSkillFile';
 	name: string;
 }
-export interface ImportSkillsFromCLICommand {
-	type: 'importSkillsFromCLI';
-}
-export interface SyncSkillsToCLICommand {
-	type: 'syncSkillsToCLI';
-}
 
 export interface CreateHookCommand {
 	type: 'createHook';
@@ -1054,12 +1028,6 @@ export interface OpenHookFileCommand {
 	type: 'openHookFile';
 	name: string;
 }
-export interface ImportHooksFromCLICommand {
-	type: 'importHooksFromCLI';
-}
-export interface SyncHooksToCLICommand {
-	type: 'syncHooksToCLI';
-}
 
 export interface CreateCommandCommand {
 	type: 'createCommand';
@@ -1074,12 +1042,6 @@ export interface DeleteCommandCommand {
 export interface OpenCommandFileCommand {
 	type: 'openCommandFile';
 	name: string;
-}
-export interface ImportCommandsFromCLICommand {
-	type: 'importCommandsFromCLI';
-}
-export interface SyncCommandsToCLICommand {
-	type: 'syncCommandsToCLI';
 }
 
 export interface CreateSubagentCommand {
@@ -1096,18 +1058,23 @@ export interface OpenSubagentFileCommand {
 	type: 'openSubagentFile';
 	name: string;
 }
-export interface ImportSubagentsFromCLICommand {
-	type: 'importSubagentsFromCLI';
-}
-export interface SyncSubagentsToCLICommand {
-	type: 'syncSubagentsToCLI';
-}
 
 export interface ToggleRuleCommand {
 	type: 'toggleRule';
 	path: string;
 	enabled: boolean;
 	source: 'opencode';
+}
+
+export interface CreateRuleCommand {
+	type: 'createRule';
+	name: string;
+	content: string;
+}
+
+export interface DeleteRuleCommand {
+	type: 'deleteRule';
+	path: string;
 }
 
 // =============================================================================
@@ -1182,9 +1149,7 @@ export type WebviewCommand =
 	| InstallMcpFromMarketplaceCommand
 	| SaveMCPServerCommand
 	| DeleteMCPServerCommand
-	| OpenAgentsMcpConfigCommand
-	| ImportMcpFromCLICommand
-	| SyncAgentsToOpenCodeProjectCommand
+	| OpenMcpConfigCommand
 	| ReloadAllProvidersCommand
 	| CheckOpenCodeStatusCommand
 	| LoadOpenCodeProvidersCommand
@@ -1215,24 +1180,18 @@ export type WebviewCommand =
 	| CreateSkillCommand
 	| DeleteSkillCommand
 	| OpenSkillFileCommand
-	| ImportSkillsFromCLICommand
-	| SyncSkillsToCLICommand
 	| CreateHookCommand
 	| DeleteHookCommand
 	| OpenHookFileCommand
-	| ImportHooksFromCLICommand
-	| SyncHooksToCLICommand
 	| CreateCommandCommand
 	| DeleteCommandCommand
 	| OpenCommandFileCommand
-	| ImportCommandsFromCLICommand
-	| SyncCommandsToCLICommand
 	| CreateSubagentCommand
 	| DeleteSubagentCommand
 	| OpenSubagentFileCommand
-	| ImportSubagentsFromCLICommand
-	| SyncSubagentsToCLICommand
 	| ToggleRuleCommand
+	| CreateRuleCommand
+	| DeleteRuleCommand
 	| AcceptFileCommand
 	| AcceptAllFilesCommand
 	| UndoFileChangesCommand

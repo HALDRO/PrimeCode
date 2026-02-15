@@ -17,65 +17,10 @@ export const CLIProviderTypeSchema = Type.Literal('opencode');
 export type CLIProviderType = Static<typeof CLIProviderTypeSchema>;
 
 // =============================================================================
-// Unified MCP Registry Types
+// MCP Server Config Types (OpenCode native: opencode.json → mcp section)
 // =============================================================================
 
-const UnifiedMcpTransportStdioSchema = Type.Object({
-	type: Type.Literal('stdio'),
-	command: Type.Array(Type.String(), { minItems: 1 }),
-	env: Type.Optional(Type.Record(Type.String(), Type.String())),
-	cwd: Type.Optional(Type.String()),
-});
-
-const UnifiedMcpTransportHttpSchema = Type.Object({
-	type: Type.Literal('http'),
-	url: Type.String(),
-	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
-});
-
-const UnifiedMcpTransportSseSchema = Type.Object({
-	type: Type.Literal('sse'),
-	url: Type.String(),
-	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
-});
-
-const UnifiedMcpTransportSchema = Type.Union([
-	UnifiedMcpTransportStdioSchema,
-	UnifiedMcpTransportHttpSchema,
-	UnifiedMcpTransportSseSchema,
-]);
-
-const UnifiedMcpMetadataSchema = Type.Object({
-	description: Type.Optional(Type.String()),
-	source: Type.Optional(
-		Type.Union([
-			Type.Literal('marketplace'),
-			Type.Literal('user'),
-			Type.Literal('workspace'),
-			Type.Literal('import'),
-		]),
-	),
-	lastStatus: Type.Optional(Type.String()),
-	lastError: Type.Optional(Type.String()),
-	lastCheckedAt: Type.Optional(Type.String()),
-});
-
-export const UnifiedMcpServerSchema = Type.Object({
-	enabled: Type.Optional(Type.Boolean()),
-	transport: UnifiedMcpTransportSchema,
-	timeoutMs: Type.Optional(Type.Number()),
-	metadata: Type.Optional(UnifiedMcpMetadataSchema),
-});
-export type UnifiedMcpServer = Static<typeof UnifiedMcpServerSchema>;
-
-export const UnifiedMcpRegistrySchema = Type.Record(Type.String(), UnifiedMcpServerSchema);
-export type UnifiedMcpRegistry = Static<typeof UnifiedMcpRegistrySchema>;
-
-// =============================================================================
-// Agents Config Types (.agents/mcp.json)
-// =============================================================================
-
-export const AgentsMcpServerSchema = Type.Object({
+export const McpServerSchema = Type.Object({
 	type: Type.Union([Type.Literal('stdio'), Type.Literal('http'), Type.Literal('sse')]),
 	command: Type.Optional(Type.Array(Type.String())),
 	url: Type.Optional(Type.String()),
@@ -85,14 +30,12 @@ export const AgentsMcpServerSchema = Type.Object({
 	enabled: Type.Optional(Type.Boolean()),
 	timeout: Type.Optional(Type.Number()),
 });
-export type AgentsMcpServer = Static<typeof AgentsMcpServerSchema>;
+export type McpServer = Static<typeof McpServerSchema>;
 
-export const AgentsMcpConfigSchema = Type.Object({
-	$schema: Type.Optional(Type.String()),
-	version: Type.Optional(Type.Number()),
-	servers: Type.Record(Type.String(), AgentsMcpServerSchema),
+export const McpConfigSchema = Type.Object({
+	mcp: Type.Optional(Type.Record(Type.String(), McpServerSchema)),
 });
-export type AgentsMcpConfig = Static<typeof AgentsMcpConfigSchema>;
+export type McpConfig = Static<typeof McpConfigSchema>;
 
 // =============================================================================
 // MCP Server Types

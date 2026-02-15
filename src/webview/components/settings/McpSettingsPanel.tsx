@@ -3,7 +3,7 @@
  * @description MCP management UI inside Settings > MCP tab.
  *              Provides inner tabs (Installed / Marketplace), showing installed servers with
  *              enable/disable, status, delete actions, command display, and expandable details.
- *              Edit/Add actions open .agents/mcp.json in editor for direct editing.
+ *              Edit/Add actions open .opencode/mcp.json in editor for direct editing.
  *              Uses Cline API for marketplace — installation is AI-assisted via README.
  *              Includes useIsMounted hook to prevent memory leaks during async operations.
  */
@@ -92,9 +92,9 @@ export const McpSettingsPanel: React.FC = () => {
 		return filtered;
 	}, [mcpMarketplace.catalog, search, sortBy]);
 
-	// Open .agents/mcp.json in editor
+	// Open opencode.json in editor
 	const openMcpConfig = () => {
-		postMessage({ type: 'openAgentsMcpConfig' });
+		postMessage({ type: 'openMcpConfig' });
 	};
 
 	const deleteServer = (name: string) => postMessage({ type: 'deleteMCPServer', name });
@@ -121,38 +121,13 @@ export const McpSettingsPanel: React.FC = () => {
 		<div className="animate-fade-in">
 			<GroupTitle>MCP</GroupTitle>
 			<SettingsGroup>
-				{/* Import from CLI sources */}
 				<SettingRow
-					title="Import from CLI"
-					tooltip="Import MCP configs from .cursor/mcp.json, .mcp.json, opencode.json into .agents/mcp.json"
-				>
-					<div className="flex items-center gap-2">
-						<Button
-							size="sm"
-							variant="secondary"
-							title="Import and reload MCP configs from all CLI sources"
-							onClick={() => postMessage({ type: 'importMcpFromCLI' })}
-						>
-							Import
-						</Button>
-						<Button size="sm" variant="secondary" onClick={openMcpConfig}>
-							Edit
-						</Button>
-					</div>
-				</SettingRow>
-
-				{/* Sync to CLI targets */}
-				<SettingRow
-					title="Sync to CLI"
-					tooltip="Export .agents/mcp.json to CLI-specific config files"
+					title="MCP Config"
+					tooltip="Edit MCP server configuration in opencode.json"
 					last
 				>
-					<Button
-						size="sm"
-						variant="secondary"
-						onClick={() => postMessage({ type: 'syncAgentsToOpenCodeProject' })}
-					>
-						Sync
+					<Button size="sm" variant="secondary" onClick={openMcpConfig}>
+						Edit
 					</Button>
 				</SettingRow>
 			</SettingsGroup>
@@ -186,7 +161,7 @@ export const McpSettingsPanel: React.FC = () => {
 								onClick={openMcpConfig}
 								className="text-vscode-textLink-foreground hover:text-vscode-textLink-activeForeground underline mt-1"
 							>
-								Add one in .agents/mcp.json
+								Add one in .opencode/mcp.json
 							</button>
 						</div>
 					) : (
@@ -269,7 +244,7 @@ export const McpSettingsPanel: React.FC = () => {
 										<div className="flex items-center gap-1 shrink-0">
 											<IconButton
 												icon={<EditIcon size={10} />}
-												title="Edit in .agents/mcp.json"
+												title="Edit in .opencode/mcp.json"
 												onClick={openMcpConfig}
 											/>
 											<IconButton

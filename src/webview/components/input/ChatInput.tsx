@@ -429,18 +429,38 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 		if (showSlashCommands) {
 			const lastSlashIndex = value.lastIndexOf('/');
 			if (lastSlashIndex >= 0) {
-				const filterText = value.substring(lastSlashIndex);
-				if (filterText.includes(' ')) {
+				const afterSlash = value.substring(lastSlashIndex);
+				// Find the end of the command token (first space or end of string)
+				const spaceIndex = afterSlash.indexOf(' ');
+				if (spaceIndex >= 0) {
+					// User typed a space — close dropdown
 					setShowSlashCommands(false);
 					setSlashFilter('');
 					setSlashCommandsAnchorRect(null);
 				} else {
-					setSlashFilter(filterText);
+					setSlashFilter(afterSlash);
 				}
 			} else {
 				setShowSlashCommands(false);
 				setSlashFilter('');
 				setSlashCommandsAnchorRect(null);
+			}
+		} else if (!showFilePicker) {
+			// Re-open slash dropdown if cursor is inside an incomplete /command token
+			const textarea = e.target;
+			const cursorPos = textarea.selectionStart ?? value.length;
+			// Walk backwards from cursor to find a '/' that starts a command token
+			const beforeCursor = value.substring(0, cursorPos);
+			const lastSlashIndex = beforeCursor.lastIndexOf('/');
+			if (lastSlashIndex >= 0) {
+				const token = value.substring(lastSlashIndex, cursorPos);
+				// Only re-open if the token has no spaces (still typing a command)
+				if (!token.includes(' ') && token.length > 1) {
+					setShowSlashCommands(true);
+					setSlashFilter(token);
+					setSlashButtonAnchorElement(null);
+					setSlashCommandsAnchorRect(getTextareaCaretAnchorRectAtIndex(textarea, lastSlashIndex));
+				}
 			}
 		}
 
@@ -620,6 +640,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 		if (e.key === '/' && !showSlashCommands && !showFilePicker) {
 			setShowSlashCommands(true);
 			setSlashFilter('');
+			setSlashButtonAnchorElement(null);
 			if (textareaRef.current) {
 				const slashIndex = textareaRef.current.selectionStart ?? textareaRef.current.value.length;
 				setSlashCommandsAnchorRect(

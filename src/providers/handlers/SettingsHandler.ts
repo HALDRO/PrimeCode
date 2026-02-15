@@ -38,6 +38,41 @@ export class SettingsHandler implements WebviewMessageHandler {
 			case 'getRules':
 				await this.onGetRules();
 				break;
+
+			// Resource CRUD
+			case 'createCommand':
+				await this.onCreateResource('commands', msg);
+				break;
+			case 'deleteCommand':
+				await this.onDeleteResource('commands', msg);
+				break;
+			case 'createSkill':
+				await this.onCreateResource('skills', msg);
+				break;
+			case 'deleteSkill':
+				await this.onDeleteResource('skills', msg);
+				break;
+			case 'createHook':
+				await this.onCreateResource('hooks', msg);
+				break;
+			case 'deleteHook':
+				await this.onDeleteResource('hooks', msg);
+				break;
+			case 'createSubagent':
+				await this.onCreateResource('subagents', msg);
+				break;
+			case 'deleteSubagent':
+				await this.onDeleteResource('subagents', msg);
+				break;
+			case 'toggleRule':
+				await this.onToggleRule(msg);
+				break;
+			case 'createRule':
+				await this.onCreateRule(msg);
+				break;
+			case 'deleteRule':
+				await this.onDeleteRule(msg);
+				break;
 		}
 	}
 
@@ -176,12 +211,15 @@ export class SettingsHandler implements WebviewMessageHandler {
 		this.context.bridge.data('commandsList', { custom: [], isLoading: true });
 		try {
 			const [commands, cliCommands] = await Promise.all([
-				this.context.services.agentResources.getAll('commands'),
+				this.context.services.resources.getAll('commands'),
 				this.fetchCliCommands(),
 			]);
+			// Deduplicate: remove CLI commands that already exist in custom list
+			const customNames = new Set(commands.map(c => c.name));
+			const dedupedCli = cliCommands.filter(c => !customNames.has(c.name));
 			this.context.bridge.data('commandsList', {
 				custom: commands,
-				cli: cliCommands,
+				cli: dedupedCli,
 				isLoading: false,
 			});
 		} catch (error) {
@@ -223,7 +261,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 	private async onGetSkills(): Promise<void> {
 		this.context.bridge.data('skillsList', { skills: [], isLoading: true });
 		try {
-			const skills = await this.context.services.agentResources.getAll('skills');
+			const skills = await this.context.services.resources.getAll('skills');
 			this.context.bridge.data('skillsList', { skills, isLoading: false });
 		} catch (error) {
 			this.context.bridge.data('skillsList', {
@@ -237,7 +275,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 	private async onGetHooks(): Promise<void> {
 		this.context.bridge.data('hooksList', { hooks: [], isLoading: true });
 		try {
-			const hooks = await this.context.services.agentResources.getAll('hooks');
+			const hooks = await this.context.services.resources.getAll('hooks');
 			this.context.bridge.data('hooksList', { hooks, isLoading: false });
 		} catch (error) {
 			this.context.bridge.data('hooksList', {
@@ -251,7 +289,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 	private async onGetSubagents(): Promise<void> {
 		this.context.bridge.data('subagentsList', { subagents: [], isLoading: true });
 		try {
-			const subagents = await this.context.services.agentResources.getAll('subagents');
+			const subagents = await this.context.services.resources.getAll('subagents');
 			this.context.bridge.data('subagentsList', { subagents, isLoading: false });
 		} catch (error) {
 			this.context.bridge.data('subagentsList', {
@@ -274,6 +312,136 @@ export class SettingsHandler implements WebviewMessageHandler {
 		} catch (error) {
 			logger.error('[SettingsHandler] getRules failed:', error);
 			this.context.bridge.data('ruleList', { rules: [] });
+		}
+	}
+
+	// =========================================================================
+	// Resource CRUD
+	// =========================================================================
+
+	private async onCreateResource(
+		type: import('../../services/ResourceService').ResourceType,
+		msg: WebviewCommand,
+	): Promise<void> {
+		const { name } = msg as {
+			name: string;
+		};
+		if (!name) return;
+
+		try {
+			const item = this.buildResourceItem(type, msg);
+			await this.context.services.resources.save(type, item);
+			logger.info(`[SettingsHandler] Created ${type}: ${name}`);
+			// Refresh the list
+			await this.refreshResourceList(type);
+		} catch (error) {
+			logger.error(`[SettingsHandler] Failed to create ${type}:`, error);
+		}
+	}
+
+	private async onDeleteResource(
+		type: import('../../services/ResourceService').ResourceType,
+		msg: WebviewCommand,
+	): Promise<void> {
+		const { name } = msg as { name: string };
+		if (!name) return;
+
+		try {
+			await this.context.services.resources.delete(type, name);
+			logger.info(`[SettingsHandler] Deleted ${type}: ${name}`);
+			await this.refreshResourceList(type);
+		} catch (error) {
+			logger.error(`[SettingsHandler] Failed to delete ${type}:`, error);
+		}
+	}
+
+	private buildResourceItem(
+		type: import('../../services/ResourceService').ResourceType,
+		msg: WebviewCommand,
+	): { name: string } & Record<string, unknown> {
+		const m = msg as unknown as Record<string, unknown>;
+		const name = String(m.name ?? '');
+
+		switch (type) {
+			case 'commands':
+				return { name, description: String(m.description ?? ''), prompt: String(m.content ?? '') };
+			case 'skills':
+				return {
+					name,
+					description: String(m.description ?? ''),
+					content: String(m.content ?? ''),
+					version: String(m.version ?? '0.1.0'),
+				};
+			case 'hooks':
+				return {
+					name,
+					enabled: m.enabled !== false,
+					event: String(m.event ?? 'all'),
+					pattern: m.pattern ? String(m.pattern) : undefined,
+					action: m.action ? String(m.action) : undefined,
+					content: String(m.content ?? ''),
+				};
+			case 'subagents':
+				return {
+					name,
+					description: String(m.description ?? ''),
+					prompt: String(m.content ?? ''),
+				};
+		}
+	}
+
+	private async refreshResourceList(
+		type: import('../../services/ResourceService').ResourceType,
+	): Promise<void> {
+		switch (type) {
+			case 'commands':
+				await this.onGetCommands();
+				break;
+			case 'skills':
+				await this.onGetSkills();
+				break;
+			case 'hooks':
+				await this.onGetHooks();
+				break;
+			case 'subagents':
+				await this.onGetSubagents();
+				break;
+		}
+	}
+
+	private async onToggleRule(msg: WebviewCommand): Promise<void> {
+		const { path: rulePath, enabled } = msg as { path: string; enabled: boolean };
+		if (!this.rulesService || !rulePath) return;
+
+		try {
+			await this.rulesService.toggleRule(rulePath, enabled);
+			await this.onGetRules();
+		} catch (error) {
+			logger.error('[SettingsHandler] toggleRule failed:', error);
+		}
+	}
+
+	private async onCreateRule(msg: WebviewCommand): Promise<void> {
+		const { name, content } = msg as { name: string; content: string };
+		if (!this.rulesService || !name) return;
+
+		try {
+			await this.rulesService.createRule(name, content ?? '');
+			await this.onGetRules();
+		} catch (error) {
+			logger.error('[SettingsHandler] createRule failed:', error);
+		}
+	}
+
+	private async onDeleteRule(msg: WebviewCommand): Promise<void> {
+		const { path: rulePath } = msg as { path: string };
+		if (!this.rulesService || !rulePath) return;
+
+		try {
+			await this.rulesService.deleteRule(rulePath);
+			await this.onGetRules();
+		} catch (error) {
+			logger.error('[SettingsHandler] deleteRule failed:', error);
 		}
 	}
 }

@@ -135,7 +135,7 @@ export class Settings implements ISettings {
 	}
 
 	// =============================================================================
-	// Agents Config (.agents/config.json)
+	// Agents Config (.opencode/config.json)
 	// =============================================================================
 
 	getAgentsConfigPath(): string {

@@ -12,6 +12,7 @@ import {
 	flip,
 	offset,
 	type Placement,
+	safePolygon,
 	shift,
 	useDismiss,
 	useFloating,
@@ -41,6 +42,14 @@ interface TooltipProps {
 	className?: string;
 	/** Whether the wrapper should be a block element */
 	display?: 'block' | 'inline-block' | 'inline-flex' | 'flex' | 'contents';
+	/** Allow hovering over the tooltip itself (for reading long content) */
+	interactive?: boolean;
+	/** Max width for tooltip content in pixels (default: none) */
+	maxWidth?: number;
+	/** Max height for tooltip content in pixels — enables scroll (default: none) */
+	maxHeight?: number;
+	/** Restrict flip to left/right only (never top/bottom). Auto-sizes maxWidth to available space. */
+	sideOnly?: boolean;
 }
 
 const TOOLTIP_OFFSET =
@@ -52,6 +61,10 @@ const TOOLTIP_OFFSET =
 const tooltipContentClassName =
 	'p-[var(--tooltip-padding-y)_var(--tooltip-padding-x)] bg-(--tooltip-bg) border border-(--alpha-10) rounded-(--tooltip-radius) shadow-[var(--tooltip-shadow)] text-xs leading-[1.3] text-(--alpha-90) whitespace-nowrap';
 
+/** Interactive tooltip - allows text wrapping and user interaction */
+const tooltipContentInteractiveClassName =
+	'p-[var(--tooltip-padding-y)_var(--tooltip-padding-x)] bg-(--tooltip-bg) border border-(--alpha-10) rounded-(--tooltip-radius) shadow-[var(--tooltip-shadow)] text-xs leading-[1.4] text-(--alpha-90) whitespace-pre-wrap break-words';
+
 /**
  * Active Tooltip - only rendered when tooltip is activated
  * This component contains all the expensive floating-ui hooks
@@ -62,72 +75,120 @@ const ActiveTooltip: React.FC<{
 	delay: number;
 	referenceElement: HTMLElement;
 	onClose: () => void;
-}> = React.memo(({ content, position, delay, referenceElement, onClose }) => {
-	const [isOpen, setIsOpen] = useState(true);
+	interactive?: boolean;
+	maxWidth?: number;
+	maxHeight?: number;
+	sideOnly?: boolean;
+}> = React.memo(
+	({
+		content,
+		position,
+		delay,
+		referenceElement,
+		onClose,
+		interactive,
+		maxWidth,
+		maxHeight,
+		sideOnly,
+	}) => {
+		const [isOpen, setIsOpen] = useState(true);
 
-	const { refs, floatingStyles, context } = useFloating({
-		open: isOpen,
-		onOpenChange: open => {
-			setIsOpen(open);
-			if (!open) {
-				// Delay cleanup to allow animation
-				setTimeout(onClose, 150);
+		// For sideOnly mode: compute available space on each side and pick the larger one
+		const computedSideMaxWidth = useMemo(() => {
+			if (!sideOnly) return undefined;
+			const rect = referenceElement.getBoundingClientRect();
+			const spaceLeft = rect.left - 16; // 16px padding from edge
+			const spaceRight = window.innerWidth - rect.right - 16;
+			return Math.max(spaceLeft, spaceRight, 120);
+		}, [sideOnly, referenceElement]);
+
+		const effectiveMaxWidth = maxWidth ?? computedSideMaxWidth;
+
+		const middleware = useMemo(() => {
+			if (sideOnly) {
+				// Only flip between left and right, never to top/bottom
+				return [
+					offset(TOOLTIP_OFFSET),
+					flip({
+						fallbackPlacements: [position === 'right' ? 'left' : 'right'],
+						padding: 8,
+					}),
+					shift({ padding: 8 }),
+				];
 			}
-		},
-		placement: position as Placement,
-		whileElementsMounted: autoUpdate,
-		elements: {
-			reference: referenceElement,
-		},
-		middleware: [
-			offset(TOOLTIP_OFFSET),
-			flip({
-				fallbackAxisSideDirection: 'start',
-				padding: 8,
-			}),
-			shift({ padding: 8 }),
-		],
-	});
+			return [
+				offset(TOOLTIP_OFFSET),
+				flip({ fallbackAxisSideDirection: 'start', padding: 8 }),
+				shift({ padding: 8 }),
+			];
+		}, [sideOnly, position]);
 
-	const hover = useHover(context, {
-		move: false,
-		delay: { open: delay, close: 0 },
-	});
-	const focus = useFocus(context);
-	const dismiss = useDismiss(context);
-	const role = useRole(context, { role: 'tooltip' });
+		const { refs, floatingStyles, context } = useFloating({
+			open: isOpen,
+			onOpenChange: open => {
+				setIsOpen(open);
+				if (!open) {
+					// Delay cleanup to allow animation
+					setTimeout(onClose, 150);
+				}
+			},
+			placement: position as Placement,
+			whileElementsMounted: autoUpdate,
+			elements: {
+				reference: referenceElement,
+			},
+			middleware,
+		});
 
-	const { getFloatingProps } = useInteractions([hover, focus, dismiss, role]);
+		const hover = useHover(context, {
+			move: false,
+			delay: { open: delay, close: interactive ? 150 : 0 },
+			handleClose: interactive ? safePolygon() : undefined,
+		});
+		const focus = useFocus(context);
+		const dismiss = useDismiss(context);
+		const role = useRole(context, { role: 'tooltip' });
 
-	const { isMounted, styles: transitionStyles } = useTransitionStyles(context, {
-		duration: 100,
-		initial: { opacity: 0 },
-	});
+		const { getFloatingProps } = useInteractions([hover, focus, dismiss, role]);
 
-	if (!isMounted) {
-		return null;
-	}
+		const { isMounted, styles: transitionStyles } = useTransitionStyles(context, {
+			duration: 100,
+			initial: { opacity: 0 },
+		});
 
-	return createPortal(
-		<div
-			ref={refs.setFloating}
-			style={{
-				...floatingStyles,
-				zIndex:
-					Number.parseInt(
-						getComputedStyle(document.documentElement).getPropertyValue('--tooltip-z') || '',
-						10,
-					) || 10000,
-				pointerEvents: 'none',
-				...transitionStyles,
-			}}
-			{...getFloatingProps()}
-		>
-			<div className={tooltipContentClassName}>{content}</div>
-		</div>,
-		document.body,
-	);
-});
+		if (!isMounted) {
+			return null;
+		}
+
+		return createPortal(
+			<div
+				ref={refs.setFloating}
+				style={{
+					...floatingStyles,
+					zIndex:
+						Number.parseInt(
+							getComputedStyle(document.documentElement).getPropertyValue('--tooltip-z') || '',
+							10,
+						) || 10000,
+					pointerEvents: interactive ? 'auto' : 'none',
+					...transitionStyles,
+				}}
+				{...getFloatingProps()}
+			>
+				<div
+					className={interactive ? tooltipContentInteractiveClassName : tooltipContentClassName}
+					style={{
+						...(effectiveMaxWidth ? { maxWidth: `${effectiveMaxWidth}px` } : {}),
+						...(maxHeight ? { maxHeight: `${maxHeight}px`, overflowY: 'auto' } : {}),
+					}}
+				>
+					{content}
+				</div>
+			</div>,
+			document.body,
+		);
+	},
+);
 
 /**
  * Lightweight Tooltip wrapper - no floating-ui overhead until hover
@@ -142,6 +203,10 @@ export const Tooltip: React.FC<TooltipProps> = React.memo(
 		wrapperStyle,
 		className,
 		display = 'inline-flex',
+		interactive = false,
+		maxWidth,
+		maxHeight,
+		sideOnly = false,
 	}) => {
 		const [isActivated, setIsActivated] = useState(false);
 		const [referenceElement, setReferenceElement] = useState<HTMLElement | null>(null);
@@ -181,6 +246,10 @@ export const Tooltip: React.FC<TooltipProps> = React.memo(
 						delay={delay}
 						referenceElement={referenceElement}
 						onClose={handleDeactivate}
+						interactive={interactive}
+						maxWidth={maxWidth}
+						maxHeight={maxHeight}
+						sideOnly={sideOnly}
 					/>
 				)}
 			</>

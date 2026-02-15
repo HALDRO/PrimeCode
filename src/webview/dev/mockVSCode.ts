@@ -2030,8 +2030,8 @@ const mockVSCodeApi: VSCodeApi = {
 				rules: {
 					hasAgentsMd: true,
 					ruleFiles: [
-						'.agents/rules/base.md',
-						'.agents/rules/disabled/legacy.md',
+						'.opencode/rules/base.md',
+						'.opencode/rules/disabled/legacy.md',
 						'.opencode/agent/default.md',
 					],
 				},
@@ -2054,13 +2054,13 @@ const mockVSCodeApi: VSCodeApi = {
 				rules: [
 					{
 						name: 'base.md',
-						path: '.agents/rules/base.md',
+						path: '.opencode/rules/base.md',
 						isEnabled: true,
 						source: 'opencode',
 					},
 					{
 						name: 'legacy.md',
-						path: '.agents/rules/disabled/legacy.md',
+						path: '.opencode/rules/disabled/legacy.md',
 						isEnabled: false,
 						source: 'opencode',
 					},
@@ -2071,21 +2071,6 @@ const mockVSCodeApi: VSCodeApi = {
 						source: 'opencode',
 					},
 				],
-			});
-		} else if (msg.type === 'importRulesFromCLI') {
-			dispatchGlobalMessage('tool_result', {
-				toolName: 'Import Rules',
-				toolUseId: createId('t'),
-				content: 'Imported legacy rules into .agents/rules/',
-				isError: false,
-			});
-			mockVSCodeApi.postMessage({ type: 'getRules' });
-		} else if (msg.type === 'syncRulesToCLI') {
-			dispatchGlobalMessage('tool_result', {
-				toolName: 'Sync Rules',
-				toolUseId: createId('t'),
-				content: 'Synced .agents/rules/ to CLI directories',
-				isError: false,
 			});
 		} else if (msg.type === 'toggleRule') {
 			const { path: rulePath, enabled } = msg as { path?: string; enabled?: boolean };
@@ -2106,7 +2091,7 @@ const mockVSCodeApi: VSCodeApi = {
 			dispatchGlobalMessage('ruleUpdated', {
 				rule: {
 					name: name ?? 'new-rule.md',
-					path: `.agents/rules/${name ?? 'new-rule.md'}`,
+					path: `.opencode/rules/${name ?? 'new-rule.md'}`,
 					isEnabled: true,
 					source: 'opencode',
 				},

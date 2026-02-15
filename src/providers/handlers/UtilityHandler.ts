@@ -8,8 +8,8 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { WebviewCommand } from '../../common/protocol';
-import type { ResourceType } from '../../services/AgentResourceService';
 import { getWorkspacePath, searchWorkspaceFiles } from '../../services/fileSearch';
+import type { ResourceType } from '../../services/ResourceService';
 import { logger } from '../../utils/logger';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
@@ -91,20 +91,42 @@ export class UtilityHandler implements WebviewMessageHandler {
 		const resourceType = RESOURCE_TYPE_MAP[msg.type];
 		if (!resourceType) return;
 
-		const items = await this.context.services.agentResources.getAll(resourceType);
+		const items = await this.context.services.resources.getAll(resourceType);
 		const relativePath = items.find(i => i.name === name)?.path;
 		if (!relativePath) {
 			logger.warn(`[UtilityHandler] Resource not found: ${msg.type} name=${name}`);
 			return;
 		}
+
+		// Path traversal guard: ensure resolved path stays within workspace root
 		const fileUri = vscode.Uri.joinPath(root, relativePath);
+		const rootFsPath = root.fsPath.replace(/\\/g, '/');
+		const fileFsPath = fileUri.fsPath.replace(/\\/g, '/');
+		if (!fileFsPath.startsWith(rootFsPath)) {
+			logger.warn(`[UtilityHandler] Path traversal blocked: ${relativePath}`);
+			return;
+		}
+
 		await vscode.window.showTextDocument(fileUri);
 	}
 
 	// ─── Git Stage ──────────────────────────────────────────────────────
 
+	/** Check that a file path is within the workspace root (prevents path traversal). */
+	private isPathWithinWorkspace(filePath: string): boolean {
+		const root = vscode.workspace.workspaceFolders?.[0]?.uri;
+		if (!root) return false;
+		const rootNorm = root.fsPath.replace(/\\/g, '/').toLowerCase();
+		const fileNorm = vscode.Uri.file(filePath).fsPath.replace(/\\/g, '/').toLowerCase();
+		return fileNorm.startsWith(rootNorm);
+	}
+
 	private async handleAcceptFile(msg: WebviewCommand): Promise<void> {
 		const filePath = (msg as { filePath: string }).filePath;
+		if (!this.isPathWithinWorkspace(filePath)) {
+			logger.warn('[UtilityHandler] acceptFile path traversal blocked:', filePath);
+			return;
+		}
 		try {
 			const uri = vscode.Uri.file(filePath);
 			await vscode.commands.executeCommand('git.stage', uri);
@@ -116,7 +138,14 @@ export class UtilityHandler implements WebviewMessageHandler {
 
 	private async handleAcceptAllFiles(msg: WebviewCommand): Promise<void> {
 		const filePaths = (msg as { filePaths: string[] }).filePaths;
-		for (const fp of filePaths) {
+		const safePaths = filePaths.filter(fp => {
+			if (!this.isPathWithinWorkspace(fp)) {
+				logger.warn('[UtilityHandler] acceptAllFiles path traversal blocked:', fp);
+				return false;
+			}
+			return true;
+		});
+		for (const fp of safePaths) {
 			try {
 				const uri = vscode.Uri.file(fp);
 				await vscode.commands.executeCommand('git.stage', uri);
@@ -124,7 +153,7 @@ export class UtilityHandler implements WebviewMessageHandler {
 				logger.error('[UtilityHandler] Failed to stage file', { filePath: fp, err });
 			}
 		}
-		logger.info('[UtilityHandler] Staged all files', { count: filePaths.length });
+		logger.info('[UtilityHandler] Staged all files', { count: safePaths.length });
 	}
 
 	// ─── Workspace Files ────────────────────────────────────────────────
