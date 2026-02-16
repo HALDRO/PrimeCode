@@ -4,14 +4,12 @@
  *              Dispatches messages to appropriate Zustand stores (chatStore, uiStore, settingsStore).
  */
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import type { ExtensionMessage } from '../../common';
 import { useChatStore } from '../store/chatStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { useUIStore } from '../store/uiStore';
 import { vscode } from '../utils/vscode';
-
-let didSendInitialRequests = false;
 
 // =============================================================================
 // Main Message Handler
@@ -29,6 +27,8 @@ const handleExtensionMessage = (message: ExtensionMessage): void => {
 // =============================================================================
 
 export function useExtensionMessages(): void {
+	const didSendInitialRequests = useRef(false);
+
 	useEffect(() => {
 		const handleMessage = (event: MessageEvent) => {
 			const message = event.data;
@@ -37,8 +37,8 @@ export function useExtensionMessages(): void {
 
 		window.addEventListener('message', handleMessage);
 
-		if (!didSendInitialRequests) {
-			didSendInitialRequests = true;
+		if (!didSendInitialRequests.current) {
+			didSendInitialRequests.current = true;
 			// Request initial data from extension
 			// syncAll is triggered by the extension itself after OpenCode server starts
 			// (or deferred until the webview is ready), so we only need webviewDidLaunch here.

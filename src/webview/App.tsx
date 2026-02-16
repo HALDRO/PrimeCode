@@ -6,7 +6,7 @@
  */
 
 import { useOverlayScrollbars } from 'overlayscrollbars-react';
-import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { ChangedFilesPanel } from './components/chat/ChangedFilesPanel';
 import { GenerationStatus } from './components/chat/GenerationStatus';
@@ -15,6 +15,7 @@ import { NotificationOverlay } from './components/chat/NotificationOverlay.tsx';
 import { shouldCollapseGroupedItem } from './components/chat/SimpleTool';
 import { UserMessage } from './components/chat/UserMessage';
 import { Header } from './components/header/Header';
+import { ChevronDownIcon } from './components/icons';
 import { ChatInput } from './components/input/ChatInput';
 import { SettingsPage } from './components/settings';
 import { ConfirmDialog } from './components/ui';
@@ -161,6 +162,9 @@ export const App: React.FC = () => {
 
 	const headerHeight = useElementHeight<HTMLDivElement>({ fallbackHeight: 44 });
 	const virtuosoRef = useRef<VirtuosoHandle>(null);
+	const isAtBottomRef = useRef(true);
+	const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+	const sessionSwitchRef = useRef(false);
 
 	const messages = useMessages();
 	const activeSessionId = useActiveSessionId();
@@ -196,21 +200,68 @@ export const App: React.FC = () => {
 	const virtuosoComponents = useMemo(
 		() => ({
 			Scroller: OverlayScroller,
-			Footer: () => <div style={{ height: '2px' }} />,
+			Footer: () => <div style={{ height: 40 }} />,
 		}),
 		[],
 	);
 
-	// Auto-scroll: follow new messages including subtask children that grow existing sections.
-	// messageCount is an intentional trigger — subtask child messages don't create new sections
-	// but increase the height of existing ones, so Virtuoso's followOutput can't detect them.
-	const messageCount = messages.length;
-	// biome-ignore lint/correctness/useExhaustiveDependencies: messageCount is an intentional trigger
+	// Track whether the user is at the bottom of the scroll container.
+	const handleAtBottomStateChange = useCallback((atBottom: boolean) => {
+		isAtBottomRef.current = atBottom;
+		setShowScrollToBottom(!atBottom);
+	}, []);
+
+	// During streaming, always auto-follow so the response stays visible.
+	// Otherwise, return false — new-section scroll is handled by the useEffect below.
+	const handleFollowOutput = useCallback(
+		(_isAtBottom: boolean) => {
+			if (isProcessing) return 'auto' as const;
+			return false as const;
+		},
+		[isProcessing],
+	);
+
+	// Mark that a session switch happened so we can scroll to top once history is replayed.
 	useEffect(() => {
-		if (isProcessing && virtuosoRef.current) {
-			virtuosoRef.current.scrollToIndex({ index: 'LAST', behavior: 'auto' });
+		if (activeSessionId) {
+			sessionSwitchRef.current = true;
 		}
-	}, [isProcessing, messageCount]);
+	}, [activeSessionId]);
+
+	// Scroll to top after session switch once sections are available (history replay complete).
+	// History arrives as individual session_event messages AFTER the 'switched' lifecycle event,
+	// so we wait for sections to appear before scrolling.
+	const sectionCount = sections.length;
+	useEffect(() => {
+		if (sessionSwitchRef.current && sectionCount > 0 && virtuosoRef.current) {
+			sessionSwitchRef.current = false;
+			requestAnimationFrame(() => {
+				virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end', behavior: 'auto' });
+			});
+		}
+	}, [sectionCount]);
+
+	// When a new section appears (user sent a message), scroll so the new
+	// user-message sticky header lands at the TOP of the viewport.
+	const prevSectionCountRef = useRef(sectionCount);
+	useEffect(() => {
+		const prev = prevSectionCountRef.current;
+		prevSectionCountRef.current = sectionCount;
+
+		if (sectionCount > prev && prev > 0 && !sessionSwitchRef.current && virtuosoRef.current) {
+			requestAnimationFrame(() => {
+				virtuosoRef.current?.scrollToIndex({
+					index: sectionCount - 1,
+					align: 'start',
+					behavior: 'auto',
+				});
+			});
+		}
+	}, [sectionCount]);
+
+	const handleScrollToBottom = useCallback(() => {
+		virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end', behavior: 'smooth' });
+	}, []);
 
 	if (!activeSessionId) {
 		return (
@@ -265,8 +316,17 @@ export const App: React.FC = () => {
 						}}
 						data={sections}
 						context={virtuosoContext}
-						initialTopMostItemIndex={{ index: 'LAST', align: 'end' }}
-						followOutput={isAtBottom => (isAtBottom ? 'auto' : false)}
+						/* Only scroll to bottom on session switch (history restore).
+						   For new/current chats, content starts at the top naturally. */
+						initialTopMostItemIndex={
+							sessionSwitchRef.current && sections.length > 0
+								? { index: sections.length - 1, align: 'end' }
+								: undefined
+						}
+						followOutput={handleFollowOutput}
+						atBottomStateChange={handleAtBottomStateChange}
+						atBottomThreshold={40}
+						increaseViewportBy={{ top: 200, bottom: 400 }}
 						itemContent={(index, section) => (
 							<MessageSectionComponent
 								key={section.userMessage.id ?? index}
@@ -276,6 +336,25 @@ export const App: React.FC = () => {
 						)}
 						components={virtuosoComponents}
 					/>
+				)}
+
+				{showScrollToBottom && sections.length > 0 && (
+					<button
+						type="button"
+						onClick={handleScrollToBottom}
+						className="absolute bottom-2 left-1/2 z-10 flex items-center justify-center rounded-md cursor-pointer transition-opacity duration-200 border-none"
+						style={{
+							transform: 'translateX(-50%)',
+							width: 28,
+							height: 28,
+							backgroundColor: 'var(--vscode-editor-background)',
+							color: 'var(--vscode-foreground)',
+							boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
+						}}
+						title="Scroll to bottom"
+					>
+						<ChevronDownIcon size={16} />
+					</button>
 				)}
 			</div>
 

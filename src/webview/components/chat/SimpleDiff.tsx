@@ -62,9 +62,17 @@ function diffLines(oldText: string, newText: string): DiffLine[] {
 	const n = oldL.length;
 	const m = newL.length;
 
+	// PERFORMANCE GUARD: O(N*M) can freeze the UI thread on large files
+	if (n * m > 2_500_000) {
+		return [
+			...oldL.map(c => ({ type: 'removed' as const, content: c })),
+			...newL.map(c => ({ type: 'added' as const, content: c })),
+		];
+	}
+
 	// LCS DP (space-optimised to two rows)
-	let prev = new Uint16Array(m + 1);
-	let curr = new Uint16Array(m + 1);
+	let prev = new Int32Array(m + 1);
+	let curr = new Int32Array(m + 1);
 
 	for (let i = 1; i <= n; i++) {
 		for (let j = 1; j <= m; j++) {

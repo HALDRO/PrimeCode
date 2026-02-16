@@ -6,7 +6,15 @@
  */
 
 import type React from 'react';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+	useCallback,
+	useDeferredValue,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from 'react';
 
 import { useFileAttachments } from '../../hooks/useFileAttachments';
 import { cn } from '../../lib/cn';
@@ -251,6 +259,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 	const isControlled = controlledValue !== undefined;
 	const inputValue = isControlled ? controlledValue : storeInput;
 
+	// PERFORMANCE: Defer the value used for expensive rendering (backdrop highlights).
+	// Typing updates textarea instantly; highlight recalculation happens at lower priority.
+	const deferredInputValue = useDeferredValue(inputValue);
+
 	// Attachments hook
 	const {
 		attachedFiles,
@@ -319,8 +331,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 		]);
 		const validSubagentNames = new Set(subagents.items.map(a => a.name.toLowerCase()));
 
-		return getMessageHighlights(inputValue, validCommandNames, validSubagentNames);
-	}, [inputValue, cliCommands, customCommands, subagents.items]);
+		return getMessageHighlights(deferredInputValue, validCommandNames, validSubagentNames);
+	}, [deferredInputValue, cliCommands, customCommands, subagents.items]);
 
 	// Handle pending paste text fallback - insert text if context was not found
 	useEffect(() => {
@@ -332,9 +344,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 					const textarea = textareaRef.current;
 					textarea.focus();
 
-					// Use execCommand for proper undo/redo support (Ctrl+Z)
-					// This integrates with browser's native undo stack
-					document.execCommand('insertText', false, pendingPasteText);
+					// Use setRangeText instead of deprecated execCommand
+					const start = textarea.selectionStart;
+					const end = textarea.selectionEnd;
+					textarea.setRangeText(pendingPasteText, start, end, 'end');
+
+					// Dispatch input event so React picks up the change
+					textarea.dispatchEvent(new Event('input', { bubbles: true }));
 
 					clearPendingPaste();
 				}
@@ -408,14 +424,18 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 		};
 	}, [isControlled, setShowSlashCommands, setShowFilePicker, setSlashFilter, setFileFilter]);
 
-	// Auto-resize textarea
-	useEffect(() => {
+	// Auto-resize textarea — re-measure whenever the input value changes.
+	// The 0px trick is needed because inside a CSS grid overlay, setting 'auto'
+	// causes scrollHeight to return the grid-stretched height, not the content height.
+	useLayoutEffect(() => {
+		// Read inputValue so the linter keeps it as a dependency (triggers re-measure on change).
+		void inputValue;
 		const el = textareaRef.current;
 		if (el) {
-			el.style.height = 'auto';
+			el.style.height = '0px';
 			el.style.height = `${Math.min(el.scrollHeight, 266)}px`;
 		}
-	});
+	}, [inputValue]);
 
 	const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
 		const value = e.target.value;
@@ -836,25 +856,24 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 							className={cn(
 								'col-start-1 row-start-1',
 								'py-(--gap-1-5) px-(--gap-3) min-h-(--input-min-height) max-h-(--input-max-height) scrollbar-gutter-stable',
-								'whitespace-pre-wrap wrap-break-word overflow-auto pointer-events-none',
+								'whitespace-pre-wrap wrap-break-word overflow-hidden pointer-events-none',
 								// Match TextArea styles exactly
 								'box-border border-none outline-none font-(family-name:--font-family-base) text-(length:--font-size-base) leading-(--line-height-base) overflow-anywhere text-input-text',
-								// Text color (for non-highlighted parts) needs to match standard input text
-								'scrollbar-hide',
-								// Hide scrollbar in backdrop but allow scrolling via sync
-								'scrollbar-hide',
 							)}
 							aria-hidden="true"
 						>
 							{(() => {
 								const elements: React.ReactNode[] = [];
 								let lastIndex = 0;
+								// Use deferredInputValue to match commandHighlights calculation
+								const textToRender = deferredInputValue;
+
 								for (const highlight of commandHighlights) {
 									// Text before command
 									if (highlight.start > lastIndex) {
 										elements.push(
 											<span key={`text-${lastIndex}`}>
-												{inputValue.substring(lastIndex, highlight.start)}
+												{textToRender.substring(lastIndex, highlight.start)}
 											</span>,
 										);
 									}
@@ -879,13 +898,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 									lastIndex = highlight.end;
 								}
 								// Remaining text
-								if (lastIndex < inputValue.length) {
+								if (lastIndex < textToRender.length) {
 									elements.push(
-										<span key={`text-${lastIndex}`}>{inputValue.substring(lastIndex)}</span>,
+										<span key={`text-${lastIndex}`}>{textToRender.substring(lastIndex)}</span>,
 									);
 								}
 								// Handle trailing newline for visual consistency
-								if (inputValue.endsWith('\n')) {
+								if (textToRender.endsWith('\n')) {
 									elements.push(<br key="trailing-br" />);
 								}
 								return elements;
@@ -909,6 +928,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 								'bg-transparent',
 								// Match backdrop styles
 								'font-(family-name:--font-family-base) text-(length:--font-size-base) leading-(--line-height-base) wrap-break-word overflow-anywhere',
+								// Ensure proper scrollbar when content exceeds max-height
+								'overflow-y-auto',
 								// Fix placeholder visibility against transparent text
 								'placeholder:text-(--vscode-input-placeholderForeground,var(--vscode-descriptionForeground))',
 								'placeholder:[-webkit-text-fill-color:var(--vscode-input-placeholderForeground,var(--vscode-descriptionForeground))]',

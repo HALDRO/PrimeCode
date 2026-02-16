@@ -78,31 +78,15 @@ export const HistoryDropdown: React.FC = () => {
 	}, [setShowHistoryDropdown]);
 
 	useEffect(() => {
-		setIsLoading(true);
-		postMessage({ type: 'getConversationList' });
-
-		const messageHandler = (event: MessageEvent) => {
-			const message = event.data;
-			if (message.type === 'conversationList') {
-				setIsLoading(false);
-			}
-		};
-
-		window.addEventListener('message', messageHandler);
-
-		const timeout = setTimeout(() => setIsLoading(false), 2000);
-
-		return () => {
-			clearTimeout(timeout);
-			window.removeEventListener('message', messageHandler);
-		};
-	}, [postMessage]);
-
-	useEffect(() => {
-		if (conversationList.length > 0) {
-			setIsLoading(false);
+		if (conversationList.length === 0) {
+			setIsLoading(true);
+			postMessage({ type: 'getConversationList' });
+			const timeout = setTimeout(() => setIsLoading(false), 2000);
+			return () => clearTimeout(timeout);
 		}
-	}, [conversationList]);
+		setIsLoading(false);
+		return undefined;
+	}, [postMessage, conversationList.length]);
 
 	useEffect(() => {
 		if (editingId && inputRef.current) {

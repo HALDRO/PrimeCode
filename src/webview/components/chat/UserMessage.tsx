@@ -454,8 +454,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 		);
 
 		const restoreCommit = useMemo(() => {
-			const byMessage = restoreCommits.filter(c => c.associatedMessageId === message.id);
-			return byMessage[0];
+			return restoreCommits.find(c => c.associatedMessageId === message.id);
 		}, [restoreCommits, message.id]);
 
 		const isEditing = editingMessageId === message.id;
