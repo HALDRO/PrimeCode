@@ -751,12 +751,7 @@ export class SessionHandler implements WebviewMessageHandler {
 
 		for (const event of history) {
 			if (event.type === 'message') {
-				const data = event.data as {
-					content?: string;
-					partId?: string;
-					isDelta?: boolean;
-					timestamp?: string;
-				};
+				const data = event.data;
 				this.postSessionMessage(
 					{
 						id: data.partId ? `msg-${data.partId}` : `hist-msg-${Math.random()}`,
@@ -772,22 +767,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			}
 
 			if (event.type === 'normalized_log') {
-				const data = event.data as {
-					role?: string;
-					content?: string;
-					timestamp?: string;
-					messageId?: string;
-					attachments?: {
-						files?: string[];
-						codeSnippets?: Array<{
-							filePath: string;
-							startLine: number;
-							endLine: number;
-							content: string;
-						}>;
-						images?: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
-					};
-				};
+				const data = event.data;
 				if (data.role === 'user') {
 					const userMsgId =
 						data.messageId?.trim() || `msg-local-${Math.random().toString(36).slice(2, 9)}`;
@@ -828,12 +808,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			}
 
 			if (event.type === 'thinking') {
-				const data = event.data as {
-					content?: string;
-					partId?: string;
-					timestamp?: string;
-					durationMs?: number;
-				};
+				const data = event.data;
 				this.postSessionMessage(
 					{
 						id: data.partId ? `thinking-${data.partId}` : `hist-thinking-${Math.random()}`,
@@ -850,12 +825,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			}
 
 			if (event.type === 'tool_use') {
-				const data = event.data as {
-					tool?: string;
-					input?: unknown;
-					toolUseId?: string;
-					timestamp?: string;
-				};
+				const data = event.data;
 				const toolName = data.tool || 'unknown';
 				const input = (data.input as Record<string, unknown>) || {};
 				const toolUseId = data.toolUseId || `hist-tool-${Math.random()}`;
@@ -950,17 +920,9 @@ export class SessionHandler implements WebviewMessageHandler {
 			}
 
 			if (event.type === 'tool_result') {
-				const data = event.data as {
-					tool?: string;
-					content?: string;
-					isError?: boolean;
-					toolUseId?: string;
-					timestamp?: string;
-					metadata?: unknown;
-					title?: unknown;
-				};
+				const data = event.data;
 				const toolName = data.tool || 'unknown';
-				const toolUseId = data.toolUseId || `hist-tool-${Math.random()}`;
+				const toolUseId = data.tool_use_id || `hist-tool-${Math.random()}`;
 				const metadata =
 					data.metadata && typeof data.metadata === 'object'
 						? (data.metadata as Record<string, unknown>)
@@ -978,8 +940,8 @@ export class SessionHandler implements WebviewMessageHandler {
 						{
 							id: toolUseId,
 							type: 'subtask',
-							status: data.isError ? 'error' : 'completed',
-							result: data.content || '',
+							status: data.is_error ? 'error' : 'completed',
+							result: String(data.content || ''),
 							contextId: childSessionId,
 							metadata: childSessionId ? { childSessionId } : undefined,
 							timestamp: data.timestamp || new Date().toISOString(),
@@ -997,8 +959,8 @@ export class SessionHandler implements WebviewMessageHandler {
 						type: 'tool_result',
 						toolName,
 						toolUseId,
-						content: data.content || '',
-						isError: Boolean(data.isError),
+						content: String(data.content || ''),
+						isError: Boolean(data.is_error),
 						title: typeof data.title === 'string' ? data.title : undefined,
 						metadata,
 						timestamp: data.timestamp || new Date().toISOString(),
@@ -1011,17 +973,7 @@ export class SessionHandler implements WebviewMessageHandler {
 
 			// Replay per-turn token stats so the UI shows real token counts
 			if (event.type === 'turn_tokens') {
-				this.postTurnTokens(
-					event.data as {
-						inputTokens: number;
-						outputTokens: number;
-						totalTokens: number;
-						cacheReadTokens: number;
-						durationMs?: number;
-						userMessageId?: string;
-					},
-					sessionId,
-				);
+				this.postTurnTokens(event.data, sessionId);
 				continue;
 			}
 
