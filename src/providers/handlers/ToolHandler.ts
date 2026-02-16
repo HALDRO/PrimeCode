@@ -156,9 +156,10 @@ export class ToolHandler implements WebviewMessageHandler {
 		await this.context.cli.respondToQuestion({ requestId, answers });
 
 		// Mark the question as resolved in the webview
+		// Use 'question-${requestId}' to match the original message ID created in ChatProvider
 		if (targetSessionId) {
 			this.context.bridge.session.message(targetSessionId, {
-				id: requestId,
+				id: `question-${requestId}`,
 				type: 'question' as import('../../common/protocol').SessionMessageType,
 				resolved: true,
 				answers,
@@ -180,7 +181,7 @@ export class ToolHandler implements WebviewMessageHandler {
 		// Mark the question as resolved (rejected) in the webview
 		if (targetSessionId) {
 			this.context.bridge.session.message(targetSessionId, {
-				id: requestId,
+				id: `question-${requestId}`,
 				type: 'question' as import('../../common/protocol').SessionMessageType,
 				resolved: true,
 				timestamp: new Date().toISOString(),

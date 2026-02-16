@@ -1135,14 +1135,10 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			}
 
 			// Attach images as file parts with data URLs
+			// Always use dataUrl (base64) — LLM providers cannot read file:// URLs
 			for (const img of attachments.images ?? []) {
 				const mime = img.dataUrl.match(/^data:([^;]+)/)?.[1] || 'image/png';
-				const url = img.path
-					? img.path.startsWith('file://')
-						? img.path
-						: `file://${img.path.replace(/\\/g, '/')}`
-					: img.dataUrl;
-				parts.push({ type: 'file' as const, mime, url, filename: img.name });
+				parts.push({ type: 'file' as const, mime, url: img.dataUrl, filename: img.name });
 			}
 		}
 

@@ -136,14 +136,20 @@ const SubtaskItem: React.FC<{
 			? message.agent.charAt(0).toUpperCase() + message.agent.slice(1)
 			: 'SubAgent';
 
-	// Auto-scroll the preview container to bottom as content streams in
+	// Auto-scroll the preview container to bottom as content streams in.
+	// Uses MutationObserver to catch all DOM changes (streaming text, new children, etc.)
 	const bodyRef = useRef<HTMLDivElement>(null);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional trigger on children/result changes
 	useEffect(() => {
-		if (isRunning && bodyRef.current) {
-			bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
-		}
-	}, [isRunning, groupedChildren.length, message.result]);
+		const el = bodyRef.current;
+		if (!isRunning || !el) return;
+		const scroll = () => {
+			el.scrollTop = el.scrollHeight;
+		};
+		scroll();
+		const observer = new MutationObserver(scroll);
+		observer.observe(el, { childList: true, subtree: true, characterData: true });
+		return () => observer.disconnect();
+	}, [isRunning]);
 
 	// Cycle: preview ↔ expanded
 	const cycleExpand = () => {

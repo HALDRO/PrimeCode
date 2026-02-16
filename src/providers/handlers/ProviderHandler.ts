@@ -341,6 +341,16 @@ export class ProviderHandler implements WebviewMessageHandler {
 						apiKey,
 						models,
 					);
+
+					// OpenCode caches config as a lazy singleton — it won't re-read
+					// opencode.json until the instance is disposed. Trigger dispose so
+					// the next request bootstraps fresh state with updated providers.
+					const sdkClient = this.context.cli.getSdkClient();
+					if (sdkClient) {
+						await sdkClient.instance.dispose().catch((err: unknown) => {
+							console.warn('[ProviderHandler] instance.dispose() after config sync failed:', err);
+						});
+					}
 				}
 			} catch (syncErr) {
 				// Non-fatal — proxy models are loaded in UI, config sync is best-effort

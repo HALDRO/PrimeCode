@@ -8,6 +8,18 @@ import type { OpencodeClient } from '@opencode-ai/sdk';
 import * as vscode from 'vscode';
 import { normalizeProxyBaseUrl } from '../common';
 
+interface OpenCodeModelConfig {
+	name: string;
+	modalities?: {
+		input: string[];
+		output: string[];
+	};
+	reasoning?: boolean;
+	temperature?: boolean;
+	attachment?: boolean;
+	tool_call?: boolean;
+}
+
 interface OpenCodeJsonConfig {
 	$schema?: string;
 	provider?: Record<
@@ -16,11 +28,29 @@ interface OpenCodeJsonConfig {
 			name?: string;
 			npm?: string;
 			options?: Record<string, unknown>;
-			models?: Record<string, { name: string }>;
+			models?: Record<string, OpenCodeModelConfig>;
 		}
 	>;
 	[key: string]: unknown;
 }
+
+/**
+ * Default capabilities for proxy models.
+ * Proxy /v1/models doesn't return capabilities, so we assume the broadest
+ * reasonable defaults. If a model doesn't actually support something,
+ * the LLM itself will return an error — better than silently stripping
+ * content on our side.
+ */
+const DEFAULT_PROXY_MODEL_CAPABILITIES: Omit<OpenCodeModelConfig, 'name'> = {
+	modalities: {
+		input: ['text', 'image'],
+		output: ['text'],
+	},
+	reasoning: true,
+	temperature: true,
+	attachment: true,
+	tool_call: true,
+};
 
 interface OpenCodeProviderModel {
 	id: string;
@@ -129,9 +159,12 @@ export class OpenCodeClientService {
 			// file doesn't exist yet — start fresh
 		}
 
-		const modelsRecord: Record<string, { name: string }> = {};
+		const modelsRecord: Record<string, OpenCodeModelConfig> = {};
 		for (const m of models) {
-			modelsRecord[m.id] = { name: m.name };
+			modelsRecord[m.id] = {
+				name: m.name,
+				...DEFAULT_PROXY_MODEL_CAPABILITIES,
+			};
 		}
 
 		const normalizedBaseUrl = normalizeProxyBaseUrl(baseUrl);
