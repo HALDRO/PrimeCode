@@ -235,6 +235,25 @@ export class OutboundBridge {
 				sessionId,
 			} satisfies SessionEventMessage);
 		},
+
+		/** Post a question request from OpenCode's question tool. */
+		question: (
+			sessionId: string,
+			data: {
+				requestId: string;
+				questions: import('../common/protocol').QuestionInfo[];
+				tool?: { messageID: string; callID: string };
+			},
+		): void => {
+			this.send({
+				type: 'session_event',
+				targetId: sessionId,
+				eventType: 'question',
+				payload: { eventType: 'question', ...data },
+				timestamp: Date.now(),
+				sessionId,
+			} satisfies SessionEventMessage);
+		},
 	};
 
 	// =========================================================================

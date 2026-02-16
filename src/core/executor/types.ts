@@ -34,6 +34,7 @@ export interface CLIEvent {
 		| 'error'
 		| 'finished'
 		| 'permission'
+		| 'question'
 		| 'session_updated'
 		| 'normalized_log'
 		| 'turn_tokens';
@@ -77,6 +78,11 @@ export interface CLIExecutor extends EventEmitter {
 		alwaysAllow?: boolean;
 		response?: 'once' | 'always' | 'reject';
 	}): Promise<void>;
+
+	/** Reply to an OpenCode question tool prompt. */
+	respondToQuestion?(decision: { requestId: string; answers: string[][] }): Promise<void>;
+	/** Reject/dismiss an OpenCode question. */
+	rejectQuestion?(requestId: string): Promise<void>;
 
 	getAdminInfo(): { baseUrl: string; directory: string } | null;
 	/** Returns the SDK client instance if available (OpenCode only). */

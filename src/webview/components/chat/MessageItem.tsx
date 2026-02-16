@@ -25,6 +25,7 @@ import {
 	TokensIcon,
 	WandIcon,
 } from '../icons';
+import { QuestionCard } from './QuestionCard';
 import {
 	InlineToolLine,
 	SimpleTool,
@@ -372,6 +373,8 @@ export const MessageItem: React.FC<{
 		case 'access_request':
 			// All access requests are rendered inline inside the related ToolCard.
 			return null;
+		case 'question':
+			return <QuestionCard message={item as Extract<Message, { type: 'question' }>} />;
 		case 'subtask':
 			return <SubtaskItem message={item} ctx={ctx} />;
 		case 'assistant':

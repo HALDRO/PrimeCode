@@ -288,10 +288,10 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (env?.OPENCODE_PERMISSION) {
 			try {
 				const existing = JSON.parse(env.OPENCODE_PERMISSION);
-				return JSON.stringify({ ...existing, question: 'deny' });
+				return JSON.stringify({ ...existing, question: 'allow' });
 			} catch {}
 		}
-		if (autoApprove) return JSON.stringify({ question: 'deny' });
+		if (autoApprove) return JSON.stringify({ question: 'allow' });
 
 		return JSON.stringify({
 			edit: 'ask',
@@ -299,7 +299,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			webfetch: 'ask',
 			doom_loop: 'ask',
 			external_directory: 'ask',
-			question: 'deny',
+			question: 'allow',
 		});
 	}
 
@@ -1199,6 +1199,12 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (!envelope || typeof envelope.type !== 'string') return;
 
 		// Handle events not in SDK Event union before narrowing
+		if (envelope.type === 'question.asked') {
+			const props = (envelope.properties ?? {}) as Record<string, unknown>;
+			const sessionId = typeof props.sessionID === 'string' ? props.sessionID : undefined;
+			this.handleQuestionAsked(props, sessionId);
+			return;
+		}
 		if (envelope.type === 'permission.asked') {
 			const props = (envelope.properties ?? {}) as Record<string, unknown>;
 			const sessionId = typeof props.sessionID === 'string' ? props.sessionID : undefined;
@@ -1347,8 +1353,52 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 	}
 
+	/**
+	 * Handle question.asked SSE events from OpenCode's Question tool.
+	 * Maps Question.Request shape → internal 'question' event with QuestionInfo[] array.
+	 */
+	private handleQuestionAsked(props: Record<string, unknown>, sessionId?: string): void {
+		const requestId = typeof props.id === 'string' ? props.id : String(props.id ?? '');
+		const rawQuestions = Array.isArray(props.questions) ? props.questions : [];
+		const toolRecord = props.tool as Record<string, unknown> | undefined;
+
+		const questions = rawQuestions.map((raw: unknown) => {
+			const q = raw as Record<string, unknown>;
+			const rawOpts = Array.isArray(q.options) ? q.options : [];
+			return {
+				question: typeof q.question === 'string' ? q.question : '',
+				header: typeof q.header === 'string' ? q.header : '',
+				options: rawOpts.map((opt: unknown) => {
+					const o = opt as Record<string, unknown>;
+					return {
+						label: typeof o.label === 'string' ? o.label : '',
+						description: typeof o.description === 'string' ? o.description : '',
+					};
+				}),
+				multiple: typeof q.multiple === 'boolean' ? q.multiple : undefined,
+				custom: typeof q.custom === 'boolean' ? q.custom : undefined,
+			};
+		});
+
+		this.emit('event', {
+			type: 'question',
+			data: {
+				requestId,
+				questions,
+				tool: toolRecord
+					? {
+							messageID: typeof toolRecord.messageID === 'string' ? toolRecord.messageID : '',
+							callID: typeof toolRecord.callID === 'string' ? toolRecord.callID : '',
+						}
+					: undefined,
+			},
+			sessionId,
+		});
+	}
+
 	private handlePermissionAsked(props: Record<string, unknown>, sessionId?: string): void {
 		const toolRecord = props.tool as Record<string, unknown> | undefined;
+
 		this.emit('event', {
 			type: 'permission',
 			data: {
@@ -1727,6 +1777,27 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			reply,
 			message: reply === 'reject' ? 'User denied this request' : undefined,
 		});
+	}
+
+	async respondToQuestion(decision: { requestId: string; answers: string[][] }): Promise<void> {
+		if (!this.serverUrl) throw new Error('OpenCode server not running');
+		const url = `${this.serverUrl}/question/${decision.requestId}/reply`;
+		const res = await fetch(url, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ answers: decision.answers }),
+		});
+		if (!res.ok) throw new Error(`Question reply failed: ${res.status}`);
+	}
+
+	async rejectQuestion(requestId: string): Promise<void> {
+		if (!this.serverUrl) throw new Error('OpenCode server not running');
+		const url = `${this.serverUrl}/question/${requestId}/reject`;
+		const res = await fetch(url, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+		});
+		if (!res.ok) throw new Error(`Question reject failed: ${res.status}`);
 	}
 
 	getSessionId(): string | null {

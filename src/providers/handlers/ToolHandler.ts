@@ -26,6 +26,12 @@ export class ToolHandler implements WebviewMessageHandler {
 			case 'accessResponse':
 				await this.onAccessResponse(msg);
 				break;
+			case 'questionResponse':
+				await this.onQuestionResponse(msg);
+				break;
+			case 'questionReject':
+				await this.onQuestionReject(msg);
+				break;
 			case 'getPermissions':
 				await this.onGetPermissions();
 				break;
@@ -136,5 +142,49 @@ export class ToolHandler implements WebviewMessageHandler {
 
 	private async onCheckCliDiagnostics(): Promise<void> {
 		this.context.bridge.data('cliDiagnostics', null);
+	}
+
+	private async onQuestionResponse(msg: CommandOf<'questionResponse'>): Promise<void> {
+		const { requestId, answers, sessionId } = msg;
+		if (!requestId) {
+			throw new Error('Missing questionResponse.requestId');
+		}
+
+		const targetSessionId = sessionId ?? this.context.sessionState.activeSessionId;
+
+		// Reply to OpenCode's question API with answers array
+		await this.context.cli.respondToQuestion({ requestId, answers });
+
+		// Mark the question as resolved in the webview
+		if (targetSessionId) {
+			this.context.bridge.session.message(targetSessionId, {
+				id: requestId,
+				type: 'question' as import('../../common/protocol').SessionMessageType,
+				resolved: true,
+				answers,
+				timestamp: new Date().toISOString(),
+			});
+		}
+	}
+
+	private async onQuestionReject(msg: CommandOf<'questionReject'>): Promise<void> {
+		const { requestId, sessionId } = msg;
+		if (!requestId) {
+			throw new Error('Missing questionReject.requestId');
+		}
+
+		const targetSessionId = sessionId ?? this.context.sessionState.activeSessionId;
+
+		await this.context.cli.rejectQuestion(requestId);
+
+		// Mark the question as resolved (rejected) in the webview
+		if (targetSessionId) {
+			this.context.bridge.session.message(targetSessionId, {
+				id: requestId,
+				type: 'question' as import('../../common/protocol').SessionMessageType,
+				resolved: true,
+				timestamp: new Date().toISOString(),
+			});
+		}
 	}
 }

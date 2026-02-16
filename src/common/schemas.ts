@@ -324,6 +324,35 @@ export const ConversationMessageSchema = Type.Union([
 		type: Type.Literal('system_notice'),
 		content: Type.String(),
 	}),
+	Type.Object({
+		id: Type.Optional(Type.String()),
+		timestamp: Type.String(),
+		type: Type.Literal('question'),
+		requestId: Type.String(),
+		questions: Type.Array(
+			Type.Object({
+				question: Type.String(),
+				header: Type.String(),
+				options: Type.Array(
+					Type.Object({
+						label: Type.String(),
+						description: Type.String(),
+						recommended: Type.Optional(Type.Boolean()),
+					}),
+				),
+				multiple: Type.Optional(Type.Boolean()),
+				custom: Type.Optional(Type.Boolean()),
+			}),
+		),
+		tool: Type.Optional(
+			Type.Object({
+				messageID: Type.String(),
+				callID: Type.String(),
+			}),
+		),
+		resolved: Type.Optional(Type.Boolean()),
+		answers: Type.Optional(Type.Array(Type.Array(Type.String()))),
+	}),
 ]);
 
 export type ConversationMessage = Static<typeof ConversationMessageSchema>;

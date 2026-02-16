@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
-
+import type { WebviewCommand } from '../common/protocol';
 import { OpenCodeExecutor } from '../core/executor/OpenCode';
+import type { CLIEvent } from '../core/executor/types';
 import type { ServiceRegistry } from '../core/ServiceRegistry';
 import { SessionGraph, SessionState } from '../core/SessionManager';
 import { Settings } from '../core/Settings';
@@ -91,6 +92,15 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private disposables: vscode.Disposable[] = [];
 	private sessionGraph = new SessionGraph();
 	private openCodeInitTimer: ReturnType<typeof setInterval> | null = null;
+
+	// Session / subtask tracking
+	private static readonly SUBTASK_INACTIVITY_TIMEOUT_MS = 30_000;
+	private readonly pendingSubtaskToolIds = new Set<string>();
+	private readonly subtaskTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	private readonly activeThinkingPartIds = new Map<string, string>();
+	private readonly activeAssistantPartIds = new Map<string, string>();
+	private readonly childSessionToToolUseId = new Map<string, string>();
+	private readonly subtaskParentSessionByToolUseId = new Map<string, string>();
 
 	// Handlers
 	private sessionHandler: SessionHandler;
@@ -406,6 +416,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			this.toolHandler,
 			[
 				'accessResponse',
+				'questionResponse',
+				'questionReject',
 				'getPermissions',
 				'setPermissions',
 				'checkDiscoveryStatus',
@@ -863,6 +875,42 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				break;
 			}
 
+			case 'question': {
+				const q = event.data as {
+					requestId: string;
+					questions: Array<{
+						question: string;
+						header: string;
+						options: Array<{ label: string; description: string }>;
+						multiple?: boolean;
+						custom?: boolean;
+					}>;
+					tool?: { messageID: string; callID: string };
+				};
+
+				// Post the question as a message so it appears in the chat
+				this.sessionHandler.postSessionMessage(
+					{
+						id: `question-${q.requestId}`,
+						type: 'question',
+						requestId: q.requestId,
+						questions: q.questions,
+						tool: q.tool,
+						resolved: false,
+						timestamp: new Date().toISOString(),
+					},
+					targetSessionId,
+				);
+
+				// Also emit a dedicated question event for the bridge
+				this.bridge.session.question(targetSessionId, {
+					requestId: q.requestId,
+					questions: q.questions,
+					tool: q.tool,
+				});
+				break;
+			}
+
 			default:
 				break;
 		}
@@ -1136,6 +1184,17 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		}
 
 		this.view.webview.postMessage(msg);
+	}
+
+	// ─── Thinking Block Lifecycle ────────────────────────────────────────────
+
+	/** Complete (close) the active thinking block for a session, if any. */
+	private completeActiveThinking(sessionId: string): void {
+		const thinkingPartId = this.activeThinkingPartIds.get(sessionId);
+		if (thinkingPartId) {
+			this.sessionHandler.postComplete(thinkingPartId, thinkingPartId, sessionId);
+			this.activeThinkingPartIds.delete(sessionId);
+		}
 	}
 
 	// ─── Subtask Inactivity Timeout ──────────────────────────────────────────

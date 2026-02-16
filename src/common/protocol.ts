@@ -55,7 +55,8 @@ export type SessionEventType =
 	| 'session_info'
 	| 'auth'
 	| 'terminal'
-	| 'turn_tokens';
+	| 'turn_tokens'
+	| 'question';
 
 export type SessionStatus = 'idle' | 'busy' | 'error' | 'retrying';
 
@@ -69,7 +70,8 @@ export type SessionMessageType =
 	| 'subtask'
 	| 'access_request'
 	| 'system_notice'
-	| 'interrupted';
+	| 'interrupted'
+	| 'question';
 
 export interface SessionMessageData {
 	id: string;
@@ -113,7 +115,7 @@ export interface SessionMessageData {
 	startTime?: string | number;
 	reasoningTokens?: number;
 	requestId?: string;
-	tool?: string;
+	tool?: string | { messageID: string; callID: string };
 	input?: Record<string, unknown>;
 	pattern?: string;
 	resolved?: boolean;
@@ -121,6 +123,9 @@ export interface SessionMessageData {
 	reason?: string;
 	model?: string;
 	normalizedEntry?: import('./normalizedTypes').NormalizedEntry;
+	// Question fields (aligned with OpenCode QuestionRequest)
+	questions?: QuestionInfo[];
+	answers?: QuestionAnswer[];
 }
 
 // =============================================================================
@@ -245,6 +250,33 @@ export interface SessionTurnTokensPayload {
 	userMessageId?: string;
 }
 
+// =============================================================================
+// Question Event Payload (OpenCode question tool)
+// =============================================================================
+
+export interface QuestionOption {
+	label: string;
+	description: string;
+	recommended?: boolean;
+}
+
+export interface QuestionInfo {
+	question: string;
+	header: string;
+	options: QuestionOption[];
+	multiple?: boolean;
+	custom?: boolean;
+}
+
+export type QuestionAnswer = string[];
+
+export interface SessionQuestionPayload {
+	eventType: 'question';
+	requestId: string;
+	questions: QuestionInfo[];
+	tool?: { messageID: string; callID: string };
+}
+
 export type SessionEventPayload =
 	| SessionMessagePayload
 	| SessionStatusPayload
@@ -259,7 +291,8 @@ export type SessionEventPayload =
 	| SessionInfoPayload
 	| SessionAuthPayload
 	| SessionTerminalPayload
-	| SessionTurnTokensPayload;
+	| SessionTurnTokensPayload
+	| SessionQuestionPayload;
 
 export interface SessionEventMessage {
 	type: 'session_event';
@@ -895,6 +928,19 @@ export interface AccessResponseCommand {
 	toolName?: string;
 }
 
+export interface QuestionResponseCommand {
+	type: 'questionResponse';
+	requestId: string;
+	answers: QuestionAnswer[];
+	sessionId?: string;
+}
+
+export interface QuestionRejectCommand {
+	type: 'questionReject';
+	requestId: string;
+	sessionId?: string;
+}
+
 export interface GetPermissionsCommand {
 	type: 'getPermissions';
 }
@@ -1160,6 +1206,8 @@ export type WebviewCommand =
 	| SelectModelCommand
 	| LoadProxyModelsCommand
 	| AccessResponseCommand
+	| QuestionResponseCommand
+	| QuestionRejectCommand
 	| GetPermissionsCommand
 	| SetPermissionsCommand
 	| CheckDiscoveryStatusCommand
