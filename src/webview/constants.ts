@@ -73,12 +73,14 @@ export const NON_GROUPABLE_TOOLS = [
 	'Write',
 	'MultiEdit',
 	'Patch',
+	'ApplyPatch',
 	'bash',
 	'todowrite',
 	'edit',
 	'write',
 	'multiedit',
 	'patch',
+	'apply_patch',
 ] as const;
 
 /**

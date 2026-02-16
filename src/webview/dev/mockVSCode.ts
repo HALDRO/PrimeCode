@@ -835,6 +835,135 @@ const SCENARIO_1_RESEARCHER: MockMessage[] = (() => {
 			timestamp: Date.now(),
 			delay: 200,
 		},
+		// =====================================================================
+		// NEW TOOLS SHOWCASE: WebSearch, CodeSearch, ApplyPatch, Diagnostics
+		// =====================================================================
+
+		// WebSearch tool_use
+		{
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('tool'),
+					type: 'tool_use',
+					toolName: 'WebSearch',
+					toolUseId: 'websearch-1',
+					rawInput: { query: 'React 19 server components best practices 2026' },
+					normalizedEntry: {
+						timestamp: new Date().toISOString(),
+						entryType: {
+							type: 'ToolUse',
+							toolName: 'WebSearch',
+							status: 'created',
+							actionType: {
+								type: 'WebSearch',
+								query: 'React 19 server components best practices 2026',
+							},
+						},
+						content: '',
+					} as NormalizedEntry,
+					timestamp: new Date().toISOString(),
+				},
+			},
+			timestamp: Date.now(),
+			delay: 400,
+		},
+		// WebSearch tool_result
+		{
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('result'),
+					type: 'tool_result',
+					toolName: 'WebSearch',
+					toolUseId: 'websearch-1',
+					content: [
+						'1. React 19 Server Components: The Definitive Guide (2026)',
+						'   https://react.dev/blog/2026/01/server-components-guide',
+						'   Server Components in React 19 allow you to render components on the server, reducing bundle size and improving performance...',
+						'',
+						'2. Best Practices for React Server Components — Vercel Blog',
+						'   https://vercel.com/blog/react-server-components-best-practices',
+						'   Learn how to structure your app with Server and Client Components, handle data fetching, and avoid common pitfalls...',
+						'',
+						'3. React 19 Migration Guide: Server Components Edition',
+						'   https://github.com/reactwg/server-components/discussions/7',
+						'   Step-by-step migration from client-only React to Server Components architecture with real-world examples...',
+						'',
+						"4. Server Components vs. SSR: What's the Difference? — MDN",
+						'   https://developer.mozilla.org/en-US/docs/Learn/React/Server_Components',
+						'   A comprehensive comparison of Server Components and traditional SSR approaches in modern React applications...',
+						'',
+						'5. Performance Benchmarks: React 19 Server Components in Production',
+						'   https://web.dev/articles/react-19-server-components-perf',
+						'   Real-world performance data from large-scale React 19 deployments using Server Components...',
+					].join('\n'),
+					isError: false,
+					timestamp: new Date().toISOString(),
+				},
+			},
+			timestamp: Date.now(),
+			delay: 300,
+		},
+		// CodeSearch tool_use
+		{
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('tool'),
+					type: 'tool_use',
+					toolName: 'CodeSearch',
+					toolUseId: 'codesearch-1',
+					rawInput: { query: 'useEffect cleanup pattern with AbortController' },
+					normalizedEntry: {
+						timestamp: new Date().toISOString(),
+						entryType: {
+							type: 'ToolUse',
+							toolName: 'CodeSearch',
+							status: 'created',
+							actionType: {
+								type: 'CodeSearch',
+								query: 'useEffect cleanup pattern with AbortController',
+							},
+						},
+						content: '',
+					} as NormalizedEntry,
+					timestamp: new Date().toISOString(),
+				},
+			},
+			timestamp: Date.now(),
+			delay: 400,
+		},
+		// CodeSearch tool_result
+		{
+			type: 'session_event',
+			targetId: mockActiveSessionId,
+			eventType: 'message',
+			payload: {
+				eventType: 'message',
+				message: {
+					id: createId('result'),
+					type: 'tool_result',
+					toolName: 'CodeSearch',
+					toolUseId: 'codesearch-1',
+					content:
+						'src/hooks/useFetch.ts:12 — useEffect with AbortController\nsrc/utils/api.ts:45 — fetch wrapper with signal',
+					isError: false,
+					timestamp: new Date().toISOString(),
+				},
+			},
+			timestamp: Date.now(),
+			delay: 300,
+		},
 		// Assistant response
 		{
 			type: 'session_event',

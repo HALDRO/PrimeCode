@@ -41,10 +41,13 @@ export type ToolStatus =
 
 export type ActionType =
 	| { type: 'FileRead'; path: string; offset?: number; limit?: number }
-	| { type: 'FileEdit'; path: string; changes: FileChange[] }
+	| { type: 'FileEdit'; path: string; changes: FileChange[]; diagnostics?: LspDiagnosticsByFile }
 	| { type: 'CommandRun'; command: string; result?: CommandRunResult }
 	| { type: 'Search'; query: string }
 	| { type: 'WebFetch'; url: string }
+	| { type: 'WebSearch'; query: string }
+	| { type: 'CodeSearch'; query: string }
+	| { type: 'ApplyPatch'; files: ApplyPatchFile[] }
 	| { type: 'Tool'; toolName: string; arguments?: unknown; result?: ToolResult }
 	| { type: 'TaskCreate'; description: string }
 	| { type: 'TaskResult'; description: string; result: string; status: 'completed' | 'error' }
@@ -74,4 +77,33 @@ export interface TodoItem {
 	content: string;
 	status: string;
 	priority?: string;
+}
+
+// ---------------------------------------------------------------------------
+// LSP Diagnostics (from edit/write/apply_patch tool metadata)
+// ---------------------------------------------------------------------------
+
+export interface LspDiagnostic {
+	range: {
+		start: { line: number; character: number };
+		end: { line: number; character: number };
+	};
+	message: string;
+	/** 1=Error, 2=Warning, 3=Info, 4=Hint */
+	severity?: number;
+}
+
+/** Map of file path → diagnostics array */
+export type LspDiagnosticsByFile = Record<string, LspDiagnostic[]>;
+
+// ---------------------------------------------------------------------------
+// ApplyPatch (multi-file patch tool used by GPT models)
+// ---------------------------------------------------------------------------
+
+export interface ApplyPatchFile {
+	path: string;
+	status: 'add' | 'update' | 'delete' | 'move';
+	newPath?: string;
+	oldContent?: string;
+	newContent?: string;
 }

@@ -18,6 +18,7 @@ export {
 	File as FileIcon,
 	FileText as FileTextIcon,
 	FolderOpen as FolderOpenIcon,
+	Globe as GlobeIcon,
 	Hash as HashIcon,
 	HelpCircle as HelpCircleIcon,
 	Image as ImageIcon,

@@ -4,6 +4,7 @@
  * ToolCard imports helpers from here — it never touches diff internals.
  */
 
+import type { OverlayScrollbars } from 'overlayscrollbars';
 import { OverlayScrollbarsComponent } from 'overlayscrollbars-react';
 import type React from 'react';
 import { Fragment, useMemo } from 'react';
@@ -12,6 +13,12 @@ import { getShortFileName } from '../../utils/format';
 
 const LINE_HEIGHT = 19;
 const CONTEXT_LINES = 2;
+
+/** Scroll an OverlayScrollbars viewport to the bottom. */
+const scrollToBottom = (instance: OverlayScrollbars) => {
+	const viewport = instance.elements().viewport;
+	if (viewport) viewport.scrollTop = viewport.scrollHeight;
+};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -379,6 +386,7 @@ export const SimpleDiff: React.FC<SimpleDiffProps> = ({
 				},
 				overflow: { x: 'scroll', y: 'scroll' },
 			}}
+			events={{ initialized: scrollToBottom }}
 			defer
 		>
 			<div className="min-w-fit relative">

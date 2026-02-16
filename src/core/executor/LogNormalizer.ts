@@ -9,9 +9,12 @@ import { EventEmitter } from 'node:events';
 // Re-export all types from the shared location so existing consumers keep working.
 export type {
 	ActionType,
+	ApplyPatchFile,
 	CommandExitStatus,
 	CommandRunResult,
 	FileChange,
+	LspDiagnostic,
+	LspDiagnosticsByFile,
 	NormalizedEntry,
 	NormalizedEntryError,
 	NormalizedEntryType,
@@ -23,7 +26,9 @@ export type {
 
 import type {
 	ActionType,
+	ApplyPatchFile,
 	FileChange,
+	LspDiagnosticsByFile,
 	NormalizedEntry,
 	NormalizedEntryType,
 } from '../../common/normalizedTypes';
@@ -266,6 +271,58 @@ export class LogNormalizer extends EventEmitter {
 				};
 				break;
 
+			case 'apply_patch':
+			case 'ApplyPatch': {
+				const patch = (input.patch as string) || (input.diff as string) || '';
+				const files = LogNormalizer.parseApplyPatchFiles(patch, input);
+				actionType = {
+					type: 'ApplyPatch',
+					files,
+				};
+				break;
+			}
+
+			case 'lsp': {
+				const operation = (input.operation as string) || 'unknown';
+				const lspPath = (input.filePath as string) || (input.file_path as string) || '';
+				const line = typeof input.line === 'number' ? input.line : 0;
+				const character = typeof input.character === 'number' ? input.character : 0;
+				actionType = {
+					type: 'Tool',
+					toolName: 'lsp',
+					arguments: { operation, filePath: lspPath, line, character },
+				};
+				break;
+			}
+
+			case 'WebSearch':
+			case 'websearch': {
+				actionType = {
+					type: 'WebSearch',
+					query: (input.query as string) || (input.search_query as string) || '',
+				};
+				break;
+			}
+
+			case 'CodeSearch':
+			case 'codesearch': {
+				actionType = {
+					type: 'CodeSearch',
+					query: (input.query as string) || (input.search_query as string) || '',
+				};
+				break;
+			}
+
+			case 'Skill':
+			case 'skill': {
+				actionType = {
+					type: 'Tool',
+					toolName: 'skill',
+					arguments: input,
+				};
+				break;
+			}
+
 			case 'TodoWrite':
 			case 'todo_write':
 			case 'todowrite':
@@ -305,5 +362,77 @@ export class LogNormalizer extends EventEmitter {
 			content: `Tool Use: ${toolName}`,
 			metadata: { toolCallId },
 		};
+	}
+
+	/**
+	 * Extract LSP diagnostics from tool_result metadata and return them
+	 * in a normalized format. OpenCode sends diagnostics as
+	 * `metadata.diagnostics: Record<string, Diagnostic[]>` on edit/write/apply_patch results.
+	 */
+	public static extractDiagnostics(
+		metadata: Record<string, unknown> | undefined,
+	): LspDiagnosticsByFile | undefined {
+		if (!metadata) return undefined;
+		const raw = metadata.diagnostics;
+		if (!raw || typeof raw !== 'object') return undefined;
+		const result: LspDiagnosticsByFile = {};
+		for (const [filePath, diags] of Object.entries(raw as Record<string, unknown>)) {
+			if (!Array.isArray(diags)) continue;
+			result[filePath] = diags.filter(
+				d => d && typeof d === 'object' && 'message' in d && 'range' in d,
+			);
+		}
+		return Object.keys(result).length > 0 ? result : undefined;
+	}
+
+	/**
+	 * Parse apply_patch input into structured file entries.
+	 * The patch format uses `*** filepath` headers with `@@` hunks.
+	 */
+	private static parseApplyPatchFiles(
+		patch: string,
+		input: Record<string, unknown>,
+	): ApplyPatchFile[] {
+		if (!patch) {
+			// Fallback: try to extract from structured input
+			const files = input.files;
+			if (Array.isArray(files)) {
+				return files.map(f => {
+					const file = f as Record<string, unknown>;
+					return {
+						path: (file.path as string) || '',
+						status: ((file.status as string) || 'update') as ApplyPatchFile['status'],
+						newPath: file.newPath as string | undefined,
+						oldContent: file.oldContent as string | undefined,
+						newContent: file.newContent as string | undefined,
+					};
+				});
+			}
+			return [];
+		}
+
+		const result: ApplyPatchFile[] = [];
+		const fileBlocks = patch.split(/^(?=\*{3}\s)/m);
+
+		for (const block of fileBlocks) {
+			const headerMatch = /^\*{3}\s+(.+?)(?:\s|$)/m.exec(block);
+			if (!headerMatch) continue;
+
+			const filePath = headerMatch[1].trim();
+			let status: ApplyPatchFile['status'] = 'update';
+
+			// Detect status from content
+			if (/^Add\s/i.test(block) || block.includes('*** /dev/null')) {
+				status = 'add';
+			} else if (/^Delete\s/i.test(block) || block.includes('+++ /dev/null')) {
+				status = 'delete';
+			} else if (/^Rename\s|^Move\s/i.test(block)) {
+				status = 'move';
+			}
+
+			result.push({ path: filePath, status });
+		}
+
+		return result.length > 0 ? result : [{ path: 'patch', status: 'update' }];
 	}
 }

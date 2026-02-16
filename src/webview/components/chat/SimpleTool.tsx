@@ -447,10 +447,14 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 		const isTaskResult = action?.type === 'TaskResult';
 		const isSearch =
 			action?.type === 'Search' ||
+			action?.type === 'WebSearch' ||
+			action?.type === 'CodeSearch' ||
 			toolLower === 'grep' ||
 			toolLower === 'glob' ||
 			toolLower === 'search' ||
-			toolLower === 'semanticsearch';
+			toolLower === 'semanticsearch' ||
+			toolLower === 'websearch' ||
+			toolLower === 'codesearch';
 
 		let label = formatToolName(toolName);
 		let meta = '';
@@ -469,6 +473,12 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 				meta = action.command;
 			} else if (action.type === 'Search') {
 				label = 'Search';
+				meta = action.query;
+			} else if (action.type === 'WebSearch') {
+				label = 'Web Search';
+				meta = action.query;
+			} else if (action.type === 'CodeSearch') {
+				label = 'Code Search';
 				meta = action.query;
 			} else if (action.type === 'WebFetch') {
 				label = 'Fetch';
@@ -638,15 +648,9 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 		if (isTodoWrite) return TodoListIcon;
 		if (isRead) return FileTextIcon;
 		if (isListDir) return FolderOpenIcon;
-		if (
-			toolName.toLowerCase() === 'grep' ||
-			toolName.toLowerCase() === 'glob' ||
-			toolName.toLowerCase() === 'search' ||
-			toolName.toLowerCase() === 'semanticsearch'
-		)
-			return SearchIcon;
+		if (isSearch) return SearchIcon;
 		return WandIcon;
-	}, [toolName, isTodoWrite, isRead, isListDir, isTaskResult]);
+	}, [toolName, isTodoWrite, isRead, isListDir, isTaskResult, isSearch]);
 
 	return (
 		<SimpleTool
