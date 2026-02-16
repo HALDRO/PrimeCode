@@ -17,6 +17,8 @@ import type { McpConfigService } from './McpConfigService';
 
 const DEBOUNCE_MS = 500;
 const MCP_CONFIG_PATTERN = '**/opencode.json';
+/** Ignore file-watcher events for this long after start() to avoid startup noise. */
+const STARTUP_GRACE_MS = 3000;
 
 // =============================================================================
 // Types
@@ -38,6 +40,8 @@ export class McpConfigWatcherService implements vscode.Disposable {
 	private _debounceTimer: ReturnType<typeof setTimeout> | undefined;
 	private _disposables: vscode.Disposable[] = [];
 	private _isReloading = false;
+	/** Timestamp when the watcher was started. Used to suppress startup noise. */
+	private _startedAt = 0;
 
 	/** Content hash of the last UI-triggered save. Used to suppress file watcher echo. */
 	private _lastUiSaveHash: string | undefined;
@@ -79,6 +83,7 @@ export class McpConfigWatcherService implements vscode.Disposable {
 		this._watcher.onDidDelete(uri => this._handleFileChange(uri, 'delete'));
 
 		this._disposables.push(this._watcher);
+		this._startedAt = Date.now();
 		logger.info('[McpConfigWatcherService] Started watching opencode.json');
 	}
 
@@ -153,6 +158,12 @@ export class McpConfigWatcherService implements vscode.Disposable {
 	 */
 	private _handleFileChange(uri: vscode.Uri, eventType: 'change' | 'create' | 'delete'): void {
 		logger.debug(`[McpConfigWatcherService] File ${eventType}: ${uri.fsPath}`);
+
+		// Suppress events during startup grace period (OpenCode server may touch opencode.json)
+		if (this._startedAt && Date.now() - this._startedAt < STARTUP_GRACE_MS) {
+			logger.debug('[McpConfigWatcherService] Suppressed (startup grace period)');
+			return;
+		}
 
 		// Clear existing debounce timer
 		if (this._debounceTimer) {

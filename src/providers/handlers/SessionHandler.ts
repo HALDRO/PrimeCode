@@ -38,6 +38,9 @@ export class SessionHandler implements WebviewMessageHandler {
 		}
 	>();
 
+	/** Sessions whose history has already been replayed into the webview. */
+	private replayedSessions = new Set<string>();
+
 	// Improve Prompt State
 	private improvePromptController: AbortController | null = null;
 	private improvePromptActiveRequestId: string | null = null;
@@ -288,8 +291,9 @@ export class SessionHandler implements WebviewMessageHandler {
 			this.context.sessionState.activeSessionId = activeTab;
 			this.postLifecycle('switched', activeTab, { isProcessing: false });
 
-			// Replay history only for the active tab (others load on switch)
+			// Replay history only for the active tab (others lazy-load on switch)
 			await this.replaySessionFromCLI(activeTab, config);
+			this.replayedSessions.add(activeTab);
 			this.postStatus(activeTab, 'idle', 'Ready');
 
 			// Mark non-active tabs as idle
@@ -395,6 +399,7 @@ export class SessionHandler implements WebviewMessageHandler {
 
 			this.context.sessionState.activeSessionId = newSessionId;
 			this.context.sessionState.startedSessions.add(newSessionId);
+			this.replayedSessions.add(newSessionId);
 
 			this.postLifecycle('created', newSessionId);
 			this.postLifecycle('switched', newSessionId, { isProcessing: false });
@@ -417,9 +422,21 @@ export class SessionHandler implements WebviewMessageHandler {
 		this.context.sessionState.activeSessionId = sessionId;
 		this.context.sessionState.startedSessions.add(sessionId);
 		this.postLifecycle('switched', sessionId, { isProcessing: false });
-		this.postStatus(sessionId, 'idle', 'Ready');
 		this.initializeSessionStats(sessionId);
 		this.persistOpenTabs(sessionId);
+
+		// Lazy-load history for tabs that were restored but not yet replayed
+		if (!this.replayedSessions.has(sessionId)) {
+			try {
+				const config = this.buildBaseConfig();
+				await this.replaySessionFromCLI(sessionId, config);
+				this.replayedSessions.add(sessionId);
+			} catch (error) {
+				logger.error('[SessionHandler] Failed to lazy-load session history:', error);
+			}
+		}
+
+		this.postStatus(sessionId, 'idle', 'Ready');
 	}
 
 	private async onCloseSession(msg: CommandOf<'closeSession'>): Promise<void> {
@@ -428,6 +445,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		logger.info('[SessionHandler] Closing session', { sessionId });
 
 		this.context.sessionState.startedSessions.delete(sessionId);
+		this.replayedSessions.delete(sessionId);
 		this.clearSessionStats(sessionId);
 
 		// If closing active session, clear backend reference
@@ -730,6 +748,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		try {
 			const config = this.buildBaseConfig();
 			await this.replaySessionFromCLI(sessionId, config);
+			this.replayedSessions.add(sessionId);
 			this.postStatus(sessionId, 'idle', 'Ready');
 		} catch (error) {
 			logger.error('[SessionHandler] Failed to load conversation:', error);

@@ -118,6 +118,9 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	/** All session IDs that are currently active (main + subagent children). */
 	private readonly activeSessions = new Set<string>();
 
+	/** Guards against concurrent ensureServer calls. */
+	private ensureServerPromise: Promise<void> | null = null;
+
 	// Token stats tracking for message.updated events (per-message cumulative → delta)
 	private readonly lastMessageTokens = new Map<
 		string,
@@ -160,6 +163,21 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	async ensureServer(config: CLIConfig): Promise<void> {
 		if (this.serverUrl) return;
 
+		// Coalesce concurrent callers — only the first one actually starts the server.
+		if (this.ensureServerPromise) {
+			await this.ensureServerPromise;
+			return;
+		}
+
+		this.ensureServerPromise = this.doEnsureServer(config);
+		try {
+			await this.ensureServerPromise;
+		} finally {
+			this.ensureServerPromise = null;
+		}
+	}
+
+	private async doEnsureServer(config: CLIConfig): Promise<void> {
 		if (config.serverUrl) {
 			this.serverUrl = config.serverUrl;
 			this.directory = config.workspaceRoot;

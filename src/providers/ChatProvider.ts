@@ -114,6 +114,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private utilityHandler: UtilityHandler;
 
 	private pendingSyncAll = false;
+	/** Guards against duplicate syncAll calls during startup. */
+	private hasSynced = false;
 	private readonly bridge = new OutboundBridge();
 	private readonly router = new CommandRouter();
 
@@ -476,6 +478,12 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			this.pendingSyncAll = true;
 			return;
 		}
+		// Prevent duplicate syncAll during startup (opencode-start vs webview-syncAll race)
+		if (this.hasSynced) {
+			logger.info('[ChatProvider] syncAll skipped: already synced', { source });
+			return;
+		}
+		this.hasSynced = true;
 		logger.info('[ChatProvider] syncAll started', { source });
 		this.pendingSyncAll = false;
 		await this.syncAll();
