@@ -1,6 +1,9 @@
 /**
  * @file CLI Types
  * @description Shared types and interfaces for CLI executors.
+ * CLIEvent is a discriminated union keyed on `type` — each variant carries
+ * a strongly-typed `data` payload so downstream consumers never need
+ * `as Record<string, unknown>` casts.
  */
 
 import type { ChildProcess } from 'node:child_process';
@@ -25,23 +28,135 @@ export interface CLIConfig {
 	autoCompact?: boolean;
 }
 
-export interface CLIEvent {
-	type:
-		| 'message'
-		| 'tool_use'
-		| 'tool_result'
-		| 'thinking'
-		| 'error'
-		| 'finished'
-		| 'permission'
-		| 'question'
-		| 'session_updated'
-		| 'normalized_log'
-		| 'turn_tokens';
-	data: unknown;
+// =============================================================================
+// CLIEvent — Discriminated Union
+// =============================================================================
+
+/** Base fields shared by every CLIEvent variant. */
+interface CLIEventBase {
 	normalizedEntry?: NormalizedEntry;
 	sessionId?: string;
 }
+
+// -- Per-type data payloads ---------------------------------------------------
+
+export interface MessageEventData {
+	content: string;
+	partId?: string;
+	isDelta: boolean;
+	timestamp?: string;
+}
+
+export interface ThinkingEventData {
+	content: string;
+	partId?: string;
+	isDelta: boolean;
+	timestamp?: string;
+	durationMs?: number;
+}
+
+export interface ToolUseEventData {
+	id?: string;
+	tool?: string;
+	name?: string;
+	input?: unknown;
+	state?: string;
+	title?: string;
+	metadata?: unknown;
+	toolUseId?: string;
+	timestamp?: string;
+}
+
+export interface ToolResultEventData {
+	tool_use_id?: string;
+	id?: string;
+	name?: string;
+	tool?: string;
+	content?: string | unknown;
+	is_error?: boolean;
+	input?: unknown;
+	title?: string;
+	metadata?: unknown;
+	timestamp?: string;
+}
+
+export interface ErrorEventData {
+	message: string;
+}
+
+export interface FinishedEventData {
+	reason: string;
+}
+
+export interface PermissionEventData {
+	id?: string;
+	requestId?: string;
+	permission?: string;
+	patterns?: unknown[];
+	toolCallId?: string;
+	toolUseId?: string;
+	tool?: string;
+	toolInput?: unknown;
+	input?: Record<string, unknown>;
+	metadata?: Record<string, unknown>;
+}
+
+export interface QuestionEventData {
+	id: string;
+	requestId: string;
+	questions: import('../../common/schemas').QuestionInfo[];
+	tool?: { messageID: string; callID: string };
+}
+
+export interface SessionUpdatedEventData {
+	sessionId?: string;
+	status?: { type: string; raw?: unknown };
+	totalStats?: Record<string, unknown>;
+	modelID?: string;
+	providerID?: string;
+}
+
+export interface TurnTokensEventData {
+	inputTokens: number;
+	outputTokens: number;
+	totalTokens: number;
+	cacheReadTokens: number;
+	durationMs?: number;
+	userMessageId?: string;
+}
+
+export interface NormalizedLogEventData {
+	role?: string;
+	content?: string;
+	timestamp?: string;
+	messageId?: string;
+	attachments?: {
+		files?: string[];
+		codeSnippets?: Array<{
+			filePath: string;
+			startLine: number;
+			endLine: number;
+			content: string;
+		}>;
+		images?: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
+	};
+	[key: string]: unknown;
+}
+
+// -- Discriminated union variants ---------------------------------------------
+
+export type CLIEvent =
+	| (CLIEventBase & { type: 'message'; data: MessageEventData })
+	| (CLIEventBase & { type: 'thinking'; data: ThinkingEventData })
+	| (CLIEventBase & { type: 'tool_use'; data: ToolUseEventData })
+	| (CLIEventBase & { type: 'tool_result'; data: ToolResultEventData })
+	| (CLIEventBase & { type: 'error'; data: ErrorEventData })
+	| (CLIEventBase & { type: 'finished'; data: FinishedEventData })
+	| (CLIEventBase & { type: 'permission'; data: PermissionEventData })
+	| (CLIEventBase & { type: 'question'; data: QuestionEventData })
+	| (CLIEventBase & { type: 'session_updated'; data: SessionUpdatedEventData })
+	| (CLIEventBase & { type: 'turn_tokens'; data: TurnTokensEventData })
+	| (CLIEventBase & { type: 'normalized_log'; data: NormalizedLogEventData });
 
 export interface CLIExecutor extends EventEmitter {
 	ensureServer(config: CLIConfig): Promise<void>;

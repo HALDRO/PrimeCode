@@ -127,6 +127,40 @@ export const TotalStatsSchema = Type.Object({
 export type TotalStats = Static<typeof TotalStatsSchema>;
 
 // =============================================================================
+// Question Types (SSE question.asked → webview)
+// =============================================================================
+
+export const QuestionOptionSchema = Type.Object({
+	label: Type.String(),
+	description: Type.String(),
+	recommended: Type.Optional(Type.Boolean()),
+});
+export type QuestionOption = Static<typeof QuestionOptionSchema>;
+
+export const QuestionInfoSchema = Type.Object({
+	question: Type.String(),
+	header: Type.String(),
+	options: Type.Array(QuestionOptionSchema),
+	multiple: Type.Optional(Type.Boolean()),
+	custom: Type.Optional(Type.Boolean()),
+});
+export type QuestionInfo = Static<typeof QuestionInfoSchema>;
+
+export const QuestionToolRefSchema = Type.Object({
+	messageID: Type.String(),
+	callID: Type.String(),
+});
+export type QuestionToolRef = Static<typeof QuestionToolRefSchema>;
+
+/** Shape of the SSE question.asked payload after validation. */
+export const QuestionRequestSchema = Type.Object({
+	id: Type.String(),
+	questions: Type.Array(QuestionInfoSchema),
+	tool: Type.Optional(QuestionToolRefSchema),
+});
+export type QuestionRequest = Static<typeof QuestionRequestSchema>;
+
+// =============================================================================
 // Access Types
 // =============================================================================
 
@@ -329,27 +363,8 @@ export const ConversationMessageSchema = Type.Union([
 		timestamp: Type.String(),
 		type: Type.Literal('question'),
 		requestId: Type.String(),
-		questions: Type.Array(
-			Type.Object({
-				question: Type.String(),
-				header: Type.String(),
-				options: Type.Array(
-					Type.Object({
-						label: Type.String(),
-						description: Type.String(),
-						recommended: Type.Optional(Type.Boolean()),
-					}),
-				),
-				multiple: Type.Optional(Type.Boolean()),
-				custom: Type.Optional(Type.Boolean()),
-			}),
-		),
-		tool: Type.Optional(
-			Type.Object({
-				messageID: Type.String(),
-				callID: Type.String(),
-			}),
-		),
+		questions: Type.Array(QuestionInfoSchema),
+		tool: Type.Optional(QuestionToolRefSchema),
 		resolved: Type.Optional(Type.Boolean()),
 		answers: Type.Optional(Type.Array(Type.Array(Type.String()))),
 	}),

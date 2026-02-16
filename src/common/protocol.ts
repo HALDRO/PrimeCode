@@ -17,6 +17,7 @@ import type {
 	OpenCodeProviderData,
 	ParsedSubagent,
 	PlatformInfo,
+	QuestionInfo,
 	TotalStats,
 	WorkspaceFile,
 } from './schemas';
@@ -55,8 +56,7 @@ export type SessionEventType =
 	| 'session_info'
 	| 'auth'
 	| 'terminal'
-	| 'turn_tokens'
-	| 'question';
+	| 'turn_tokens';
 
 export type SessionStatus = 'idle' | 'busy' | 'error' | 'retrying';
 
@@ -254,28 +254,11 @@ export interface SessionTurnTokensPayload {
 // Question Event Payload (OpenCode question tool)
 // =============================================================================
 
-export interface QuestionOption {
-	label: string;
-	description: string;
-	recommended?: boolean;
-}
-
-export interface QuestionInfo {
-	question: string;
-	header: string;
-	options: QuestionOption[];
-	multiple?: boolean;
-	custom?: boolean;
-}
+// QuestionOption, QuestionInfo, QuestionToolRef are derived from TypeBox schemas in schemas.ts.
+// Re-export them here for backward compatibility with existing imports.
+export type { QuestionInfo, QuestionOption, QuestionToolRef } from './schemas';
 
 export type QuestionAnswer = string[];
-
-export interface SessionQuestionPayload {
-	eventType: 'question';
-	requestId: string;
-	questions: QuestionInfo[];
-	tool?: { messageID: string; callID: string };
-}
 
 export type SessionEventPayload =
 	| SessionMessagePayload
@@ -291,8 +274,7 @@ export type SessionEventPayload =
 	| SessionInfoPayload
 	| SessionAuthPayload
 	| SessionTerminalPayload
-	| SessionTurnTokensPayload
-	| SessionQuestionPayload;
+	| SessionTurnTokensPayload;
 
 export interface SessionEventMessage {
 	type: 'session_event';

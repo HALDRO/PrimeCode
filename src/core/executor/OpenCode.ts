@@ -25,6 +25,8 @@ import type {
 } from '@opencode-ai/sdk';
 import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk';
 
+import { Value } from '@sinclair/typebox/value';
+import { QuestionRequestSchema } from '../../common/schemas';
 import { logger } from '../../utils/logger';
 import { LogNormalizer } from './LogNormalizer';
 import type { CLIConfig, CLIEvent, CLIExecutor } from './types';
@@ -744,8 +746,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 								data: {
 									tool: name,
 									content: state?.output || '',
-									isError: status === 'error',
-									toolUseId: callID,
+									is_error: status === 'error',
+									tool_use_id: callID,
 									timestamp,
 									title: state?.title,
 									metadata: state?.metadata,
@@ -1355,42 +1357,18 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 	/**
 	 * Handle question.asked SSE events from OpenCode's Question tool.
-	 * Maps Question.Request shape → internal 'question' event with QuestionInfo[] array.
+	 * Validates raw SSE props against QuestionRequestSchema (single parse),
+	 * then emits typed data that flows through all layers without re-mapping.
 	 */
 	private handleQuestionAsked(props: Record<string, unknown>, sessionId?: string): void {
-		const requestId = typeof props.id === 'string' ? props.id : String(props.id ?? '');
-		const rawQuestions = Array.isArray(props.questions) ? props.questions : [];
-		const toolRecord = props.tool as Record<string, unknown> | undefined;
-
-		const questions = rawQuestions.map((raw: unknown) => {
-			const q = raw as Record<string, unknown>;
-			const rawOpts = Array.isArray(q.options) ? q.options : [];
-			return {
-				question: typeof q.question === 'string' ? q.question : '',
-				header: typeof q.header === 'string' ? q.header : '',
-				options: rawOpts.map((opt: unknown) => {
-					const o = opt as Record<string, unknown>;
-					return {
-						label: typeof o.label === 'string' ? o.label : '',
-						description: typeof o.description === 'string' ? o.description : '',
-					};
-				}),
-				multiple: typeof q.multiple === 'boolean' ? q.multiple : undefined,
-				custom: typeof q.custom === 'boolean' ? q.custom : undefined,
-			};
-		});
+		const parsed = Value.Cast(QuestionRequestSchema, props);
 
 		this.emit('event', {
 			type: 'question',
 			data: {
-				requestId,
-				questions,
-				tool: toolRecord
-					? {
-							messageID: typeof toolRecord.messageID === 'string' ? toolRecord.messageID : '',
-							callID: typeof toolRecord.callID === 'string' ? toolRecord.callID : '',
-						}
-					: undefined,
+				requestId: parsed.id,
+				questions: parsed.questions,
+				tool: parsed.tool,
 			},
 			sessionId,
 		});

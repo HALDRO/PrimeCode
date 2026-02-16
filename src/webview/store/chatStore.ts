@@ -615,40 +615,6 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 							break;
 						}
 
-						case 'question': {
-							const q = payload as {
-								requestId: string;
-								questions: Array<{
-									question: string;
-									header: string;
-									options: Array<{ label: string; description: string; recommended?: boolean }>;
-									multiple?: boolean;
-									custom?: boolean;
-								}>;
-								tool?: { messageID: string; callID: string };
-								resolved?: boolean;
-								answers?: string[][];
-							};
-							const existing = targetSession.messages.find(
-								m => m.type === 'question' && 'requestId' in m && m.requestId === q.requestId,
-							);
-							if (existing && existing.type === 'question') {
-								// Update existing question (e.g. mark resolved)
-								Object.assign(existing, q);
-							} else {
-								targetSession.messages.push({
-									id: `question-${q.requestId}`,
-									type: 'question',
-									requestId: q.requestId,
-									questions: q.questions ?? [],
-									tool: q.tool,
-									resolved: q.resolved ?? false,
-									timestamp: new Date().toISOString(),
-								});
-							}
-							break;
-						}
-
 						case 'messages_reload': {
 							const r = payload as SessionMessagesReloadPayload;
 							targetSession.messages = (r.messages || []).map(m => ({

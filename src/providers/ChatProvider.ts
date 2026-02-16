@@ -649,17 +649,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			}
 
 			case 'turn_tokens': {
-				this.sessionHandler.postTurnTokens(
-					event.data as {
-						inputTokens: number;
-						outputTokens: number;
-						totalTokens: number;
-						cacheReadTokens: number;
-						durationMs?: number;
-						userMessageId?: string;
-					},
-					targetSessionId,
-				);
+				this.sessionHandler.postTurnTokens(event.data, targetSessionId);
 				break;
 			}
 
@@ -686,7 +676,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				// Complete any active thinking block when assistant message starts
 				this.completeActiveThinking(targetSessionId);
 
-				const e = event.data as { content?: string; partId?: string; isDelta?: boolean };
+				const e = event.data;
 				const partId =
 					e.partId || this.activeAssistantPartIds.get(targetSessionId) || `part-${now}`;
 				this.activeAssistantPartIds.set(targetSessionId, partId);
@@ -711,7 +701,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			}
 
 			case 'thinking': {
-				const e = event.data as { content?: string; partId?: string; isDelta?: boolean };
+				const e = event.data;
 				const partId = e.partId || `thinking-${now}`;
 
 				// Complete previous thinking block if a new one starts
@@ -761,7 +751,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					{
 						id: errorId,
 						type: 'error',
-						content: (event.data as { message?: string }).message || 'Unknown error',
+						content: event.data.message || 'Unknown error',
 						isError: true,
 						timestamp: new Date().toISOString(),
 						normalizedEntry: event.normalizedEntry,
@@ -876,19 +866,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			}
 
 			case 'question': {
-				const q = event.data as {
-					requestId: string;
-					questions: Array<{
-						question: string;
-						header: string;
-						options: Array<{ label: string; description: string }>;
-						multiple?: boolean;
-						custom?: boolean;
-					}>;
-					tool?: { messageID: string; callID: string };
-				};
-
-				// Post the question as a message so it appears in the chat
+				// event.data is already typed as QuestionEventData via discriminated CLIEvent union.
+				const q = event.data;
 				this.sessionHandler.postSessionMessage(
 					{
 						id: `question-${q.requestId}`,
@@ -901,13 +880,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					},
 					targetSessionId,
 				);
-
-				// Also emit a dedicated question event for the bridge
-				this.bridge.session.question(targetSessionId, {
-					requestId: q.requestId,
-					questions: q.questions,
-					tool: q.tool,
-				});
 				break;
 			}
 
