@@ -216,10 +216,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 			if (hasContent) {
 				const stats = computeSimpleStats(oldContent, newContent);
 				const maxHeight = 120;
-				const needsExpand =
-					getDiffContentHeight(oldContent, newContent, {
-						collapseUnchanged: false,
-					}) > maxHeight;
+				const needsExpand = getDiffContentHeight(oldContent, newContent) > maxHeight;
 				const showAccessGate = accessRequest && !accessRequest.resolved && accessRequest.requestId;
 
 				return (
@@ -278,7 +275,6 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 										modified={newContent}
 										maxHeight={maxHeight}
 										expanded={diffExpanded}
-										collapseUnchanged={!diffExpanded}
 									/>
 								</div>
 								<div

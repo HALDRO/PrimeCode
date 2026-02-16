@@ -838,7 +838,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 								'py-(--gap-1-5) px-(--gap-3) min-h-(--input-min-height) max-h-(--input-max-height) scrollbar-gutter-stable',
 								'whitespace-pre-wrap wrap-break-word overflow-auto pointer-events-none',
 								// Match TextArea styles exactly
-								'box-border border-none outline-none font-(family-name:--vscode-font-family) text-vscode-font-size leading-normal overflow-anywhere text-input-text',
+								'box-border border-none outline-none font-(family-name:--font-family-base) text-(length:--font-size-base) leading-(--line-height-base) overflow-anywhere text-input-text',
 								// Text color (for non-highlighted parts) needs to match standard input text
 								'scrollbar-hide',
 								// Hide scrollbar in backdrop but allow scrolling via sync
@@ -908,7 +908,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 								// Make text fully transparent - use both for cross-browser support
 								'bg-transparent',
 								// Match backdrop styles
-								'font-(family-name:--vscode-font-family) text-vscode-font-size leading-normal wrap-break-word overflow-anywhere',
+								'font-(family-name:--font-family-base) text-(length:--font-size-base) leading-(--line-height-base) wrap-break-word overflow-anywhere',
 								// Fix placeholder visibility against transparent text
 								'placeholder:text-(--vscode-input-placeholderForeground,var(--vscode-descriptionForeground))',
 								'placeholder:[-webkit-text-fill-color:var(--vscode-input-placeholderForeground,var(--vscode-descriptionForeground))]',

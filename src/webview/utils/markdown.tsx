@@ -1,10 +1,9 @@
 /**
  * @file Markdown renderer with syntax highlighting
- * @description Compact markdown renderer using react-markdown with rehype-highlight.
- *              Optimized for chat UI with minimal spacing and VS Code-like appearance.
- *              Includes enhanced code blocks with language badges, copy functionality, and horizontal scrolling for long lines.
- *              Code block detection uses language class, hljs highlighting, or multiline content (for tree structures, ASCII art, etc.).
- *              Inline code that looks like file paths becomes clickable to open in editor.
+ * @description Standard markdown renderer using react-markdown with rehype-highlight.
+ *              Uses plain CSS for styling instead of fighting Tailwind prose plugin.
+ *              Code blocks have language badges, copy button, and horizontal scroll.
+ *              Inline code that looks like file paths becomes clickable.
  */
 
 import React, { useState } from 'react';
@@ -13,8 +12,7 @@ import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
 import { CheckIcon, CopyIcon } from '../components/icons';
-import { FileTypeIcon } from '../components/icons/FileTypeIcon';
-import { IconButton, Tooltip } from '../components/ui';
+import { IconButton, PathChip } from '../components/ui';
 import { cn } from '../lib/cn';
 import { vscode } from './vscode';
 
@@ -31,39 +29,88 @@ interface MarkdownProps {
 // Helper Functions
 // ----------------------------------------------------------------------
 
-/** Common file extensions for detection */
 const FILE_EXTENSIONS =
 	/\.(tsx?|jsx?|json|md|css|scss|less|html|xml|yaml|yml|toml|ini|conf|sh|bash|zsh|ps1|py|rb|go|rs|java|kt|swift|c|cpp|h|hpp|cs|php|sql|graphql|vue|svelte|astro)$/i;
 
-/** Check if text looks like a file path */
 const isFilePath = (text: string): boolean => {
-	// Must have a file extension
-	if (!FILE_EXTENSIONS.test(text)) {
+	if (!FILE_EXTENSIONS.test(text)) return false;
+	if (text.includes(' ')) return false;
+	if (text.length > 100) return false;
+	if (/^(import|export|from|require|const|let|var|function|class|interface|type)\b/.test(text))
 		return false;
-	}
-	// Should not contain spaces (usually code, not paths)
-	if (text.includes(' ')) {
-		return false;
-	}
-	// Should not be too long (likely not a simple file reference)
-	if (text.length > 100) {
-		return false;
-	}
-	// Should not start with common code patterns
-	if (/^(import|export|from|require|const|let|var|function|class|interface|type)\b/.test(text)) {
-		return false;
-	}
 	return true;
 };
 
-/** Extract file name from path */
-const getFileName = (path: string): string => path.split(/[/\\]/).pop() || path;
+/**
+ * Regex to detect file paths with optional :line suffix in plain text.
+ * Requires at least one `/` or `\` separator to distinguish from bare filenames.
+ * Matches: `src/utils/markdown.tsx`, `./components/App.tsx:42`, `C:\foo\bar.ts`, `/usr/bin/foo.py`
+ * Does NOT match: `foo.ts` (no separator — handled by inline code detection instead)
+ */
+const FILE_PATH_IN_TEXT =
+	/(?:(?:[a-zA-Z]:[/\\]|\.{1,2}[/\\]|[/\\])[\w.@-]+(?:[/\\][\w.@-]+)*|[\w.@-]+(?:[/\\][\w.@-]+)+)\.(tsx?|jsx?|json|md|css|scss|less|html|xml|yaml|yml|toml|ini|conf|sh|bash|zsh|ps1|py|rb|go|rs|java|kt|swift|c|cpp|h|hpp|cs|php|sql|graphql|vue|svelte|astro)(?::(\d+))?(?=[)\s,;:!?'"]|$)/g;
+
+/**
+ * Scans a text string for file paths and returns an array of React nodes
+ * where file paths are replaced with clickable PathChip components.
+ */
+const linkifyFilePaths = (text: string): React.ReactNode[] => {
+	const parts: React.ReactNode[] = [];
+	let lastIndex = 0;
+
+	for (const m of text.matchAll(FILE_PATH_IN_TEXT)) {
+		const matchStart = m.index;
+		const fullMatch = m[0];
+		const lineNum = m[2] ? Number.parseInt(m[2], 10) : undefined;
+		const filePath = lineNum ? fullMatch.replace(`:${m[2]}`, '') : fullMatch;
+
+		if (matchStart > lastIndex) {
+			parts.push(text.slice(lastIndex, matchStart));
+		}
+
+		parts.push(
+			<PathChip
+				key={`fp-${matchStart}`}
+				path={filePath}
+				line={lineNum}
+				title={fullMatch}
+				className="align-text-bottom"
+				onClick={() => vscode.postMessage({ type: 'openFile', filePath, line: lineNum })}
+			/>,
+		);
+
+		lastIndex = matchStart + fullMatch.length;
+	}
+
+	if (lastIndex === 0) return [text];
+	if (lastIndex < text.length) {
+		parts.push(text.slice(lastIndex));
+	}
+	return parts;
+};
+
+/**
+ * Recursively processes React children, replacing plain text file paths
+ * with PathChip components. Leaves non-string children untouched.
+ */
+const processChildren = (children: React.ReactNode): React.ReactNode => {
+	if (typeof children === 'string') {
+		const linked = linkifyFilePaths(children);
+		return linked.length === 1 && typeof linked[0] === 'string' ? children : linked;
+	}
+	if (Array.isArray(children)) {
+		return children.map((child, i) => {
+			const key = typeof child === 'string' ? `t-${i}-${child.slice(0, 8)}` : `n-${i}`;
+			return <React.Fragment key={key}>{processChildren(child)}</React.Fragment>;
+		});
+	}
+	return children;
+};
 
 // ----------------------------------------------------------------------
 // Helper Components
 // ----------------------------------------------------------------------
 
-/** Copy button for code blocks with visual feedback */
 const CopyButton: React.FC<{ code: string; className?: string }> = ({ code, className }) => {
 	const [copied, setCopied] = useState(false);
 
@@ -84,20 +131,10 @@ const CopyButton: React.FC<{ code: string; className?: string }> = ({ code, clas
 	);
 };
 
-/**
- * Recursive function to extract raw text from React children.
- * Useful for getting the code string from syntax-highlighted nodes.
- */
 const getTextContent = (children: React.ReactNode): string => {
-	if (typeof children === 'string') {
-		return children;
-	}
-	if (typeof children === 'number') {
-		return String(children);
-	}
-	if (Array.isArray(children)) {
-		return children.map(getTextContent).join('');
-	}
+	if (typeof children === 'string') return children;
+	if (typeof children === 'number') return String(children);
+	if (Array.isArray(children)) return children.map(getTextContent).join('');
 	if (children && typeof children === 'object' && 'props' in (children as React.ReactElement)) {
 		return getTextContent(
 			(children as React.ReactElement<{ children?: React.ReactNode }>).props.children,
@@ -107,102 +144,35 @@ const getTextContent = (children: React.ReactNode): string => {
 };
 
 // ----------------------------------------------------------------------
-// Styles
+// Language display names
 // ----------------------------------------------------------------------
 
-// VS Code Dark+ inspired syntax highlighting colors map to Tailwind classes via arbitrary values
-// Using descendant selectors ([&_...]) to target the token spans inside the code block
-const syntaxHighlightStyles = cn(
-	'[&_.hljs-comment]:text-[#6A9955]',
-	'[&_.hljs-quote]:text-[#6A9955]',
-	'[&_.hljs-variable]:text-[#9CDCFE]',
-	'[&_.hljs-template-variable]:text-[#9CDCFE]',
-	'[&_.hljs-tag]:text-[#9CDCFE]',
-	'[&_.hljs-name]:text-[#9CDCFE]',
-	'[&_.hljs-selector-id]:text-[#9CDCFE]',
-	'[&_.hljs-selector-class]:text-[#9CDCFE]',
-	'[&_.hljs-regexp]:text-[#9CDCFE]',
-	'[&_.hljs-link]:text-[#9CDCFE]',
-	'[&_.hljs-number]:text-[#B5CEA8]',
-	'[&_.hljs-meta]:text-[#569CD6]',
-	'[&_.hljs-built_in]:text-[#4EC9B0]',
-	'[&_.hljs-builtin-name]:text-[#4EC9B0]',
-	'[&_.hljs-literal]:text-[#569CD6]',
-	'[&_.hljs-type]:text-[#4EC9B0]',
-	'[&_.hljs-params]:text-[#9CDCFE]',
-	'[&_.hljs-string]:text-[#CE9178]',
-	'[&_.hljs-symbol]:text-[#CE9178]',
-	'[&_.hljs-bullet]:text-[#CE9178]',
-	'[&_.hljs-title]:text-[#DCDCAA]',
-	'[&_.hljs-section]:text-[#DCDCAA]',
-	'[&_.hljs-keyword]:text-[#C586C0]',
-	'[&_.hljs-selector-tag]:text-[#C586C0]',
-	'[&_.hljs-emphasis]:italic',
-	'[&_.hljs-strong]:font-bold',
-);
+const LANG_DISPLAY: Record<string, string> = {
+	typescript: 'TS',
+	javascript: 'JS',
+	python: 'Python',
+	bash: 'Terminal',
+	sh: 'Terminal',
+	json: 'JSON',
+	html: 'HTML',
+	css: 'CSS',
+	yaml: 'YAML',
+	sql: 'SQL',
+	rust: 'Rust',
+	go: 'Go',
+};
+
+const getLangDisplay = (lang: string) => LANG_DISPLAY[lang] || lang.toUpperCase();
 
 // ----------------------------------------------------------------------
 // Markdown Components
 // ----------------------------------------------------------------------
 
 const components: Components = {
-	// Headings
-	h1: ({ children }) => (
-		<h1 className="text-sm font-bold text-vscode-editor-foreground mt-1.5 mb-0.5 first:mt-0 pb-0.5 border-b border-vscode-panel-border">
-			{children}
-		</h1>
-	),
-	h2: ({ children }) => (
-		<h2 className="text-sm font-semibold text-vscode-editor-foreground mt-1.5 mb-0.5 first:mt-0">
-			{children}
-		</h2>
-	),
-	h3: ({ children }) => (
-		<h3 className="text-base font-semibold text-vscode-editor-foreground mt-1 mb-0.5 first:mt-0">
-			{children}
-		</h3>
-	),
-	h4: ({ children }) => (
-		<h4 className="text-base font-medium text-vscode-editor-foreground mt-1 mb-0.5 first:mt-0">
-			{children}
-		</h4>
-	),
-	h5: ({ children }) => (
-		<h5 className="text-md font-bold text-vscode-editor-foreground mt-1 mb-0.5 first:mt-0 uppercase tracking-wide">
-			{children}
-		</h5>
-	),
-	h6: ({ children }) => (
-		<h6 className="text-md font-semibold text-vscode-descriptionForeground mt-1 mb-0.5 first:mt-0">
-			{children}
-		</h6>
-	),
-
-	// Paragraphs
-	p: ({ children }) => (
-		<p className="text-base leading-relaxed text-vscode-editor-foreground mb-0.5 last:mb-0">
-			{children}
-		</p>
-	),
-
-	// Lists
-	ul: ({ children }) => (
-		<ul className="list-disc list-inside pl-(--gap-4) mb-0.5 text-base text-vscode-editor-foreground marker:text-vscode-descriptionForeground space-y-0 [&>li::marker]:text-[1.2em]">
-			{children}
-		</ul>
-	),
-	ol: ({ children }) => (
-		<ol className="list-decimal list-inside pl-(--gap-4) mb-0.5 text-base text-vscode-editor-foreground marker:text-vscode-descriptionForeground space-y-0">
-			{children}
-		</ol>
-	),
-	li: ({ children }) => <li className="my-0 pl-(--gap-1)">{children}</li>,
-
-	// Links
 	a: ({ href, children }) => (
 		<a
 			href={href}
-			className="text-vscode-textLink-foreground hover:text-vscode-textLink-activeForeground hover:underline transition-colors decoration-vscode-textLink-foreground/30 underline-offset-2"
+			className="text-vscode-textLink-foreground hover:text-vscode-textLink-activeForeground hover:underline transition-colors underline-offset-2"
 			target="_blank"
 			rel="noopener noreferrer"
 		>
@@ -210,66 +180,34 @@ const components: Components = {
 		</a>
 	),
 
-	// Blockquotes
-	blockquote: ({ children }) => (
-		<blockquote className="border-l-2 border-vscode-textLink-foreground/50 bg-vscode-textBlockQuote-background px-2 py-0.5 my-0.5 rounded-l text-vscode-descriptionForeground italic text-base">
-			{children}
-		</blockquote>
-	),
+	p: ({ children }) => <p>{processChildren(children)}</p>,
+	li: ({ children }) => <li>{processChildren(children)}</li>,
+	strong: ({ children }) => <strong>{processChildren(children)}</strong>,
+	em: ({ children }) => <em>{processChildren(children)}</em>,
 
-	// Horizontal Rule
-	hr: () => <hr className="border-none h-px bg-vscode-panel-border my-0.5" />,
-
-	// Formatting
-	strong: ({ children }) => (
-		<strong className="font-semibold text-vscode-editor-foreground">{children}</strong>
-	),
-	em: ({ children }) => <em className="italic text-vscode-editor-foreground">{children}</em>,
-	del: ({ children }) => <del className="line-through opacity-70">{children}</del>,
-
-	// Code Blocks & Inline Code
 	pre: ({ children }) => <>{children}</>,
 
 	code: ({ className, children, ...props }) => {
-		// Check if this is a block code (has language class, hljs class, or is multiline)
 		const match = /language-(\w+)/.exec(className || '');
 		const codeContent = getTextContent(children);
-		// Detect code blocks: has language, has hljs highlighting, or contains newlines (multiline)
 		const isMultiline = codeContent.includes('\n');
 		const isCodeBlock = match || className?.includes('hljs') || isMultiline;
 
 		if (isCodeBlock) {
 			const language = match ? match[1] : 'text';
-
-			const displayName =
-				language === 'typescript'
-					? 'TS'
-					: language === 'javascript'
-						? 'JS'
-						: language === 'python'
-							? 'Python'
-							: language === 'bash' || language === 'sh'
-								? 'Terminal'
-								: language === 'json'
-									? 'JSON'
-									: language.toUpperCase();
-
 			return (
-				<div className="group/codeblock isolate relative my-0.5 rounded-lg border border-(--tool-border-color) overflow-hidden bg-(--tool-bg-header)">
-					{/* Floating controls - absolute positioned, z-index scoped by isolate */}
+				<div className="group/codeblock isolate relative my-2 rounded-lg border border-(--tool-border-color) overflow-hidden bg-(--tool-bg-header)">
 					<div className="absolute right-0 top-0 z-1 flex items-center gap-1 p-1 opacity-0 group-hover/codeblock:opacity-100 transition-opacity bg-(--tool-bg-header) rounded-bl">
 						<span className="text-xs font-mono text-vscode-descriptionForeground/50 pointer-events-none select-none">
-							{displayName}
+							{getLangDisplay(language)}
 						</span>
 						<CopyButton code={codeContent} />
 					</div>
-
 					<div className="overflow-x-auto">
 						<code
 							className={cn(
 								'block p-(--tool-content-padding) font-mono text-md leading-(--line-height-code) whitespace-pre',
 								'text-vscode-editor-foreground bg-(--tool-bg-header) w-fit min-w-full',
-								syntaxHighlightStyles,
 								className,
 							)}
 							{...props}
@@ -281,37 +219,20 @@ const components: Components = {
 			);
 		}
 
-		// Inline Code
+		// Inline code — file path detection
 		const codeText = getTextContent(children);
-
-		// Check if it looks like a file path - make it clickable
 		if (isFilePath(codeText)) {
-			const fileName = getFileName(codeText);
-			const handleClick = () => {
-				vscode.postMessage({ type: 'openFile', filePath: codeText });
-			};
-
 			return (
-				<Tooltip content={`Open ${codeText}`} position="top" delay={300}>
-					<button
-						type="button"
-						onClick={handleClick}
-						className={cn(
-							'inline-flex items-center gap-1 px-1 py-px mx-0.5 rounded-sm',
-							'bg-transparent hover:bg-vscode-list-hoverBackground text-vscode-textLink-foreground hover:text-vscode-textLink-activeForeground',
-							'text-md font-mono',
-							'transition-colors duration-150 cursor-pointer',
-							'hover:underline underline-offset-2 decoration-vscode-textLink-foreground/50',
-						)}
-					>
-						<FileTypeIcon name={fileName} size={11} />
-						<span>{fileName}</span>
-					</button>
-				</Tooltip>
+				<PathChip
+					path={codeText}
+					title={codeText}
+					className="align-text-bottom"
+					onClick={() => vscode.postMessage({ type: 'openFile', filePath: codeText })}
+				/>
 			);
 		}
 
-		// Regular inline code - no syntax highlighting, just background
+		// Regular inline code
 		return (
 			<code
 				className="inline-code px-1 py-px mx-0.5 rounded-sm bg-(--alpha-10) text-md font-mono"
@@ -322,21 +243,17 @@ const components: Components = {
 		);
 	},
 
-	// Images
 	img: ({ src, alt }) => (
-		<div className="my-0.5">
-			<img
-				src={src}
-				alt={alt || 'Image'}
-				className="max-w-full h-auto rounded border border-vscode-panel-border"
-				loading="lazy"
-			/>
-		</div>
+		<img
+			src={src}
+			alt={alt || 'Image'}
+			className="my-2 max-w-full h-auto rounded border border-vscode-panel-border"
+			loading="lazy"
+		/>
 	),
 
-	// Tables - styled like ToolResultMessage
 	table: ({ children }) => (
-		<div className="my-0.5 bg-(--tool-bg-header) border border-(--tool-border-color) rounded-lg overflow-hidden">
+		<div className="my-2 bg-(--tool-bg-header) border border-(--tool-border-color) rounded-lg overflow-hidden">
 			<table className="w-full text-md border-collapse">{children}</table>
 		</div>
 	),
@@ -366,41 +283,28 @@ const components: Components = {
 };
 
 // ----------------------------------------------------------------------
-// Main Component
+// Preprocessing
 // ----------------------------------------------------------------------
 
-/**
- * Pre-process markdown content to close unclosed code blocks for smoother streaming rendering.
- * This emulates the "liquid" feel by preventing layout shifts when code blocks are incomplete.
- */
 const preprocessContent = (content: string): string => {
-	// Count backticks to see if we have an open code block
 	const codeBlockMatches = content.match(/```/g);
 	const count = codeBlockMatches ? codeBlockMatches.length : 0;
-
-	// If odd number of backticks, we have an open block. Close it.
 	if (count % 2 !== 0) {
 		return `${content}\n\`\`\``;
 	}
 	return content;
 };
 
-/**
- * Memoized Markdown renderer - prevents expensive re-renders when content hasn't changed.
- * Markdown parsing with syntax highlighting is CPU-intensive, so we skip re-renders
- * when props are identical.
- */
+// ----------------------------------------------------------------------
+// Main Component — uses plain CSS (.markdown-body) instead of Tailwind prose
+// ----------------------------------------------------------------------
+
 export const Markdown: React.FC<MarkdownProps> = React.memo(
 	({ content, className }) => {
 		const processedContent = React.useMemo(() => preprocessContent(content), [content]);
 
 		return (
-			<div
-				className={cn(
-					'markdown-body max-w-full text-vscode-editor-foreground wrap-break-word overflow-x-clip',
-					className,
-				)}
-			>
+			<div className={cn('markdown-body', className)}>
 				<ReactMarkdown
 					remarkPlugins={[remarkGfm]}
 					rehypePlugins={[rehypeHighlight]}

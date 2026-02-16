@@ -94,7 +94,7 @@ const EmptyState: React.FC = () => (
 		<div style={{ fontSize: 'var(--spacing-4)', marginBottom: 'var(--spacing-2)' }}>🤖</div>
 		<div
 			className="text-vscode-descriptionForeground"
-			style={{ fontSize: 'var(--vscode-font-size)' }}
+			style={{ fontSize: 'var(--font-size-base)' }}
 		>
 			Start a conversation...
 		</div>
@@ -201,12 +201,16 @@ export const App: React.FC = () => {
 		[],
 	);
 
-	// Auto-scroll logic
+	// Auto-scroll: follow new messages including subtask children that grow existing sections.
+	// messageCount is an intentional trigger — subtask child messages don't create new sections
+	// but increase the height of existing ones, so Virtuoso's followOutput can't detect them.
+	const messageCount = messages.length;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: messageCount is an intentional trigger
 	useEffect(() => {
 		if (isProcessing && virtuosoRef.current) {
 			virtuosoRef.current.scrollToIndex({ index: 'LAST', behavior: 'auto' });
 		}
-	}, [isProcessing]);
+	}, [isProcessing, messageCount]);
 
 	if (!activeSessionId) {
 		return (

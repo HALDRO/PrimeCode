@@ -696,7 +696,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 						<div
 							ref={contentRef}
 							className={cn(
-								'text-vscode-font-size leading-tight wrap-break-word overflow-anywhere whitespace-pre-wrap overflow-hidden line-clamp-3 px-(--gap-3) py-(--gap-1-5)',
+								'text-(length:--font-size-base) leading-tight wrap-break-word overflow-anywhere whitespace-pre-wrap overflow-hidden line-clamp-3 px-(--gap-3) py-(--gap-1-5)',
 							)}
 						>
 							{(attachedFiles.length > 0 ||

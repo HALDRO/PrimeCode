@@ -3,6 +3,7 @@ import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'rea
 import type { NormalizedEntry } from '../../../common/normalizedTypes';
 import { isMcpTool, isToolInList, NON_GROUPABLE_TOOLS } from '../../constants';
 import { cn } from '../../lib/cn';
+import { CollapseOverlay } from '../ui';
 
 /** Max search results shown inline before collapsing with "+N more" */
 const SEARCH_PREVIEW_LIMIT = 10;
@@ -41,6 +42,8 @@ interface SimpleToolProps {
 	className?: string;
 	/** Optional override for the expandable content wrapper styling. */
 	contentClassName?: string;
+	/** Show a CollapseOverlay at the bottom of expanded content. */
+	showCollapseOverlay?: boolean;
 }
 
 export const SimpleTool: React.FC<SimpleToolProps> = ({
@@ -55,6 +58,7 @@ export const SimpleTool: React.FC<SimpleToolProps> = ({
 	isError,
 	className,
 	contentClassName,
+	showCollapseOverlay = false,
 }) => {
 	const [uncontrolledExpanded, setUncontrolledExpanded] = useState(defaultExpanded);
 	const contentId = useId();
@@ -125,14 +129,17 @@ export const SimpleTool: React.FC<SimpleToolProps> = ({
 				)}
 			</button>
 			{expanded && hasContent && (
-				<div
-					id={contentId}
-					className={cn(
-						'pl-3 ml-1 border-l border-(--border-subtle) mt-1 py-1 text-sm overflow-x-auto',
-						contentClassName,
-					)}
-				>
-					{children}
+				<div className="relative group">
+					<div
+						id={contentId}
+						className={cn(
+							'pl-3 ml-1 border-l border-(--border-subtle) mt-1 py-1 text-sm overflow-x-auto',
+							contentClassName,
+						)}
+					>
+						{children}
+					</div>
+					{showCollapseOverlay && <CollapseOverlay visible={true} onCollapse={toggle} />}
 				</div>
 			)}
 		</div>
@@ -400,6 +407,7 @@ interface InlineToolLineProps {
 	isError: boolean;
 	defaultExpanded?: boolean;
 	normalizedEntry?: NormalizedEntry;
+	showCollapseOverlay?: boolean;
 }
 
 export const InlineToolLine: React.FC<InlineToolLineProps> = ({
@@ -409,6 +417,7 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 	isError,
 	defaultExpanded,
 	normalizedEntry,
+	showCollapseOverlay,
 }) => {
 	const { postMessage } = useVSCode();
 	const toolLower = toolName.toLowerCase();
@@ -646,6 +655,7 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 			meta={metaNode}
 			isError={isError}
 			defaultExpanded={defaultExpanded}
+			showCollapseOverlay={showCollapseOverlay}
 			rightContent={
 				<>
 					{isRead && (

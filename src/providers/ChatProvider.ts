@@ -571,6 +571,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			}
 		} catch (error) {
 			logger.error(`[ChatProvider] Error handling message:`, error);
+
+			// Don't surface file/UI operation errors as chat messages — they are not actionable for the user
+			const silentCommands = new Set(['openFile', 'openFileDiff', 'openExternal', 'getImageData']);
+			if (silentCommands.has(msg.type)) return;
+
 			this.sessionHandler.postSessionMessage({
 				id: `error-${Date.now()}`,
 				type: 'error',

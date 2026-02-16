@@ -29,7 +29,7 @@ export class FileHandler implements WebviewMessageHandler {
 	}
 
 	private async onOpenFile(msg: CommandOf<'openFile'>): Promise<void> {
-		const { filePath } = msg;
+		const { filePath, line, startLine, endLine } = msg;
 
 		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 		const isAbsolute =
@@ -44,11 +44,42 @@ export class FileHandler implements WebviewMessageHandler {
 		try {
 			uri = vscode.Uri.file(absolutePath);
 		} catch {
-			// Fallback if formatting fails
 			uri = vscode.Uri.file(filePath);
 		}
 
-		await vscode.window.showTextDocument(uri);
+		// Try direct path first, then fuzzy search by filename
+		let doc: vscode.TextDocument | undefined;
+		try {
+			doc = await vscode.workspace.openTextDocument(uri);
+		} catch {
+			// File not found at exact path — search workspace by filename
+			const fileName = filePath.replace(/\\/g, '/').split('/').pop();
+			if (fileName) {
+				const matches = await vscode.workspace.findFiles(`**/${fileName}`, '**/node_modules/**', 5);
+				if (matches.length === 1) {
+					uri = matches[0];
+					doc = await vscode.workspace.openTextDocument(uri);
+				} else if (matches.length > 1) {
+					// Multiple matches — pick the one whose path best matches the input
+					const normalized = filePath.replace(/\\/g, '/');
+					const best = matches.find(m => m.fsPath.replace(/\\/g, '/').endsWith(normalized));
+					uri = best ?? matches[0];
+					doc = await vscode.workspace.openTextDocument(uri);
+				}
+			}
+		}
+
+		if (!doc) return;
+
+		const start =
+			typeof line === 'number' && line > 0
+				? line - 1
+				: typeof startLine === 'number' && startLine > 0
+					? startLine - 1
+					: 0;
+		const end = typeof endLine === 'number' && endLine > 0 ? endLine - 1 : start;
+		const selection = new vscode.Range(start, 0, end, 0);
+		await vscode.window.showTextDocument(doc, { selection });
 	}
 
 	private async onOpenFileDiff(msg: CommandOf<'openFileDiff'>): Promise<void> {

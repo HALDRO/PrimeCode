@@ -7,7 +7,6 @@
 
 @import 'tailwindcss';
 @import 'overlayscrollbars/overlayscrollbars.css';
-@plugin '@tailwindcss/typography';
 
 /* Tailwind v4: Source directories for class scanning */
 @source '../';
@@ -32,6 +31,11 @@
 
 	--font-ui: var(--vscode-font-family);
 	--font-mono: var(--vscode-editor-font-family);
+
+	/* Base typography tokens (used by MessageItem, ChatInput, Markdown) */
+	--font-size-base: var(--vscode-font-size, 13px);
+	--line-height-base: 1.5;
+	--font-family-base: var(--font-ui);
 
 	/* ===========================================
 	   SPACING - 10 steps
@@ -220,24 +224,6 @@
 	--color-vscode-dropdown-foreground: var(--vscode-dropdown-foreground);
 	--color-vscode-dropdown-border: var(--vscode-dropdown-border);
 
-	/* Typography for prose */
-	--color-prose-body: var(--vscode-foreground);
-	--color-prose-headings: var(--vscode-foreground);
-	--color-prose-lead: var(--vscode-descriptionForeground);
-	--color-prose-links: var(--vscode-textLink-foreground);
-	--color-prose-bold: var(--vscode-foreground);
-	--color-prose-counters: var(--vscode-descriptionForeground);
-	--color-prose-bullets: var(--vscode-descriptionForeground);
-	--color-prose-hr: var(--vscode-panel-border);
-	--color-prose-quotes: var(--vscode-descriptionForeground);
-	--color-prose-quote-borders: var(--vscode-textLink-foreground);
-	--color-prose-captions: var(--vscode-descriptionForeground);
-	--color-prose-code: var(--vscode-foreground);
-	--color-prose-pre-code: var(--vscode-editor-foreground);
-	--color-prose-pre-bg: var(--vscode-editor-background);
-	--color-prose-th-borders: var(--vscode-panel-border);
-	--color-prose-td-borders: var(--vscode-panel-border);
-
 	/* Animations */
 	--animate-fade-in: fadeIn 0.15s ease-out;
 	--animate-scale-in: scaleIn 0.15s ease-out;
@@ -369,6 +355,187 @@ div:hover > .user-copy-btn {
 
 .show-on-narrow {
 	display: none;
+}
+
+/* ===========================================
+   MARKDOWN BODY — Optimized for AI Chat
+   =========================================== */
+.markdown-body {
+	font-family: var(--font-ui);
+	font-size: var(--font-size-base);
+	line-height: 1.5;
+	color: var(--vscode-editor-foreground);
+	word-wrap: break-word;
+	overflow-wrap: break-word;
+}
+
+/* Remove edge margins for chat bubbles */
+.markdown-body > *:first-child {
+	margin-top: 0 !important;
+}
+.markdown-body > *:last-child {
+	margin-bottom: 0 !important;
+}
+
+/* Paragraphs */
+.markdown-body p {
+	margin: 0.5em 0;
+}
+
+/* Headings */
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+	font-weight: 600;
+	line-height: 1.25;
+	margin-top: 1.5em;
+	margin-bottom: 0.5em;
+	color: var(--vscode-foreground);
+}
+.markdown-body h1 {
+	font-size: 1.4em;
+	border-bottom: 1px solid var(--vscode-panel-border);
+	padding-bottom: 0.3em;
+}
+.markdown-body h2 {
+	font-size: 1.25em;
+	border-bottom: 1px solid var(--border-subtle);
+	padding-bottom: 0.3em;
+}
+.markdown-body h3 {
+	font-size: 1.1em;
+}
+.markdown-body h4 {
+	font-size: 1em;
+}
+
+/* Strong & Emphasis */
+.markdown-body strong {
+	color: var(--vscode-editor-foreground);
+	font-weight: 600;
+}
+.markdown-body em {
+	font-style: italic;
+}
+
+/* Links — fallback, React component handles most */
+.markdown-body a {
+	color: var(--vscode-textLink-foreground);
+	text-decoration: none;
+	cursor: pointer;
+}
+.markdown-body a:hover {
+	text-decoration: underline;
+}
+
+/* Lists */
+.markdown-body ul,
+.markdown-body ol {
+	margin: 0.5em 0;
+	padding-left: 1.5em;
+}
+.markdown-body ul {
+	list-style-type: disc;
+}
+.markdown-body ol {
+	list-style-type: decimal;
+}
+.markdown-body li {
+	margin: 0.2em 0;
+}
+.markdown-body li > p {
+	margin: 0;
+}
+.markdown-body ul > li::marker,
+.markdown-body ol > li::marker {
+	color: var(--vscode-descriptionForeground);
+}
+.markdown-body li > ul,
+.markdown-body li > ol {
+	margin: 0.1em 0;
+}
+
+/* Blockquotes */
+.markdown-body blockquote {
+	margin: 0.8em 0;
+	padding: 0.2em 1em;
+	border-left: 3px solid var(--vscode-textLink-foreground);
+	color: var(--vscode-descriptionForeground);
+	background: var(--alpha-5);
+	border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+.markdown-body blockquote p {
+	margin: 0.2em 0;
+}
+
+/* Horizontal Rule */
+.markdown-body hr {
+	height: 1px;
+	padding: 0;
+	margin: 1.5em 0;
+	background-color: var(--vscode-panel-border);
+	border: 0;
+}
+
+/* Strikethrough (GFM) */
+.markdown-body del {
+	text-decoration: line-through;
+	opacity: 0.7;
+}
+
+/* ===========================================
+   SYNTAX HIGHLIGHTING — VS Code Dark+ colors
+   Global styles so rehype-highlight works everywhere
+   =========================================== */
+.hljs-comment,
+.hljs-quote {
+	color: #6a9955;
+}
+.hljs-variable,
+.hljs-template-variable,
+.hljs-tag,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class,
+.hljs-regexp,
+.hljs-deletion {
+	color: #9cdcfe;
+}
+.hljs-number,
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-literal,
+.hljs-type,
+.hljs-params,
+.hljs-meta,
+.hljs-link {
+	color: #569cd6;
+}
+.hljs-attribute {
+	color: #9cdcfe;
+}
+.hljs-string,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-addition {
+	color: #ce9178;
+}
+.hljs-title,
+.hljs-section {
+	color: #dcdcaa;
+}
+.hljs-keyword,
+.hljs-selector-tag {
+	color: #c586c0;
+}
+.hljs-emphasis {
+	font-style: italic;
+}
+.hljs-strong {
+	font-weight: bold;
 }
 
 /* ===========================================

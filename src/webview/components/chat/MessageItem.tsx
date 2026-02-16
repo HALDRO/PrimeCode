@@ -65,15 +65,15 @@ const cleanSubtaskResult = (raw: string): string => {
 	return text.trim();
 };
 
-type SubtaskExpandState = 'collapsed' | 'result' | 'expanded';
+type SubtaskExpandState = 'preview' | 'expanded';
+
+const SUBTASK_PREVIEW_MAX_HEIGHT = 150;
 
 const SubtaskItem: React.FC<{
 	message: Extract<Message, { type: 'subtask' }>;
 	ctx: MessageItemContext;
 }> = ({ message, ctx }) => {
-	const [expandState, setExpandState] = useState<SubtaskExpandState>(
-		message.status === 'running' ? 'expanded' : 'result',
-	);
+	const [expandState, setExpandState] = useState<SubtaskExpandState>('preview');
 	const [promptExpanded, setPromptExpanded] = useState(false);
 	const mcpServers = useMcpServers();
 	const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
@@ -136,9 +136,18 @@ const SubtaskItem: React.FC<{
 			? message.agent.charAt(0).toUpperCase() + message.agent.slice(1)
 			: 'SubAgent';
 
-	// Cycle: result ↔ expanded (no fully collapsed state for subtasks)
+	// Auto-scroll the preview container to bottom as content streams in
+	const bodyRef = useRef<HTMLDivElement>(null);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional trigger on children/result changes
+	useEffect(() => {
+		if (isRunning && bodyRef.current) {
+			bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+		}
+	}, [isRunning, groupedChildren.length, message.result]);
+
+	// Cycle: preview ↔ expanded
 	const cycleExpand = () => {
-		setExpandState(prev => (prev === 'result' ? 'expanded' : 'result'));
+		setExpandState(prev => (prev === 'preview' ? 'expanded' : 'preview'));
 	};
 
 	// Meta info block (model, task description) — reused in result & expanded
@@ -195,32 +204,40 @@ const SubtaskItem: React.FC<{
 				) : undefined
 			}
 			isCollapsible
-			expanded={expandState !== 'collapsed'}
+			expanded
 			showCollapseOverlay={expandState === 'expanded'}
 			onToggle={cycleExpand}
 			className="my-2"
 			body={
-				expandState === 'expanded' ? (
-					<div className="px-(--tool-content-padding) py-2 bg-(--tool-bg-header)">
-						{metaBlock}
-						{message.prompt && message.prompt !== message.description && (
-							<SimpleTool
-								icon={<WandIcon size={14} />}
-								label="Prompt"
-								meta={!promptExpanded ? message.prompt : undefined}
-								expanded={promptExpanded}
-								onToggle={() => setPromptExpanded(prev => !prev)}
-								className="mb-2"
-							>
-								<div className="text-sm text-vscode-descriptionForeground whitespace-pre-wrap">
-									{message.prompt}
-								</div>
-							</SimpleTool>
-						)}
-						{message.command && (
-							<div className="text-xs font-mono opacity-50 truncate mb-2">$ {message.command}</div>
-						)}
-						{groupedChildren.map((child, idx) => {
+				<div
+					ref={bodyRef}
+					className="px-(--tool-content-padding) py-2 bg-(--tool-bg-header) relative"
+					style={
+						isRunning && expandState === 'preview'
+							? { maxHeight: SUBTASK_PREVIEW_MAX_HEIGHT, overflowY: 'auto' }
+							: undefined
+					}
+				>
+					{metaBlock}
+					{isRunning && message.prompt && message.prompt !== message.description && (
+						<SimpleTool
+							icon={<WandIcon size={14} />}
+							label="Prompt"
+							meta={!promptExpanded ? message.prompt : undefined}
+							expanded={promptExpanded}
+							onToggle={() => setPromptExpanded(prev => !prev)}
+							className="mb-2"
+						>
+							<div className="text-sm text-vscode-descriptionForeground whitespace-pre-wrap">
+								{message.prompt}
+							</div>
+						</SimpleTool>
+					)}
+					{isRunning && message.command && (
+						<div className="text-xs font-mono opacity-50 truncate mb-2">$ {message.command}</div>
+					)}
+					{(isRunning || expandState === 'expanded') &&
+						groupedChildren.map((child, idx) => {
 							const key = Array.isArray(child)
 								? (child[0]?.id ?? `tool-group-${idx}`)
 								: (child.id ?? `message-${idx}`);
@@ -235,44 +252,17 @@ const SubtaskItem: React.FC<{
 								/>
 							);
 						})}
-						{taskResultEntry && (
-							<InlineToolLine
-								toolName="task"
-								rawInput={{}}
-								content={cleanSubtaskResult(message.result || '')}
-								isError={false}
-								normalizedEntry={taskResultEntry}
-							/>
-						)}
-					</div>
-				) : expandState === 'result' ? (
-					<div className="px-(--tool-content-padding) py-2 bg-(--tool-bg-header)">
-						{metaBlock}
-						{message.prompt && message.prompt !== message.description && (
-							<SimpleTool
-								icon={<WandIcon size={14} />}
-								label="Prompt"
-								meta={!promptExpanded ? message.prompt : undefined}
-								expanded={promptExpanded}
-								onToggle={() => setPromptExpanded(prev => !prev)}
-								className="mb-2"
-							>
-								<div className="text-sm text-vscode-descriptionForeground whitespace-pre-wrap">
-									{message.prompt}
-								</div>
-							</SimpleTool>
-						)}
-						{taskResultEntry && (
-							<InlineToolLine
-								toolName="task"
-								rawInput={{}}
-								content={cleanSubtaskResult(message.result || '')}
-								isError={false}
-								normalizedEntry={taskResultEntry}
-							/>
-						)}
-					</div>
-				) : undefined
+					{taskResultEntry && (
+						<InlineToolLine
+							toolName="task"
+							rawInput={{}}
+							content={cleanSubtaskResult(message.result || '')}
+							isError={false}
+							normalizedEntry={taskResultEntry}
+							showCollapseOverlay
+						/>
+					)}
+				</div>
 			}
 		/>
 	);

@@ -126,7 +126,7 @@ export const PathChip: React.FC<PathChipProps> = ({
 
 	if (effectiveTitle) {
 		return (
-			<Tooltip content={effectiveTitle} position="top" delay={200}>
+			<Tooltip content={effectiveTitle} position="top" delay={200} className={className}>
 				{chip}
 			</Tooltip>
 		);

@@ -13,7 +13,7 @@ export const TextArea = forwardRef<HTMLTextAreaElement, TextAreaProps>(
 			<textarea
 				ref={ref}
 				className={cn(
-					'w-full box-border bg-transparent border-none outline-none font-(family-name:--vscode-font-family) text-vscode-font-size leading-normal wrap-break-word overflow-anywhere text-input-text',
+					'w-full box-border bg-transparent border-none outline-none font-(family-name:--vscode-font-family) text-(length:--font-size-base) leading-normal wrap-break-word overflow-anywhere text-input-text',
 					isResizable ? 'resize-y' : 'resize-none',
 					className,
 				)}

@@ -70,7 +70,6 @@
 		"@tailwindcss/cli": "^4.0.9",
 		"@tailwindcss/node": "^4.1.18",
 		"@tailwindcss/postcss": "^4.0.9",
-		"@tailwindcss/typography": "^0.5.19",
 		"@tailwindcss/vite": "^4.1.18",
 		"@types/js-yaml": "^4.0.9",
 		"@types/mocha": "^10.0.10",
