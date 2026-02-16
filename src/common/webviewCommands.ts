@@ -59,7 +59,6 @@ export interface ImprovePromptRequestCommand {
 	text: string;
 	requestId: string;
 	model?: string;
-	timeoutMs?: number;
 }
 
 export interface CancelImprovePromptCommand {

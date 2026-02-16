@@ -1,8 +1,8 @@
 /**
  * @file ToolHandler permission policy tests
- * @description Tests that ToolHandler correctly persists and returns permission policies,
- *              handles access responses with alwaysAllow, and exposes policies for
- *              ChatProvider auto-approval.
+ * @description Tests that ToolHandler correctly persists and returns all 16 permission
+ *              categories, handles access responses with alwaysAllow, exposes policies
+ *              for ChatProvider auto-approval, and syncs policies to the server with retry.
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -11,6 +11,31 @@ import { SessionGraph } from '../../core/SessionManager';
 import { OutboundBridge } from '../../transport/OutboundBridge';
 import { ToolHandler } from './ToolHandler';
 import type { HandlerContext } from './types';
+
+// ---------------------------------------------------------------------------
+// Constants — must match ToolHandler.DEFAULT_POLICIES
+// ---------------------------------------------------------------------------
+
+const DEFAULT_POLICIES = {
+	read: 'allow',
+	edit: 'ask',
+	glob: 'allow',
+	grep: 'allow',
+	list: 'allow',
+	bash: 'ask',
+	task: 'ask',
+	skill: 'allow',
+	lsp: 'allow',
+	todoread: 'allow',
+	todowrite: 'allow',
+	webfetch: 'ask',
+	websearch: 'ask',
+	codesearch: 'allow',
+	external_directory: 'ask',
+	doom_loop: 'ask',
+} as const;
+
+const ALL_ALLOW_POLICIES = Object.fromEntries(Object.keys(DEFAULT_POLICIES).map(k => [k, 'allow']));
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -24,6 +49,7 @@ function createMockHandlerContext(
 	const mockCli = {
 		respondToPermission: vi.fn().mockResolvedValue(undefined),
 		getProvider: vi.fn().mockReturnValue('opencode'),
+		getSdkClient: vi.fn().mockReturnValue(null),
 	};
 
 	const mockSettings = {
@@ -36,7 +62,6 @@ function createMockHandlerContext(
 	};
 
 	const bridge = new OutboundBridge();
-	// Intercept all outbound messages so tests can inspect them
 	vi.spyOn(bridge, 'send').mockImplementation((msg: unknown) => {
 		postedMessages.push(msg);
 	});
@@ -68,14 +93,23 @@ function createMockHandlerContext(
 
 describe('ToolHandler', () => {
 	describe('getPermissions', () => {
-		it('should return actual persisted policies, not hardcoded "ask"', async () => {
+		it('should return default 16-category policies when nothing is persisted', async () => {
 			const ctx = createMockHandlerContext();
+			const handler = new ToolHandler(ctx);
+			await handler.handleMessage({ type: 'getPermissions' });
 
-			// Simulate user previously setting policies to 'allow'
+			const msg = ctx.postedMessages.find((m: any) => m.type === 'permissionsUpdated') as any;
+
+			expect(msg).toBeDefined();
+			expect(msg.data.policies).toEqual(DEFAULT_POLICIES);
+		});
+
+		it('should merge persisted policies over defaults', async () => {
+			const ctx = createMockHandlerContext();
 			await ctx.extensionContext.workspaceState.update('primeCode.permissionPolicies', {
 				edit: 'allow',
-				terminal: 'allow',
-				network: 'allow',
+				bash: 'allow',
+				external_directory: 'deny',
 			});
 
 			const handler = new ToolHandler(ctx);
@@ -85,38 +119,40 @@ describe('ToolHandler', () => {
 
 			expect(msg).toBeDefined();
 			expect(msg.data.policies).toEqual({
+				...DEFAULT_POLICIES,
 				edit: 'allow',
-				terminal: 'allow',
-				network: 'allow',
+				bash: 'allow',
+				external_directory: 'deny',
 			});
 		});
 
-		it('should default to "ask" when no policies have been persisted', async () => {
+		it('should ignore unknown legacy keys from stored policies', async () => {
 			const ctx = createMockHandlerContext();
-			const handler = new ToolHandler(ctx);
-			await handler.handleMessage({ type: 'getPermissions' });
-
-			const msg = ctx.postedMessages.find((m: any) => m.type === 'permissionsUpdated') as any;
-
-			expect(msg).toBeDefined();
-			expect(msg.data.policies).toEqual({
-				edit: 'ask',
-				terminal: 'ask',
-				network: 'ask',
+			await ctx.extensionContext.workspaceState.update('primeCode.permissionPolicies', {
+				terminal: 'allow', // legacy key — should be ignored
+				network: 'allow', // legacy key — should be ignored
+				edit: 'allow',
 			});
+
+			const handler = new ToolHandler(ctx);
+			const policies = handler.getPermissionPolicies();
+
+			// Should have all 16 keys, not legacy ones
+			expect(Object.keys(policies).sort()).toEqual(Object.keys(DEFAULT_POLICIES).sort());
+			expect(policies.edit).toBe('allow');
+			expect((policies as any).terminal).toBeUndefined();
+			expect((policies as any).network).toBeUndefined();
 		});
 	});
 
 	describe('setPermissions', () => {
-		it('should persist the policies from the incoming message', async () => {
+		it('should persist all 16 categories from incoming message', async () => {
 			const ctx = createMockHandlerContext();
 			const handler = new ToolHandler(ctx);
 
-			// Real webview sends: postMessage('setPermissions', { policies, provider })
-			// postMessageToVSCode spreads data onto top-level: { type, ...data }
 			await handler.handleMessage({
 				type: 'setPermissions',
-				policies: { edit: 'allow', terminal: 'allow', network: 'deny' },
+				policies: ALL_ALLOW_POLICIES,
 				provider: 'opencode',
 			} as any);
 
@@ -124,35 +160,54 @@ describe('ToolHandler', () => {
 				'primeCode.permissionPolicies',
 			) as any;
 
-			expect(persisted).toEqual({
-				edit: 'allow',
-				terminal: 'allow',
-				network: 'deny',
-			});
+			expect(persisted).toEqual(ALL_ALLOW_POLICIES);
 
-			// Verify the response message reflects the new policies
 			const msg = ctx.postedMessages.find((m: any) => m.type === 'permissionsUpdated') as any;
-			expect(msg.data.policies).toEqual({
-				edit: 'allow',
-				terminal: 'allow',
-				network: 'deny',
-			});
+			expect(msg.data.policies).toEqual(ALL_ALLOW_POLICIES);
 		});
 
-		it('should reject invalid policy values', async () => {
+		it('should reject invalid policy values and keep default', async () => {
 			const ctx = createMockHandlerContext();
 			const handler = new ToolHandler(ctx);
 
 			await handler.handleMessage({
 				type: 'setPermissions',
-				policies: { edit: 'invalid_value', terminal: 'allow', network: 'allow' },
+				policies: { edit: 'invalid_value' as any, bash: 'allow' },
 			} as any);
 
-			// Invalid values should fall back to 'ask'
-			const persisted = ctx.extensionContext.workspaceState.get(
-				'primeCode.permissionPolicies',
-			) as any;
-			expect(persisted.edit).toBe('ask');
+			const policies = handler.getPermissionPolicies();
+			expect(policies.edit).toBe('ask'); // default, not 'invalid_value'
+			expect(policies.bash).toBe('allow'); // valid, accepted
+		});
+
+		it('should ignore unknown keys in incoming policies', async () => {
+			const ctx = createMockHandlerContext();
+			const handler = new ToolHandler(ctx);
+
+			await handler.handleMessage({
+				type: 'setPermissions',
+				policies: { terminal: 'allow', network: 'deny', edit: 'allow' } as any,
+			} as any);
+
+			const policies = handler.getPermissionPolicies();
+			expect(policies.edit).toBe('allow');
+			expect((policies as any).terminal).toBeUndefined();
+			expect((policies as any).network).toBeUndefined();
+		});
+
+		it('should partially update — only override provided keys', async () => {
+			const ctx = createMockHandlerContext();
+			const handler = new ToolHandler(ctx);
+
+			await handler.handleMessage({
+				type: 'setPermissions',
+				policies: { bash: 'allow' },
+			} as any);
+
+			const policies = handler.getPermissionPolicies();
+			expect(policies.bash).toBe('allow');
+			expect(policies.edit).toBe('ask'); // unchanged default
+			expect(policies.read).toBe('allow'); // unchanged default
 		});
 	});
 
@@ -184,24 +239,21 @@ describe('ToolHandler', () => {
 	});
 
 	describe('policy-based auto-approval', () => {
-		it('should expose policies so ChatProvider can auto-approve edit tools', async () => {
+		it('should expose all 16 policies for ChatProvider', async () => {
 			const ctx = createMockHandlerContext();
-
-			// User set edit policy to 'allow'
 			await ctx.extensionContext.workspaceState.update('primeCode.permissionPolicies', {
 				edit: 'allow',
-				terminal: 'ask',
-				network: 'ask',
+				bash: 'deny',
 			});
 
 			const handler = new ToolHandler(ctx);
 			const policies = handler.getPermissionPolicies();
 
-			expect(policies).toEqual({
-				edit: 'allow',
-				terminal: 'ask',
-				network: 'ask',
-			});
+			expect(policies.edit).toBe('allow');
+			expect(policies.bash).toBe('deny');
+			expect(policies.read).toBe('allow'); // default
+			expect(policies.task).toBe('ask'); // default
+			expect(Object.keys(policies)).toHaveLength(16);
 		});
 	});
 });

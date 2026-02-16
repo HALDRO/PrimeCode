@@ -1,163 +1,107 @@
 /**
  * @file PromptImproverSettings
- * @description Settings UI for the Prompt Improver feature. Displays timeout in seconds for UX,
- * while persisting the underlying extension setting in milliseconds (primeCode.promptImprove.timeoutMs).
+ * @description Settings UI for the Prompt Improver feature (model selection and system prompt template).
+ *              Reuses ModelDropdown for model selection to avoid duplicating model list logic.
  */
 
 import type React from 'react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { IMPROVE_PROMPT_DEFAULT_TEMPLATE } from '../../../common/promptImprover';
 import { cn } from '../../lib/cn';
 import { useSettingsActions, useSettingsStore } from '../../store';
 import { useVSCode } from '../../utils/vscode';
 import { ChevronIcon } from '../icons';
-import { Button, Select, TextArea } from '../ui';
+import { type ModelData, ModelDropdown } from '../input/ModelDropdown';
+import { Button, type DropdownMenuItem, TextArea } from '../ui';
 import { GroupTitle, SettingRow, SettingsGroup } from './SettingsUI';
 
 export const PromptImproverSettings: React.FC = () => {
-	const {
-		promptImproveModel,
-		promptImproveTemplate,
-		promptImproveTimeoutSeconds,
-		proxyModels,
-		enabledProxyModels,
-	} = useSettingsStore();
+	const { promptImproveModel, promptImproveTemplate } = useSettingsStore();
 	const { setSettings } = useSettingsActions();
 	const { postMessage } = useVSCode();
 	const [expanded, setExpanded] = useState(false);
-
-	// Local state for timeout to allow instant UI updates
-	const storeTimeoutSeconds =
-		typeof promptImproveTimeoutSeconds === 'number' && Number.isFinite(promptImproveTimeoutSeconds)
-			? Math.max(1, Math.round(promptImproveTimeoutSeconds))
-			: 30;
-	const [localTimeout, setLocalTimeout] = useState(storeTimeoutSeconds);
-	const debounceRef = useRef<NodeJS.Timeout | null>(null);
-
-	// Sync local state when store changes (e.g., from extension)
-	useEffect(() => {
-		setLocalTimeout(storeTimeoutSeconds);
-	}, [storeTimeoutSeconds]);
+	const [showModelDropdown, setShowModelDropdown] = useState(false);
+	const modelButtonRef = useRef<HTMLButtonElement>(null);
 
 	const saveSettingToBackend = useCallback(
 		(key: string, value: unknown) => {
-			let backendKey = '';
-			if (key === 'promptImproveModel') {
-				backendKey = 'promptImprove.model';
-			}
-			if (key === 'promptImproveTemplate') {
-				backendKey = 'promptImprove.template';
-			}
-			if (key === 'promptImproveTimeoutSeconds') {
-				backendKey = 'promptImprove.timeoutMs';
-			}
-
-			if (!backendKey) {
-				return;
-			}
-
-			// Timeout is shown/stored in the webview as seconds for UX, but persisted as ms in extension.
-			if (key === 'promptImproveTimeoutSeconds') {
-				const seconds =
-					typeof value === 'number'
-						? value
-						: typeof value === 'string'
-							? Number.parseFloat(value)
-							: Number.NaN;
-
-				const ms = Number.isFinite(seconds) ? Math.max(1000, Math.round(seconds * 1000)) : 30000;
-
-				postMessage({
-					type: 'updateSettings',
-					settings: {
-						[backendKey]: ms,
-					},
-				});
-				return;
-			}
-
-			postMessage({
-				type: 'updateSettings',
-				settings: {
-					[backendKey]: value,
-				},
-			});
+			const keyMap: Record<string, string> = {
+				promptImproveModel: 'promptImprove.model',
+				promptImproveTemplate: 'promptImprove.template',
+			};
+			const backendKey = keyMap[key];
+			if (!backendKey) return;
+			postMessage({ type: 'updateSettings', settings: { [backendKey]: value } });
 		},
 		[postMessage],
 	);
 
 	const saveSetting = useCallback(
 		(key: string, value: unknown) => {
-			// Update local store immediately
 			// biome-ignore lint/suspicious/noExplicitAny: generic setting update
 			setSettings({ [key]: value } as any);
-			// Save to backend
 			saveSettingToBackend(key, value);
 		},
 		[setSettings, saveSettingToBackend],
 	);
 
-	// Debounced save for timeout - updates UI instantly, saves to backend after delay
-	const handleTimeoutChange = useCallback(
-		(secondsValue: number) => {
-			const validValue = Number.isFinite(secondsValue) ? Math.max(1, secondsValue) : 30;
+	// "Use main model" extra item prepended to the dropdown
+	const extraItems = useMemo((): DropdownMenuItem<ModelData>[] => {
+		const isActive = !promptImproveModel;
+		return [
+			{
+				id: '',
+				label: 'Use main model',
+				data: { id: '', name: 'Use main model', isActive },
+			},
+		];
+	}, [promptImproveModel]);
 
-			// Update local state immediately for responsive UI
-			setLocalTimeout(validValue);
-			// Update store immediately too
-			// biome-ignore lint/suspicious/noExplicitAny: generic setting update
-			setSettings({ promptImproveTimeoutSeconds: validValue } as any);
-
-			// Debounce the backend save
-			if (debounceRef.current) {
-				clearTimeout(debounceRef.current);
-			}
-			debounceRef.current = setTimeout(() => {
-				saveSettingToBackend('promptImproveTimeoutSeconds', validValue);
-			}, 500);
+	const handleModelSelect = useCallback(
+		(modelId: string) => {
+			saveSetting('promptImproveModel', modelId);
 		},
-		[setSettings, saveSettingToBackend],
+		[saveSetting],
 	);
 
-	// Cleanup debounce on unmount
-	useEffect(() => {
-		return () => {
-			if (debounceRef.current) {
-				clearTimeout(debounceRef.current);
-			}
-		};
-	}, []);
+	const selectedModelLabel = useMemo(() => {
+		if (!promptImproveModel) return 'Use main model';
+		const parts = promptImproveModel.split('/');
+		return parts.length > 1 ? parts.slice(1).join('/') : promptImproveModel;
+	}, [promptImproveModel]);
 
-	const modelOptions = [
-		{ value: '', label: 'Use main model' },
-		...enabledProxyModels.map(id => {
-			const model = proxyModels.find(m => m.id === id);
-			return { value: id, label: model?.name || id };
-		}),
-	];
-
-	const DEFAULT_TEMPLATE = `You are an expert prompt engineer. Your task is to rewrite the user's prompt to be more clear, specific, and effective for an LLM coding assistant.
-
-CRITICAL RULES:
-1.  Preserve the original intent and all technical details.
-2.  Do NOT add any conversational filler ("Here is the improved prompt:", "Sure!").
-3.  Output ONLY the improved prompt text.
-4.  **detect the language of the user's prompt and output the improved prompt in the SAME language.** (e.g. Russian -> Russian).
-
-User Prompt:
-{{TEXT}}`;
-
-	const currentTemplate = promptImproveTemplate || DEFAULT_TEMPLATE;
+	const currentTemplate = promptImproveTemplate || IMPROVE_PROMPT_DEFAULT_TEMPLATE;
 
 	return (
 		<div className="animate-fade-in">
 			<GroupTitle>Prompt Improver</GroupTitle>
 			<SettingsGroup>
 				<SettingRow title="Model" tooltip="Model used for improving prompts">
-					<Select
-						value={promptImproveModel}
-						onChange={e => saveSetting('promptImproveModel', e.target.value)}
-						options={modelOptions}
-					/>
+					<div className="relative">
+						<button
+							ref={modelButtonRef}
+							type="button"
+							onClick={() => setShowModelDropdown(!showModelDropdown)}
+							className={cn(
+								'flex items-center justify-between gap-(--gap-2) px-(--gap-2-5) h-(--btn-height-sm) min-w-(--select-min-width) rounded-md bg-(--alpha-5) border border-(--alpha-10) text-sm text-(--alpha-90) cursor-pointer outline-none transition-all duration-200',
+								'hover:bg-(--alpha-8) hover:border-(--alpha-20)',
+								showModelDropdown &&
+									'border-(--color-accent)/50 bg-(--alpha-10) ring-1 ring-(--color-accent)/20',
+							)}
+						>
+							<span className="truncate">{selectedModelLabel}</span>
+							<ChevronIcon expanded={showModelDropdown} size={10} className="shrink-0" />
+						</button>
+						{showModelDropdown && (
+							<ModelDropdown
+								anchorElement={modelButtonRef.current}
+								onClose={() => setShowModelDropdown(false)}
+								onSelectOverride={handleModelSelect}
+								activeModelId={promptImproveModel || ''}
+								extraItems={extraItems}
+							/>
+						)}
+					</div>
 				</SettingRow>
 
 				<div className="px-2.5 py-1.5 border-b border-(--border-subtle) last:border-b-0">
@@ -167,7 +111,9 @@ User Prompt:
 							<Button
 								size="xs"
 								variant="secondary"
-								onClick={() => saveSetting('promptImproveTemplate', DEFAULT_TEMPLATE)}
+								onClick={() =>
+									saveSetting('promptImproveTemplate', IMPROVE_PROMPT_DEFAULT_TEMPLATE)
+								}
 							>
 								Reset Default
 							</Button>
@@ -192,7 +138,7 @@ User Prompt:
 									'w-full bg-vscode-input-background border border-vscode-input-border rounded-sm p-1.5 text-sm font-mono mt-2',
 									'focus:border-vscode-focusBorder focus:outline-none transition-all resize-none',
 								)}
-								placeholder={DEFAULT_TEMPLATE}
+								placeholder={IMPROVE_PROMPT_DEFAULT_TEMPLATE}
 							/>
 							<div className="mt-1.5 text-xs text-vscode-descriptionForeground">
 								Use{' '}
@@ -202,20 +148,6 @@ User Prompt:
 						</>
 					)}
 				</div>
-
-				<SettingRow title="Timeout (sec)" tooltip="Max time to wait for improvement" last>
-					<input
-						type="number"
-						min={1}
-						max={300}
-						value={localTimeout}
-						onChange={e => {
-							const secondsValue = Number.parseInt(e.target.value, 10);
-							handleTimeoutChange(secondsValue);
-						}}
-						className="bg-vscode-input-background border border-vscode-input-border rounded-sm px-2 h-7 text-md text-vscode-input-foreground w-16 text-center focus:border-vscode-focusBorder focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-					/>
-				</SettingRow>
 			</SettingsGroup>
 		</div>
 	);

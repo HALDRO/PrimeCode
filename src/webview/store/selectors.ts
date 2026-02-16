@@ -184,6 +184,40 @@ export const useAccessRequestByToolUseId = (toolUseId: string | undefined) =>
 		return undefined;
 	});
 
+/**
+ * Find the first unresolved access_request related to a subtask.
+ * Matches by:
+ *  1. toolUseId — permission on the `task` tool itself (before child session exists)
+ *  2. childSessionId — permission from inside the running child session
+ */
+export const useSubtaskAccessRequest = (
+	toolUseId: string | undefined,
+	childSessionId: string | undefined,
+) =>
+	useChatStore((state: ChatState) => {
+		if (!toolUseId && !childSessionId) return undefined;
+		const messages = getActiveSession(state)?.messages ?? EMPTY_MESSAGES;
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const m = messages[i];
+			if (m.type !== 'access_request' || m.resolved) continue;
+			// Match by childSessionId (permission routed from child to parent)
+			if (childSessionId && (m as Record<string, unknown>).childSessionId === childSessionId) {
+				return m as Extract<
+					ChatState['sessionsById'][string]['messages'][number],
+					{ type: 'access_request' }
+				>;
+			}
+			// Match by toolUseId (permission on the task tool before child session starts)
+			if (toolUseId && m.toolUseId === toolUseId) {
+				return m as Extract<
+					ChatState['sessionsById'][string]['messages'][number],
+					{ type: 'access_request' }
+				>;
+			}
+		}
+		return undefined;
+	});
+
 // ============================================
 // UI Store Selectors
 // ============================================

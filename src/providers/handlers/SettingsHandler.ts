@@ -195,12 +195,6 @@ export class SettingsHandler implements WebviewMessageHandler {
 					}
 					break;
 
-				case 'promptImprove.timeoutMs':
-					if (typeof value === 'number' && Number.isFinite(value)) {
-						await this.context.settings.set('promptImprove.timeoutMs', value);
-					}
-					break;
-
 				default:
 					break;
 			}

@@ -1,7 +1,7 @@
 import type React from 'react';
 import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { NormalizedEntry } from '../../../common/normalizedTypes';
-import { isMcpTool, isToolInList, NON_GROUPABLE_TOOLS } from '../../constants';
+import { isMcpTool, isNonGroupableTool } from '../../constants';
 import { cn } from '../../lib/cn';
 import { CollapseOverlay } from '../ui';
 
@@ -222,7 +222,7 @@ const isGroupableTool = (msg: Message, mcpServerNames: string[]): boolean => {
 		return false;
 	}
 
-	return !isToolInList(toolName, NON_GROUPABLE_TOOLS);
+	return !isNonGroupableTool(toolName);
 };
 
 const getToolUseCount = (msgs: Message[]): number =>
@@ -279,7 +279,7 @@ const shouldTriggerCollapse = (msg: Message): boolean => {
 
 	if (msg.type === 'tool_use') {
 		const toolName = msg.toolName || '';
-		if (isToolInList(toolName, NON_GROUPABLE_TOOLS)) return true;
+		if (isNonGroupableTool(toolName)) return true;
 		// TaskResult (via normalizedEntry) should also trigger collapse
 		const entry = (msg as { normalizedEntry?: NormalizedEntry }).normalizedEntry;
 		if (

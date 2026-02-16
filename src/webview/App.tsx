@@ -221,24 +221,29 @@ export const App: React.FC = () => {
 		[isProcessing],
 	);
 
-	// Mark that a session switch happened so we can scroll to top once history is replayed.
+	// Mark that a session switch happened so we can scroll to bottom once history is replayed.
 	useEffect(() => {
 		if (activeSessionId) {
 			sessionSwitchRef.current = true;
 		}
 	}, [activeSessionId]);
 
-	// Scroll to top after session switch once sections are available (history replay complete).
+	// Scroll to bottom after session switch once sections are available (history replay complete).
 	// History arrives as individual session_event messages AFTER the 'switched' lifecycle event,
 	// so we wait for sections to appear before scrolling.
 	const sectionCount = sections.length;
 	useEffect(() => {
 		if (sessionSwitchRef.current && sectionCount > 0 && virtuosoRef.current) {
 			sessionSwitchRef.current = false;
-			requestAnimationFrame(() => {
+			// Use a short delay so Virtuoso can reconcile the final data array
+			// before we ask it to scroll. Without this, the internal item list
+			// may still reference a stale snapshot from mid-replay.
+			const raf = requestAnimationFrame(() => {
 				virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end', behavior: 'auto' });
 			});
+			return () => cancelAnimationFrame(raf);
 		}
+		return undefined;
 	}, [sectionCount]);
 
 	// When a new section appears (user sent a message), scroll so the new
@@ -249,14 +254,19 @@ export const App: React.FC = () => {
 		prevSectionCountRef.current = sectionCount;
 
 		if (sectionCount > prev && prev > 0 && !sessionSwitchRef.current && virtuosoRef.current) {
-			requestAnimationFrame(() => {
+			// Capture the count at the time of scheduling so the rAF callback
+			// uses a value that was valid when the effect ran.
+			const targetIndex = sectionCount - 1;
+			const raf = requestAnimationFrame(() => {
 				virtuosoRef.current?.scrollToIndex({
-					index: sectionCount - 1,
+					index: targetIndex,
 					align: 'start',
 					behavior: 'auto',
 				});
 			});
+			return () => cancelAnimationFrame(raf);
 		}
+		return undefined;
 	}, [sectionCount]);
 
 	const handleScrollToBottom = useCallback(() => {
@@ -316,24 +326,28 @@ export const App: React.FC = () => {
 						}}
 						data={sections}
 						context={virtuosoContext}
-						/* Only scroll to bottom on session switch (history restore).
-						   For new/current chats, content starts at the top naturally. */
-						initialTopMostItemIndex={
-							sessionSwitchRef.current && sections.length > 0
-								? { index: sections.length - 1, align: 'end' }
-								: undefined
-						}
+						/* Scroll-to-bottom on session switch is handled by the
+						   sectionCount useEffect below. Setting initialTopMostItemIndex
+						   here caused a race: during rapid history replay the prop
+						   changed every render while Virtuoso still processed the
+						   previous value, leading to stale-index crashes. */
 						followOutput={handleFollowOutput}
 						atBottomStateChange={handleAtBottomStateChange}
 						atBottomThreshold={40}
 						increaseViewportBy={{ top: 200, bottom: 400 }}
-						itemContent={(index, section) => (
-							<MessageSectionComponent
-								key={section.userMessage.id ?? index}
-								section={section}
-								context={virtuosoContext}
-							/>
-						)}
+						itemContent={(index, section) => {
+							// During rapid history replay Virtuoso can invoke
+							// itemContent with a stale index after the data array
+							// has shrunk, yielding an undefined section.
+							if (!section) return null;
+							return (
+								<MessageSectionComponent
+									key={section.userMessage.id ?? index}
+									section={section}
+									context={virtuosoContext}
+								/>
+							);
+						}}
 						components={virtuosoComponents}
 					/>
 				)}

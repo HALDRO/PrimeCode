@@ -32,6 +32,7 @@ import type {
 } from '../../common';
 import { generateId } from '../../common';
 import type { NormalizedEntry } from '../../common/normalizedTypes';
+import { useUIStore } from './uiStore';
 
 export type { CommitInfo, ConversationMessage, SubtaskMessage, TotalStats };
 
@@ -335,12 +336,19 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 			}
 
 			if (message.type === 'improvePromptError') {
-				const { requestId } = (
+				const { requestId, error } = (
 					message as { type: string; data: { requestId: string; error: string } }
 				).data;
 				const state = get();
 				if (state.improvingPromptRequestId === requestId) {
 					state.actions.setImprovingPrompt(false, null);
+					// Show error via transient notification overlay
+					useUIStore.getState().actions.pushNotification({
+						type: 'error',
+						content: `Prompt Improve failed\n${error || 'Unknown error'}`,
+						timestamp: new Date().toISOString(),
+						autoDismissMs: 8000,
+					});
 				}
 				return;
 			}

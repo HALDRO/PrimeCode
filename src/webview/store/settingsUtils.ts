@@ -25,11 +25,6 @@ export const handleSettingsData = (settings: Record<string, unknown>, actions: S
 		mappedSettings.promptImproveModel = settings['promptImprove.model'];
 	if (settings['promptImprove.template'] !== undefined)
 		mappedSettings.promptImproveTemplate = settings['promptImprove.template'];
-	if (settings['promptImprove.timeoutMs'] !== undefined) {
-		const ms = settings['promptImprove.timeoutMs'];
-		mappedSettings.promptImproveTimeoutSeconds =
-			typeof ms === 'number' && Number.isFinite(ms) ? Math.max(1, Math.round(ms / 1000)) : 30;
-	}
 
 	if (settings['opencode.agent'] !== undefined)
 		mappedSettings.opencodeAgent = settings['opencode.agent'];

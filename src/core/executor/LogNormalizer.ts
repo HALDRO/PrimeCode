@@ -33,6 +33,8 @@ import type {
 	NormalizedEntryType,
 } from '../../common/normalizedTypes';
 
+import { resolveToolName } from '../../common/toolRegistry';
+
 export class LogNormalizer extends EventEmitter {
 	private stderrBuffer: Array<{ timestamp: number; line: string }> = [];
 	private flushTimeout: NodeJS.Timeout | null = null;
@@ -126,60 +128,65 @@ export class LogNormalizer extends EventEmitter {
 
 	/**
 	 * Convert a raw tool use event into a NormalizedEntry with ActionType.
-	 * This mirrors the 'build_action_type' logic from the reference.
+	 * Uses the unified tool registry to resolve aliases instead of hardcoded switch cases.
 	 */
 	public normalizeToolUse(
 		toolName: string,
 		input: Record<string, unknown>,
 		toolCallId: string,
 	): NormalizedEntry {
-		let actionType: ActionType;
+		const canonical = resolveToolName(toolName);
+		const actionType = this.buildActionType(canonical, toolName, input);
 
-		switch (toolName) {
-			case 'ReadFile':
-			case 'read_file':
+		return {
+			timestamp: new Date().toISOString(),
+			entryType: {
+				type: 'ToolUse',
+				toolName,
+				actionType,
+				status: 'created',
+			},
+			content: `Tool Use: ${toolName}`,
+			metadata: { toolCallId },
+		};
+	}
+
+	/**
+	 * Map a resolved canonical tool name to its ActionType.
+	 * Keeps input-parsing logic intact while eliminating alias duplication.
+	 */
+	private buildActionType(
+		canonical: string | undefined,
+		rawToolName: string,
+		input: Record<string, unknown>,
+	): ActionType {
+		const pathFromInput = () =>
+			(input.path as string) || (input.file_path as string) || (input.filePath as string) || '';
+
+		switch (canonical) {
 			case 'read': {
 				const readOffset = typeof input.offset === 'number' ? input.offset : undefined;
 				const readLimit = typeof input.limit === 'number' ? input.limit : undefined;
-				actionType = {
+				return {
 					type: 'FileRead',
-					path:
-						(input.path as string) ||
-						(input.file_path as string) ||
-						(input.filePath as string) ||
-						'',
+					path: pathFromInput(),
 					...(readOffset !== undefined && { offset: readOffset }),
 					...(readLimit !== undefined && { limit: readLimit }),
 				};
-				break;
 			}
 
-			case 'WriteFile':
-			case 'write_file':
-			case 'Write':
-			case 'write':
-			case 'writefile': {
-				const path =
-					(input.path as string) || (input.file_path as string) || (input.filePath as string) || '';
+			case 'write': {
 				const content = (input.content as string) || (input.contents as string) || '';
-				actionType = {
+				return {
 					type: 'FileEdit',
-					path,
+					path: pathFromInput(),
 					changes: [{ type: 'Write', content }],
 				};
-				break;
 			}
 
-			case 'Edit': // Handle generic "Edit" tool used in mocks and Claude
-			case 'EditFile':
-			case 'edit_file':
 			case 'edit':
-			case 'Patch':
-			case 'patch':
-			case 'MultiEdit':
-			case 'multiedit': {
-				const path =
-					(input.path as string) || (input.file_path as string) || (input.filePath as string) || '';
+			case 'multiedit':
+			case 'patch': {
 				const diff = (input.diff as string) || '';
 				const oldString =
 					(input.old_string as string) ||
@@ -193,52 +200,30 @@ export class LogNormalizer extends EventEmitter {
 					'';
 
 				let change: FileChange;
-
-				// Prefer diff if available
 				if (diff) {
 					change = { type: 'Edit', unifiedDiff: diff, hasLineNumbers: false };
-				}
-				// Otherwise try search/replace structure
-				else if (oldString || newString) {
+				} else if (oldString || newString) {
 					change = { type: 'Replace', oldContent: oldString, newContent: newString };
-				}
-				// Fallback (shouldn't happen for valid calls)
-				else {
+				} else {
 					change = { type: 'Edit', unifiedDiff: '', hasLineNumbers: false };
 				}
 
-				actionType = {
-					type: 'FileEdit',
-					path,
-					changes: [change],
-				};
-				break;
+				return { type: 'FileEdit', path: pathFromInput(), changes: [change] };
 			}
 
-			case 'RunCommand':
-			case 'run_command':
-			case 'Bash':
 			case 'bash':
-				actionType = {
-					type: 'CommandRun',
-					command: (input.command as string) || '',
-				};
-				break;
+				return { type: 'CommandRun', command: (input.command as string) || '' };
 
-			case 'Search':
 			case 'search':
 			case 'grep':
-				actionType = {
+				return {
 					type: 'Search',
 					query: (input.query as string) || (input.pattern as string) || '',
 				};
-				break;
 
-			case 'SemanticSearch':
 			case 'semanticsearch':
-			case 'Glob':
 			case 'glob':
-				actionType = {
+				return {
 					type: 'Search',
 					query:
 						(input.query as string) ||
@@ -247,39 +232,20 @@ export class LogNormalizer extends EventEmitter {
 						(input.pattern as string) ||
 						'',
 				};
-				break;
 
-			case 'LS':
 			case 'ls':
-			case 'list_dir':
-			case 'serena_list_dir':
-				// Map to Tool, preserving the name so UI can handle list rendering logic if needed,
-				// or we could map to CommandRun if we just want to show the command.
-				// For now, explicit Tool with 'ls' allows specific UI handling.
-				actionType = {
-					type: 'Tool',
-					toolName: 'ls', // Normalize name
-					arguments: input,
-				};
-				break;
+				return { type: 'Tool', toolName: 'ls', arguments: input };
 
-			case 'Task':
 			case 'task':
-				actionType = {
+				return {
 					type: 'TaskCreate',
 					description: (input.description as string) || (input.prompt as string) || '',
 				};
-				break;
 
-			case 'apply_patch':
-			case 'ApplyPatch': {
+			case 'apply_patch': {
 				const patch = (input.patch as string) || (input.diff as string) || '';
 				const files = LogNormalizer.parseApplyPatchFiles(patch, input);
-				actionType = {
-					type: 'ApplyPatch',
-					files,
-				};
-				break;
+				return { type: 'ApplyPatch', files };
 			}
 
 			case 'lsp': {
@@ -287,46 +253,30 @@ export class LogNormalizer extends EventEmitter {
 				const lspPath = (input.filePath as string) || (input.file_path as string) || '';
 				const line = typeof input.line === 'number' ? input.line : 0;
 				const character = typeof input.character === 'number' ? input.character : 0;
-				actionType = {
+				return {
 					type: 'Tool',
 					toolName: 'lsp',
 					arguments: { operation, filePath: lspPath, line, character },
 				};
-				break;
 			}
 
-			case 'WebSearch':
-			case 'websearch': {
-				actionType = {
+			case 'websearch':
+				return {
 					type: 'WebSearch',
 					query: (input.query as string) || (input.search_query as string) || '',
 				};
-				break;
-			}
 
-			case 'CodeSearch':
-			case 'codesearch': {
-				actionType = {
+			case 'codesearch':
+				return {
 					type: 'CodeSearch',
 					query: (input.query as string) || (input.search_query as string) || '',
 				};
-				break;
-			}
 
-			case 'Skill':
-			case 'skill': {
-				actionType = {
-					type: 'Tool',
-					toolName: 'skill',
-					arguments: input,
-				};
-				break;
-			}
+			case 'skill':
+				return { type: 'Tool', toolName: 'skill', arguments: input };
 
-			case 'TodoWrite':
-			case 'todo_write':
 			case 'todowrite':
-				actionType = {
+				return {
 					type: 'TodoManagement',
 					operation: 'write',
 					todos: Array.isArray(input.todos)
@@ -340,28 +290,10 @@ export class LogNormalizer extends EventEmitter {
 							})
 						: [],
 				};
-				break;
 
 			default:
-				actionType = {
-					type: 'Tool',
-					toolName,
-					arguments: input,
-				};
-				break;
+				return { type: 'Tool', toolName: rawToolName, arguments: input };
 		}
-
-		return {
-			timestamp: new Date().toISOString(),
-			entryType: {
-				type: 'ToolUse',
-				toolName,
-				actionType,
-				status: 'created', // Initial status
-			},
-			content: `Tool Use: ${toolName}`,
-			metadata: { toolCallId },
-		};
 	}
 
 	/**

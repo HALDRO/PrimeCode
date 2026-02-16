@@ -6,7 +6,9 @@ import type {
 	TotalStats,
 } from '../../common';
 import { generateId } from '../../common';
+import { IMPROVE_PROMPT_DEFAULT_TEMPLATE } from '../../common/promptImprover';
 import type { CommandOf, WebviewCommand } from '../../common/protocol';
+import { isFileEditTool } from '../../common/toolRegistry';
 import { LogNormalizer } from '../../core/executor/LogNormalizer';
 import type { CLIEvent } from '../../core/executor/types';
 import { logger } from '../../utils/logger';
@@ -1056,10 +1058,9 @@ export class SessionHandler implements WebviewMessageHandler {
 		logger.info(
 			`[ImprovePrompt] Request received: requestId=${requestId}, textLen=${text?.length ?? 0}`,
 		);
-		const timeoutMs =
-			msg.timeoutMs && Number.isFinite(msg.timeoutMs)
-				? Math.max(1000, Math.round(msg.timeoutMs))
-				: 60_000;
+		// Hardcoded 30s timeout — prompt improvement is a short task,
+		// and SDK prompt() is synchronous (no streaming), so this is an absolute cap.
+		const timeoutMs = 30_000;
 
 		if (!text.trim() || !requestId) {
 			logger.warn('[ImprovePrompt] Missing text or requestId');
@@ -1077,23 +1078,42 @@ export class SessionHandler implements WebviewMessageHandler {
 		const timeout = setTimeout(() => this.improvePromptController?.abort(), timeoutMs);
 
 		try {
+			// --- Template resolution ---
 			const templateFromSettings = this.context.settings.get('promptImprove.template');
-			const template = typeof templateFromSettings === 'string' ? templateFromSettings : undefined;
+			const template =
+				typeof templateFromSettings === 'string' && templateFromSettings.trim()
+					? templateFromSettings
+					: IMPROVE_PROMPT_DEFAULT_TEMPLATE;
 
-			// Use the same model & server as the main chat
+			logger.info(
+				`[ImprovePrompt] Template from settings: raw=${JSON.stringify(templateFromSettings)}, resolved="${template.slice(0, 80)}..."`,
+			);
+
+			// --- Model resolution ---
+			// Priority: 1) promptImprove.model from settings  2) main chat model
+			// NOTE: msg.model is intentionally ignored — ChatInput should NOT pass
+			// the chat model here; Prompt Improver has its own model setting.
+			const improveModelFromSettings = this.context.settings.get('promptImprove.model');
+			const sendConfig = this.buildSendConfig();
+			const resolvedModel =
+				(typeof improveModelFromSettings === 'string' && improveModelFromSettings.trim()
+					? improveModelFromSettings
+					: undefined) || sendConfig.model;
+
+			logger.info(
+				`[ImprovePrompt] Model resolution: settings=${JSON.stringify(improveModelFromSettings)}, mainModel=${JSON.stringify(sendConfig.model)}, resolved=${JSON.stringify(resolvedModel)}`,
+			);
+
 			const sdkClient = this.context.cli.getSdkClient();
 			if (!sdkClient) {
 				throw new Error('OpenCode server is not running. Send a message first to start it.');
 			}
 
-			const sendConfig = this.buildSendConfig();
-
 			const improvedText = await this.improvePromptViaOpenCode({
 				text,
 				template,
 				client: sdkClient,
-				model: sendConfig.model,
-				parentSessionId: this.context.sessionState.activeSessionId,
+				model: resolvedModel,
 				signal: this.improvePromptController.signal,
 			});
 
@@ -1140,73 +1160,81 @@ export class SessionHandler implements WebviewMessageHandler {
 	/**
 	 * Routes the "Improve Prompt" request through the running OpenCode server.
 	 * Creates a temporary session, sends the prompt via SDK's synchronous prompt(),
-	 * which waits for the assistant response and returns it directly.
+	 * which blocks until the LLM finishes and returns the full response directly.
 	 */
 	private async improvePromptViaOpenCode(params: {
 		text: string;
-		template?: string;
+		template: string;
 		model?: string;
 		client: import('@opencode-ai/sdk').OpencodeClient;
-		parentSessionId?: string;
 		signal: AbortSignal;
 	}): Promise<string> {
 		const { client, signal } = params;
 
-		const instruction =
-			params.template?.trim() ||
-			'Rewrite the following user prompt to be clearer, more specific, and more actionable for an AI coding agent. Preserve the original intent and constraints. Return ONLY the rewritten prompt text, nothing else — no explanations, no markdown fences, no preamble.';
+		if (!params.template.trim()) {
+			throw new Error(
+				'Prompt Improver template is empty. Configure it in Settings → Prompt Improver.',
+			);
+		}
 
-		const fullText = `${instruction}\n\n---\n\n${params.text}`;
+		// Replace {{TEXT}} placeholder with user text, or append if placeholder is missing
+		const fullText = params.template.includes('{{TEXT}}')
+			? params.template.replace('{{TEXT}}', params.text)
+			: `${params.template.trim()}\n\n---\n\n${params.text}`;
 
-		// 1. Create a temporary session via SDK
-		logger.info('[ImprovePrompt] Creating temp session...');
-		const { data: sessionData, error: createError } = await client.session.create({
-			body: params.parentSessionId ? { parentID: params.parentSessionId } : undefined,
-			signal,
-		});
+		logger.info(
+			`[ImprovePrompt] fullText length=${fullText.length}, model=${params.model ?? 'default'}`,
+		);
+
+		const directory = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+
+		// 1. Create a temporary session
+		const { data: sessionData, error: createError } = await client.session.create({ signal });
 		if (createError || !sessionData?.id) {
 			throw new Error(`Failed to create temp session: ${createError ?? 'no session id'}`);
 		}
 		const sessionId = sessionData.id;
-		logger.info(`[ImprovePrompt] Temp session created: ${sessionId}`);
+		logger.info(`[ImprovePrompt] Temp session: ${sessionId}`);
 
 		try {
-			// 2. Send message via SDK's synchronous prompt() — waits for assistant response
+			// Parse model string safely: "provider/model" or "provider/namespace/model"
+			// Use indexOf + slice to handle models with slashes in their names
 			const modelOverride = params.model?.includes('/')
-				? { providerID: params.model.split('/')[0], modelID: params.model.split('/')[1] }
+				? (() => {
+						const firstSlash = params.model.indexOf('/');
+						return {
+							providerID: params.model.slice(0, firstSlash),
+							modelID: params.model.slice(firstSlash + 1),
+						};
+					})()
 				: undefined;
 
-			logger.info(`[ImprovePrompt] Sending message to session ${sessionId}...`);
-			const { data: response, error: promptError } = await client.session.prompt({
+			// 2. Synchronous prompt — blocks until the LLM finishes, returns full response
+			const { data, error } = await client.session.prompt({
 				path: { id: sessionId },
+				query: { directory },
 				body: {
 					parts: [{ type: 'text', text: fullText }],
-					model: modelOverride,
+					...(modelOverride ? { model: modelOverride } : {}),
 				},
 				signal,
 			});
 
-			if (promptError) {
-				throw new Error(`Improve prompt failed: ${promptError}`);
-			}
+			if (error) throw new Error(`Prompt failed: ${JSON.stringify(error)}`);
 
-			// 3. Extract assistant text from response parts
-			let assistantText = '';
+			// 3. Extract text from response parts
+			const response = data as { parts?: Array<{ type: string; text?: string }> } | undefined;
+			let result = '';
 			for (const part of response?.parts ?? []) {
-				if (part.type === 'text' && 'text' in part) {
-					assistantText += (part as { text: string }).text;
-				}
+				if (part.type === 'text' && part.text) result += part.text;
 			}
-			assistantText = assistantText.trim();
+			result = result.trim();
 
-			if (!assistantText) {
-				throw new Error('No assistant response in prompt result');
-			}
+			if (!result) throw new Error('Empty response from model');
 
-			logger.info(`[ImprovePrompt] Got response: ${assistantText.length} chars`);
-			return assistantText;
+			logger.info(`[ImprovePrompt] Got response: ${result.length} chars`);
+			return result;
 		} finally {
-			// 4. Clean up — delete the temporary session (fire and forget)
 			client.session.delete({ path: { id: sessionId } }).catch(() => {});
 		}
 	}
@@ -1245,9 +1273,12 @@ export class SessionHandler implements WebviewMessageHandler {
 			provider,
 			model,
 			workspaceRoot,
-			yoloMode: Boolean(this.context.settings.get('yoloMode') || false),
 			agent: typeof opencodeAgent === 'string' ? opencodeAgent : undefined,
-			autoApprove: Boolean(this.context.settings.get('autoApprove') || false),
+			autoApprove: Boolean(
+				this.context.settings.get('access.autoApprove') ||
+					this.context.settings.get('access.yoloMode') ||
+					false,
+			),
 			serverTimeoutMs:
 				typeof opencodeServerTimeout === 'number' && Number.isFinite(opencodeServerTimeout)
 					? Math.max(0, opencodeServerTimeout) * 1000
@@ -1328,26 +1359,7 @@ export class SessionHandler implements WebviewMessageHandler {
 
 	/** Check if a tool name corresponds to a file-editing operation */
 	private isFileEditTool(toolName: string): boolean {
-		const normalized = toolName.toLowerCase();
-		const editTools = new Set([
-			'write',
-			'edit',
-			'multiedit',
-			'multi_edit',
-			'patch',
-			'create',
-			'writefile',
-			'editfile',
-			'write_file',
-			'edit_file',
-			'create_file',
-			'apply_diff',
-			'insert_code',
-		]);
-		if (editTools.has(normalized)) return true;
-		return /\b(write|edit|patch|create|overwrite|insert|replace|append|delete_file)\b/.test(
-			normalized,
-		);
+		return isFileEditTool(toolName);
 	}
 
 	private postLifecycle(

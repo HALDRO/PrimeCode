@@ -61,39 +61,16 @@ export const SETTINGS_NAV_ITEMS: NavItem[] = [
 // Tool Configuration
 // ============================================================================
 
-/**
- * Tools that should NOT be grouped in the message list
- * Heavy tools like Bash, Edit, Write are shown individually.
- * Tool names may come in different casings depending on source adapters.
- */
-export const NON_GROUPABLE_TOOLS = [
-	'Bash',
-	'TodoWrite',
-	'Edit',
-	'Write',
-	'MultiEdit',
-	'Patch',
-	'ApplyPatch',
-	'bash',
-	'todowrite',
-	'edit',
-	'write',
-	'multiedit',
-	'patch',
-	'apply_patch',
-] as const;
-
-/**
- * Normalize tool name to lowercase for comparison
- */
-const normalizeToolName = (toolName: string | undefined): string =>
-	toolName ? toolName.toLowerCase() : '';
-
-/**
- * Check if tool name matches (case-insensitive)
- */
-export const isToolMatch = (toolName: string | undefined, target: string): boolean =>
-	normalizeToolName(toolName) === normalizeToolName(target);
+// Re-export tool helpers from the unified registry (single source of truth).
+// Webview consumers should import from here or directly from '@common/toolRegistry'.
+export {
+	getToolDisplayName,
+	isFileEditTool,
+	isNonGroupableTool,
+	isTaskTool,
+	isToolMatch,
+	NON_GROUPABLE_TOOLS,
+} from '../common/toolRegistry';
 
 /**
  * Check if tool is in list (case-insensitive)
@@ -102,8 +79,8 @@ export const isToolInList = (toolName: string | undefined, list: readonly string
 	if (!toolName) {
 		return false;
 	}
-	const normalized = normalizeToolName(toolName);
-	return list.some(t => normalizeToolName(t) === normalized);
+	const normalized = toolName.toLowerCase();
+	return list.some(t => t.toLowerCase() === normalized);
 };
 
 /**

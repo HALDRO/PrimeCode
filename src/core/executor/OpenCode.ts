@@ -26,6 +26,7 @@ import type {
 import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk';
 
 import { Value } from '@sinclair/typebox/value';
+import { PERMISSION_CATEGORIES } from '../../common/permissions';
 import { QuestionRequestSchema } from '../../common/schemas';
 import { logger } from '../../utils/logger';
 import { LogNormalizer } from './LogNormalizer';
@@ -34,12 +35,6 @@ import type { CLIConfig, CLIEvent, CLIExecutor } from './types';
 // =============================================================================
 // Types & Interfaces
 // =============================================================================
-
-declare module './types' {
-	interface CLIConfig {
-		autoApprove?: boolean;
-	}
-}
 
 /** Single entry from `client.session.messages()` response. */
 type SessionMessageEntry = { info: Message; parts: Part[] };
@@ -232,7 +227,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (this.serverUrl) return;
 
 		const autoApprove = config.autoApprove ?? false;
-		const permissionsEnv = this.buildPermissionsEnv(autoApprove, config.env);
+		const permissionsEnv = this.buildPermissionsEnv(autoApprove, config.env, config.policies);
 
 		const processEnv = {
 			...process.env,
@@ -304,23 +299,39 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		} catch {}
 	}
 
-	private buildPermissionsEnv(autoApprove: boolean, env?: Record<string, string>): string {
+	private buildPermissionsEnv(
+		autoApprove: boolean,
+		env?: Record<string, string>,
+		policies?: Partial<Record<string, string>>,
+	): string {
 		if (env?.OPENCODE_PERMISSION) {
 			try {
 				const existing = JSON.parse(env.OPENCODE_PERMISSION);
 				return JSON.stringify({ ...existing, question: 'allow' });
 			} catch {}
 		}
-		if (autoApprove) return JSON.stringify({ question: 'allow' });
 
-		return JSON.stringify({
-			edit: 'ask',
-			bash: 'ask',
-			webfetch: 'ask',
-			doom_loop: 'ask',
-			external_directory: 'ask',
-			question: 'allow',
-		});
+		// If autoApprove is on, allow everything unconditionally.
+		if (autoApprove) {
+			const result: Record<string, string> = { question: 'allow' };
+			for (const cat of PERMISSION_CATEGORIES) result[cat] = 'allow';
+			return JSON.stringify(result);
+		}
+
+		// Pass each UI policy directly to OpenCode as-is.
+		// "deny" → "deny" (server rejects immediately, no round-trip).
+		// "allow" → "allow" (server auto-approves).
+		// "ask" or unset → "ask" (server sends permission.asked event).
+		const result: Record<string, string> = { question: 'allow' };
+		for (const cat of PERMISSION_CATEGORIES) {
+			const val = policies?.[cat];
+			if (val === 'allow' || val === 'deny') {
+				result[cat] = val;
+			} else {
+				result[cat] = 'ask';
+			}
+		}
+		return JSON.stringify(result);
 	}
 
 	/**
@@ -1073,17 +1084,26 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	}
 
 	private async sendPermissionReply(
-		directory: string,
+		_directory: string,
 		requestId: string,
 		payload: { reply: 'once' | 'always' | 'reject'; message?: string },
 	): Promise<void> {
-		if (!this.sessionId) throw new Error('No active session for permission reply');
-		const client = this.requireSdk();
-		await client.postSessionIdPermissionsPermissionId({
-			path: { id: this.sessionId, permissionID: requestId },
-			body: { response: payload.reply },
-			query: { directory },
+		if (!this.serverUrl) throw new Error('OpenCode server not running');
+		// Use the NEW /permission/:requestID/reply endpoint (session-independent).
+		// The legacy /session/:id/permissions/:permissionID endpoint requires a sessionId
+		// which breaks for child session (subtask) permissions.
+		const url = `${this.serverUrl}/permission/${encodeURIComponent(requestId)}/reply`;
+		const body: Record<string, unknown> = { reply: payload.reply };
+		if (payload.message) body.message = payload.message;
+		const res = await fetch(url, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(body),
 		});
+		if (!res.ok) {
+			const text = await res.text().catch(() => '');
+			throw new Error(`Permission reply failed: ${res.status} ${text}`);
+		}
 	}
 
 	private async sendPrompt(
@@ -1706,6 +1726,14 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 	parseStream(_chunk: Buffer): CLIEvent[] {
 		return [];
+	}
+
+	async abortSession(sessionId: string): Promise<void> {
+		if (!this.directory) return;
+		await this.sendAbort(this.directory, sessionId).catch(e =>
+			logger.warn(`[OpenCode] Failed to abort session ${sessionId}:`, e),
+		);
+		this.activeSessions.delete(sessionId);
 	}
 
 	async abort(): Promise<void> {

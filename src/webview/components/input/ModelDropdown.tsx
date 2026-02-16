@@ -28,11 +28,22 @@ interface ModelDropdownProps {
 	anchorElement?: HTMLElement | null;
 	/** Optional callback when dropdown should close */
 	onClose?: () => void;
+	/** Override default select behaviour (e.g. for settings). Receives composite model id. */
+	onSelectOverride?: (modelId: string) => void;
+	/** Override which model id is shown as active (e.g. promptImproveModel in settings) */
+	activeModelId?: string;
+	/** Prepend extra items (e.g. "Use main model") */
+	extraItems?: DropdownMenuItem<ModelData>[];
 }
+
+export type { ModelData };
 
 export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 	anchorElement,
 	onClose: externalOnClose,
+	onSelectOverride,
+	activeModelId,
+	extraItems,
 }) => {
 	const { postMessage } = useVSCode();
 	const {
@@ -89,6 +100,11 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 
 	const handleSelect = useCallback(
 		(model: ModelData) => {
+			if (onSelectOverride) {
+				onSelectOverride(model.id);
+				onClose();
+				return;
+			}
 			// Persist per-session override (so different chats can use different models)
 			setSessionModel(model.id === 'default' ? undefined : model.id);
 
@@ -102,7 +118,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 			}
 			onClose();
 		},
-		[postMessage, onClose, provider, setSessionModel],
+		[postMessage, onClose, provider, setSessionModel, onSelectOverride],
 	);
 
 	// Custom render for model items with purple dot for active model
@@ -137,14 +153,17 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 		[],
 	);
 
+	// Resolve which model id to use for "active" highlighting
+	const effectiveActiveModel = activeModelId ?? selectedModel;
+
 	// Build flat list of models with provider as badge
 	const items = useMemo((): DropdownMenuItem<ModelData>[] => {
-		const result: DropdownMenuItem<ModelData>[] = [];
+		const result: DropdownMenuItem<ModelData>[] = [...(extraItems ?? [])];
 		// OpenCode models - flatten all providers into single list
 		for (const opProvider of filteredOpencodeProviders) {
 			for (const model of opProvider.models) {
 				const modelId = `${opProvider.id}/${model.id}`;
-				const isActive = selectedModel === modelId;
+				const isActive = effectiveActiveModel === modelId;
 				result.push({
 					id: modelId,
 					label: model.name,
@@ -172,7 +191,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 		for (const model of enabledProxyModelsList) {
 			// For OpenCode, proxy models use 'oai' provider prefix (saved to opencode.json)
 			const modelId = `${OPENAI_COMPATIBLE_PROVIDER_ID}/${model.id}`;
-			const isActive = selectedModel === modelId;
+			const isActive = effectiveActiveModel === modelId;
 			result.push({
 				id: modelId,
 				label: model.name || model.id,
@@ -196,7 +215,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 		}
 
 		return result;
-	}, [selectedModel, enabledProxyModelsList, filteredOpencodeProviders]);
+	}, [effectiveActiveModel, enabledProxyModelsList, filteredOpencodeProviders, extraItems]);
 
 	return (
 		<DropdownMenu

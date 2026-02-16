@@ -370,12 +370,16 @@ export type RuleUpdatedMessage = BaseExtensionMessage<'ruleUpdated', { rule: Rul
 // Permissions Messages (global)
 // =============================================================================
 
-export type PermissionPolicyValue = 'ask' | 'allow' | 'deny';
-export interface PermissionPolicies {
-	edit: PermissionPolicyValue;
-	terminal: PermissionPolicyValue;
-	network: PermissionPolicyValue;
-}
+// Re-export from unified permissions module (single source of truth)
+import type {
+	PermissionCategory as _PermissionCategory,
+	PermissionPolicies as _PermissionPolicies,
+	PermissionPolicyValue as _PermissionPolicyValue,
+} from './permissions';
+export type PermissionPolicies = _PermissionPolicies;
+export type PermissionPolicyValue = _PermissionPolicyValue;
+export type PermissionCategory = _PermissionCategory;
+export { DEFAULT_POLICIES, PERMISSION_CATEGORIES } from './permissions';
 
 export type PermissionsUpdatedMessage = BaseExtensionMessage<
 	'permissionsUpdated',
@@ -773,8 +777,6 @@ export interface ImprovePromptRequestCommand {
 	type: 'improvePromptRequest';
 	text: string;
 	requestId: string;
-	model?: string;
-	timeoutMs?: number;
 }
 
 export interface CancelImprovePromptCommand {

@@ -30,6 +30,7 @@ import {
 	useSettingsStore,
 	useSlashCommandsState,
 } from '../../store';
+import { useUIStore } from '../../store/uiStore';
 import { getShortFileName } from '../../utils/format';
 import { getMessageHighlights } from '../../utils/messageParser';
 
@@ -242,7 +243,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 	} = useChatActions();
 	const isProcessing = useIsProcessing();
 	const { selectedModel, proxyModels, opencodeProviders, getSessionModel } = useModelSelection();
-	const promptImproveTimeoutSeconds = useSettingsStore(state => state.promptImproveTimeoutSeconds);
 	const customCommands = useSettingsStore(state => state.commands.custom);
 	const cliCommands = useSettingsStore(state => state.commands.cli);
 	const subagents = useSettingsStore(state => state.subagents);
@@ -612,28 +612,27 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 		}
 
 		if (!inputValue.trim()) {
+			// Instant error — no backend call needed
+			useUIStore.getState().actions.pushNotification({
+				type: 'error',
+				content: 'Cannot improve an empty prompt',
+				timestamp: new Date().toISOString(),
+				autoDismissMs: 4000,
+			});
 			return;
 		}
 
 		const requestId = crypto.randomUUID();
 		setImprovingPrompt(true, requestId);
 
+		// Do NOT pass the chat model here — Prompt Improver uses its own model
+		// from settings (promptImprove.model), resolved in SessionHandler.
 		postMessage({
 			type: 'improvePromptRequest',
 			text: inputValue,
 			requestId,
-			model: selectedModel === 'default' ? undefined : selectedModel,
-			timeoutMs: Math.max(1000, Math.round(promptImproveTimeoutSeconds * 1000)),
 		});
-	}, [
-		inputValue,
-		isImproving,
-		currentImproveRequestId,
-		postMessage,
-		selectedModel,
-		promptImproveTimeoutSeconds,
-		setImprovingPrompt,
-	]);
+	}, [inputValue, isImproving, currentImproveRequestId, postMessage, setImprovingPrompt]);
 	const handleKeyDown = (e: React.KeyboardEvent) => {
 		// Block Enter when dropdown is open - let dropdown handle selection
 		if (e.key === 'Enter' && !e.shiftKey) {

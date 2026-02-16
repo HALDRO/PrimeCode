@@ -1,8 +1,14 @@
+import {
+	DEFAULT_POLICIES,
+	migrateLegacyPolicies,
+	PERMISSION_CATEGORIES,
+	policiesToServerFormat,
+	VALID_POLICY_VALUES,
+} from '../../common/permissions';
 import type { CommandOf, PermissionPolicies, WebviewCommand } from '../../common/protocol';
+import { logger } from '../../utils/logger';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
-const VALID_POLICY_VALUES = new Set(['ask', 'allow', 'deny']);
-const DEFAULT_POLICIES: PermissionPolicies = { edit: 'ask', terminal: 'ask', network: 'ask' };
 const POLICIES_KEY = 'primeCode.permissionPolicies';
 
 export class ToolHandler implements WebviewMessageHandler {
@@ -16,9 +22,26 @@ export class ToolHandler implements WebviewMessageHandler {
 				| undefined) ?? {};
 
 		const stored = this.context.extensionContext.workspaceState.get(POLICIES_KEY) as
-			| PermissionPolicies
+			| Record<string, unknown>
 			| undefined;
-		this.policies = stored ? { ...DEFAULT_POLICIES, ...stored } : { ...DEFAULT_POLICIES };
+
+		// Start with defaults
+		this.policies = { ...DEFAULT_POLICIES };
+
+		if (stored) {
+			// Migrate legacy policies (terminal → bash, network → webfetch)
+			const migrated = migrateLegacyPolicies(stored);
+			// Merge migrated policies into defaults
+			this.policies = { ...this.policies, ...migrated };
+		}
+
+		logger.info('[ToolHandler] Initialized policies', {
+			hasStored: !!stored,
+			task: this.policies.task,
+			external_directory: this.policies.external_directory,
+			bash: this.policies.bash,
+			edit: this.policies.edit,
+		});
 	}
 
 	async handleMessage(msg: WebviewCommand): Promise<void> {
@@ -106,16 +129,71 @@ export class ToolHandler implements WebviewMessageHandler {
 
 	private async onSetPermissions(msg: CommandOf<'setPermissions'>): Promise<void> {
 		const incoming = msg.policies;
+		logger.info('[ToolHandler] onSetPermissions called', {
+			hasIncoming: !!incoming,
+			incomingTask: incoming?.task,
+			incomingExtDir: incoming?.external_directory,
+		});
 		if (incoming) {
-			for (const key of ['edit', 'terminal', 'network'] as const) {
+			// Merge incoming policies with current policies
+			for (const key of PERMISSION_CATEGORIES) {
 				const val = incoming[key];
 				if (val && VALID_POLICY_VALUES.has(val)) {
 					this.policies[key] = val;
 				}
 			}
 		}
+		logger.info('[ToolHandler] Policies after update', {
+			task: this.policies.task,
+			external_directory: this.policies.external_directory,
+			bash: this.policies.bash,
+			edit: this.policies.edit,
+		});
 		await this.context.extensionContext.workspaceState.update(POLICIES_KEY, this.policies);
 		this.context.bridge.permissionsUpdated({ ...this.policies });
+
+		// Sync all categories to running OpenCode server via PATCH /config.
+		void this.syncPoliciesToServer().catch(e =>
+			logger.warn('[ToolHandler] Failed to sync policies to server:', e),
+		);
+	}
+
+	/**
+	 * Push current permission policies to the running OpenCode server
+	 * via `PATCH /config { permission: { ... } }`.
+	 *
+	 * The server's Config.Permission Zod schema defines all 16 named fields
+	 * plus `.catchall(PermissionRule)`, so every category is accepted.
+	 * After writing, the server calls `Instance.dispose()` which forces
+	 * a full state rebuild on the next request — agents pick up new rulesets.
+	 *
+	 * Retries up to 3 times with 1s delay if the SDK client is not yet ready
+	 * (server still starting). This closes the timing gap where a policy
+	 * change during startup would be silently lost.
+	 */
+	private async syncPoliciesToServer(retries = 3): Promise<void> {
+		const client = this.context.cli.getSdkClient?.();
+		if (!client) {
+			if (retries > 0) {
+				logger.debug(`[ToolHandler] No SDK client — retrying in 1s (${retries} left)`);
+				await new Promise(r => setTimeout(r, 1000));
+				return this.syncPoliciesToServer(retries - 1);
+			}
+			logger.warn('[ToolHandler] No SDK client after retries — sync skipped');
+			return;
+		}
+
+		const serverPermission = policiesToServerFormat(this.policies);
+
+		logger.info('[ToolHandler] Syncing all policies to server', serverPermission);
+		const { error } = await client.config.update({
+			body: { permission: serverPermission } as import('@opencode-ai/sdk').Config,
+		});
+		if (error) {
+			logger.warn('[ToolHandler] Server config update failed:', error);
+		} else {
+			logger.info('[ToolHandler] Policies synced to server successfully');
+		}
 	}
 
 	private async onCheckDiscoveryStatus(): Promise<void> {

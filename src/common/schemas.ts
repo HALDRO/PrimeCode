@@ -330,6 +330,7 @@ export const ConversationMessageSchema = Type.Union([
 		toolUseId: Type.Optional(Type.String()),
 		resolved: Type.Optional(Type.Boolean()),
 		approved: Type.Optional(Type.Boolean()),
+		childSessionId: Type.Optional(Type.String()),
 	}),
 	Type.Object({
 		id: Type.Optional(Type.String()),

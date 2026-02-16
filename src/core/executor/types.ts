@@ -26,6 +26,10 @@ export interface CLIConfig {
 	serverUrl?: string;
 	/** Enable auto-compaction for OpenCode. */
 	autoCompact?: boolean;
+	/** Auto-approve all permissions (yoloMode / autoApprove setting). */
+	autoApprove?: boolean;
+	/** Granular permission policies from the UI — all OpenCode categories. */
+	policies?: Partial<Record<string, string>>;
 }
 
 // =============================================================================
@@ -185,6 +189,8 @@ export interface CLIExecutor extends EventEmitter {
 	createEmptySession(config: CLIConfig): Promise<string>;
 	kill(): Promise<void>;
 	abort(): Promise<void>;
+	/** Abort a single session by ID (used for timed-out subtasks). */
+	abortSession?(sessionId: string): Promise<void>;
 	parseStream(chunk: Buffer): CLIEvent[];
 	getSessionId(): string | null;
 	respondToPermission(decision: {

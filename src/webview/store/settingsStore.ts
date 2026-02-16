@@ -30,6 +30,7 @@ import type {
 	PlatformInfo,
 	Rule,
 } from '../../common';
+import type { PermissionPolicies } from '../../common/permissions';
 
 export type CommandItem = import('../constants').CommandItem;
 
@@ -41,6 +42,7 @@ export type {
 	OpenCodeProviderData,
 	PlatformInfo,
 	DiscoveryStatus,
+	PermissionPolicies,
 };
 
 import { handleSettingsData } from './settingsUtils';
@@ -79,13 +81,6 @@ export interface CLIDiagnostics {
 	error: string | null;
 	lastChecked: number | null;
 	isChecking: boolean;
-}
-
-// Permission Policies
-export interface PermissionPolicies {
-	edit: 'ask' | 'allow' | 'deny';
-	terminal: 'ask' | 'allow' | 'deny';
-	network: 'ask' | 'allow' | 'deny';
 }
 
 export interface SettingsActions {
@@ -201,8 +196,6 @@ export interface SettingsState {
 	// Prompt Improver
 	promptImproveModel: string;
 	promptImproveTemplate: string;
-	/** Timeout in seconds for UI display (persisted as ms in extension settings). */
-	promptImproveTimeoutSeconds: number;
 
 	// OpenCode Configuration
 	opencodeAgent: string;
@@ -335,7 +328,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
 	promptImproveModel: '',
 	promptImproveTemplate: '',
-	promptImproveTimeoutSeconds: 30,
 
 	opencodeAgent: '',
 	opencodeProviders: [],
@@ -372,9 +364,22 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 	rules: [],
 
 	policies: {
-		edit: 'allow',
-		terminal: 'allow',
-		network: 'allow',
+		read: 'allow',
+		edit: 'ask',
+		glob: 'allow',
+		grep: 'allow',
+		list: 'allow',
+		bash: 'ask',
+		task: 'ask',
+		skill: 'allow',
+		lsp: 'allow',
+		todoread: 'allow',
+		todowrite: 'allow',
+		webfetch: 'ask',
+		websearch: 'ask',
+		codesearch: 'allow',
+		external_directory: 'ask',
+		doom_loop: 'ask',
 	},
 
 	access: [],

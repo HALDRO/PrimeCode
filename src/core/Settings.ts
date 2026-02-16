@@ -41,7 +41,6 @@ export interface PrimeCodeSettings {
 
 	'promptImprove.model'?: string;
 	'promptImprove.template'?: string;
-	'promptImprove.timeoutMs'?: number;
 }
 
 interface AgentsConfig {
@@ -130,7 +129,6 @@ export class Settings implements ISettings {
 
 			'promptImprove.model': this.get('promptImprove.model'),
 			'promptImprove.template': this.get('promptImprove.template'),
-			'promptImprove.timeoutMs': this.get('promptImprove.timeoutMs'),
 		};
 	}
 

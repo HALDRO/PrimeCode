@@ -32,6 +32,8 @@ export type {
 } from './protocol';
 // Schemas: runtime-validated types (TypeBox) — exported first as source of truth for Rule, ParsedCommand, etc.
 export * from './schemas';
+// Unified tool name registry (shared between extension and webview)
+export * from './toolRegistry';
 
 /** Generate a unique ID with the given prefix: `{prefix}-{timestamp}-{random}` */
 export function generateId(prefix: string): string {

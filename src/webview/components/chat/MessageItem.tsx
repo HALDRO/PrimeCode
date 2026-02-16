@@ -11,7 +11,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { NormalizedEntry } from '../../../common/normalizedTypes';
 import { useSubtaskThread } from '../../hooks/useSubtaskChildren';
 import type { Message } from '../../store/chatStore';
-import { useMcpServers } from '../../store/selectors';
+import { useMcpServers, useSubtaskAccessRequest } from '../../store/selectors';
 import { formatDuration, formatNumber, formatToolName } from '../../utils/format';
 import { Markdown } from '../../utils/markdown';
 import {
@@ -25,6 +25,7 @@ import {
 	TokensIcon,
 	WandIcon,
 } from '../icons';
+import { AccessGate } from './AccessGate';
 import { QuestionCard } from './QuestionCard';
 import {
 	InlineToolLine,
@@ -77,6 +78,7 @@ const SubtaskItem: React.FC<{
 	const [promptExpanded, setPromptExpanded] = useState(false);
 	const mcpServers = useMcpServers();
 	const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
+	const pendingAccess = useSubtaskAccessRequest(message.id, message.contextId);
 	const {
 		groupedChildren: rawGroupedChildren,
 		totalDurationMs,
@@ -258,6 +260,16 @@ const SubtaskItem: React.FC<{
 								/>
 							);
 						})}
+					{pendingAccess && (
+						<AccessGate
+							requestId={pendingAccess.requestId}
+							messageId={pendingAccess.id}
+							tool={pendingAccess.tool}
+							input={pendingAccess.input}
+							pattern={pendingAccess.pattern}
+							className="my-2"
+						/>
+					)}
 					{taskResultEntry && (
 						<InlineToolLine
 							toolName="task"

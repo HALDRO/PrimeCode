@@ -162,16 +162,32 @@ const PermissionsSettings: React.FC = () => {
 	const { discoveryStatus, policies } = useSettingsStore();
 	const { permissions } = discoveryStatus;
 
-	const handlePolicyChange = (
-		type: 'edit' | 'terminal' | 'network',
-		value: 'ask' | 'allow' | 'deny',
-	) => {
+	type PolicyKey = keyof typeof policies;
+
+	const handlePolicyChange = (type: PolicyKey, value: 'ask' | 'allow' | 'deny') => {
 		const newPolicies = { ...policies, [type]: value };
 		postMessage({ type: 'setPermissions', policies: newPolicies, provider: 'opencode' });
 	};
 
 	const handlePreset = (preset: 'ask' | 'allow') => {
-		const newPolicies = { edit: preset, terminal: preset, network: preset };
+		const newPolicies: typeof policies = {
+			read: preset,
+			edit: preset,
+			glob: preset,
+			grep: preset,
+			list: preset,
+			bash: preset,
+			task: preset,
+			skill: preset,
+			lsp: preset,
+			todoread: preset,
+			todowrite: preset,
+			webfetch: preset,
+			websearch: preset,
+			codesearch: preset,
+			external_directory: preset,
+			doom_loop: preset,
+		};
 		postMessage({ type: 'setPermissions', policies: newPolicies, provider: 'opencode' });
 	};
 
@@ -181,35 +197,64 @@ const PermissionsSettings: React.FC = () => {
 		{ value: 'deny', label: 'Deny' },
 	];
 
+	const policyRow = (key: PolicyKey, title: string, tooltip: string, last = false) => (
+		<SettingRow title={title} tooltip={tooltip} last={last}>
+			<Select
+				value={policies[key]}
+				onChange={e => handlePolicyChange(key, e.target.value as 'ask' | 'allow' | 'deny')}
+				options={policyOptions}
+			/>
+		</SettingRow>
+	);
+
 	return (
 		<div className="animate-fade-in">
-			<GroupTitle>Global Policies (OpenCode)</GroupTitle>
+			<GroupTitle>File Operations</GroupTitle>
 			<SettingsGroup>
-				<SettingRow title="Edit Files" tooltip="Allow AI to modify files in workspace">
-					<Select
-						value={policies.edit}
-						onChange={e => handlePolicyChange('edit', e.target.value as 'ask' | 'allow' | 'deny')}
-						options={policyOptions}
-					/>
-				</SettingRow>
-				<SettingRow title="Terminal" tooltip="Allow AI to execute shell commands">
-					<Select
-						value={policies.terminal}
-						onChange={e =>
-							handlePolicyChange('terminal', e.target.value as 'ask' | 'allow' | 'deny')
-						}
-						options={policyOptions}
-					/>
-				</SettingRow>
-				<SettingRow title="Network" tooltip="Allow AI to access internet">
-					<Select
-						value={policies.network}
-						onChange={e =>
-							handlePolicyChange('network', e.target.value as 'ask' | 'allow' | 'deny')
-						}
-						options={policyOptions}
-					/>
-				</SettingRow>
+				{policyRow('read', 'Read Files', 'Allow AI to read files')}
+				{policyRow('edit', 'Edit Files', 'Allow AI to modify files in workspace')}
+				{policyRow('glob', 'Glob', 'Allow AI to search files by pattern')}
+				{policyRow('grep', 'Grep', 'Allow AI to search file contents')}
+				{policyRow('list', 'List Directory', 'Allow AI to list directory contents', true)}
+			</SettingsGroup>
+
+			<GroupTitle>Shell & Execution</GroupTitle>
+			<SettingsGroup>
+				{policyRow('bash', 'Shell Commands', 'Allow AI to execute shell commands')}
+				{policyRow('task', 'Sub-agents', 'Allow AI to run sub-agents')}
+				{policyRow('skill', 'Skills', 'Allow AI to load skills', true)}
+			</SettingsGroup>
+
+			<GroupTitle>LSP & Todo</GroupTitle>
+			<SettingsGroup>
+				{policyRow('lsp', 'LSP Requests', 'Allow AI to execute LSP requests')}
+				{policyRow('todoread', 'Read Todo', 'Allow AI to read the todo list')}
+				{policyRow('todowrite', 'Write Todo', 'Allow AI to update the todo list', true)}
+			</SettingsGroup>
+
+			<GroupTitle>Network</GroupTitle>
+			<SettingsGroup>
+				{policyRow('webfetch', 'Fetch URL', 'Allow AI to fetch URLs')}
+				{policyRow('websearch', 'Web Search', 'Allow AI to perform web searches')}
+				{policyRow('codesearch', 'Code Search', 'Allow AI to perform code searches', true)}
+			</SettingsGroup>
+
+			<GroupTitle>Safety</GroupTitle>
+			<SettingsGroup>
+				{policyRow(
+					'external_directory',
+					'External Directory',
+					'Allow AI to access paths outside the project',
+				)}
+				{policyRow(
+					'doom_loop',
+					'Doom Loop Protection',
+					'Allow AI to repeat identical tool calls',
+					true,
+				)}
+			</SettingsGroup>
+
+			<SettingsGroup>
 				<SettingRow title="Quick Presets" tooltip="Apply preset to all policies" last>
 					<div className="flex items-center gap-1.5">
 						<Button size="xs" variant="secondary" onClick={() => handlePreset('ask')}>

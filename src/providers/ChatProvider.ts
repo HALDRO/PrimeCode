@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
+import { PERMISSION_CATEGORIES, type PermissionCategory } from '../common/permissions';
 import type { WebviewCommand } from '../common/protocol';
+import { isFileEditTool, isTaskTool } from '../common/toolRegistry';
 import { OpenCodeExecutor } from '../core/executor/OpenCode';
 import type { CLIEvent } from '../core/executor/types';
 import type { ServiceRegistry } from '../core/ServiceRegistry';
@@ -19,70 +21,6 @@ import { SseHandler } from './handlers/SseHandler';
 import { ToolHandler } from './handlers/ToolHandler';
 import type { HandlerContext } from './handlers/types';
 import { UtilityHandler } from './handlers/UtilityHandler';
-
-/**
- * Maps a tool name to its permission policy category (edit/terminal/network).
- * Returns undefined for unrecognized tools (falls through to 'ask' UI prompt).
- *
- * Uses exact-match Sets first, then word-boundary regex as fallback
- * to avoid false positives (e.g. "read_file_without_editing" matching "edit").
- */
-function resolveToolPolicyCategory(tool: string): 'edit' | 'terminal' | 'network' | undefined {
-	const normalized = tool.toLowerCase();
-
-	// Exact known tool names (highest priority, no ambiguity).
-	const exactEdit = new Set([
-		'write',
-		'edit',
-		'multiedit',
-		'multi_edit',
-		'patch',
-		'create',
-		'writefile',
-		'editfile',
-		'write_file',
-		'edit_file',
-		'create_file',
-		'apply_diff',
-		'insert_code',
-	]);
-	const exactTerminal = new Set([
-		'bash',
-		'terminal',
-		'shell',
-		'command',
-		'exec',
-		'run',
-		'execute',
-		'run_command',
-		'run_terminal_cmd',
-	]);
-	const exactNetwork = new Set([
-		'fetch',
-		'http',
-		'curl',
-		'request',
-		'download',
-		'mcp',
-		'web_search',
-		'http_request',
-	]);
-
-	if (exactEdit.has(normalized)) return 'edit';
-	if (exactTerminal.has(normalized)) return 'terminal';
-	if (exactNetwork.has(normalized)) return 'network';
-
-	// Word-boundary regex fallback for dynamic/unknown tool names.
-	const editPattern = /\b(write|edit|patch|create|overwrite|insert|replace|append|delete_file)\b/;
-	const terminalPattern = /\b(bash|terminal|shell|command|exec|run)\b/;
-	const networkPattern = /\b(fetch|http|curl|request|download|mcp|web_search)\b/;
-
-	if (editPattern.test(normalized)) return 'edit';
-	if (terminalPattern.test(normalized)) return 'terminal';
-	if (networkPattern.test(normalized)) return 'network';
-
-	return undefined;
-}
 
 export class ChatProvider implements vscode.WebviewViewProvider {
 	private view?: vscode.WebviewView;
@@ -293,12 +231,16 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		const opencodeAgent = this.settings.get('opencode.agent');
 		const opencodeServerTimeout = this.settings.get('opencode.serverTimeout');
 		const opencodeServerUrl = this.settings.get('opencode.serverUrl');
+		const policies = this.toolHandler.getPermissionPolicies();
 
 		const config = {
 			provider: 'opencode' as const,
 			workspaceRoot,
 			agent: typeof opencodeAgent === 'string' ? opencodeAgent : undefined,
-			autoApprove: Boolean(this.settings.get('autoApprove') || false),
+			autoApprove: Boolean(
+				this.settings.get('access.autoApprove') || this.settings.get('access.yoloMode') || false,
+			),
+			policies: { ...policies },
 			serverTimeoutMs:
 				typeof opencodeServerTimeout === 'number' && Number.isFinite(opencodeServerTimeout)
 					? Math.max(0, opencodeServerTimeout) * 1000
@@ -785,6 +727,15 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					break;
 				}
 
+				// If this permission comes from a child session, route it to the parent
+				// so the user actually sees the dialog (child session UI is not visible).
+				const isChildPermission = this.sessionGraph.isChild(targetSessionId);
+				const permissionTargetSessionId = isChildPermission
+					? (this.sessionGraph.getParent(targetSessionId) ??
+						this.sessionState.activeSessionId ??
+						targetSessionId)
+					: targetSessionId;
+
 				const toolUseId =
 					(typeof e.toolUseId === 'string' ? (e.toolUseId as string) : undefined) ??
 					(typeof e.toolCallId === 'string' ? (e.toolCallId as string) : undefined);
@@ -820,13 +771,14 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 							approved,
 							timestamp: new Date().toISOString(),
 							metadata,
+							...(isChildPermission ? { childSessionId: targetSessionId } : {}),
 						},
-						targetSessionId,
+						permissionTargetSessionId,
 					);
 					void this.cli
 						.respondToPermission({ requestId, approved, alwaysAllow })
 						.catch(error => logger.error('[ChatProvider] auto-response failed:', error));
-					this.bridge.session.accessResponse(targetSessionId, {
+					this.bridge.session.accessResponse(permissionTargetSessionId, {
 						requestId,
 						approved,
 						...(alwaysAllow ? { alwaysAllow } : {}),
@@ -836,7 +788,15 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				// Auto-approve everything if yoloMode or autoApprove is enabled in settings.
 				const isYolo = Boolean(this.settings.get('access.yoloMode'));
 				const isAutoApprove = Boolean(this.settings.get('access.autoApprove'));
+				logger.debug('[ChatProvider] Permission check', {
+					tool,
+					requestId,
+					isYolo,
+					isAutoApprove,
+					isChildPermission,
+				});
 				if (isYolo || isAutoApprove) {
+					logger.debug('[ChatProvider] Auto-approve via yolo/autoApprove');
 					autoRespond(true);
 					break;
 				}
@@ -845,21 +805,34 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 				// Auto-approve if user previously marked this tool as always-allow.
 				if (alwaysAllowByTool[tool]) {
+					logger.debug('[ChatProvider] Auto-approve via alwaysAllowByTool', { tool });
 					autoRespond(true, true);
 					break;
 				}
 
-				// Auto-approve/deny based on permission policies (edit/terminal/network).
+				// Auto-approve/deny based on permission policies.
+				// OpenCode sends the category name directly in the `permission` field
+				// (e.g. "edit", "bash", "webfetch") — no mapping needed.
 				const policies = this.toolHandler.getPermissionPolicies();
-				const policyCategory = resolveToolPolicyCategory(tool);
+				const policyCategory = PERMISSION_CATEGORIES.includes(tool as PermissionCategory)
+					? (tool as PermissionCategory)
+					: undefined;
 				const policyValue = policyCategory ? policies[policyCategory] : undefined;
+				logger.debug('[ChatProvider] Policy resolution', {
+					tool,
+					policyCategory,
+					policyValue,
+				});
 
 				if (policyValue === 'allow' || policyValue === 'deny') {
+					logger.debug('[ChatProvider] Auto-respond via policy', { policyValue });
 					autoRespond(policyValue === 'allow');
 					break;
 				}
 
 				// Fall through: show the permission dialog in the webview.
+				// Use permissionTargetSessionId so child session permissions
+				// are shown in the parent session (which the user is viewing).
 				this.sessionHandler.postSessionMessage(
 					{
 						id: `access-${requestId}`,
@@ -872,8 +845,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 						resolved: false,
 						timestamp: new Date().toISOString(),
 						metadata,
+						...(isChildPermission ? { childSessionId: targetSessionId } : {}),
 					},
-					targetSessionId,
+					permissionTargetSessionId,
 				);
 				break;
 			}
@@ -907,7 +881,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		const toolUseId = (e.id as string) || `tool-${now}`;
 		const toolName = (e.name as string) || (e.tool as string) || 'unknown';
 
-		if (toolName === 'task') {
+		if (isTaskTool(toolName)) {
 			const eventSessionId = event.sessionId;
 			// The task tool_use event comes from the PARENT's SSE stream,
 			// so event.sessionId is the parent — NOT the child.
@@ -983,7 +957,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		const toolUseId = (e.tool_use_id as string) || (e.id as string) || `tool-${now}`;
 		const toolName = (e.name as string) || (e.tool as string) || 'unknown';
 
-		if (toolName === 'task') {
+		if (isTaskTool(toolName)) {
 			const content =
 				typeof e.content === 'string'
 					? (e.content as string)
@@ -1062,9 +1036,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			);
 
 			if (filePath && !emittedFileChange) {
-				const normalizedTool = toolName.toLowerCase();
-				const isFileTool = ['write', 'edit', 'multiedit', 'patch'].includes(normalizedTool);
-				if (isFileTool) {
+				if (isFileEditTool(toolName)) {
 					const oldContent =
 						typeof toolInput.old_string === 'string'
 							? toolInput.old_string
@@ -1276,8 +1248,19 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 		// Synthesize an error subtask result so the parent continues
 		if (parentSessionId) {
+			// Abort the child session on the backend so it doesn't hang forever
+			// (e.g. waiting for a permission response that will never come).
+			if (childSessionId && this.cli.abortSession) {
+				void this.cli
+					.abortSession(childSessionId)
+					.catch(error =>
+						logger.warn('[ChatProvider] Failed to abort timed-out child session:', error),
+					);
+			}
+
 			const now = Date.now();
-			const errorContent = 'Subtask timed out — no activity for 60 seconds';
+			const timeoutSec = ChatProvider.SUBTASK_INACTIVITY_TIMEOUT_MS / 1000;
+			const errorContent = `Subtask timed out — no activity for ${timeoutSec} seconds`;
 
 			// 1. Update the subtask card to show error state
 			this.sessionHandler.postSessionMessage(

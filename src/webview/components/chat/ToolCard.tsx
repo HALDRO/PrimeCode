@@ -37,7 +37,7 @@ import {
 	resolveDiffData,
 	SimpleDiff,
 } from './SimpleDiff';
-import { InlineToolLine } from './SimpleTool';
+import { InlineToolLine, SimpleTool } from './SimpleTool';
 
 const TOOL_CARD_CLASSES = 'bg-(--tool-bg-header) border border-(--tool-border-color) rounded-lg';
 
@@ -165,8 +165,6 @@ interface ToolCardMessageProps {
 // LSP Diagnostics Display
 // ---------------------------------------------------------------------------
 
-const MAX_DIAGNOSTICS_PER_FILE = 3;
-
 /**
  * Extract diagnostics from tool result metadata.
  * OpenCode sends `metadata.diagnostics: Record<string, Diagnostic[]>` on edit/write/apply_patch.
@@ -184,35 +182,64 @@ function extractDiagnosticsFromMeta(
 			(d): d is LspDiagnostic => d && typeof d === 'object' && 'message' in d && 'range' in d,
 		);
 		// Only show errors (severity === 1)
-		const errors = valid.filter(d => d.severity === 1).slice(0, MAX_DIAGNOSTICS_PER_FILE);
+		const errors = valid.filter(d => d.severity === 1);
 		if (errors.length > 0) result[filePath] = errors;
 	}
 	return Object.keys(result).length > 0 ? result : undefined;
 }
 
-/** Renders LSP error diagnostics below a file edit card */
+/** Group diagnostics by message, collecting locations for each unique error */
+function groupDiagnosticsByMessage(
+	diagnostics: LspDiagnosticsByFile,
+): Array<{ message: string; locations: Array<{ file: string; line: number; character: number }> }> {
+	const groups = new Map<string, Array<{ file: string; line: number; character: number }>>();
+	for (const [filePath, diags] of Object.entries(diagnostics)) {
+		for (const d of diags) {
+			const key = d.message;
+			if (!groups.has(key)) groups.set(key, []);
+			groups.get(key)?.push({
+				file: filePath,
+				// Convert 0-based LSP positions to 1-based for UI display
+				line: d.range.start.line + 1,
+				character: d.range.start.character + 1,
+			});
+		}
+	}
+	return Array.from(groups.entries()).map(([message, locations]) => ({ message, locations }));
+}
+
+/** Renders LSP error diagnostics below a file edit card, grouped by message */
 const DiagnosticsDisplay: React.FC<{ diagnostics: LspDiagnosticsByFile }> = ({ diagnostics }) => {
-	const entries = Object.entries(diagnostics);
-	if (entries.length === 0) return null;
+	const groups = useMemo(() => groupDiagnosticsByMessage(diagnostics), [diagnostics]);
+	if (groups.length === 0) return null;
+
+	const totalErrors = groups.reduce((sum, g) => sum + g.locations.length, 0);
 
 	return (
-		<div className="mt-1 ml-2 mb-(--tool-utility-block-margin)">
-			{entries.map(([filePath, diags]) => (
-				<div key={filePath} className="flex flex-col gap-0.5">
-					{diags.map(d => (
-						<div
-							key={`${filePath}-${d.range.start.line}:${d.range.start.character}-${d.message.slice(0, 20)}`}
-							className="flex items-center gap-1.5 text-sm"
-						>
-							<AlertCircleIcon size={12} className="text-error shrink-0" />
-							<span className="text-error font-medium whitespace-nowrap">
-								[{d.range.start.line}:{d.range.start.character}]
-							</span>
-							<span className="text-vscode-descriptionForeground truncate">{d.message}</span>
+		<div className="mt-1">
+			<SimpleTool
+				icon={<AlertCircleIcon size={14} />}
+				label={`${totalErrors} ${totalErrors === 1 ? 'error' : 'errors'}`}
+				isError
+			>
+				<div className="flex flex-col gap-0.5">
+					{groups.map(group => (
+						<div key={group.message} className="flex items-center gap-1.5 text-sm">
+							{group.locations.length > 1 && (
+								<span className="text-error font-medium whitespace-nowrap">
+									x{group.locations.length}
+								</span>
+							)}
+							{group.locations.length === 1 && (
+								<span className="text-error font-medium whitespace-nowrap">
+									[{group.locations[0].line}:{group.locations[0].character}]
+								</span>
+							)}
+							<span className="text-vscode-descriptionForeground truncate">{group.message}</span>
 						</div>
 					))}
 				</div>
-			))}
+			</SimpleTool>
 		</div>
 	);
 };

@@ -363,11 +363,6 @@
 					"editPresentation": "multilineText",
 					"default": "",
 					"description": "System prompt template for Prompt Improver."
-				},
-				"primeCode.promptImprove.timeoutMs": {
-					"type": "number",
-					"default": 60000,
-					"description": "Timeout for Prompt Improver in milliseconds."
 				}
 			}
 		}
