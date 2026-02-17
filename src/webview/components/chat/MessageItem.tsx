@@ -78,7 +78,7 @@ const SubtaskItem: React.FC<{
 	const [promptExpanded, setPromptExpanded] = useState(false);
 	const mcpServers = useMcpServers();
 	const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
-	const pendingAccess = useSubtaskAccessRequest(message.id, message.contextId);
+	const pendingAccess = useSubtaskAccessRequest(message.id);
 	const {
 		groupedChildren: rawGroupedChildren,
 		totalDurationMs,

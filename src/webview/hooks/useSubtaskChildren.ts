@@ -13,46 +13,21 @@ interface SubtaskTokenStats {
 }
 
 /**
- * Hook to retrieve all child messages for a given subtask using unified Context ID.
- * Resolves contextId from the subtask message and retrieves the corresponding session bucket.
- *
- * Subscribes only to the specific child session's messages (not the entire sessionsById map)
- * to avoid unnecessary re-renders and potential recursive rendering when contextId
- * accidentally points to the parent session.
+ * Hook to retrieve all child messages for a given subtask.
+ * Reads directly from the subtask message's `transcript` array —
+ * child events are aggregated into the parent session by the backend,
+ * so no separate child session bucket lookup is needed.
  */
 function useSubtaskChildren(subtaskId: string): Message[] {
-	// 1. Get the subtask message from current active session messages
-	const message = useChatStore(state => {
+	const transcript = useChatStore(state => {
 		const sid = state.activeSessionId;
-		if (!sid) return undefined;
-		return state.sessionsById[sid]?.messages.find((m: Message) => m.id === subtaskId);
+		if (!sid) return EMPTY_MESSAGES;
+		const msg = state.sessionsById[sid]?.messages.find((m: Message) => m.id === subtaskId);
+		if (!msg || msg.type !== 'subtask') return EMPTY_MESSAGES;
+		return msg.transcript?.length ? (msg.transcript as Message[]) : EMPTY_MESSAGES;
 	});
 
-	// 2. Extract contextId from the subtask message
-	const contextId = message?.type === 'subtask' ? message.contextId : undefined;
-
-	// 3. Subscribe to the specific child session's messages only (not all sessions).
-	//    Guard: if contextId equals the active session, ignore it to prevent recursive rendering.
-	const childMessages = useChatStore(state => {
-		if (!contextId) return EMPTY_MESSAGES;
-		// Safety: never read from the parent session as child context
-		if (contextId === state.activeSessionId) return EMPTY_MESSAGES;
-		const session = state.sessionsById[contextId];
-		return session?.messages?.length ? session.messages : EMPTY_MESSAGES;
-	});
-
-	// 4. Fall back to archived transcript if no live child session
-	const children = useMemo(() => {
-		if (!message || message.type !== 'subtask') {
-			return EMPTY_MESSAGES;
-		}
-		if (childMessages.length > 0) {
-			return childMessages;
-		}
-		return message.transcript ?? EMPTY_MESSAGES;
-	}, [message, childMessages]);
-
-	return children;
+	return transcript;
 }
 
 /**
@@ -98,25 +73,10 @@ export function useSubtaskThread(
 	}, [message?.durationMs, children]);
 
 	// Aggregate token stats from child session — read primitives to avoid new-object re-renders
-	const contextId = message?.contextId;
-	const tokenInput = useChatStore(state => {
-		if (!contextId || contextId === state.activeSessionId) return 0;
-		return state.sessionsById[contextId]?.totalStats?.totalInputTokens ?? 0;
-	});
-	const tokenOutput = useChatStore(state => {
-		if (!contextId || contextId === state.activeSessionId) return 0;
-		return state.sessionsById[contextId]?.totalStats?.totalOutputTokens ?? 0;
-	});
-	const tokenStats: SubtaskTokenStats | null = useMemo(() => {
-		if (tokenInput === 0 && tokenOutput === 0) return null;
-		return { input: tokenInput, output: tokenOutput, total: tokenInput + tokenOutput };
-	}, [tokenInput, tokenOutput]);
+	const tokenStats: SubtaskTokenStats | null = null;
 
-	// Read child session's activeModelID for display in SubtaskItem header
-	const childModelId = useChatStore(state => {
-		if (!contextId || contextId === state.activeSessionId) return undefined;
-		return state.sessionsById[contextId]?.activeModelID;
-	});
+	// Child model ID is no longer available from separate session bucket
+	const childModelId: string | undefined = undefined;
 
 	return {
 		message,

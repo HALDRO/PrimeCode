@@ -84,10 +84,14 @@ export class ToolHandler implements WebviewMessageHandler {
 	private async onAccessResponse(msg: CommandOf<'accessResponse'>): Promise<void> {
 		const { id: requestId, approved, response } = msg;
 		const alwaysAllow = msg.alwaysAllow ?? false;
-		const targetSessionId = msg.sessionId ?? this.context.sessionState.activeSessionId;
+		const targetSessionId = msg.sessionId;
 
 		if (!requestId) {
 			throw new Error('Missing accessResponse.id');
+		}
+
+		if (!targetSessionId) {
+			logger.warn('[ToolHandler] accessResponse dropped: no sessionId', { requestId });
 		}
 
 		if (alwaysAllow) {
@@ -228,7 +232,7 @@ export class ToolHandler implements WebviewMessageHandler {
 			throw new Error('Missing questionResponse.requestId');
 		}
 
-		const targetSessionId = sessionId ?? this.context.sessionState.activeSessionId;
+		const targetSessionId = sessionId;
 
 		// Reply to OpenCode's question API with answers array
 		await this.context.cli.respondToQuestion({ requestId, answers });
@@ -252,7 +256,7 @@ export class ToolHandler implements WebviewMessageHandler {
 			throw new Error('Missing questionReject.requestId');
 		}
 
-		const targetSessionId = sessionId ?? this.context.sessionState.activeSessionId;
+		const targetSessionId = sessionId;
 
 		await this.context.cli.rejectQuestion(requestId);
 

@@ -28,6 +28,7 @@ import type {
 	SessionStatusPayload,
 	SessionTurnTokensPayload,
 	SubtaskMessage,
+	SubtaskTranscriptPayload,
 	TotalStats,
 } from '../../common';
 import { generateId } from '../../common';
@@ -140,10 +141,10 @@ export interface ChatActions {
 	switchSession: (sessionId: string) => void;
 	closeSession: (sessionId: string) => void;
 
-	// File & restore data (active session by default)
-	addChangedFile: (file: ChangedFile) => void;
-	removeChangedFile: (filePath: string) => void;
-	clearChangedFiles: () => void;
+	// File & restore data (session-explicit — no activeSessionId fallback)
+	addChangedFile: (file: ChangedFile, sessionId?: string) => void;
+	removeChangedFile: (filePath: string, sessionId?: string) => void;
+	clearChangedFiles: (sessionId?: string) => void;
 	addRestoreCommit: (commit: CommitInfo, sessionId?: string) => void;
 	clearRestoreCommits: (sessionId?: string) => void;
 	setRestoreCommits: (commits: CommitInfo[], sessionId?: string) => void;
@@ -152,13 +153,18 @@ export interface ChatActions {
 	// Stats
 	setTotalStats: (stats: Partial<TotalStats>, sessionId?: string) => void;
 
-	// Subtask actions (active session)
-	startSubtask: (subtask: SubtaskMessage) => void;
-	updateSubtask: (subtaskId: string, status: 'completed' | 'error', result?: string) => void;
+	// Subtask actions (session-aware — do NOT rely on activeSessionId)
+	startSubtask: (subtask: SubtaskMessage, sessionId?: string) => void;
+	updateSubtask: (
+		subtaskId: string,
+		status: 'completed' | 'error',
+		result?: string,
+		sessionId?: string,
+	) => void;
 
-	// Active session revert marker
-	markRevertedFromMessageId: (id: string | null) => void;
-	clearRevertedMessages: () => void;
+	// Revert marker (session-explicit — no activeSessionId fallback)
+	markRevertedFromMessageId: (id: string | null, sessionId?: string) => void;
+	clearRevertedMessages: (sessionId?: string) => void;
 
 	// Prompt Improver actions
 	setImprovingPrompt: (isImproving: boolean, requestId?: string | null) => void;
@@ -197,6 +203,67 @@ export const DEFAULT_TOTAL_STATS: TotalStats = {
 	totalOutputTokens: 0,
 };
 
+/**
+ * Merge an incoming message into an array (by id or partId), handling delta
+ * content concatenation and subtask-meta preservation.  Mutates `messages` in place (Immer-safe).
+ */
+function mergeOrAddMessage(messages: Message[], incoming: Message): void {
+	const existingIdx = messages.findIndex(m => {
+		if (m.id === incoming.id) return true;
+		const mPartId = 'partId' in m ? m.partId : undefined;
+		const msgPartId = 'partId' in incoming ? incoming.partId : undefined;
+		return msgPartId !== undefined && mPartId === msgPartId && m.type === incoming.type;
+	});
+
+	if (existingIdx === -1) {
+		messages.push(incoming);
+		return;
+	}
+
+	const existing = messages[existingIdx];
+
+	// Delta content concatenation
+	if ('isDelta' in incoming && incoming.isDelta && 'content' in existing && 'content' in incoming) {
+		existing.content = (existing.content || '') + (incoming.content || '');
+		const preservedStartTime = 'startTime' in existing ? existing.startTime : undefined;
+		Object.assign(existing, { ...incoming, content: existing.content });
+		if (preservedStartTime !== undefined && 'startTime' in existing) {
+			(existing as { startTime: number }).startTime = preservedStartTime as number;
+		}
+		return;
+	}
+
+	// Non-delta merge — preserve startTime and subtask meta
+	const preservedStartTime = 'startTime' in existing ? existing.startTime : undefined;
+	const preservedSubtaskMeta =
+		existing.type === 'subtask'
+			? {
+					description: existing.description,
+					prompt: existing.prompt,
+					agent: existing.agent,
+					startTime: existing.startTime,
+					transcript: existing.transcript,
+				}
+			: undefined;
+
+	Object.assign(existing, incoming);
+
+	if (existing.type === 'subtask' && preservedSubtaskMeta) {
+		if (!existing.description && preservedSubtaskMeta.description)
+			existing.description = preservedSubtaskMeta.description;
+		if (!existing.prompt && preservedSubtaskMeta.prompt)
+			existing.prompt = preservedSubtaskMeta.prompt;
+		if (!existing.agent && preservedSubtaskMeta.agent) existing.agent = preservedSubtaskMeta.agent;
+		if (!existing.startTime && preservedSubtaskMeta.startTime)
+			existing.startTime = preservedSubtaskMeta.startTime;
+		if (!existing.transcript && preservedSubtaskMeta.transcript)
+			existing.transcript = preservedSubtaskMeta.transcript;
+	}
+	if (preservedStartTime !== undefined && 'startTime' in existing) {
+		(existing as { startTime: number }).startTime = preservedStartTime as number;
+	}
+}
+
 const createEmptySession = (id: string): ChatSession => ({
 	id,
 	model: undefined,
@@ -229,7 +296,7 @@ type ZustandSet = (
 	partial: ChatState | Partial<ChatState> | ((state: ChatState) => ChatState | Partial<ChatState>),
 ) => void;
 
-/** Mutate a target session inside produce(). Resolves sessionId, guards null, updates lastActive. */
+/** Mutate a target session inside produce(). Guards null, updates lastActive. */
 function mutateSession(
 	set: ZustandSet,
 	sessionId: string | undefined,
@@ -237,10 +304,9 @@ function mutateSession(
 ): void {
 	set(
 		produce((state: ChatState) => {
-			const sid = resolveTargetSessionId(state, sessionId);
-			if (!sid || !state.sessionsById[sid]) return;
-			mutator(state.sessionsById[sid], state);
-			state.sessionsById[sid].lastActive = Date.now();
+			if (!sessionId || !state.sessionsById[sessionId]) return;
+			mutator(state.sessionsById[sessionId], state);
+			state.sessionsById[sessionId].lastActive = Date.now();
 		}),
 	);
 }
@@ -395,73 +461,11 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 								break;
 							}
 
-							const storageSession = targetSession;
-
-							// Merge or append
-							const existingIdx = storageSession.messages.findIndex(m => {
-								if (m.id === message.id) return true;
-								// Safe check for partId existence
-								const mPartId = 'partId' in m ? m.partId : undefined;
-								const msgPartId = 'partId' in message ? message.partId : undefined;
-
-								return msgPartId !== undefined && mPartId === msgPartId && m.type === message.type;
-							});
-
-							if (existingIdx !== -1) {
-								const existing = storageSession.messages[existingIdx];
-								if (
-									'isDelta' in message &&
-									message.isDelta &&
-									'content' in existing &&
-									'content' in message
-								) {
-									existing.content = (existing.content || '') + (message.content || '');
-									// Preserve startTime from the first chunk — don't let subsequent deltas overwrite it
-									const preservedStartTime =
-										'startTime' in existing ? existing.startTime : undefined;
-									Object.assign(existing, { ...message, content: existing.content });
-									if (preservedStartTime !== undefined && 'startTime' in existing) {
-										(existing as { startTime: number }).startTime = preservedStartTime as number;
-									}
-								} else {
-									// For non-delta merges, also preserve startTime if already set
-									const preservedStartTime =
-										'startTime' in existing ? existing.startTime : undefined;
-									const preservedSubtaskMeta =
-										existing.type === 'subtask'
-											? {
-													description: existing.description,
-													prompt: existing.prompt,
-													agent: existing.agent,
-													startTime: existing.startTime,
-												}
-											: undefined;
-									Object.assign(existing, message);
-									if (existing.type === 'subtask' && preservedSubtaskMeta) {
-										if (!existing.description && preservedSubtaskMeta.description) {
-											existing.description = preservedSubtaskMeta.description;
-										}
-										if (!existing.prompt && preservedSubtaskMeta.prompt) {
-											existing.prompt = preservedSubtaskMeta.prompt;
-										}
-										if (!existing.agent && preservedSubtaskMeta.agent) {
-											existing.agent = preservedSubtaskMeta.agent;
-										}
-										if (!existing.startTime && preservedSubtaskMeta.startTime) {
-											existing.startTime = preservedSubtaskMeta.startTime;
-										}
-									}
-									if (preservedStartTime !== undefined && 'startTime' in existing) {
-										(existing as { startTime: number }).startTime = preservedStartTime as number;
-									}
-								}
-							} else {
-								storageSession.messages.push(message);
-							}
+							mergeOrAddMessage(targetSession.messages, message);
 
 							// Clear retry info on success
 							if (message.type === 'assistant') {
-								storageSession.retryInfo = null;
+								targetSession.retryInfo = null;
 							}
 							break;
 						}
@@ -516,7 +520,6 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 								if ('partId' in m && m.partId === completePartId) {
 									if (m.type === 'thinking') {
 										m.isStreaming = false;
-										// Compute duration from startTime if not already set
 										if (!m.durationMs && m.startTime && typeof m.startTime === 'number') {
 											m.durationMs = Date.now() - m.startTime;
 										}
@@ -525,6 +528,17 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 									}
 								}
 							});
+							// Mark completed subtasks in a second pass.
+							for (const msg of targetSession.messages) {
+								if (msg.type !== 'subtask') continue;
+								const partId = (msg as Record<string, unknown>).partId as string | undefined;
+								if (partId !== completePartId) continue;
+								msg.status = msg.status === 'running' ? 'completed' : msg.status;
+								if (!msg.durationMs && msg.startTime) {
+									const start = new Date(msg.startTime).getTime();
+									if (start > 0) msg.durationMs = Date.now() - start;
+								}
+							}
 							break;
 						}
 
@@ -660,6 +674,25 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 						case 'terminal':
 							// Terminal notifications are transient UI overlays; ignore in chat history.
 							break;
+
+						case 'subtask_transcript': {
+							const tp = payload as SubtaskTranscriptPayload;
+							const subtaskMsg = targetSession.messages.find(
+								m => m.type === 'subtask' && m.id === tp.subtaskId,
+							);
+							if (subtaskMsg && subtaskMsg.type === 'subtask') {
+								if (!subtaskMsg.transcript) {
+									subtaskMsg.transcript = [];
+								}
+								const childMsg = {
+									...tp.childMessage,
+									id: tp.childMessage.id || generateId('child'),
+									timestamp: tp.childMessage.timestamp || new Date().toISOString(),
+								} as Message;
+								mergeOrAddMessage(subtaskMsg.transcript, childMsg);
+							}
+							break;
+						}
 					}
 				}),
 			);
@@ -684,7 +717,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 			}),
 
 		updateSession: (updates, sessionId) =>
-			mutateSession(set, sessionId, s => Object.assign(s, updates)),
+			mutateSession(set, sessionId ?? get().activeSessionId, s => Object.assign(s, updates)),
 
 		setProcessing: (isProcessing, sessionId) =>
 			get().actions.updateSession({ isProcessing }, sessionId),
@@ -700,7 +733,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 		setInput: (input, sessionId) => get().actions.updateSession({ input }, sessionId),
 
 		appendInput: (text, sessionId) =>
-			mutateSession(set, sessionId, s => {
+			mutateSession(set, sessionId ?? get().activeSessionId, s => {
 				s.input += text;
 			}),
 
@@ -710,13 +743,13 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 			get().actions.updateSession({ streamingToolId: toolId }, sessionId),
 
 		clearMessages: sessionId =>
-			mutateSession(set, sessionId, s => {
+			mutateSession(set, sessionId ?? get().activeSessionId, s => {
 				s.messages = [];
 				s.turnTokens = {};
 			}),
 
 		updateMessage: (id, updates, sessionId) =>
-			mutateSession(set, sessionId, s => {
+			mutateSession(set, sessionId ?? get().activeSessionId, s => {
 				const msg = s.messages.find(m => m.id === id);
 				if (msg) Object.assign(msg, updates);
 			}),
@@ -724,7 +757,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 		setEditingMessageId: id => set({ editingMessageId: id }),
 
 		deleteMessagesAfterId: (id, sessionId) =>
-			mutateSession(set, sessionId, s => {
+			mutateSession(set, sessionId ?? get().activeSessionId, s => {
 				const idx = s.messages.findIndex(m => m.id === id);
 				if (idx !== -1) {
 					// Clean up turnTokens for removed user messages
@@ -742,7 +775,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 			}),
 
 		removeMessageByPartId: (partId, sessionId) =>
-			mutateSession(set, sessionId, s => {
+			mutateSession(set, sessionId ?? get().activeSessionId, s => {
 				s.messages = s.messages.filter(m => {
 					if (m.id === partId) return false;
 					const mPartId = 'partId' in m ? m.partId : undefined;
@@ -752,13 +785,13 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 				});
 			}),
 
-		markRevertedFromMessageId: id =>
-			mutateSession(set, undefined, s => {
+		markRevertedFromMessageId: (id, sessionId) =>
+			mutateSession(set, sessionId ?? get().activeSessionId, s => {
 				s.revertedFromMessageId = id;
 			}),
 
-		clearRevertedMessages: () =>
-			mutateSession(set, undefined, s => {
+		clearRevertedMessages: sessionId =>
+			mutateSession(set, sessionId ?? get().activeSessionId, s => {
 				if (!s.revertedFromMessageId) return;
 				const idx = s.messages.findIndex(m => m.id === s.revertedFromMessageId);
 				if (idx !== -1) {
@@ -812,8 +845,8 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 			);
 		},
 
-		addChangedFile: file =>
-			mutateSession(set, undefined, s => {
+		addChangedFile: (file, sessionId) =>
+			mutateSession(set, sessionId ?? get().activeSessionId, s => {
 				const idx = s.changedFiles.findIndex(f => f.toolUseId === file.toolUseId);
 				if (idx !== -1) {
 					s.changedFiles[idx] = { ...s.changedFiles[idx], ...file };
@@ -822,13 +855,13 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 				}
 			}),
 
-		removeChangedFile: filePath =>
-			mutateSession(set, undefined, s => {
+		removeChangedFile: (filePath, sessionId) =>
+			mutateSession(set, sessionId ?? get().activeSessionId, s => {
 				s.changedFiles = s.changedFiles.filter(f => f.filePath !== filePath);
 			}),
 
-		clearChangedFiles: () =>
-			mutateSession(set, undefined, s => {
+		clearChangedFiles: sessionId =>
+			mutateSession(set, sessionId ?? get().activeSessionId, s => {
 				s.changedFiles = [];
 			}),
 
@@ -849,32 +882,25 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 		setTotalStats: (stats, sessionId) =>
 			mutateSession(set, sessionId, s => Object.assign(s.totalStats, stats)),
 
-		startSubtask: subtask =>
-			mutateSession(set, undefined, s => {
+		startSubtask: (subtask, sessionId) =>
+			mutateSession(set, sessionId, s => {
 				if (!s.messages.some(m => m.id === subtask.id)) s.messages.push(subtask);
 			}),
 
-		updateSubtask: (subtaskId, status, result) => {
+		updateSubtask: (subtaskId, status, result, sessionId) => {
 			set(
 				produce((state: ChatState) => {
-					const sid = state.activeSessionId;
-					if (!sid || !state.sessionsById[sid]) return;
+					// Use explicit sessionId when provided (avoids O(N) scan over all sessions)
+					const sid = sessionId && state.sessionsById[sessionId] ? sessionId : undefined;
+					if (!sid) return;
 					const msg = state.sessionsById[sid].messages.find(m => m.id === subtaskId);
 					if (!msg || msg.type !== 'subtask') return;
 					msg.status = status;
 					msg.result = result;
-					// Compute duration from startTime if available
 					if (!msg.durationMs && msg.startTime) {
 						const start =
 							typeof msg.startTime === 'number' ? msg.startTime : new Date(msg.startTime).getTime();
 						if (start > 0) msg.durationMs = Date.now() - start;
-					}
-					// Archive context transcript
-					const contextId = msg.contextId;
-					if (contextId && state.sessionsById[contextId]) {
-						msg.transcript = state.sessionsById[contextId].messages;
-						msg.contextId = undefined;
-						delete state.sessionsById[contextId];
 					}
 					state.sessionsById[sid].lastActive = Date.now();
 				}),

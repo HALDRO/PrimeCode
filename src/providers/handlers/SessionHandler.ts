@@ -95,8 +95,14 @@ export class SessionHandler implements WebviewMessageHandler {
 	// =============================================================================
 
 	public postSessionMessage(message: SessionMessageData, sessionId?: string): void {
-		const targetId = sessionId || this.context.sessionState.activeSessionId;
-		if (!targetId) return;
+		const targetId = sessionId;
+		if (!targetId) {
+			logger.warn('[SessionHandler] postSessionMessage dropped: no sessionId', {
+				messageType: message.type,
+				messageId: message.id,
+			});
+			return;
+		}
 
 		// Only log non-streaming message types to avoid per-token spam
 		if (message.type !== 'thinking' && message.type !== 'assistant') {
@@ -120,8 +126,11 @@ export class SessionHandler implements WebviewMessageHandler {
 	}
 
 	public postComplete(partId: string, toolUseId?: string, sessionId?: string): void {
-		const targetId = sessionId || this.context.sessionState.activeSessionId;
-		if (!targetId) return;
+		const targetId = sessionId;
+		if (!targetId) {
+			logger.warn('[SessionHandler] postComplete dropped: no sessionId', { partId });
+			return;
+		}
 		this.context.bridge.session.complete(targetId, partId, toolUseId);
 	}
 
@@ -136,8 +145,11 @@ export class SessionHandler implements WebviewMessageHandler {
 		},
 		sessionId?: string,
 	): void {
-		const targetId = sessionId || this.context.sessionState.activeSessionId;
-		if (!targetId) return;
+		const targetId = sessionId;
+		if (!targetId) {
+			logger.warn('[SessionHandler] postTurnTokens dropped: no sessionId');
+			return;
+		}
 		this.context.bridge.session.turnTokens(targetId, data);
 	}
 
@@ -146,22 +158,31 @@ export class SessionHandler implements WebviewMessageHandler {
 
 		// Resolve target session: event-level sessionId > data.sessionId > activeSessionId
 		const backendSessionId = eventSessionId || getStringProp(record, 'sessionId');
-		const targetSessionId = backendSessionId || this.context.sessionState.activeSessionId;
-		if (!targetSessionId) return;
+
+		const status = record.status as
+			| { type?: string; attempt?: number; message?: string; next?: number }
+			| undefined;
+
+		// STRICT: never fallback to activeSessionId for any event routing.
+		// Without a real sessionId, we'd route data to the wrong session after tab switch.
+		const targetSessionId = backendSessionId;
+		if (!targetSessionId) {
+			logger.warn('[SessionHandler] Dropping session_updated event without sessionId', {
+				statusType: status?.type,
+				hasStats: !!asRecord(record.totalStats),
+			});
+			return;
+		}
 
 		// Ensure session is tracked as started
 		if (!this.context.sessionState.startedSessions.has(targetSessionId)) {
 			this.context.sessionState.startedSessions.add(targetSessionId);
 		}
 
-		const status = record.status as
-			| { type?: string; attempt?: number; message?: string; next?: number }
-			| undefined;
-
 		if (status?.type === 'busy') {
 			// Stop guard: suppress 'busy' events that arrive after user clicked Stop.
 			// This prevents delayed SSE events from overwriting the forced 'idle' status.
-			if (this.context.sessionState.isStopGuarded()) {
+			if (this.context.sessionState.isStopGuarded(targetSessionId)) {
 				logger.debug('[SessionHandler] Suppressed busy status (stop guard active)', {
 					targetSessionId,
 				});
@@ -170,7 +191,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			this.postStatus(targetSessionId, 'busy', 'Working...');
 		} else if (status?.type === 'idle') {
 			// During stop guard, suppress idle too — we already forced idle.
-			if (this.context.sessionState.isStopGuarded()) {
+			if (this.context.sessionState.isStopGuarded(targetSessionId)) {
 				logger.debug('[SessionHandler] Suppressed idle status (stop guard active)', {
 					targetSessionId,
 				});
@@ -289,19 +310,26 @@ export class SessionHandler implements WebviewMessageHandler {
 				this.initializeSessionStats(tabId);
 			}
 
-			// Switch to the active tab
+			// Switch to the active tab — query real status from executor
 			this.context.sessionState.activeSessionId = activeTab;
-			this.postLifecycle('switched', activeTab, { isProcessing: false });
+			const isActiveTabBusy = this.context.cli.isSessionActive?.(activeTab) ?? false;
+			this.postLifecycle('switched', activeTab, { isProcessing: isActiveTabBusy });
 
 			// Replay history only for the active tab (others lazy-load on switch)
 			await this.replaySessionFromCLI(activeTab, config);
 			this.replayedSessions.add(activeTab);
-			this.postStatus(activeTab, 'idle', 'Ready');
+			// Post status matching real backend state
+			if (isActiveTabBusy) {
+				this.postStatus(activeTab, 'busy', 'Working...');
+			} else {
+				this.postStatus(activeTab, 'idle', 'Ready');
+			}
 
-			// Mark non-active tabs as idle
+			// Post real status for non-active tabs
 			for (const tabId of tabsToRestore) {
 				if (tabId !== activeTab) {
-					this.postStatus(tabId, 'idle', 'Ready');
+					const isBusy = this.context.cli.isSessionActive?.(tabId) ?? false;
+					this.postStatus(tabId, isBusy ? 'busy' : 'idle', isBusy ? 'Working...' : 'Ready');
 				}
 			}
 		} catch (error) {
@@ -337,16 +365,17 @@ export class SessionHandler implements WebviewMessageHandler {
 			}
 		}
 
-		// Register all parent↔child links in the graph (single source of truth)
+		// Register all parent↔child links in the graph
 		graph.registerChildrenFromHistory(sessionId, taskToolUseIds, childSessionIds);
 
-		// Replay child sessions into their own buckets and compute durations
+		// Pre-load child histories and compute durations.
+		// Child events are aggregated into parent subtask transcripts (no separate buckets).
+		const childHistories = new Map<string, CLIEvent[]>();
 		const childDurations = new Map<string, number>();
 		for (const child of childSessions) {
 			const childHistory = await this.context.cli.getHistory(child.id, config);
-			this.replayHistoryIntoSession(child.id, childHistory);
+			childHistories.set(child.id, childHistory);
 
-			// Compute child session duration from first/last event timestamps
 			if (childHistory.length > 0) {
 				const firstTs = (childHistory[0].data as { timestamp?: string })?.timestamp;
 				const lastTs = (childHistory[childHistory.length - 1].data as { timestamp?: string })
@@ -362,6 +391,8 @@ export class SessionHandler implements WebviewMessageHandler {
 		if (taskToolUseIds.length === 0 && childSessions.length > 0) {
 			for (const child of childSessions) {
 				const duration = childDurations.get(child.id);
+				const childHistory = childHistories.get(child.id) || [];
+				const transcript = this.buildTranscriptFromHistory(childHistory) as unknown[];
 				this.postSessionMessage(
 					{
 						id: `hist-subtask-${child.id}`,
@@ -369,8 +400,7 @@ export class SessionHandler implements WebviewMessageHandler {
 						agent: 'subagent',
 						description: child.title || 'Subtask',
 						status: 'completed',
-						contextId: child.id,
-						metadata: { childSessionId: child.id },
+						transcript: transcript as import('../../common').SessionMessageData['transcript'],
 						timestamp: new Date().toISOString(),
 						...(duration ? { durationMs: duration } : {}),
 					},
@@ -388,6 +418,7 @@ export class SessionHandler implements WebviewMessageHandler {
 				mode: 'parent',
 				parentSessionId: sessionId,
 				childDurations,
+				childHistories,
 			});
 		}
 	}
@@ -423,7 +454,11 @@ export class SessionHandler implements WebviewMessageHandler {
 		});
 		this.context.sessionState.activeSessionId = sessionId;
 		this.context.sessionState.startedSessions.add(sessionId);
-		this.postLifecycle('switched', sessionId, { isProcessing: false });
+
+		// Query REAL processing status from the backend executor.
+		// The executor tracks active sessions via SSE session.status events.
+		const isActive = this.context.cli.isSessionActive?.(sessionId) ?? false;
+		this.postLifecycle('switched', sessionId, { isProcessing: isActive });
 		this.initializeSessionStats(sessionId);
 		this.persistOpenTabs(sessionId);
 
@@ -438,7 +473,12 @@ export class SessionHandler implements WebviewMessageHandler {
 			}
 		}
 
-		this.postStatus(sessionId, 'idle', 'Ready');
+		// Post status matching the real backend state
+		if (isActive) {
+			this.postStatus(sessionId, 'busy', 'Working...');
+		} else {
+			this.postStatus(sessionId, 'idle', 'Ready');
+		}
 	}
 
 	private async onCloseSession(msg: CommandOf<'closeSession'>): Promise<void> {
@@ -473,13 +513,28 @@ export class SessionHandler implements WebviewMessageHandler {
 			return;
 		}
 
-		// Activate stop guard FIRST — blocks any incoming SSE 'busy' events
-		// from overwriting our forced 'idle' status during the race window.
-		this.context.sessionState.activateStopGuard(10_000);
+		// Collect the active session + its child sessions (subagents) only.
+		// Do NOT guard unrelated sessions from other tabs.
+		const sessionsToStop = new Set<string>([activeId]);
+		for (const childId of this.context.sessionGraph.getChildren(activeId)) {
+			sessionsToStop.add(childId);
+		}
 
-		// Force UI to idle IMMEDIATELY — before awaiting abort.
-		// This guarantees the Stop button always responds, even if the
-		// abort request hangs or the server is unreachable.
+		// Activate per-session stop guard — blocks incoming SSE 'busy' events
+		// from overwriting our status during the abort window.
+		for (const sid of sessionsToStop) {
+			this.context.sessionState.activateStopGuard(10_000, sid);
+		}
+
+		// Abort on the backend FIRST — wait for confirmation before updating UI.
+		// This ensures the button state reflects reality, not optimistic guesses.
+		try {
+			await this.context.cli.abort();
+		} catch (error) {
+			logger.error('[SessionHandler] Abort failed:', error);
+		}
+
+		// NOW update UI — backend has confirmed the stop.
 		this.postStatus(activeId, 'idle', 'Stopped');
 		this.postSessionMessage(
 			{
@@ -491,19 +546,11 @@ export class SessionHandler implements WebviewMessageHandler {
 			activeId,
 		);
 
-		// Also force idle on any known child sessions (subagents)
-		for (const sid of this.context.sessionState.startedSessions) {
+		// Also force idle on child sessions (subagents) of the active session only
+		for (const sid of sessionsToStop) {
 			if (sid !== activeId) {
 				this.postStatus(sid, 'idle', 'Stopped');
 			}
-		}
-
-		// Now abort all sessions on the backend (main + subagents).
-		// Wrapped in try/catch so the UI is never left stuck.
-		try {
-			await this.context.cli.abort();
-		} catch (error) {
-			logger.error('[SessionHandler] Abort failed (UI already reset):', error);
 		}
 	}
 
@@ -514,9 +561,12 @@ export class SessionHandler implements WebviewMessageHandler {
 		messageIdToTruncate?: string,
 		attachments?: CommandOf<'sendMessage'>['attachments'],
 	): Promise<void> {
-		// Clear stop guard — user is explicitly sending a new message,
-		// so SSE 'busy' events should be allowed through again.
-		this.context.sessionState.clearStopGuard();
+		// Clear stop guard for the target session — user is explicitly sending
+		// a new message, so SSE 'busy' events should be allowed through again.
+		const targetSessionForGuard = explicitSessionId || this.context.sessionState.activeSessionId;
+		if (targetSessionForGuard) {
+			this.context.sessionState.clearStopGuard(targetSessionForGuard);
+		}
 
 		const config = this.buildSendConfig(uiModel);
 		let modelNotice: string | undefined;
@@ -671,13 +721,16 @@ export class SessionHandler implements WebviewMessageHandler {
 				this.context.sessionState.startedSessions.delete(activeId);
 				this.sessionTotalsByUiSession.delete(activeId);
 
-				this.postSessionMessage({
-					id: `error-${Date.now()}`,
-					type: 'error',
-					content: error instanceof Error ? error.message : 'Failed to start CLI',
-					isError: true,
-					timestamp: new Date().toISOString(),
-				});
+				this.postSessionMessage(
+					{
+						id: `error-${Date.now()}`,
+						type: 'error',
+						content: error instanceof Error ? error.message : 'Failed to start CLI',
+						isError: true,
+						timestamp: new Date().toISOString(),
+					},
+					activeId,
+				);
 				this.postStatus(activeId, 'error', 'Failed to start');
 			}
 		}
@@ -743,6 +796,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		this.context.sessionState.activeSessionId = sessionId;
 		this.context.sessionState.startedSessions.add(sessionId);
 		this.postLifecycle('created', sessionId);
+		// New conversations are never busy — they haven't been sent to yet
 		this.postLifecycle('switched', sessionId, { isProcessing: false });
 		this.initializeSessionStats(sessionId);
 		this.persistOpenTabs(sessionId);
@@ -751,7 +805,9 @@ export class SessionHandler implements WebviewMessageHandler {
 			const config = this.buildBaseConfig();
 			await this.replaySessionFromCLI(sessionId, config);
 			this.replayedSessions.add(sessionId);
-			this.postStatus(sessionId, 'idle', 'Ready');
+			// Query real status — loaded conversation could theoretically be active
+			const isBusy = this.context.cli.isSessionActive?.(sessionId) ?? false;
+			this.postStatus(sessionId, isBusy ? 'busy' : 'idle', isBusy ? 'Working...' : 'Ready');
 		} catch (error) {
 			logger.error('[SessionHandler] Failed to load conversation:', error);
 			this.postStatus(sessionId, 'error', 'Failed to load');
@@ -765,6 +821,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			mode?: 'default' | 'parent';
 			parentSessionId?: string;
 			childDurations?: Map<string, number>;
+			childHistories?: Map<string, CLIEvent[]>;
 		},
 	): void {
 		// Track subtask metadata from tool_use so tool_result can carry it forward
@@ -868,8 +925,18 @@ export class SessionHandler implements WebviewMessageHandler {
 					const agent = typeof input.subagent_type === 'string' ? input.subagent_type : 'subagent';
 					const prompt = typeof input.prompt === 'string' ? input.prompt : '';
 					const description = typeof input.description === 'string' ? input.description : 'Subtask';
-					// Save metadata so tool_result replay can carry it forward
 					subtaskMeta.set(toolUseId, { description, prompt, agent });
+
+					// Build transcript from child history instead of using contextId
+					const childHistory = childSessionId
+						? options.childHistories?.get(childSessionId)
+						: undefined;
+					const transcript = childHistory
+						? (this.buildTranscriptFromHistory(
+								childHistory,
+							) as unknown as import('../../common').SessionMessageData['transcript'])
+						: undefined;
+
 					this.postSessionMessage(
 						{
 							id: toolUseId,
@@ -878,8 +945,7 @@ export class SessionHandler implements WebviewMessageHandler {
 							prompt,
 							description,
 							status: 'running',
-							contextId: childSessionId,
-							metadata: childSessionId ? { childSessionId } : undefined,
+							transcript,
 							timestamp: data.timestamp || new Date().toISOString(),
 							startTime: data.timestamp || new Date().toISOString(),
 							...(subtaskDuration ? { durationMs: subtaskDuration } : {}),
@@ -955,7 +1021,6 @@ export class SessionHandler implements WebviewMessageHandler {
 					const subtaskDuration = childSessionId
 						? options.childDurations?.get(childSessionId)
 						: undefined;
-					// Carry forward metadata saved from tool_use replay
 					const savedMeta = subtaskMeta.get(toolUseId);
 					this.postSessionMessage(
 						{
@@ -963,8 +1028,6 @@ export class SessionHandler implements WebviewMessageHandler {
 							type: 'subtask',
 							status: data.is_error ? 'error' : 'completed',
 							result: String(data.content || ''),
-							contextId: childSessionId,
-							metadata: childSessionId ? { childSessionId } : undefined,
 							timestamp: data.timestamp || new Date().toISOString(),
 							...(subtaskDuration ? { durationMs: subtaskDuration } : {}),
 							...(savedMeta ?? {}),
@@ -1355,6 +1418,79 @@ export class SessionHandler implements WebviewMessageHandler {
 			SessionHandler.ACTIVE_TAB_KEY,
 		);
 		return { openTabs, activeTab };
+	}
+
+	/**
+	 * Build a transcript array from child session history events.
+	 * Used during replay to inline child messages into the parent subtask card.
+	 */
+	private buildTranscriptFromHistory(
+		history: CLIEvent[],
+	): import('../../common').SessionMessageData[] {
+		const transcript: import('../../common').SessionMessageData[] = [];
+		for (const event of history) {
+			if (event.type === 'message') {
+				const d = event.data;
+				transcript.push({
+					id: d.partId ? `msg-${d.partId}` : `child-msg-${Math.random()}`,
+					type: 'assistant',
+					content: d.content || '',
+					isDelta: false,
+					timestamp: d.timestamp || new Date().toISOString(),
+					normalizedEntry: event.normalizedEntry,
+				});
+			} else if (event.type === 'thinking') {
+				const d = event.data;
+				transcript.push({
+					id: d.partId ? `thinking-${d.partId}` : `child-thinking-${Math.random()}`,
+					type: 'thinking',
+					content: d.content || '',
+					isDelta: false,
+					isStreaming: false,
+					timestamp: d.timestamp || new Date().toISOString(),
+					...(d.durationMs ? { durationMs: d.durationMs } : {}),
+				});
+			} else if (event.type === 'tool_use') {
+				const d = event.data;
+				const toolName = d.tool || 'unknown';
+				const input = (d.input as Record<string, unknown>) || {};
+				const toolUseId = d.toolUseId || `child-tool-${Math.random()}`;
+				const filePath =
+					typeof input.filePath === 'string'
+						? input.filePath
+						: typeof input.file_path === 'string'
+							? input.file_path
+							: typeof input.path === 'string'
+								? input.path
+								: undefined;
+				transcript.push({
+					id: toolUseId,
+					type: 'tool_use',
+					toolName,
+					toolUseId,
+					rawInput: input,
+					toolInput: JSON.stringify(input),
+					filePath,
+					timestamp: d.timestamp || new Date().toISOString(),
+					normalizedEntry: event.normalizedEntry,
+				});
+			} else if (event.type === 'tool_result') {
+				const d = event.data;
+				const toolUseId = d.tool_use_id || `child-tool-${Math.random()}`;
+				transcript.push({
+					id: `res-${toolUseId}`,
+					type: 'tool_result',
+					toolName: d.tool || 'unknown',
+					toolUseId,
+					content: String(d.content || ''),
+					isError: Boolean(d.is_error),
+					title: typeof d.title === 'string' ? d.title : undefined,
+					timestamp: d.timestamp || new Date().toISOString(),
+					normalizedEntry: event.normalizedEntry,
+				});
+			}
+		}
+		return transcript;
 	}
 
 	/** Check if a tool name corresponds to a file-editing operation */

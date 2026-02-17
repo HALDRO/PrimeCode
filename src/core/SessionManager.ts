@@ -13,14 +13,27 @@ export class SessionState implements ISessionState {
 	public startedSessions = new Set<string>();
 
 	/**
-	 * Timestamp (ms) until which incoming "busy" status events from SSE
-	 * should be suppressed for the active session. Set by onStopRequest()
-	 * to prevent race conditions where delayed SSE events overwrite the
-	 * forced "idle" status after the user clicks Stop.
-	 *
-	 * Reset to 0 when the user sends a new message (onSendMessage).
+	 * @deprecated Use per-session stop guard via stopGuards map.
+	 * Kept for interface compatibility — returns max of all per-session guards.
 	 */
-	public stopGuardUntil = 0;
+	public get stopGuardUntil(): number {
+		let max = 0;
+		for (const ts of this.stopGuards.values()) {
+			if (ts > max) max = ts;
+		}
+		return max;
+	}
+	public set stopGuardUntil(_v: number) {
+		// no-op — use activateStopGuard(duration, sessionId) instead
+	}
+
+	/**
+	 * Per-session stop guards. Maps sessionId → timestamp (ms) until which
+	 * incoming "busy" status events should be suppressed for that session.
+	 * Prevents race conditions where delayed SSE events overwrite the
+	 * forced "idle" status after the user clicks Stop.
+	 */
+	private readonly stopGuards = new Map<string, number>();
 
 	constructor() {
 		this.activeSessionId = undefined;
@@ -28,19 +41,32 @@ export class SessionState implements ISessionState {
 
 	reset(newId?: string) {
 		this.activeSessionId = newId;
-		this.stopGuardUntil = 0;
+		this.stopGuards.clear();
 	}
 
-	isStopGuarded(): boolean {
-		return this.stopGuardUntil > 0 && Date.now() < this.stopGuardUntil;
+	isStopGuarded(sessionId?: string): boolean {
+		if (sessionId) {
+			const until = this.stopGuards.get(sessionId);
+			return until !== undefined && until > 0 && Date.now() < until;
+		}
+		// Fallback: check if any session is guarded
+		for (const until of this.stopGuards.values()) {
+			if (until > 0 && Date.now() < until) return true;
+		}
+		return false;
 	}
 
-	activateStopGuard(durationMs = 10_000): void {
-		this.stopGuardUntil = Date.now() + durationMs;
+	activateStopGuard(durationMs = 10_000, sessionId?: string): void {
+		if (!sessionId) return;
+		this.stopGuards.set(sessionId, Date.now() + durationMs);
 	}
 
-	clearStopGuard(): void {
-		this.stopGuardUntil = 0;
+	clearStopGuard(sessionId?: string): void {
+		if (sessionId) {
+			this.stopGuards.delete(sessionId);
+		} else {
+			this.stopGuards.clear();
+		}
 	}
 }
 

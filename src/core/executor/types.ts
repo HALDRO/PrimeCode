@@ -206,6 +206,8 @@ export interface CLIExecutor extends EventEmitter {
 	rejectQuestion?(requestId: string): Promise<void>;
 
 	getAdminInfo(): { baseUrl: string; directory: string } | null;
+	/** Returns true if the given session is currently active (busy) on the backend. */
+	isSessionActive?(sessionId: string): boolean;
 	/** Returns the SDK client instance if available (OpenCode only). */
 	getSdkClient?(): import('@opencode-ai/sdk').OpencodeClient | null;
 	listSessions(config: CLIConfig): Promise<

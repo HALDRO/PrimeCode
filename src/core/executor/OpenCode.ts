@@ -1829,6 +1829,10 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			: null;
 	}
 
+	isSessionActive(sessionId: string): boolean {
+		return this.activeSessions.has(sessionId);
+	}
+
 	getSdkClient(): OpencodeClient | null {
 		return this.sdkClient;
 	}

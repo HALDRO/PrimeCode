@@ -56,7 +56,8 @@ export type SessionEventType =
 	| 'session_info'
 	| 'auth'
 	| 'terminal'
-	| 'turn_tokens';
+	| 'turn_tokens'
+	| 'subtask_transcript';
 
 export type SessionStatus = 'idle' | 'busy' | 'error' | 'retrying';
 
@@ -123,6 +124,7 @@ export interface SessionMessageData {
 	reason?: string;
 	model?: string;
 	normalizedEntry?: import('./normalizedTypes').NormalizedEntry;
+	transcript?: import('./schemas').ConversationMessage[];
 	// Question fields (aligned with OpenCode QuestionRequest)
 	questions?: QuestionInfo[];
 	answers?: QuestionAnswer[];
@@ -250,6 +252,14 @@ export interface SessionTurnTokensPayload {
 	userMessageId?: string;
 }
 
+export interface SubtaskTranscriptPayload {
+	eventType: 'subtask_transcript';
+	/** The subtask message ID (toolUseId) in the parent session. */
+	subtaskId: string;
+	/** The child message to append to the subtask's transcript. */
+	childMessage: SessionMessageData;
+}
+
 // =============================================================================
 // Question Event Payload (OpenCode question tool)
 // =============================================================================
@@ -274,7 +284,8 @@ export type SessionEventPayload =
 	| SessionInfoPayload
 	| SessionAuthPayload
 	| SessionTerminalPayload
-	| SessionTurnTokensPayload;
+	| SessionTurnTokensPayload
+	| SubtaskTranscriptPayload;
 
 export interface SessionEventMessage {
 	type: 'session_event';

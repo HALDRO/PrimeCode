@@ -197,6 +197,26 @@ export class OutboundBridge {
 			} satisfies SessionEventMessage);
 		},
 
+		/** Append a child message to a subtask's transcript in the parent session. */
+		subtaskTranscript: (
+			parentSessionId: string,
+			subtaskId: string,
+			childMessage: SessionMessageData,
+		): void => {
+			this.send({
+				type: 'session_event',
+				targetId: parentSessionId,
+				eventType: 'subtask_transcript',
+				payload: {
+					eventType: 'subtask_transcript',
+					subtaskId,
+					childMessage,
+				},
+				timestamp: Date.now(),
+				sessionId: parentSessionId,
+			} satisfies SessionEventMessage);
+		},
+
 		/** Post session info (tools, mcp servers). */
 		info: (sessionId: string, tools: string[], mcpServers: string[]): void => {
 			this.send({
