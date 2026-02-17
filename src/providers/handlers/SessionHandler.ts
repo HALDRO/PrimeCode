@@ -3,12 +3,22 @@ import type {
 	ConversationIndexEntry,
 	OpenCodeProviderData,
 	SessionMessageData,
+	SessionMessageUpdate,
 	TotalStats,
 } from '../../common';
 import { generateId } from '../../common';
 import { IMPROVE_PROMPT_DEFAULT_TEMPLATE } from '../../common/promptImprover';
 import type { CommandOf, WebviewCommand } from '../../common/protocol';
 import { isFileEditTool } from '../../common/toolRegistry';
+import {
+	buildTranscript,
+	extractFilePath,
+	mapMessageEvent,
+	mapThinkingEvent,
+	mapToolResultEvent,
+	mapToolUseEvent,
+	mapUserEvent,
+} from '../../core/eventToMessage';
 import { LogNormalizer } from '../../core/executor/LogNormalizer';
 import type { CLIEvent } from '../../core/executor/types';
 import { logger } from '../../utils/logger';
@@ -94,7 +104,10 @@ export class SessionHandler implements WebviewMessageHandler {
 	// Public Methods for ChatProvider interaction (Event Reflection)
 	// =============================================================================
 
-	public postSessionMessage(message: SessionMessageData, sessionId?: string): void {
+	public postSessionMessage(
+		message: SessionMessageData | SessionMessageUpdate,
+		sessionId?: string,
+	): void {
 		const targetId = sessionId;
 		if (!targetId) {
 			logger.warn('[SessionHandler] postSessionMessage dropped: no sessionId', {
@@ -431,9 +444,10 @@ export class SessionHandler implements WebviewMessageHandler {
 						id: `hist-subtask-${child.id}`,
 						type: 'subtask',
 						agent: 'subagent',
+						prompt: '',
 						description: child.title || 'Subtask',
 						status: 'completed',
-						transcript: transcript as import('../../common').SessionMessageData['transcript'],
+						transcript: transcript as import('../../common/schemas').ConversationMessage[],
 						timestamp: new Date().toISOString(),
 						...(duration ? { durationMs: duration } : {}),
 						...(childTokens ? { childTokens } : {}),
@@ -868,16 +882,8 @@ export class SessionHandler implements WebviewMessageHandler {
 
 		for (const event of history) {
 			if (event.type === 'message') {
-				const data = event.data;
 				this.postSessionMessage(
-					{
-						id: data.partId ? `msg-${data.partId}` : `hist-msg-${Math.random()}`,
-						type: 'assistant',
-						content: data.content || '',
-						isDelta: false,
-						timestamp: data.timestamp || new Date().toISOString(),
-						normalizedEntry: event.normalizedEntry,
-					},
+					mapMessageEvent(event.data, { idPrefix: 'hist', normalizedEntry: event.normalizedEntry }),
 					sessionId,
 				);
 				continue;
@@ -886,27 +892,15 @@ export class SessionHandler implements WebviewMessageHandler {
 			if (event.type === 'normalized_log') {
 				const data = event.data;
 				if (data.role === 'user') {
-					const userMsgId =
-						data.messageId?.trim() || `msg-local-${Math.random().toString(36).slice(2, 9)}`;
-					const { attachments } = data;
-					this.postSessionMessage(
-						{
-							id: userMsgId,
-							type: 'user',
-							content: data.content || '',
-							timestamp: data.timestamp || new Date().toISOString(),
-							normalizedEntry: event.normalizedEntry,
-							...(attachments ? { attachments } : {}),
-						},
-						sessionId,
-					);
+					const userMsg = mapUserEvent(data, { normalizedEntry: event.normalizedEntry });
+					this.postSessionMessage(userMsg, sessionId);
 
 					// Emit checkpoint so the restore button appears for replayed user messages
 					const replayCommitId = generateId('checkpoint');
 					this.context.registerCheckpoint?.(replayCommitId, {
 						sessionId,
-						messageId: userMsgId,
-						associatedMessageId: userMsgId,
+						messageId: userMsg.id,
+						associatedMessageId: userMsg.id,
 						isOpenCode: true,
 					});
 
@@ -917,7 +911,7 @@ export class SessionHandler implements WebviewMessageHandler {
 							sha: replayCommitId,
 							message: 'Checkpoint before message',
 							timestamp: data.timestamp || new Date().toISOString(),
-							associatedMessageId: userMsgId,
+							associatedMessageId: userMsg.id,
 						},
 					});
 				}
@@ -925,19 +919,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			}
 
 			if (event.type === 'thinking') {
-				const data = event.data;
-				this.postSessionMessage(
-					{
-						id: data.partId ? `thinking-${data.partId}` : `hist-thinking-${Math.random()}`,
-						type: 'thinking',
-						content: data.content || '',
-						isDelta: false,
-						isStreaming: false,
-						timestamp: data.timestamp || new Date().toISOString(),
-						...(data.durationMs ? { durationMs: data.durationMs } : {}),
-					},
-					sessionId,
-				);
+				this.postSessionMessage(mapThinkingEvent(event.data, { idPrefix: 'hist' }), sessionId);
 				continue;
 			}
 
@@ -946,14 +928,7 @@ export class SessionHandler implements WebviewMessageHandler {
 				const toolName = data.tool || 'unknown';
 				const input = (data.input as Record<string, unknown>) || {};
 				const toolUseId = data.toolUseId || `hist-tool-${Math.random()}`;
-				const filePathFromInput =
-					typeof input.filePath === 'string'
-						? input.filePath
-						: typeof input.file_path === 'string'
-							? input.file_path
-							: typeof input.path === 'string'
-								? input.path
-								: undefined;
+				const filePathFromInput = extractFilePath(input);
 
 				if (options?.mode === 'parent' && toolName === 'task') {
 					const graph = this.context.sessionGraph;
@@ -976,7 +951,7 @@ export class SessionHandler implements WebviewMessageHandler {
 					const transcript = childHistory
 						? (this.buildTranscriptFromHistory(
 								childHistory,
-							) as unknown as import('../../common').SessionMessageData['transcript'])
+							) as unknown as import('../../common/schemas').ConversationMessage[])
 						: undefined;
 
 					this.postSessionMessage(
@@ -998,20 +973,11 @@ export class SessionHandler implements WebviewMessageHandler {
 					continue;
 				}
 
-				this.postSessionMessage(
-					{
-						id: toolUseId,
-						type: 'tool_use',
-						toolName,
-						toolUseId,
-						rawInput: input,
-						toolInput: JSON.stringify(input),
-						filePath: filePathFromInput,
-						timestamp: data.timestamp || new Date().toISOString(),
-						normalizedEntry: event.normalizedEntry,
-					},
-					sessionId,
-				);
+				const toolUseMsg = mapToolUseEvent(data, {
+					idPrefix: 'hist',
+					normalizedEntry: event.normalizedEntry,
+				});
+				this.postSessionMessage(toolUseMsg, sessionId);
 
 				// Emit file change event for edit tools during replay
 				// so ChangedFilesPanel is restored after extension restart
@@ -1053,10 +1019,6 @@ export class SessionHandler implements WebviewMessageHandler {
 				const data = event.data;
 				const toolName = data.tool || 'unknown';
 				const toolUseId = data.tool_use_id || `hist-tool-${Math.random()}`;
-				const metadata =
-					data.metadata && typeof data.metadata === 'object'
-						? (data.metadata as Record<string, unknown>)
-						: undefined;
 
 				if (options?.mode === 'parent' && toolName === 'task') {
 					const graph = this.context.sessionGraph;
@@ -1085,18 +1047,7 @@ export class SessionHandler implements WebviewMessageHandler {
 				}
 
 				this.postSessionMessage(
-					{
-						id: `res-${toolUseId || Math.random()}`,
-						type: 'tool_result',
-						toolName,
-						toolUseId,
-						content: String(data.content || ''),
-						isError: Boolean(data.is_error),
-						title: typeof data.title === 'string' ? data.title : undefined,
-						metadata,
-						timestamp: data.timestamp || new Date().toISOString(),
-						normalizedEntry: event.normalizedEntry,
-					},
+					mapToolResultEvent(data, { idPrefix: 'hist', normalizedEntry: event.normalizedEntry }),
 					sessionId,
 				);
 				continue;
@@ -1474,70 +1425,7 @@ export class SessionHandler implements WebviewMessageHandler {
 	private buildTranscriptFromHistory(
 		history: CLIEvent[],
 	): import('../../common').SessionMessageData[] {
-		const transcript: import('../../common').SessionMessageData[] = [];
-		for (const event of history) {
-			if (event.type === 'message') {
-				const d = event.data;
-				transcript.push({
-					id: d.partId ? `msg-${d.partId}` : `child-msg-${Math.random()}`,
-					type: 'assistant',
-					content: d.content || '',
-					isDelta: false,
-					timestamp: d.timestamp || new Date().toISOString(),
-					normalizedEntry: event.normalizedEntry,
-				});
-			} else if (event.type === 'thinking') {
-				const d = event.data;
-				transcript.push({
-					id: d.partId ? `thinking-${d.partId}` : `child-thinking-${Math.random()}`,
-					type: 'thinking',
-					content: d.content || '',
-					isDelta: false,
-					isStreaming: false,
-					timestamp: d.timestamp || new Date().toISOString(),
-					...(d.durationMs ? { durationMs: d.durationMs } : {}),
-				});
-			} else if (event.type === 'tool_use') {
-				const d = event.data;
-				const toolName = d.tool || 'unknown';
-				const input = (d.input as Record<string, unknown>) || {};
-				const toolUseId = d.toolUseId || `child-tool-${Math.random()}`;
-				const filePath =
-					typeof input.filePath === 'string'
-						? input.filePath
-						: typeof input.file_path === 'string'
-							? input.file_path
-							: typeof input.path === 'string'
-								? input.path
-								: undefined;
-				transcript.push({
-					id: toolUseId,
-					type: 'tool_use',
-					toolName,
-					toolUseId,
-					rawInput: input,
-					toolInput: JSON.stringify(input),
-					filePath,
-					timestamp: d.timestamp || new Date().toISOString(),
-					normalizedEntry: event.normalizedEntry,
-				});
-			} else if (event.type === 'tool_result') {
-				const d = event.data;
-				const toolUseId = d.tool_use_id || `child-tool-${Math.random()}`;
-				transcript.push({
-					id: `res-${toolUseId}`,
-					type: 'tool_result',
-					toolName: d.tool || 'unknown',
-					toolUseId,
-					content: String(d.content || ''),
-					isError: Boolean(d.is_error),
-					title: typeof d.title === 'string' ? d.title : undefined,
-					timestamp: d.timestamp || new Date().toISOString(),
-					normalizedEntry: event.normalizedEntry,
-				});
-			}
-		}
-		return transcript;
+		return buildTranscript(history, 'child');
 	}
 
 	/** Check if a tool name corresponds to a file-editing operation */

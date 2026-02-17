@@ -14,6 +14,7 @@ import type {
 	SessionEventMessage,
 	SessionLifecycleMessage,
 	SessionMessageData,
+	SessionMessageUpdate,
 	SessionRestorePayload,
 	SessionStatus,
 	TotalStats,
@@ -77,13 +78,17 @@ export class OutboundBridge {
 
 	public readonly session = {
 		/** Post a session message (assistant, user, tool_use, tool_result, etc.) */
-		message: (targetId: string, message: SessionMessageData, sessionId?: string): void => {
+		message: (
+			targetId: string,
+			message: SessionMessageData | SessionMessageUpdate,
+			sessionId?: string,
+		): void => {
 			const sid = sessionId ?? targetId;
 			this.send({
 				type: 'session_event',
 				targetId,
 				eventType: 'message',
-				payload: { eventType: 'message', message },
+				payload: { eventType: 'message', message: message as SessionMessageData },
 				timestamp: Date.now(),
 				sessionId: sid,
 				normalizedEntry: message.normalizedEntry,

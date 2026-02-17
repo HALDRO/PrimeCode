@@ -242,11 +242,11 @@ export class ToolHandler implements WebviewMessageHandler {
 		if (targetSessionId) {
 			this.context.bridge.session.message(targetSessionId, {
 				id: `question-${requestId}`,
-				type: 'question' as import('../../common/protocol').SessionMessageType,
+				type: 'question' as const,
 				resolved: true,
 				answers,
 				timestamp: new Date().toISOString(),
-			});
+			} satisfies import('../../common').SessionMessageUpdate);
 		}
 	}
 
@@ -264,10 +264,10 @@ export class ToolHandler implements WebviewMessageHandler {
 		if (targetSessionId) {
 			this.context.bridge.session.message(targetSessionId, {
 				id: `question-${requestId}`,
-				type: 'question' as import('../../common/protocol').SessionMessageType,
+				type: 'question' as const,
 				resolved: true,
 				timestamp: new Date().toISOString(),
-			});
+			} satisfies import('../../common').SessionMessageUpdate);
 		}
 	}
 }

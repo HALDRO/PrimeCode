@@ -5,25 +5,10 @@
  * hard boundaries (heavy tools, end of stream) correctly break groups.
  */
 
-import { describe, expect, it, vi } from 'vitest';
-
-// Mock UI dependencies that access DOM at module level
-vi.mock('../ui', () => ({
-	CollapseOverlay: () => null,
-	Badge: () => null,
-	PathChip: () => null,
-}));
-
-vi.mock('../../utils/markdown', () => ({
-	Markdown: () => null,
-}));
-
-vi.mock('../../utils/vscode', () => ({
-	useVSCode: () => ({ postMessage: vi.fn() }),
-}));
+import { describe, expect, it } from 'vitest';
 
 import type { Message } from '../../store/chatStore';
-import { groupToolMessages } from './SimpleTool';
+import { groupToolMessages } from './toolGrouping';
 
 // --- Helpers ---
 
@@ -132,8 +117,8 @@ describe('groupToolMessages', () => {
 		});
 	});
 
-	describe('intermediate messages are NOT absorbed (no content loss)', () => {
-		it('should keep assistant message between tool runs as separate item', () => {
+	describe('bridge absorption: short assistant/thinking messages are absorbed into groups', () => {
+		it('should absorb short assistant between tool runs into a single group', () => {
 			const msgs = [
 				toolUse('1'),
 				toolResult('1r', 'tu-1'),
@@ -145,13 +130,15 @@ describe('groupToolMessages', () => {
 				assistant('a2', 'All done.'),
 			];
 			const result = groupToolMessages(msgs, NO_MCP);
-			// First 2 tools (below threshold) + assistant + 1 tool (below threshold) + assistant
-			// No grouping because each run is below threshold
-			expect(result).toHaveLength(8);
-			expect(result.every(r => !Array.isArray(r))).toBe(true);
+			// Bridge absorption: short assistant is absorbed, creating one group of 7 (4 tools + 2 results + 1 assistant bridge) + trailing assistant
+			expect(result).toHaveLength(2);
+			expect(Array.isArray(result[0])).toBe(true);
+			// Group contains all 3 tool_use + 3 tool_result + 1 absorbed assistant
+			expect((result[0] as Message[]).length).toBe(7);
+			expect((result[1] as Message).type).toBe('assistant');
 		});
 
-		it('should keep thinking message between tool runs as separate item', () => {
+		it('should absorb thinking between tool runs into the group', () => {
 			const msgs = [
 				toolUse('1'),
 				toolResult('1r', 'tu-1'),
@@ -165,17 +152,14 @@ describe('groupToolMessages', () => {
 				assistant('a1', 'Done.'),
 			];
 			const result = groupToolMessages(msgs, NO_MCP);
-			// Group of 3 tools (6 msgs), then thinking, then tool_use + tool_result (below threshold), then assistant
-			expect(result).toHaveLength(5);
+			// Bridge absorption: thinking is absorbed, single group of 9 (4 tools + 4 results + 1 thinking) + trailing assistant
+			expect(result).toHaveLength(2);
 			expect(Array.isArray(result[0])).toBe(true);
-			expect((result[0] as Message[]).length).toBe(6);
-			expect((result[1] as Message).type).toBe('thinking');
-			expect((result[2] as Message).type).toBe('tool_use');
-			expect((result[3] as Message).type).toBe('tool_result');
-			expect((result[4] as Message).type).toBe('assistant');
+			expect((result[0] as Message[]).length).toBe(9);
+			expect((result[1] as Message).type).toBe('assistant');
 		});
 
-		it('should create separate groups when split by intermediate text', () => {
+		it('should absorb short assistant between two tool groups into one merged group', () => {
 			const msgs = [
 				toolUse('1'),
 				toolResult('1r', 'tu-1'),
@@ -193,14 +177,11 @@ describe('groupToolMessages', () => {
 				assistant('a2', 'Done.'),
 			];
 			const result = groupToolMessages(msgs, NO_MCP);
-			// Group1 (3 tools), assistant, Group2 (3 tools), assistant
-			expect(result).toHaveLength(4);
+			// Bridge absorption: short assistant absorbed, one merged group of 13 + trailing assistant
+			expect(result).toHaveLength(2);
 			expect(Array.isArray(result[0])).toBe(true);
-			expect((result[0] as Message[]).length).toBe(6);
+			expect((result[0] as Message[]).length).toBe(13);
 			expect((result[1] as Message).type).toBe('assistant');
-			expect(Array.isArray(result[2])).toBe(true);
-			expect((result[2] as Message[]).length).toBe(6);
-			expect((result[3] as Message).type).toBe('assistant');
 		});
 
 		it('should keep assistant before heavy tool as separate item', () => {
@@ -281,8 +262,9 @@ describe('groupToolMessages', () => {
 			expect(result.every(r => !Array.isArray(r))).toBe(true);
 		});
 
-		it('should handle single tool with intermediate then more tools (no absorption)', () => {
-			// Intermediate message breaks the group — two separate runs
+		it('should absorb short assistant bridging single tool to more tools into one group', () => {
+			// Bridge absorption: short assistant between 1 tool and 2 more tools
+			// Total 3 tool_use → meets threshold, absorbed into single group
 			const msgs = [
 				toolUse('1'),
 				toolResult('1r', 'tu-1'),
@@ -294,9 +276,11 @@ describe('groupToolMessages', () => {
 				assistant('a2', 'Done.'),
 			];
 			const result = groupToolMessages(msgs, NO_MCP);
-			// tool_use + tool_result (individual) + assistant + tool_use + tool_result + tool_use + tool_result (individual) + assistant
-			expect(result).toHaveLength(8);
-			expect(result.every(r => !Array.isArray(r))).toBe(true);
+			// Bridge absorption merges all into one group of 7 + trailing assistant
+			expect(result).toHaveLength(2);
+			expect(Array.isArray(result[0])).toBe(true);
+			expect((result[0] as Message[]).length).toBe(7);
+			expect((result[1] as Message).type).toBe('assistant');
 		});
 	});
 
@@ -338,7 +322,7 @@ describe('groupToolMessages', () => {
 			expect(result.every(r => !Array.isArray(r))).toBe(true);
 		});
 
-		it('should NOT absorb intermediate messages when streaming (no content loss)', () => {
+		it('should absorb short assistant bridge when streaming and group trailing tools', () => {
 			const msgs = [
 				toolUse('1'),
 				toolResult('1r', 'tu-1'),
@@ -349,10 +333,11 @@ describe('groupToolMessages', () => {
 				toolResult('3r', 'tu-3'),
 			];
 			const result = groupToolMessages(msgs, NO_MCP, true);
-			// Intermediate message breaks the group — no absorption even during streaming
-			// First 2 tools (below threshold) + assistant + trailing 1 tool (below threshold)
-			expect(result).toHaveLength(7);
-			expect(result.every(r => !Array.isArray(r))).toBe(true);
+			// Bridge absorption: short assistant absorbed, 3 tool_use meets threshold,
+			// streaming allows trailing group → single group of 7
+			expect(result).toHaveLength(1);
+			expect(Array.isArray(result[0])).toBe(true);
+			expect((result[0] as Message[]).length).toBe(7);
 		});
 
 		it('should still flush non-trailing groups normally when streaming', () => {

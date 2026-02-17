@@ -23,6 +23,7 @@ export type {
 	SessionMessagePayload,
 	SessionMessageRemovedPayload,
 	SessionMessagesReloadPayload,
+	SessionMessageUpdate,
 	SessionRestorePayload,
 	SessionStatsPayload,
 	SessionStatus,

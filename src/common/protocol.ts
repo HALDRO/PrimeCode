@@ -74,26 +74,21 @@ export type SessionMessageType =
 	| 'interrupted'
 	| 'question';
 
-export interface SessionMessageData {
+// =============================================================================
+// SessionMessageData — Discriminated Union by `type`
+// =============================================================================
+
+/** Common fields shared by all session message variants. */
+interface SessionMessageBase {
 	id: string;
-	type: SessionMessageType;
-	content?: string;
-	partId?: string;
-	isStreaming?: boolean;
-	isDelta?: boolean;
-	hidden?: boolean;
 	timestamp?: string;
-	toolName?: string;
-	toolUseId?: string;
-	toolInput?: string;
-	rawInput?: Record<string, unknown>;
-	filePath?: string;
-	isError?: boolean;
-	isRunning?: boolean;
-	streamingOutput?: string;
-	estimatedTokens?: number;
-	title?: string;
-	durationMs?: number;
+	normalizedEntry?: import('./normalizedTypes').NormalizedEntry;
+}
+
+export interface UserMessageData extends SessionMessageBase {
+	type: 'user';
+	content: string;
+	model?: string;
 	attachments?: {
 		files?: string[];
 		codeSnippets?: Array<{
@@ -104,26 +99,111 @@ export interface SessionMessageData {
 		}>;
 		images?: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
 	};
-	metadata?: Record<string, unknown>;
-	agent?: string;
-	prompt?: string;
-	description?: string;
-	command?: string;
-	status?: 'running' | 'completed' | 'error' | 'cancelled';
-	result?: string;
-	messageID?: string;
+}
+
+export interface AssistantMessageData extends SessionMessageBase {
+	type: 'assistant';
+	content: string;
+	partId?: string;
+	hidden?: boolean;
 	contextId?: string;
-	startTime?: string | number;
+	isStreaming?: boolean;
+	isDelta?: boolean;
+}
+
+export interface ThinkingMessageData extends SessionMessageBase {
+	type: 'thinking';
+	content?: string;
+	partId?: string;
 	reasoningTokens?: number;
-	requestId?: string;
-	tool?: string | { messageID: string; callID: string };
-	input?: Record<string, unknown>;
+	startTime?: string | number;
+	durationMs?: number;
+	isStreaming?: boolean;
+	isDelta?: boolean;
+	hidden?: boolean;
+}
+
+export interface ToolUseMessageData extends SessionMessageBase {
+	type: 'tool_use';
+	toolName: string;
+	toolUseId: string;
+	partId?: string;
+	toolInput?: string;
+	rawInput?: Record<string, unknown>;
+	filePath?: string;
+	streamingOutput?: string;
+	isRunning?: boolean;
+	hidden?: boolean;
+	metadata?: Record<string, unknown>;
+	contextId?: string;
+}
+
+export interface ToolResultMessageData extends SessionMessageBase {
+	type: 'tool_result';
+	toolName: string;
+	toolUseId: string;
+	content: string;
+	isError: boolean;
+	partId?: string;
+	estimatedTokens?: number;
+	hidden?: boolean;
+	title?: string;
+	durationMs?: number;
+	attachments?: Array<{
+		id: string;
+		mime: string;
+		filename?: string;
+		url?: string;
+	}>;
+	metadata?: Record<string, unknown>;
+	contextId?: string;
+}
+
+export interface ErrorMessageData extends SessionMessageBase {
+	type: 'error';
+	content: string;
+	isError?: boolean;
+}
+
+export interface InterruptedMessageData extends SessionMessageBase {
+	type: 'interrupted';
+	content: string;
+	reason?: string;
+}
+
+export interface AccessRequestMessageData extends SessionMessageBase {
+	type: 'access_request';
+	requestId: string;
+	tool: string | { messageID: string; callID: string };
+	input: Record<string, unknown>;
 	pattern?: string;
+	toolUseId?: string;
 	resolved?: boolean;
 	approved?: boolean;
-	reason?: string;
-	model?: string;
-	normalizedEntry?: import('./normalizedTypes').NormalizedEntry;
+	metadata?: Record<string, unknown>;
+	childSessionId?: string;
+}
+
+export interface SubtaskMessageData extends SessionMessageBase {
+	type: 'subtask';
+	agent: string;
+	prompt: string;
+	description: string;
+	command?: string;
+	status: 'running' | 'completed' | 'error' | 'cancelled';
+	partId?: string;
+	toolUseId?: string;
+	toolName?: string;
+	toolInput?: string;
+	rawInput?: Record<string, unknown>;
+	isRunning?: boolean;
+	isError?: boolean;
+	content?: string;
+	contextId?: string;
+	result?: string;
+	messageID?: string;
+	startTime?: string | number;
+	durationMs?: number;
 	transcript?: import('./schemas').ConversationMessage[];
 	childTokens?: {
 		input: number;
@@ -133,10 +213,49 @@ export interface SessionMessageData {
 		durationMs?: number;
 	};
 	childModelId?: string;
-	// Question fields (aligned with OpenCode QuestionRequest)
-	questions?: QuestionInfo[];
+}
+
+export interface SystemNoticeMessageData extends SessionMessageBase {
+	type: 'system_notice';
+	content: string;
+}
+
+export interface QuestionMessageData extends SessionMessageBase {
+	type: 'question';
+	requestId: string;
+	questions: QuestionInfo[];
+	tool?: string | { messageID: string; callID: string };
+	resolved?: boolean;
 	answers?: QuestionAnswer[];
 }
+
+/**
+ * Discriminated union of all session message types.
+ * Use `msg.type` to narrow to a specific variant.
+ */
+export type SessionMessageData =
+	| UserMessageData
+	| AssistantMessageData
+	| ThinkingMessageData
+	| ToolUseMessageData
+	| ToolResultMessageData
+	| ErrorMessageData
+	| InterruptedMessageData
+	| AccessRequestMessageData
+	| SubtaskMessageData
+	| SystemNoticeMessageData
+	| QuestionMessageData;
+
+/**
+ * Partial update keyed by `id` + `type`. Used when merging incremental
+ * updates into an existing message (e.g. updating childTokens on a subtask).
+ * The webview's `mergeOrAddMessage` applies `Object.assign(existing, update)`.
+ */
+export type SessionMessageUpdate = {
+	[K in SessionMessageData['type']]: { id: string; type: K; timestamp?: string } & Partial<
+		Omit<Extract<SessionMessageData, { type: K }>, 'id' | 'type'>
+	>;
+}[SessionMessageData['type']];
 
 // =============================================================================
 // Session Event Payloads
