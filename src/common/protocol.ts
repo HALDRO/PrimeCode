@@ -125,6 +125,14 @@ export interface SessionMessageData {
 	model?: string;
 	normalizedEntry?: import('./normalizedTypes').NormalizedEntry;
 	transcript?: import('./schemas').ConversationMessage[];
+	childTokens?: {
+		input: number;
+		output: number;
+		total: number;
+		cacheRead?: number;
+		durationMs?: number;
+	};
+	childModelId?: string;
 	// Question fields (aligned with OpenCode QuestionRequest)
 	questions?: QuestionInfo[];
 	answers?: QuestionAnswer[];

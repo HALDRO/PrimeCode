@@ -243,6 +243,18 @@ function mergeOrAddMessage(messages: Message[], incoming: Message): void {
 					agent: existing.agent,
 					startTime: existing.startTime,
 					transcript: existing.transcript,
+					durationMs: existing.durationMs,
+					command: (existing as Record<string, unknown>).command as string | undefined,
+					childTokens: (existing as Record<string, unknown>).childTokens as
+						| {
+								input: number;
+								output: number;
+								total: number;
+								cacheRead?: number;
+								durationMs?: number;
+						  }
+						| undefined,
+					childModelId: (existing as Record<string, unknown>).childModelId as string | undefined,
 				}
 			: undefined;
 
@@ -258,6 +270,14 @@ function mergeOrAddMessage(messages: Message[], incoming: Message): void {
 			existing.startTime = preservedSubtaskMeta.startTime;
 		if (!existing.transcript && preservedSubtaskMeta.transcript)
 			existing.transcript = preservedSubtaskMeta.transcript;
+		if (!existing.durationMs && preservedSubtaskMeta.durationMs)
+			existing.durationMs = preservedSubtaskMeta.durationMs;
+		const ex = existing as Record<string, unknown>;
+		if (!ex.command && preservedSubtaskMeta.command) ex.command = preservedSubtaskMeta.command;
+		if (!ex.childTokens && preservedSubtaskMeta.childTokens)
+			ex.childTokens = preservedSubtaskMeta.childTokens;
+		if (!ex.childModelId && preservedSubtaskMeta.childModelId)
+			ex.childModelId = preservedSubtaskMeta.childModelId;
 	}
 	if (preservedStartTime !== undefined && 'startTime' in existing) {
 		(existing as { startTime: number }).startTime = preservedStartTime as number;
@@ -500,12 +520,12 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 								[...targetSession.messages].reverse().find(m => m.type === 'user')?.id;
 							if (turnMsgId) {
 								const existing = targetSession.turnTokens[turnMsgId];
+								// Accumulate deltas: turn_tokens now emit per-step deltas (not cumulative)
 								targetSession.turnTokens[turnMsgId] = {
-									input: t.inputTokens,
-									output: t.outputTokens,
-									total: t.totalTokens,
-									cacheRead: t.cacheReadTokens,
-									// Accumulate duration for live streaming (multiple turn_tokens per turn)
+									input: (existing?.input ?? 0) + t.inputTokens,
+									output: (existing?.output ?? 0) + t.outputTokens,
+									total: (existing?.total ?? 0) + t.totalTokens,
+									cacheRead: (existing?.cacheRead ?? 0) + t.cacheReadTokens,
 									durationMs: t.durationMs
 										? (existing?.durationMs ?? 0) + t.durationMs
 										: existing?.durationMs,

@@ -352,6 +352,16 @@ export const ConversationMessageSchema = Type.Union([
 		transcript: Type.Optional(Type.Array(Type.Any())),
 		startTime: Type.Optional(Type.String()),
 		durationMs: Type.Optional(Type.Number()),
+		childTokens: Type.Optional(
+			Type.Object({
+				input: Type.Number(),
+				output: Type.Number(),
+				total: Type.Number(),
+				cacheRead: Type.Optional(Type.Number()),
+				durationMs: Type.Optional(Type.Number()),
+			}),
+		),
+		childModelId: Type.Optional(Type.String()),
 	}),
 	Type.Object({
 		id: Type.Optional(Type.String()),
@@ -393,6 +403,16 @@ export const SubtaskMessageSchema = Type.Object({
 	transcript: Type.Optional(Type.Array(ConversationMessageSchema)),
 	startTime: Type.Optional(Type.String()),
 	durationMs: Type.Optional(Type.Number()),
+	childTokens: Type.Optional(
+		Type.Object({
+			input: Type.Number(),
+			output: Type.Number(),
+			total: Type.Number(),
+			cacheRead: Type.Optional(Type.Number()),
+			durationMs: Type.Optional(Type.Number()),
+		}),
+	),
+	childModelId: Type.Optional(Type.String()),
 });
 export type SubtaskMessage = Static<typeof SubtaskMessageSchema>;
 

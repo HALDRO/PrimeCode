@@ -372,6 +372,10 @@ export class SessionHandler implements WebviewMessageHandler {
 		// Child events are aggregated into parent subtask transcripts (no separate buckets).
 		const childHistories = new Map<string, CLIEvent[]>();
 		const childDurations = new Map<string, number>();
+		const childTokensMap = new Map<
+			string,
+			{ input: number; output: number; total: number; cacheRead: number }
+		>();
 		for (const child of childSessions) {
 			const childHistory = await this.context.cli.getHistory(child.id, config);
 			childHistories.set(child.id, childHistory);
@@ -384,6 +388,34 @@ export class SessionHandler implements WebviewMessageHandler {
 					const duration = new Date(lastTs).getTime() - new Date(firstTs).getTime();
 					if (duration > 0) childDurations.set(child.id, duration);
 				}
+
+				// Aggregate turn_tokens from child history for childTokens on subtask cards
+				let totalInput = 0;
+				let totalOutput = 0;
+				let totalTokens = 0;
+				let totalCacheRead = 0;
+				for (const ev of childHistory) {
+					if (ev.type === 'turn_tokens') {
+						const d = ev.data as {
+							inputTokens?: number;
+							outputTokens?: number;
+							totalTokens?: number;
+							cacheReadTokens?: number;
+						};
+						totalInput += d.inputTokens ?? 0;
+						totalOutput += d.outputTokens ?? 0;
+						totalTokens += d.totalTokens ?? 0;
+						totalCacheRead += d.cacheReadTokens ?? 0;
+					}
+				}
+				if (totalTokens > 0) {
+					childTokensMap.set(child.id, {
+						input: totalInput,
+						output: totalOutput,
+						total: totalTokens,
+						cacheRead: totalCacheRead,
+					});
+				}
 			}
 		}
 
@@ -391,6 +423,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		if (taskToolUseIds.length === 0 && childSessions.length > 0) {
 			for (const child of childSessions) {
 				const duration = childDurations.get(child.id);
+				const childTokens = childTokensMap.get(child.id);
 				const childHistory = childHistories.get(child.id) || [];
 				const transcript = this.buildTranscriptFromHistory(childHistory) as unknown[];
 				this.postSessionMessage(
@@ -403,6 +436,7 @@ export class SessionHandler implements WebviewMessageHandler {
 						transcript: transcript as import('../../common').SessionMessageData['transcript'],
 						timestamp: new Date().toISOString(),
 						...(duration ? { durationMs: duration } : {}),
+						...(childTokens ? { childTokens } : {}),
 					},
 					sessionId,
 				);
@@ -419,6 +453,7 @@ export class SessionHandler implements WebviewMessageHandler {
 				parentSessionId: sessionId,
 				childDurations,
 				childHistories,
+				childTokensMap,
 			});
 		}
 	}
@@ -822,6 +857,10 @@ export class SessionHandler implements WebviewMessageHandler {
 			parentSessionId?: string;
 			childDurations?: Map<string, number>;
 			childHistories?: Map<string, CLIEvent[]>;
+			childTokensMap?: Map<
+				string,
+				{ input: number; output: number; total: number; cacheRead: number }
+			>;
 		},
 	): void {
 		// Track subtask metadata from tool_use so tool_result can carry it forward
@@ -922,6 +961,9 @@ export class SessionHandler implements WebviewMessageHandler {
 					const subtaskDuration = childSessionId
 						? options.childDurations?.get(childSessionId)
 						: undefined;
+					const childTokens = childSessionId
+						? options.childTokensMap?.get(childSessionId)
+						: undefined;
 					const agent = typeof input.subagent_type === 'string' ? input.subagent_type : 'subagent';
 					const prompt = typeof input.prompt === 'string' ? input.prompt : '';
 					const description = typeof input.description === 'string' ? input.description : 'Subtask';
@@ -949,6 +991,7 @@ export class SessionHandler implements WebviewMessageHandler {
 							timestamp: data.timestamp || new Date().toISOString(),
 							startTime: data.timestamp || new Date().toISOString(),
 							...(subtaskDuration ? { durationMs: subtaskDuration } : {}),
+							...(childTokens ? { childTokens } : {}),
 						},
 						sessionId,
 					);
@@ -1021,6 +1064,9 @@ export class SessionHandler implements WebviewMessageHandler {
 					const subtaskDuration = childSessionId
 						? options.childDurations?.get(childSessionId)
 						: undefined;
+					const childTokens = childSessionId
+						? options.childTokensMap?.get(childSessionId)
+						: undefined;
 					const savedMeta = subtaskMeta.get(toolUseId);
 					this.postSessionMessage(
 						{
@@ -1030,6 +1076,7 @@ export class SessionHandler implements WebviewMessageHandler {
 							result: String(data.content || ''),
 							timestamp: data.timestamp || new Date().toISOString(),
 							...(subtaskDuration ? { durationMs: subtaskDuration } : {}),
+							...(childTokens ? { childTokens } : {}),
 							...(savedMeta ?? {}),
 						},
 						sessionId,

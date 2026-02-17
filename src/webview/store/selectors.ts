@@ -83,6 +83,20 @@ export const useTotalStats = () =>
 		useShallow((state: ChatState) => getActiveSession(state)?.totalStats ?? DEFAULT_TOTAL_STATS),
 	);
 
+/** Aggregate subagent token totals from subtask messages in active session */
+export const useSubagentTokenTotals = () =>
+	useChatStore((state: ChatState) => {
+		const messages = getActiveSession(state)?.messages ?? EMPTY_MESSAGES;
+		let total = 0;
+		for (const msg of messages) {
+			if (msg.type === 'subtask') {
+				const ct = (msg as Record<string, unknown>).childTokens as { total?: number } | undefined;
+				if (ct?.total) total += ct.total;
+			}
+		}
+		return total;
+	});
+
 /** Select active model ID reported by the backend */
 export const useActiveModelID = () =>
 	useChatStore((state: ChatState) => getActiveSession(state)?.activeModelID);

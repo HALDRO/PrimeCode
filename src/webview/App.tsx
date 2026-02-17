@@ -185,8 +185,9 @@ export const App: React.FC = () => {
 				revertedFromMessageId,
 				changedFiles,
 				turnTokens,
+				isProcessing,
 			),
-		[messages, mcpServerNames, revertedFromMessageId, changedFiles, turnTokens],
+		[messages, mcpServerNames, revertedFromMessageId, changedFiles, turnTokens, isProcessing],
 	);
 
 	const virtuosoContext: VirtuosoContext = useMemo(

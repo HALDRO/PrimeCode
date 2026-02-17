@@ -29,6 +29,7 @@ import { AccessGate } from './AccessGate';
 import { QuestionCard } from './QuestionCard';
 import {
 	InlineToolLine,
+	liveToolGroups,
 	SimpleTool,
 	shouldCollapseGroupedItem,
 	ThinkingMessage,
@@ -129,7 +130,7 @@ const SubtaskItem: React.FC<{
 
 	// Live elapsed timer while subtask is running
 	const isRunning = message.status === 'running';
-	const liveElapsed = useElapsedTimer(isRunning);
+	const liveElapsed = useElapsedTimer(isRunning, message.startTime);
 	const displayDuration = isRunning ? liveElapsed : totalDurationMs;
 
 	// Agent display name for the header
@@ -227,7 +228,7 @@ const SubtaskItem: React.FC<{
 					}
 				>
 					{metaBlock}
-					{isRunning && message.prompt && message.prompt !== message.description && (
+					{message.prompt && message.prompt !== message.description && (
 						<SimpleTool
 							icon={<WandIcon size={14} />}
 							label="Prompt"
@@ -241,7 +242,7 @@ const SubtaskItem: React.FC<{
 							</div>
 						</SimpleTool>
 					)}
-					{isRunning && message.command && (
+					{message.command && (
 						<div className="text-xs font-mono opacity-50 truncate mb-2">$ {message.command}</div>
 					)}
 					{(isRunning || expandState === 'expanded') &&
@@ -286,10 +287,13 @@ const SubtaskItem: React.FC<{
 	);
 };
 
-const SimpleToolGroup: React.FC<{ messages: Message[]; shouldCollapse: boolean }> = ({
-	messages,
-	shouldCollapse,
-}) => {
+const TOOL_GROUP_PREVIEW_MAX_HEIGHT = 120;
+
+const SimpleToolGroup: React.FC<{
+	messages: Message[];
+	shouldCollapse: boolean;
+}> = ({ messages, shouldCollapse }) => {
+	const isLive = liveToolGroups.has(messages);
 	const toolUseMessages = useMemo(
 		() =>
 			messages.filter((m): m is Extract<Message, { type: 'tool_use' }> => m.type === 'tool_use'),
@@ -321,15 +325,38 @@ const SimpleToolGroup: React.FC<{ messages: Message[]; shouldCollapse: boolean }
 		return order.map(name => `${name} x${counts.get(name) ?? 0}`).join(', ');
 	}, [toolUseMessages]);
 
+	/** Ordered list of renderable items: tool_use messages and bridge messages (assistant/thinking) */
+	const renderItems = useMemo(
+		() =>
+			messages.filter(
+				m => m.type === 'tool_use' || m.type === 'assistant' || m.type === 'thinking',
+			),
+		[messages],
+	);
+
 	const [expanded, setExpanded] = useState(!shouldCollapse);
 	const prevShouldCollapseRef = useRef(shouldCollapse);
 
 	useEffect(() => {
-		if (shouldCollapse && !prevShouldCollapseRef.current) {
+		if (shouldCollapse && !prevShouldCollapseRef.current && !isLive) {
 			setExpanded(false);
 		}
 		prevShouldCollapseRef.current = shouldCollapse;
-	}, [shouldCollapse]);
+	}, [shouldCollapse, isLive]);
+
+	// Auto-scroll preview container to bottom as new tools stream in
+	const bodyRef = useRef<HTMLDivElement>(null);
+	useEffect(() => {
+		const el = bodyRef.current;
+		if (!isLive || !el) return;
+		const scroll = () => {
+			el.scrollTop = el.scrollHeight;
+		};
+		scroll();
+		const observer = new MutationObserver(scroll);
+		observer.observe(el, { childList: true, subtree: true, characterData: true });
+		return () => observer.disconnect();
+	}, [isLive]);
 
 	if (toolUseMessages.length === 0) return null;
 
@@ -349,14 +376,43 @@ const SimpleToolGroup: React.FC<{ messages: Message[]; shouldCollapse: boolean }
 			}
 			className="mb-(--tool-block-margin)"
 		>
-			<div className="pl-2 border-l border-(--border-subtle)">
-				{toolUseMessages.map(msg => (
-					<ToolCardMessage
-						key={msg.id}
-						message={msg}
-						toolResult={msg.toolUseId ? localToolResults[msg.toolUseId] : undefined}
-					/>
-				))}
+			<div
+				ref={bodyRef}
+				className="pl-2 border-l border-(--border-subtle)"
+				style={isLive ? { maxHeight: TOOL_GROUP_PREVIEW_MAX_HEIGHT, overflowY: 'auto' } : undefined}
+			>
+				{renderItems.map(msg => {
+					if (msg.type === 'assistant') {
+						return (
+							<div
+								key={msg.id}
+								className="py-1 text-sm leading-(--line-height-base) font-(family-name:--font-family-base)"
+								style={{ color: 'var(--input-text-color)' }}
+							>
+								<Markdown content={(msg as { content: string }).content || ''} />
+							</div>
+						);
+					}
+					if (msg.type === 'thinking') {
+						return (
+							<ThinkingMessage
+								key={msg.id}
+								content={(msg as Extract<Message, { type: 'thinking' }>).content || ''}
+								durationMs={(msg as Extract<Message, { type: 'thinking' }>).durationMs}
+								isStreaming={(msg as Extract<Message, { type: 'thinking' }>).isStreaming}
+							/>
+						);
+					}
+					// tool_use
+					const toolMsg = msg as Extract<Message, { type: 'tool_use' }>;
+					return (
+						<ToolCardMessage
+							key={toolMsg.id}
+							message={toolMsg}
+							toolResult={toolMsg.toolUseId ? localToolResults[toolMsg.toolUseId] : undefined}
+						/>
+					);
+				})}
 			</div>
 		</SimpleTool>
 	);

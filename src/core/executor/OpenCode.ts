@@ -121,6 +121,11 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		string,
 		{ input: number; output: number; cacheRead: number }
 	>();
+	// Accumulated deltas per message for turn_tokens emission (reset on emit)
+	private readonly turnTokenDeltas = new Map<
+		string,
+		{ input: number; output: number; cacheRead: number }
+	>();
 
 	private readonly CACHE_TTL = 5 * 60 * 1000;
 	private _cache: {
@@ -1318,6 +1323,18 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 			this.lastMessageTokens.set(info.id, { input, output, cacheRead });
 
+			// Accumulate deltas for turn_tokens emission (consumed on completed)
+			const prevAccum = this.turnTokenDeltas.get(info.id) ?? {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+			};
+			this.turnTokenDeltas.set(info.id, {
+				input: prevAccum.input + deltaInput,
+				output: prevAccum.output + deltaOutput,
+				cacheRead: prevAccum.cacheRead + deltaCacheRead,
+			});
+
 			// Always emit modelID/providerID when present (even if token deltas are zero)
 			// so the UI can display the active model from the very first SSE event.
 			const modelID = info.modelID || undefined;
@@ -1367,18 +1384,27 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 					sessionId,
 				});
 
-				// Emit per-turn token snapshot so the UI can show real tokens per user turn
+				// Emit per-turn token deltas using accumulated values (not instant delta)
+				// Instant delta may be 0 if tokens were already consumed by earlier updates
+				const accum = this.turnTokenDeltas.get(info.id) ?? {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+				};
+				const accumTotal = accum.input + accum.output;
 				this.emit('event', {
 					type: 'turn_tokens',
 					data: {
-						inputTokens: input,
-						outputTokens: output,
-						totalTokens: total,
-						cacheReadTokens: cacheRead,
+						inputTokens: accum.input,
+						outputTokens: accum.output,
+						totalTokens: accumTotal,
+						cacheReadTokens: accum.cacheRead,
 						...(durationMs ? { durationMs } : {}),
 					},
 					sessionId,
 				});
+				// Reset accumulated deltas for this message
+				this.turnTokenDeltas.delete(info.id);
 
 				this.emit('event', {
 					type: 'finished',
@@ -1766,6 +1792,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		this.completedToolCalls.clear();
 		this.lastEmittedStatus.clear();
 		this.lastMessageTokens.clear();
+		this.turnTokenDeltas.clear();
 		this.activeSessions.clear();
 	}
 

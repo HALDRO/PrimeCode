@@ -560,6 +560,56 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			// Also reset inactivity timer for known child sessions on session_updated
 			if (updatedSessionId && this.sessionGraph.isChild(updatedSessionId)) {
 				this.resetSubtaskTimerByChild(updatedSessionId);
+
+				const record = event.data as Record<string, unknown> | undefined;
+
+				// Propagate cumulative totalStats from child session_updated onto the parent subtask card
+				const totalStats = record?.totalStats as
+					| {
+							contextTokens?: number;
+							outputTokens?: number;
+							totalTokens?: number;
+							cacheReadTokens?: number;
+					  }
+					| undefined;
+				if (totalStats && (totalStats.totalTokens ?? 0) > 0) {
+					const parentId = this.sessionGraph.getParent(updatedSessionId);
+					const toolId = this.childSessionToToolUseId.get(updatedSessionId);
+					if (parentId && toolId) {
+						this.sessionHandler.postSessionMessage(
+							{
+								id: toolId,
+								type: 'subtask',
+								childTokens: {
+									input: totalStats.contextTokens ?? 0,
+									output: totalStats.outputTokens ?? 0,
+									total: totalStats.totalTokens ?? 0,
+									cacheRead: totalStats.cacheReadTokens,
+								},
+								timestamp: new Date().toISOString(),
+							},
+							parentId,
+						);
+					}
+				}
+
+				// Propagate modelID from child session_updated onto the parent subtask message
+				const modelID = record && typeof record.modelID === 'string' ? record.modelID : undefined;
+				if (modelID) {
+					const parentId = this.sessionGraph.getParent(updatedSessionId);
+					const toolId = this.childSessionToToolUseId.get(updatedSessionId);
+					if (parentId && toolId) {
+						this.sessionHandler.postSessionMessage(
+							{
+								id: toolId,
+								type: 'subtask',
+								childModelId: modelID,
+								timestamp: new Date().toISOString(),
+							},
+							parentId,
+						);
+					}
+				}
 			}
 
 			this.sessionHandler.handleSessionUpdatedEvent(event.data, event.sessionId);
@@ -596,8 +646,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			}
 
 			case 'turn_tokens': {
-				// Child session turn_tokens are dropped — parent aggregates its own stats
-				if (isChildSession) break;
+				if (isChildSession) {
+					// Child token stats are handled via cumulative totalStats in session_updated
+					break;
+				}
 				this.sessionHandler.postTurnTokens(event.data, targetSessionId);
 				break;
 			}

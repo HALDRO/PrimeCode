@@ -59,6 +59,7 @@ export const groupMessagesIntoSections = (
 		string,
 		{ input: number; output: number; total: number; cacheRead: number; durationMs?: number }
 	> = {},
+	isProcessing = false,
 ): MessageSection[] => {
 	const visibleMsgs = msgs.filter(m => !('hidden' in m && m.hidden));
 	// Collect sections with their raw (ungrouped) responses
@@ -100,7 +101,7 @@ export const groupMessagesIntoSections = (
 	}
 
 	if (currentSection) {
-		currentSection.responses = groupToolMessages(currentResponses, mcpServerNames);
+		currentSection.responses = groupToolMessages(currentResponses, mcpServerNames, isProcessing);
 		currentSection.stats = computeSectionStats(
 			currentSection,
 			currentResponses,
@@ -145,11 +146,20 @@ function computeSectionStats(
 	}
 
 	// File changes: collect toolUseIds from this section's tool_use messages
+	// Also collect from subtask transcripts so file changes made by sub-agents are counted
 	let fileChanges: SectionStats['fileChanges'] = null;
 	const toolUseIds: string[] = [];
 	for (const msg of rawResponses) {
 		if (msg.type === 'tool_use' && 'toolUseId' in msg) {
 			toolUseIds.push(msg.toolUseId);
+		}
+		// Collect toolUseIds from subtask transcript children
+		if (msg.type === 'subtask' && msg.transcript) {
+			for (const child of msg.transcript) {
+				if (child.type === 'tool_use' && 'toolUseId' in child) {
+					toolUseIds.push((child as { toolUseId: string }).toolUseId);
+				}
+			}
 		}
 	}
 	if (toolUseIds.length > 0 && changedFiles.length > 0) {

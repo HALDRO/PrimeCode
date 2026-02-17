@@ -56,27 +56,50 @@ export function useSubtaskThread(
 
 	const children = useSubtaskChildren(subtaskId);
 
+	const isRunning = message?.status === 'running';
+
 	const groupedChildren = useMemo(() => {
 		if (!children.length) return EMPTY_GROUPED;
-		return groupToolMessages(children, mcpServerNames);
-	}, [children, mcpServerNames]);
+		return groupToolMessages(children, mcpServerNames, isRunning);
+	}, [children, mcpServerNames, isRunning]);
 
 	const totalDurationMs = useMemo(() => {
 		if (message?.durationMs && message.durationMs > 0) return message.durationMs;
+		// Sum child durations from transcript
 		let duration = 0;
 		for (const msg of children) {
 			if (msg.type === 'tool_result' || msg.type === 'thinking') {
 				if (msg.durationMs) duration += msg.durationMs;
 			}
 		}
+		if (duration > 0) return duration;
+		// Fallback: compute from startTime and last child timestamp
+		if (message?.startTime && message.status !== 'running' && children.length > 0) {
+			const start = new Date(message.startTime).getTime();
+			if (start > 0) {
+				// Find the last valid timestamp in transcript (skip children without one)
+				for (let i = children.length - 1; i >= 0; i--) {
+					const ts = (children[i] as Record<string, unknown>).timestamp as string | undefined;
+					if (!ts) continue;
+					const end = new Date(ts).getTime();
+					if (end > start) return end - start;
+				}
+			}
+		}
 		return duration;
-	}, [message?.durationMs, children]);
+	}, [message?.durationMs, message?.startTime, message?.status, children]);
 
-	// Aggregate token stats from child session — read primitives to avoid new-object re-renders
-	const tokenStats: SubtaskTokenStats | null = null;
+	// Read token stats and model ID directly from the subtask message
+	const tokenStats: SubtaskTokenStats | null = useMemo(() => {
+		if (!message?.childTokens) return null;
+		return {
+			input: message.childTokens.input,
+			output: message.childTokens.output,
+			total: message.childTokens.total,
+		};
+	}, [message?.childTokens]);
 
-	// Child model ID is no longer available from separate session bucket
-	const childModelId: string | undefined = undefined;
+	const childModelId: string | undefined = message?.childModelId;
 
 	return {
 		message,
