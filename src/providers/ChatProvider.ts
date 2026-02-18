@@ -497,6 +497,15 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			webviewView.webview.onDidReceiveMessage(msg => this.handleWebviewMessage(msg)),
 		);
 
+		// Null out bridge view on dispose so messages are queued, not lost
+		webviewView.onDidDispose(() => {
+			logger.info('[ChatProvider] webview disposed — nulling bridge view');
+			this.bridge.clearView();
+		});
+
+		// Reset sync flag so full state is re-sent when webview is re-created
+		this.hasSynced = false;
+
 		this.sendInitialState();
 		this.bridge.data('accessData', []);
 

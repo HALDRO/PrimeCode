@@ -31,12 +31,7 @@ import {
 import { FileTypeIcon } from '../icons/FileTypeIcon';
 import { Button, CollapseOverlay, IconButton, Tooltip } from '../ui';
 import { AccessGate } from './AccessGate';
-import {
-	computeSimpleStats,
-	getDiffContentHeight,
-	resolveDiffData,
-	SimpleDiff,
-} from './SimpleDiff';
+import { getDiffContentHeight, resolveDiffData, SimpleDiff } from './SimpleDiff';
 import { InlineToolLine, SimpleTool } from './SimpleTool';
 
 const TOOL_CARD_CLASSES = 'bg-(--tool-bg-header) border border-(--tool-border-color) rounded-lg';
@@ -273,21 +268,24 @@ const FileEditCard: React.FC<FileEditCardProps> = ({
 	diagnostics,
 	postMessage,
 }) => {
-	const resolved = resolveDiffData({
-		actionType,
-		toolResultMetadata: toolResult?.metadata,
-		accessRequestRaw: accessRequest,
-		fallbackFilePath: filePath,
-	});
+	const resolved = useMemo(
+		() =>
+			resolveDiffData({
+				actionType,
+				toolResultMetadata: toolResult?.metadata,
+				accessRequestRaw: accessRequest,
+				fallbackFilePath: filePath,
+			}),
+		[actionType, toolResult?.metadata, accessRequest, filePath],
+	);
 
-	const { oldContent, newContent, effectiveFilePath, name, hasDeleteChange } = resolved;
-	const hasContent = newContent || oldContent || hasDeleteChange;
+	const { lines, effectiveFilePath, name, hasDeleteChange, stats } = resolved;
+	const hasContent = lines.length > 0 || hasDeleteChange;
 
 	if (!hasContent) return null;
 
-	const stats = computeSimpleStats(oldContent, newContent);
 	const maxHeight = 120;
-	const needsExpand = getDiffContentHeight(oldContent, newContent) > maxHeight;
+	const needsExpand = getDiffContentHeight(lines) > maxHeight;
 	const showAccessGate = accessRequest && !accessRequest.resolved && accessRequest.requestId;
 
 	return (
@@ -326,8 +324,8 @@ const FileEditCard: React.FC<FileEditCardProps> = ({
 								postMessage({
 									type: 'openFileDiff',
 									filePath: effectiveFilePath,
-									oldContent,
-									newContent,
+									oldContent: '',
+									newContent: '',
 								});
 						}}
 						title="Open in diff editor"
@@ -342,12 +340,7 @@ const FileEditCard: React.FC<FileEditCardProps> = ({
 				body={
 					<div className="relative">
 						<div className={cn(accessRequest?.resolved === false ? 'pb-2' : undefined)}>
-							<SimpleDiff
-								original={oldContent}
-								modified={newContent}
-								maxHeight={maxHeight}
-								expanded={diffExpanded}
-							/>
+							<SimpleDiff lines={lines} maxHeight={maxHeight} expanded={diffExpanded} />
 						</div>
 						<div
 							className={cn(
@@ -360,7 +353,11 @@ const FileEditCard: React.FC<FileEditCardProps> = ({
 								icon={<CopyIcon size={14} />}
 								onClick={e => {
 									e.stopPropagation();
-									navigator.clipboard.writeText(newContent);
+									const content = lines
+										.filter(l => l.type === 'added' || l.type === 'unchanged')
+										.map(l => l.content)
+										.join('\n');
+									navigator.clipboard.writeText(content);
 								}}
 								title="Copy"
 								size={20}

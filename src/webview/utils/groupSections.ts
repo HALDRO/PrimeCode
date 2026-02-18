@@ -69,6 +69,15 @@ export const groupMessagesIntoSections = (
 	let sectionIndex = 0;
 	let pastRevertPoint = false;
 
+	// PERFORMANCE: Create a lookup map for changed files by toolUseId once per render cycle
+	// This prevents nested O(N^2) loops inside computeSectionStats
+	const changedFilesMap = new Map<string, ChangedFile>();
+	if (changedFiles.length > 0) {
+		for (const file of changedFiles) {
+			changedFilesMap.set(file.toolUseId, file);
+		}
+	}
+
 	for (const msg of visibleMsgs) {
 		if (msg.type === 'user') {
 			if (currentSection) {
@@ -76,7 +85,7 @@ export const groupMessagesIntoSections = (
 				currentSection.stats = computeSectionStats(
 					currentSection,
 					currentResponses,
-					changedFiles,
+					changedFilesMap,
 					false,
 					turnTokens,
 				);
@@ -105,7 +114,7 @@ export const groupMessagesIntoSections = (
 		currentSection.stats = computeSectionStats(
 			currentSection,
 			currentResponses,
-			changedFiles,
+			changedFilesMap,
 			true,
 			turnTokens,
 		);
@@ -127,7 +136,7 @@ export const groupMessagesIntoSections = (
 function computeSectionStats(
 	section: MessageSection,
 	rawResponses: Message[],
-	changedFiles: ChangedFile[],
+	changedFilesMap: Map<string, ChangedFile>,
 	isLast: boolean,
 	turnTokens: Record<
 		string,
@@ -145,34 +154,40 @@ function computeSectionStats(
 		}
 	}
 
-	// File changes: collect toolUseIds from this section's tool_use messages
-	// Also collect from subtask transcripts so file changes made by sub-agents are counted
+	// File changes: iterate tool_use messages and look up in the Map (O(1) per lookup)
 	let fileChanges: SectionStats['fileChanges'] = null;
-	const toolUseIds: string[] = [];
-	for (const msg of rawResponses) {
-		if (msg.type === 'tool_use' && 'toolUseId' in msg) {
-			toolUseIds.push(msg.toolUseId);
-		}
-		// Collect toolUseIds from subtask transcript children
-		if (msg.type === 'subtask' && msg.transcript) {
-			for (const child of msg.transcript) {
-				if (child.type === 'tool_use' && 'toolUseId' in child) {
-					toolUseIds.push((child as { toolUseId: string }).toolUseId);
-				}
-			}
-		}
-	}
-	if (toolUseIds.length > 0 && changedFiles.length > 0) {
+
+	// PERFORMANCE: Only iterate once, looking up in the Map instead of nested array scan
+	if (changedFilesMap.size > 0) {
 		let added = 0;
 		let removed = 0;
 		const filesSet = new Set<string>();
-		for (const file of changedFiles) {
-			if (toolUseIds.includes(file.toolUseId)) {
-				added += file.linesAdded;
-				removed += file.linesRemoved;
-				filesSet.add(file.filePath);
+
+		for (const msg of rawResponses) {
+			// Check direct tool usage
+			if (msg.type === 'tool_use' && 'toolUseId' in msg) {
+				const file = changedFilesMap.get(msg.toolUseId);
+				if (file) {
+					added += file.linesAdded;
+					removed += file.linesRemoved;
+					filesSet.add(file.filePath);
+				}
+			}
+			// Check subtask transcript children
+			if (msg.type === 'subtask' && msg.transcript) {
+				for (const child of msg.transcript) {
+					if (child.type === 'tool_use' && 'toolUseId' in child) {
+						const file = changedFilesMap.get((child as { toolUseId: string }).toolUseId);
+						if (file) {
+							added += file.linesAdded;
+							removed += file.linesRemoved;
+							filesSet.add(file.filePath);
+						}
+					}
+				}
 			}
 		}
+
 		if (filesSet.size > 0) {
 			fileChanges = { added, removed, files: filesSet.size };
 		}

@@ -36,6 +36,11 @@ export class OutboundBridge {
 		this.flush();
 	}
 
+	/** Clear the view reference so messages are queued until a new view connects. */
+	public clearView(): void {
+		this._view = null;
+	}
+
 	/** Returns true when the webview is connected and ready to receive messages. */
 	public get isReady(): boolean {
 		return this._view !== null;

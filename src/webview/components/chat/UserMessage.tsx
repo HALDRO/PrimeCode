@@ -607,39 +607,36 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 		const [isSticky, setIsSticky] = useState(false);
 		const containerRef = useRef<HTMLDivElement>(null);
 
+		// Use IntersectionObserver instead of per-instance scroll listeners.
+		// A scroll listener on every UserMessage causes N forced reflows
+		// (getBoundingClientRect) per scroll frame. IntersectionObserver is
+		// async and batched by the browser — zero main-thread cost during scroll.
 		useEffect(() => {
 			const el = containerRef.current;
 			if (!el) return;
 
-			const scrollParent = el.closest('.os-viewport') || window;
+			const scrollParent = el.closest('.os-viewport') as HTMLElement | null;
+			const root = scrollParent || null;
 
-			const checkSticky = () => {
-				const rect = el.getBoundingClientRect();
-				let parentTop = 0;
-				let hasOverlap = false;
+			// A 1px-tall sentinel at the top of the scroll container.
+			// When the sticky header reaches the top and the sentinel goes
+			// out of view, we know the element is "stuck".
+			const observer = new IntersectionObserver(
+				([entry]) => {
+					// isIntersecting=false means the element's top edge has
+					// reached (or passed) the scroll container's top — it's stuck.
+					setIsSticky(!entry.isIntersecting);
+				},
+				{
+					root,
+					// Trigger when the very top pixel leaves the viewport
+					threshold: 1.0,
+					rootMargin: '0px 0px 0px 0px',
+				},
+			);
 
-				if (scrollParent instanceof Element) {
-					parentTop = scrollParent.getBoundingClientRect().top;
-					// If the scroll container is scrolled, the sticky element is overlapping content.
-					hasOverlap = (scrollParent as HTMLElement).scrollTop > 0;
-				} else {
-					hasOverlap = window.scrollY > 0;
-				}
-
-				const isAtStickyTop = Math.abs(rect.top - parentTop) <= 2;
-				setIsSticky(hasOverlap && isAtStickyTop);
-			};
-
-			scrollParent.addEventListener('scroll', checkSticky);
-			// Also check on resize as layout might change
-			window.addEventListener('resize', checkSticky);
-
-			checkSticky(); // Initial check
-
-			return () => {
-				scrollParent.removeEventListener('scroll', checkSticky);
-				window.removeEventListener('resize', checkSticky);
-			};
+			observer.observe(el);
+			return () => observer.disconnect();
 		}, []);
 
 		if (isEditing) {

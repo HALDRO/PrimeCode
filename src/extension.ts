@@ -155,6 +155,7 @@ export function activate(context: vscode.ExtensionContext) {
 			const webviewProviderDisposable = vscode.window.registerWebviewViewProvider(
 				'primecode.chat',
 				webviewProvider,
+				{ webviewOptions: { retainContextWhenHidden: true } },
 			);
 			logger.info('WebviewViewProvider registered');
 

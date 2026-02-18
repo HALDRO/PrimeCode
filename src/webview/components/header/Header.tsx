@@ -5,7 +5,7 @@
  * creates a real session and responds with lifecycle events — no client-side draft IDs.
  */
 
-import React, { useCallback, useEffect, useMemo } from 'react';
+import React, { startTransition, useCallback, useEffect, useMemo } from 'react';
 import { cn } from '../../lib/cn';
 import {
 	type ChatSession,
@@ -60,9 +60,13 @@ export const Header: React.FC = React.memo(() => {
 
 	const handleSwitchSession = useCallback(
 		(sessionId: string) => {
-			// Keep UI responsive (local switch) but also sync backend state
-			// so session-specific messages and restore state route correctly.
-			switchSession(sessionId);
+			// OPTIMIZED: Wrap expensive session switch in startTransition so React
+			// prioritizes keeping the UI responsive (tab click feels instant) over
+			// the heavy re-render of the new message list.
+			startTransition(() => {
+				switchSession(sessionId);
+			});
+			// postMessage is async/fast, safe to keep outside transition
 			postMessage({ type: 'switchSession', sessionId });
 		},
 		[postMessage, switchSession],
