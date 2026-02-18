@@ -7,16 +7,48 @@
  *              React Compiler (babel-plugin-react-compiler) enabled for automatic memoization.
  */
 
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import react from '@vitejs/plugin-react';
+import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
+import { defineConfig } from 'vite';
 
 // React Compiler configuration
 const ReactCompilerConfig = {
 	// Target React 19 (default, can be omitted)
 	// target: '19',
 };
+
+/**
+ * Vite plugin to serve session dump files from docs/debug/ via HTTP.
+ * This allows fetch('/docs/debug/ses_xxx.json') to work in dev mode.
+ */
+function serveDumpsPlugin() {
+	const docsRoot = resolve(__dirname, 'docs');
+	return {
+		name: 'serve-session-dumps',
+		configureServer(server: { middlewares: { use: (fn: Function) => void } }) {
+			server.middlewares.use(
+				(
+					req: { url?: string },
+					res: { setHeader: Function; end: Function; statusCode: number },
+					next: Function,
+				) => {
+					if (req.url?.startsWith('/docs/')) {
+						const filePath = resolve(docsRoot, req.url.replace('/docs/', ''));
+						if (existsSync(filePath)) {
+							res.setHeader('Content-Type', 'application/json');
+							res.setHeader('Access-Control-Allow-Origin', '*');
+							res.end(readFileSync(filePath, 'utf-8'));
+							return;
+						}
+					}
+					next();
+				},
+			);
+		},
+	};
+}
 
 export default defineConfig({
 	plugins: [
@@ -26,6 +58,7 @@ export default defineConfig({
 			},
 		}),
 		tailwindcss(),
+		serveDumpsPlugin(),
 	],
 	root: resolve(__dirname, 'src/webview/dev'),
 	publicDir: resolve(__dirname, 'public'),
@@ -33,6 +66,9 @@ export default defineConfig({
 		port: 5173,
 		open: true,
 		host: true,
+		fs: {
+			allow: [resolve(__dirname)],
+		},
 	},
 	build: {
 		outDir: resolve(__dirname, 'dev-dist'),

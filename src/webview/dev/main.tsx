@@ -9,7 +9,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 
 // Initialize mock VS Code API BEFORE importing App
-import { addSampleMessages, initMockVSCode } from './mockVSCode';
+import { initMockVSCode } from './mockVSCode';
 
 initMockVSCode();
 
@@ -32,10 +32,7 @@ root.render(
 	</React.StrictMode>,
 );
 
-// Add sample messages after app is mounted
-setTimeout(() => {
-	addSampleMessages();
-}, 1000);
+// Session dump is loaded automatically via webviewDidLaunch → loadAndPlayDump()
 
 // Log dev mode info
 console.log(
