@@ -29,6 +29,11 @@ import { logger } from '../utils/logger';
 export class OutboundBridge {
 	private _view: IView | null = null;
 	private _queue: unknown[] = [];
+	/**
+	 * When non-null, send() collects session_event messages here instead of posting them.
+	 * Used during history replay to batch hundreds of events into a single postMessage.
+	 */
+	private _collectBuffer: unknown[] | null = null;
 
 	/** Wire up the actual webview. Called once from ChatProvider.resolveWebviewView(). */
 	public setView(view: IView): void {
@@ -51,6 +56,14 @@ export class OutboundBridge {
 	// =========================================================================
 
 	public send(msg: unknown): void {
+		// In collect mode, buffer session_event messages for batch delivery
+		if (this._collectBuffer !== null) {
+			const msgType = (msg as { type?: string })?.type;
+			if (msgType === 'session_event') {
+				this._collectBuffer.push(msg);
+				return;
+			}
+		}
 		if (!this._view) {
 			logger.debug('[OutboundBridge] view not ready, queuing message', {
 				type: (msg as { type?: string })?.type,
@@ -64,6 +77,53 @@ export class OutboundBridge {
 			logger.debug('[OutboundBridge] send', { type: msgType });
 		}
 		this._view.postMessage(msg);
+	}
+
+	/**
+	 * Start collecting session_event messages instead of sending them immediately.
+	 * Call flushCollected() to send all collected messages as a single batch.
+	 * Used during history replay to reduce postMessage overhead.
+	 */
+	public startCollect(): void {
+		this._collectBuffer = [];
+	}
+
+	/**
+	 * Flush all collected session_event messages as a single batch.
+	 * Falls back to individual sends if no messages were collected.
+	 */
+	public flushCollected(): void {
+		const buffer = this._collectBuffer;
+		this._collectBuffer = null;
+		if (!buffer || buffer.length === 0) return;
+		this.sendBatch(buffer);
+	}
+
+	/**
+	 * Send multiple messages as a single batch to reduce postMessage overhead.
+	 * Used during history replay to avoid hundreds of individual postMessage calls.
+	 * The webview unpacks the batch and processes each message individually.
+	 */
+	public sendBatch(messages: unknown[]): void {
+		if (messages.length === 0) return;
+		if (messages.length === 1) {
+			this.send(messages[0]);
+			return;
+		}
+		const batchMsg = { type: 'session_event_batch', messages };
+		if (!this._view) {
+			logger.debug('[OutboundBridge] view not ready, queuing batch', {
+				count: messages.length,
+				queueSize: this._queue.length,
+			});
+			// Queue individual messages so they can be flushed normally
+			for (const msg of messages) {
+				this._queue.push(msg);
+			}
+			return;
+		}
+		logger.info(`[OutboundBridge] sendBatch: ${messages.length} messages`);
+		this._view.postMessage(batchMsg);
 	}
 
 	/** Flush queued messages after webview connects. */

@@ -14,6 +14,7 @@ export type {
 	QuestionOption,
 	SessionAccessPayload,
 	SessionDeleteMessagesAfterPayload,
+	SessionEventBatchMessage,
 	SessionEventMessage,
 	SessionEventPayload,
 	SessionEventType,

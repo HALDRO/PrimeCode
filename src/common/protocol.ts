@@ -424,6 +424,15 @@ export interface SessionEventMessage {
 	normalizedEntry?: import('./normalizedTypes').NormalizedEntry;
 }
 
+/**
+ * Batched session events for history replay optimization.
+ * Reduces postMessage overhead by sending multiple events in a single message.
+ */
+export interface SessionEventBatchMessage {
+	type: 'session_event_batch';
+	messages: SessionEventMessage[];
+}
+
 export type SessionLifecycleAction = 'created' | 'closed' | 'switched' | 'cleared';
 
 export interface SessionLifecycleMessage {
@@ -801,6 +810,7 @@ export type SseClosedMessage = BaseExtensionMessage<'sseClosed', { id: string }>
 
 export type ExtensionMessage =
 	| SessionEventMessage
+	| SessionEventBatchMessage
 	| SessionLifecycleMessage
 	| AccessDataMessage
 	| RuleListMessage

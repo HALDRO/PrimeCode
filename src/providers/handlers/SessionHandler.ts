@@ -329,7 +329,8 @@ export class SessionHandler implements WebviewMessageHandler {
 			this.postLifecycle('switched', activeTab, { isProcessing: isActiveTabBusy });
 
 			// Replay history only for the active tab (others lazy-load on switch)
-			await this.replaySessionFromCLI(activeTab, config);
+			// Pass allSessions to avoid a redundant listSessions() call inside replaySessionFromCLI
+			await this.replaySessionFromCLI(activeTab, config, allSessions);
 			this.replayedSessions.add(activeTab);
 			// Post status matching real backend state
 			if (isActiveTabBusy) {
@@ -353,14 +354,24 @@ export class SessionHandler implements WebviewMessageHandler {
 	/**
 	 * Loads a session's full history (including child subagent sessions) from CLI
 	 * and replays it into the webview. Uses SessionGraph for parent↔child linkage.
+	 *
+	 * @param cachedSessions - Pre-fetched sessions list to avoid redundant listSessions() calls.
+	 *                         When omitted, falls back to fetching from CLI.
 	 */
 	private async replaySessionFromCLI(
 		sessionId: string,
 		config: { provider: 'opencode'; workspaceRoot: string },
+		cachedSessions?: Array<{
+			id: string;
+			title?: string;
+			lastModified?: number;
+			created?: number;
+			parentID?: string;
+		}>,
 	): Promise<void> {
 		const graph = this.context.sessionGraph;
 
-		const allSessions = await this.context.cli.listSessions(config);
+		const allSessions = cachedSessions ?? (await this.context.cli.listSessions(config));
 		const childSessions = allSessions
 			.filter(s => s.parentID === sessionId)
 			.sort((a, b) => (a.created || 0) - (b.created || 0));
@@ -381,7 +392,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		// Register all parent↔child links in the graph
 		graph.registerChildrenFromHistory(sessionId, taskToolUseIds, childSessionIds);
 
-		// Pre-load child histories and compute durations.
+		// Pre-load ALL child histories in parallel (instead of sequential loop).
 		// Child events are aggregated into parent subtask transcripts (no separate buckets).
 		const childHistories = new Map<string, CLIEvent[]>();
 		const childDurations = new Map<string, number>();
@@ -389,86 +400,102 @@ export class SessionHandler implements WebviewMessageHandler {
 			string,
 			{ input: number; output: number; total: number; cacheRead: number }
 		>();
-		for (const child of childSessions) {
-			const childHistory = await this.context.cli.getHistory(child.id, config);
-			childHistories.set(child.id, childHistory);
 
-			if (childHistory.length > 0) {
-				const firstTs = (childHistory[0].data as { timestamp?: string })?.timestamp;
-				const lastTs = (childHistory[childHistory.length - 1].data as { timestamp?: string })
-					?.timestamp;
-				if (firstTs && lastTs) {
-					const duration = new Date(lastTs).getTime() - new Date(firstTs).getTime();
-					if (duration > 0) childDurations.set(child.id, duration);
-				}
+		if (childSessions.length > 0) {
+			const childResults = await Promise.all(
+				childSessions.map(async child => ({
+					id: child.id,
+					title: child.title,
+					history: await this.context.cli.getHistory(child.id, config),
+				})),
+			);
 
-				// Aggregate turn_tokens from child history for childTokens on subtask cards
-				let totalInput = 0;
-				let totalOutput = 0;
-				let totalTokens = 0;
-				let totalCacheRead = 0;
-				for (const ev of childHistory) {
-					if (ev.type === 'turn_tokens') {
-						const d = ev.data as {
-							inputTokens?: number;
-							outputTokens?: number;
-							totalTokens?: number;
-							cacheReadTokens?: number;
-						};
-						totalInput += d.inputTokens ?? 0;
-						totalOutput += d.outputTokens ?? 0;
-						totalTokens += d.totalTokens ?? 0;
-						totalCacheRead += d.cacheReadTokens ?? 0;
+			for (const { id, history } of childResults) {
+				childHistories.set(id, history);
+
+				if (history.length > 0) {
+					const firstTs = (history[0].data as { timestamp?: string })?.timestamp;
+					const lastTs = (history[history.length - 1].data as { timestamp?: string })?.timestamp;
+					if (firstTs && lastTs) {
+						const duration = new Date(lastTs).getTime() - new Date(firstTs).getTime();
+						if (duration > 0) childDurations.set(id, duration);
+					}
+
+					// Aggregate turn_tokens from child history for childTokens on subtask cards
+					let totalInput = 0;
+					let totalOutput = 0;
+					let totalTokens = 0;
+					let totalCacheRead = 0;
+					for (const ev of history) {
+						if (ev.type === 'turn_tokens') {
+							const d = ev.data as {
+								inputTokens?: number;
+								outputTokens?: number;
+								totalTokens?: number;
+								cacheReadTokens?: number;
+							};
+							totalInput += d.inputTokens ?? 0;
+							totalOutput += d.outputTokens ?? 0;
+							totalTokens += d.totalTokens ?? 0;
+							totalCacheRead += d.cacheReadTokens ?? 0;
+						}
+					}
+					if (totalTokens > 0) {
+						childTokensMap.set(id, {
+							input: totalInput,
+							output: totalOutput,
+							total: totalTokens,
+							cacheRead: totalCacheRead,
+						});
 					}
 				}
-				if (totalTokens > 0) {
-					childTokensMap.set(child.id, {
-						input: totalInput,
-						output: totalOutput,
-						total: totalTokens,
-						cacheRead: totalCacheRead,
-					});
+			}
+		}
+
+		// Batch all replay messages into a single postMessage to reduce overhead.
+		// startCollect() buffers session_event messages; flushCollected() sends them as one batch.
+		this.context.bridge.startCollect();
+		try {
+			// Surface child sessions as subtask cards if parent history is compacted
+			if (taskToolUseIds.length === 0 && childSessions.length > 0) {
+				for (const child of childSessions) {
+					const duration = childDurations.get(child.id);
+					const childTokens = childTokensMap.get(child.id);
+					const childHistory = childHistories.get(child.id) || [];
+					const transcript = this.buildTranscriptFromHistory(childHistory) as unknown[];
+					this.postSessionMessage(
+						{
+							id: `hist-subtask-${child.id}`,
+							type: 'subtask',
+							agent: 'subagent',
+							prompt: '',
+							description: child.title || 'Subtask',
+							status: 'completed',
+							transcript: transcript as import('../../common/schemas').ConversationMessage[],
+							timestamp: new Date().toISOString(),
+							...(duration ? { durationMs: duration } : {}),
+							...(childTokens ? { childTokens } : {}),
+						},
+						sessionId,
+					);
 				}
 			}
-		}
 
-		// Surface child sessions as subtask cards if parent history is compacted
-		if (taskToolUseIds.length === 0 && childSessions.length > 0) {
-			for (const child of childSessions) {
-				const duration = childDurations.get(child.id);
-				const childTokens = childTokensMap.get(child.id);
-				const childHistory = childHistories.get(child.id) || [];
-				const transcript = this.buildTranscriptFromHistory(childHistory) as unknown[];
-				this.postSessionMessage(
-					{
-						id: `hist-subtask-${child.id}`,
-						type: 'subtask',
-						agent: 'subagent',
-						prompt: '',
-						description: child.title || 'Subtask',
-						status: 'completed',
-						transcript: transcript as import('../../common/schemas').ConversationMessage[],
-						timestamp: new Date().toISOString(),
-						...(duration ? { durationMs: duration } : {}),
-						...(childTokens ? { childTokens } : {}),
-					},
-					sessionId,
+			// Replay parent history, using graph for task→child resolution
+			if (parentHistory.length > 0) {
+				logger.info(
+					`[SessionHandler] Replaying ${parentHistory.length} events for session ${sessionId}`,
 				);
+				this.replayHistoryIntoSession(sessionId, parentHistory, {
+					mode: 'parent',
+					parentSessionId: sessionId,
+					childDurations,
+					childHistories,
+					childTokensMap,
+				});
 			}
-		}
-
-		// Replay parent history, using graph for task→child resolution
-		if (parentHistory.length > 0) {
-			logger.info(
-				`[SessionHandler] Replaying ${parentHistory.length} events for session ${sessionId}`,
-			);
-			this.replayHistoryIntoSession(sessionId, parentHistory, {
-				mode: 'parent',
-				parentSessionId: sessionId,
-				childDurations,
-				childHistories,
-				childTokensMap,
-			});
+		} finally {
+			this.context.bridge.flushCollected();
 		}
 	}
 

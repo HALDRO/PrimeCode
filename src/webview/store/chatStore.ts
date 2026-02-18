@@ -395,6 +395,16 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 				return;
 			}
 
+			// Handle batched session events (history replay optimization)
+			if (message.type === 'session_event_batch') {
+				const batch = message as { type: string; messages: SessionEventMessage[] };
+				const { dispatch } = get().actions;
+				for (const event of batch.messages) {
+					dispatch(event.targetId, event.eventType, event.payload);
+				}
+				return;
+			}
+
 			// Handle improve prompt responses
 			if (message.type === 'improvePromptResult') {
 				const { requestId, improvedText } = (

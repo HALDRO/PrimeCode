@@ -224,6 +224,41 @@ export const useUIStore = create<UIState>((set, get) => ({
 					}
 					break;
 				}
+
+				// Handle batched session events (history replay optimization)
+				case 'session_event_batch' as ExtensionMessage['type']: {
+					const batch = message as unknown as { messages: unknown[] };
+					if (!Array.isArray(batch.messages)) break;
+					for (const evt of batch.messages) {
+						const event = evt as SessionEventMessage;
+						if (event.eventType !== 'message') continue;
+						const msg = (event.payload as { eventType?: unknown; message?: unknown }).message as
+							| {
+									type?: unknown;
+									content?: unknown;
+									reason?: unknown;
+									timestamp?: unknown;
+									id?: unknown;
+							  }
+							| undefined;
+						if (!msg) continue;
+						const t = msg.type;
+						if (t === 'error' || t === 'interrupted' || t === 'system_notice') {
+							const content = typeof msg.content === 'string' ? msg.content : '';
+							if (!content.trim()) continue;
+							actions.pushNotification({
+								id: typeof msg.id === 'string' ? msg.id : undefined,
+								type: t,
+								content,
+								reason: typeof msg.reason === 'string' ? msg.reason : undefined,
+								timestamp:
+									typeof msg.timestamp === 'string' ? msg.timestamp : new Date().toISOString(),
+								autoDismissMs: t === 'system_notice' ? 6000 : undefined,
+							});
+						}
+					}
+					break;
+				}
 			}
 		},
 	},
