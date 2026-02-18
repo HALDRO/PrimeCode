@@ -3,9 +3,17 @@
  * @description Webview hook that manages message attachments: file references, images, and code snippets.
  *              Intercepts paste/drag-drop events, requests clipboard context from the extension,
  *              and exposes stable handlers/state for the chat input.
+ *
+ * Design principles (aligned with OpenCode CLI approach):
+ * - Paste: only intercept when clipboard contains images. For text, always ask the extension
+ *   for clipboard context (editor copy tracking) but NEVER block the default paste.
+ *   If context is found, a code snippet badge is added *in addition* to the pasted text.
+ * - Drag-and-drop: support both workspace and external files/directories.
+ *   Files from dataTransfer.files (external drops) are handled alongside text/URI paths.
+ * - No heuristic "looks like code" detection — this caused false positives and errors.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useVSCode } from '../utils/vscode';
 
 interface CodeSnippet {
@@ -40,6 +48,34 @@ interface UseFileAttachmentsOptions {
 	}>;
 }
 
+/** Image extensions for path-based detection */
+const IMAGE_EXT_RE = /\.(png|jpg|jpeg|gif|webp|svg|bmp|ico)$/i;
+
+/**
+ * Normalize a dropped/pasted path: strip file:// prefix, decode URI components,
+ * and handle Windows drive-letter URIs (e.g. file:///C:/foo).
+ */
+function normalizePath(raw: string): string {
+	let p = raw.trim();
+	if (p.startsWith('file:///')) {
+		// file:///C:/foo → C:/foo  (Windows)
+		// file:///home/user → /home/user (Unix)
+		p = p.substring(8); // strip "file:///"
+		// On Windows the path starts with drive letter, on Unix we need the leading /
+		if (!/^[a-zA-Z]:/.test(p)) {
+			p = `/${p}`;
+		}
+	} else if (p.startsWith('file://')) {
+		p = p.substring(7);
+	}
+	try {
+		p = decodeURIComponent(p);
+	} catch {
+		// already decoded or malformed — use as-is
+	}
+	return p;
+}
+
 export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 	const { initialFiles = [], initialCodeSnippets = [], initialImages = [] } = options;
 	const { postMessage } = useVSCode();
@@ -55,13 +91,20 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 	);
 	const [isDragOver, setIsDragOver] = useState(false);
 
+	// Track the last pasted text so we can match it against clipboard context responses.
+	// Unlike the old approach, we do NOT block the default paste — text is always inserted
+	// normally, and if context is found we add a code snippet badge on top.
+	const lastPastedTextRef = useRef<string | null>(null);
+
 	// Handlers for managing attachments
 	const addFile = useCallback((filePath: string) => {
+		const normalized = filePath.trim();
+		if (!normalized) return;
 		setAttachedFiles(prev => {
-			if (prev.includes(filePath)) {
+			if (prev.includes(normalized)) {
 				return prev;
 			}
-			return [...prev, filePath];
+			return [...prev, normalized];
 		});
 	}, []);
 
@@ -83,12 +126,11 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 		setCodeSnippets([]);
 	}, []);
 
-	// Drag & Drop handlers
+	// ── Drag & Drop ──────────────────────────────────────────────────────
+
 	const handleDragOver = useCallback((e: React.DragEvent) => {
-		if (!e.shiftKey) {
-			setIsDragOver(false);
-			return;
-		}
+		// preventDefault + stopPropagation prevents VS Code from intercepting the drop.
+		// In webview (Electron), this works without Shift — unlike the text editor API.
 		e.preventDefault();
 		e.stopPropagation();
 		setIsDragOver(true);
@@ -107,26 +149,38 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 			e.stopPropagation();
 			setIsDragOver(false);
 
-			// Handle images
+			let handledFiles = false;
+
+			// 1. Handle files from dataTransfer.files (external drops from OS file manager)
 			const files = e.dataTransfer.files;
 			if (files && files.length > 0) {
+				handledFiles = true;
 				for (let i = 0; i < files.length; i++) {
 					const file = files[i];
 					if (file.type.startsWith('image/')) {
+						// Image file — read as data URL
 						const reader = new FileReader();
-						reader.onload = e => {
-							const dataUrl = e.target?.result as string;
+						reader.onload = ev => {
+							const dataUrl = ev.target?.result as string;
 							if (dataUrl) {
 								const id = `img-${Date.now()}-${file.name}`;
 								setAttachedImages(prev => [...prev, { id, name: file.name, dataUrl, file }]);
 							}
 						};
 						reader.readAsDataURL(file);
+					} else {
+						// Non-image file — try to get its path.
+						// In webview, File objects from external drops may have a `path` property
+						// (Electron/VS Code webview exposes this). Use it if available.
+						const filePath = (file as File & { path?: string }).path;
+						if (filePath) {
+							addFile(filePath);
+						}
 					}
 				}
 			}
 
-			// Handle text (file paths)
+			// 2. Handle text/URI paths (from VS Code file tree, or other sources)
 			const textPlain = e.dataTransfer.getData('text');
 			const textUriList = e.dataTransfer.getData('application/vnd.code.uri-list');
 			const text = textPlain || textUriList;
@@ -134,40 +188,44 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 			if (text) {
 				const lines = text.split(/\r?\n/).filter(line => line.trim() !== '');
 				for (const line of lines) {
+					const processedPath = normalizePath(line);
+					if (!processedPath) continue;
+
 					// Check for images passed as paths
-					const lowerLine = line.toLowerCase();
-					if (lowerLine.match(/\.(png|jpg|jpeg|gif|webp|svg|bmp|ico)$/)) {
-						const name = line.split(/[/\\]/).pop() || 'image';
+					if (IMAGE_EXT_RE.test(processedPath)) {
+						const name = processedPath.split(/[/\\]/).pop() || 'image';
 						const id = `img-${Date.now()}-${name}`;
-						postMessage({ type: 'getImageData', path: line, id, name });
+						postMessage({ type: 'getImageData', path: processedPath, id, name });
 						continue;
 					}
 
-					// Regular files
-					let processedPath = line;
-					if (processedPath.startsWith('file://')) {
-						processedPath = processedPath.substring(7);
-					}
-					// Add simple normalization if needed...
+					// Regular file/directory path
 					addFile(processedPath);
 				}
+			} else if (!handledFiles) {
+				// No text data and no files — nothing to do
 			}
 		},
 		[addFile, postMessage],
 	);
 
-	// Pending paste text - used when waiting for clipboard context response
-	const [pendingPasteText, setPendingPasteText] = useState<string | null>(null);
+	// ── Paste ────────────────────────────────────────────────────────────
+	// Key change: we NEVER block the default paste for text content.
+	// Instead, we let the browser insert the text normally, and in parallel
+	// ask the extension if the pasted text matches a recent editor copy.
+	// If it does, we add a code snippet badge. If not, nothing happens —
+	// the text is already in the input.
 
-	// Paste handler
+	// Legacy compat: keep pendingPasteText in state so ChatInput can read it,
+	// but it will always be null now (paste is never blocked).
+	const [pendingPasteText] = useState<string | null>(null);
+
 	const handlePaste = useCallback(
 		(e: React.ClipboardEvent) => {
 			const clipboardData = e.clipboardData;
-			if (!clipboardData) {
-				return;
-			}
+			if (!clipboardData) return;
 
-			// Images
+			// 1. Images — intercept and handle (browser can't insert images into textarea)
 			const items = clipboardData.items;
 			for (let i = 0; i < items.length; i++) {
 				const item = items[i];
@@ -176,8 +234,8 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 					const file = item.getAsFile();
 					if (file) {
 						const reader = new FileReader();
-						reader.onload = e => {
-							const dataUrl = e.target?.result as string;
+						reader.onload = ev => {
+							const dataUrl = ev.target?.result as string;
 							if (dataUrl) {
 								const id = `img-${Date.now()}-${file.name}`;
 								setAttachedImages(prev => [...prev, { id, name: file.name, dataUrl, file }]);
@@ -189,40 +247,27 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 				}
 			}
 
-			// Code snippets - always try to get context from extension
-			// Extension tracks copy events and can match pasted text to source file
+			// 2. Text — let the browser handle the paste normally (no preventDefault!).
+			//    In parallel, ask the extension if this text matches a recent editor copy.
+			//    If context is found, a code snippet badge will be added via the message listener.
 			const textPlain = clipboardData.getData('text/plain');
-
 			if (textPlain?.trim()) {
-				// Check if it looks like code (multiline or has code patterns)
-				const lines = textPlain.split('\n');
-				const isMultiline = lines.length > 1;
-				const hasIndentation = lines.some(line => /^\s{2,}/.test(line));
-				const hasCodePatterns =
-					/^(import|export|const|let|var|function|class|interface|type|if|for|while|return|async|await|def |from |#include)\b/.test(
-						textPlain.trim(),
-					);
-
-				if (isMultiline || hasIndentation || hasCodePatterns) {
-					// Prevent default paste - we'll handle it based on context response
-					e.preventDefault();
-					// Store the text in case context is not found
-					setPendingPasteText(textPlain);
-					// Request context from extension
-					postMessage({ type: 'getClipboardContext', text: textPlain });
-				}
+				lastPastedTextRef.current = textPlain;
+				postMessage({ type: 'getClipboardContext', text: textPlain });
 			}
 		},
 		[postMessage],
 	);
 
-	// Listen for extension messages regarding attachments
+	// ── Extension message listener ───────────────────────────────────────
+
 	useEffect(() => {
 		const handleMessage = (event: MessageEvent) => {
 			const message = event.data;
 
 			if (message?.type === 'clipboardContext' && message.filePath) {
-				// Context found - add as code snippet badge
+				// Context found — add as code snippet badge.
+				// The text is already in the input (we didn't block paste).
 				const id = `${message.filePath}:${message.startLine}-${message.endLine}:${Date.now()}`;
 				setCodeSnippets(prev => [
 					...prev,
@@ -234,14 +279,12 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 						content: message.content,
 					},
 				]);
-				// Clear pending paste text since we created a badge
-				setPendingPasteText(null);
+				lastPastedTextRef.current = null;
 			}
 
 			if (message?.type === 'clipboardContextNotFound') {
-				// Context not found - don't clear pendingPasteText here
-				// Let the timeout in ChatInput handle the fallback insertion
-				// We just need to signal that context lookup is complete
+				// No context — text is already in the input, nothing to do.
+				lastPastedTextRef.current = null;
 			}
 
 			if (message?.type === 'imageData' && message.dataUrl) {
@@ -251,6 +294,18 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 					...prev,
 					{ id, name, dataUrl: message.dataUrl, path: message.path },
 				]);
+			}
+
+			if (message?.type === 'browsedFiles' && Array.isArray(message.paths)) {
+				for (const filePath of message.paths as string[]) {
+					const trimmed = filePath.trim();
+					if (trimmed) {
+						setAttachedFiles(prev => {
+							if (prev.includes(trimmed)) return prev;
+							return [...prev, trimmed];
+						});
+					}
+				}
 			}
 		};
 
@@ -269,7 +324,9 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 		removeImage,
 		removeCodeSnippet,
 		clearAll,
-		clearPendingPaste: () => setPendingPasteText(null),
+		clearPendingPaste: () => {
+			lastPastedTextRef.current = null;
+		},
 		handleDragOver,
 		handleDragLeave,
 		handleDrop,

@@ -339,46 +339,36 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 					'@container/panel',
 				)}
 			>
-				{/* Header - clickable to toggle expand */}
-				<div
-					role={hasFiles ? 'button' : undefined}
-					tabIndex={hasFiles ? 0 : -1}
-					onClick={() => hasFiles && setExpanded(!expanded)}
-					onKeyDown={e => {
-						if (!hasFiles) {
-							return;
-						}
-						if (e.key === 'Enter' || e.key === ' ') {
-							e.preventDefault();
-							setExpanded(!expanded);
-						}
-					}}
-					className={cn(
-						'flex items-center justify-between w-full h-(--tool-header-height) px-(--tool-header-padding)',
-						'text-sm font-(family-name:--vscode-font-family)',
-						'bg-transparent border-none',
-						expanded && hasFiles && 'rounded-b-lg',
-						hasFiles && 'cursor-pointer',
-						!hasFiles && 'cursor-default',
-					)}
-				>
-					{/* Left section - stats (only when files exist) */}
-					{hasFiles && (
+				{/* Header - only when files exist */}
+				{hasFiles && (
+					<div
+						role="button"
+						tabIndex={0}
+						onClick={() => setExpanded(!expanded)}
+						onKeyDown={e => {
+							if (e.key === 'Enter' || e.key === ' ') {
+								e.preventDefault();
+								setExpanded(!expanded);
+							}
+						}}
+						className={cn(
+							'flex items-center justify-between w-full h-(--tool-header-height) px-(--tool-header-padding)',
+							'text-sm font-(family-name:--vscode-font-family)',
+							'bg-transparent border-none cursor-pointer',
+							expanded && 'rounded-b-lg',
+						)}
+					>
+						{/* Left section - stats */}
 						<span className="flex items-center overflow-hidden min-w-0 shrink-0">
-							{/* Chevron */}
 							<span className="shrink-0 flex items-center justify-center w-(--icon-md)">
 								<ChevronIcon expanded={expanded} size={10} />
 							</span>
-
-							{/* Stats - min-width for alignment, right-aligned text */}
 							<span className="text-success whitespace-nowrap text-right min-w-8">
 								+{totalAdded}
 							</span>
 							<span className="text-error whitespace-nowrap text-left min-w-8 ml-(--gap-4)">
 								-{totalRemoved}
 							</span>
-
-							{/* Files count */}
 							<span className="flex items-center gap-(--gap-1) text-sm text-vscode-foreground opacity-90">
 								<FileIcon size={12} />
 								<span className="hide-on-narrow">
@@ -386,17 +376,12 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 								</span>
 								<span className="show-on-narrow">{uniqueFileCount}</span>
 							</span>
-
-							{/* Total Model Duration */}
-							{/* moved to SessionStatsDisplay footer */}
 						</span>
-					)}
 
-					{/* Center section - Todo status (isolated component) */}
-					<TodoSection hasFiles={hasFiles} />
+						{/* Center section - Todo status */}
+						<TodoSection hasFiles={hasFiles} />
 
-					{/* Right section - action buttons (only when files exist) */}
-					{hasFiles && (
+						{/* Right section - action buttons */}
 						<div className="flex items-center gap-1 ml-2 shrink-0">
 							<IconButton
 								icon={<CopyIcon size={12} />}
@@ -446,8 +431,8 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 								</button>
 							</Tooltip>
 						</div>
-					)}
-				</div>
+					</div>
+				)}
 
 				{expanded && hasFiles && (
 					<div>
@@ -462,8 +447,19 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 								/>
 							))}
 						</ScrollContainer>
-						<SessionStatsDisplay mode="footer" />
+						<SessionStatsDisplay
+							mode="footer"
+							className="border-t border-(--panel-header-border)"
+						/>
 					</div>
+				)}
+
+				{!hasFiles && (
+					<SessionStatsDisplay
+						mode="footer"
+						leftContent={<TodoSection hasFiles={false} />}
+						className="border-t-0 rounded-none"
+					/>
 				)}
 			</div>
 		</div>

@@ -45,7 +45,7 @@ interface MessageItemContext {
 const subtaskStatusIcon = (status: Extract<Message, { type: 'subtask' }>['status']) => {
 	switch (status) {
 		case 'running':
-			return <TodoProgressIcon size={14} className="text-warning" />;
+			return <TodoProgressIcon size={14} className="text-warning animate-spin-smooth" />;
 		case 'completed':
 			return <TodoCheckIcon size={14} className="text-success" />;
 		case 'cancelled':

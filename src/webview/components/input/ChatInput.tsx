@@ -274,8 +274,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 		removeImage,
 		removeCodeSnippet,
 		clearAll,
-		pendingPasteText,
-		clearPendingPaste,
 		handleDragOver,
 		handleDragLeave,
 		handleDrop,
@@ -333,33 +331,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
 		return getMessageHighlights(deferredInputValue, validCommandNames, validSubagentNames);
 	}, [deferredInputValue, cliCommands, customCommands, subagents.items]);
-
-	// Handle pending paste text fallback - insert text if context was not found
-	useEffect(() => {
-		if (pendingPasteText) {
-			// Wait a short time for clipboardContext response
-			const timeout = setTimeout(() => {
-				// If still pending after timeout, insert as plain text
-				if (pendingPasteText && textareaRef.current) {
-					const textarea = textareaRef.current;
-					textarea.focus();
-
-					// Use setRangeText instead of deprecated execCommand
-					const start = textarea.selectionStart;
-					const end = textarea.selectionEnd;
-					textarea.setRangeText(pendingPasteText, start, end, 'end');
-
-					// Dispatch input event so React picks up the change
-					textarea.dispatchEvent(new Event('input', { bubbles: true }));
-
-					clearPendingPaste();
-				}
-			}, 300); // Wait for context response from extension
-
-			return () => clearTimeout(timeout);
-		}
-		return undefined;
-	}, [pendingPasteText, clearPendingPaste]);
 
 	// Caret tracking for dropdowns
 	useEffect(() => {
@@ -749,7 +720,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 				<div className="flex-1 min-w-0 flex flex-col relative pb-(--gap-0-5)">
 					{isDragOver && (
 						<div className="absolute inset-0 bg-vscode-button-background/10 rounded-lg flex items-center justify-center z-10 pointer-events-none">
-							<div className="text-vscode-textLink-foreground font-medium">Drop files here</div>
+							<div className="text-vscode-textLink-foreground font-medium text-center text-xs leading-relaxed">
+								<div>Drop files here</div>
+								<div className="opacity-60 text-[10px]">Hold Shift when dragging from Explorer</div>
+							</div>
 						</div>
 					)}
 

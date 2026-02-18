@@ -36,7 +36,7 @@ const CONTAINER_CLASSES: Record<NonNullable<StatsDisplayProps['mode']>, string> 
 		'flex items-end justify-end gap-(--gap-3) text-sm px-(--gap-3) pt-(--gap-1) pb-(--gap-0-5) mt-auto',
 	panel: 'flex items-center gap-(--gap-3) text-(--changed-files-font-size)',
 	footer:
-		'flex items-center justify-center gap-(--gap-3) h-(--tool-header-height) px-(--gap-3) text-(--changed-files-font-size) font-(family-name:--vscode-font-family) border-t border-(--panel-header-border) bg-black/15 rounded-t-lg',
+		'flex items-center justify-center gap-(--gap-3) h-(--tool-header-height) px-(--gap-3) text-(--changed-files-font-size) font-(family-name:--vscode-font-family)',
 	tooltip: 'flex items-center h-full gap-(--gap-6) text-xs whitespace-nowrap',
 };
 
@@ -84,7 +84,7 @@ export const StatsDisplay: React.FC<StatsDisplayProps> = ({
 	className,
 	restoreButton,
 }) => {
-	if (items.length === 0 && !restoreButton) {
+	if (mode !== 'footer' && items.length === 0 && !restoreButton) {
 		return null;
 	}
 
@@ -103,7 +103,8 @@ export const SessionStatsDisplay: React.FC<{
 	mode: 'footer' | 'tooltip';
 	style?: CSSProperties;
 	className?: string;
-}> = ({ mode, style, className }) => {
+	leftContent?: ReactNode;
+}> = ({ mode, style, className, leftContent }) => {
 	const totalStats = useTotalStats();
 	const contextLimit = useModelContextWindow();
 	const subagentTokensTotal = useSubagentTokenTotals();
@@ -182,6 +183,14 @@ export const SessionStatsDisplay: React.FC<{
 		return result;
 	}, [totalStats, contextLimit, subagentTokensTotal]);
 
-	return <StatsDisplay mode={mode} items={items} style={style} className={className} />;
+	return (
+		<StatsDisplay
+			mode={mode}
+			items={items}
+			style={style}
+			className={className}
+			restoreButton={leftContent}
+		/>
+	);
 };
 SessionStatsDisplay.displayName = 'SessionStatsDisplay';

@@ -135,7 +135,7 @@ export const SendButton: React.FC<SendButtonProps> = ({
 				{/* Icon with smooth transitions */}
 				<div
 					className={cn(
-						'flex items-center justify-center transition-all duration-200',
+						'relative z-10 flex items-center justify-center transition-all duration-200',
 						isHovered && !isDisabled && 'scale-110',
 					)}
 					style={{ color: getIconColor() }}
@@ -151,12 +151,12 @@ export const SendButton: React.FC<SendButtonProps> = ({
 
 				{/* Subtle pulse ring */}
 				{showPulse && !isProcessing && (
-					<div className="absolute inset-(--send-btn-inset) rounded-[inherit] border-(length:--send-btn-border-width) border-solid border-(--color-thinking) opacity-60 animate-[subtlePulse_0.4s_ease-out_forwards] pointer-events-none" />
+					<div className="absolute inset-(--send-btn-inset) rounded-[inherit] border-(length:--send-btn-border-width) border-solid border-(--color-thinking) opacity-60 animate-[subtlePulse_0.4s_ease-out_forwards] pointer-events-none z-10" />
 				)}
 
 				{/* Processing indicator */}
 				{isProcessing && (
-					<div className="absolute bottom-(--gap-3) flex gap-(--gap-1)">
+					<div className="absolute bottom-(--gap-3) flex gap-(--gap-1) z-10">
 						{[0, 1, 2].map(i => (
 							<div
 								key={i}
