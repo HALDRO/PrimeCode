@@ -11,7 +11,12 @@
 import type React from 'react';
 import { useEffect, useState } from 'react';
 import { cn } from '../../lib/cn';
-import { useChatStatus, useIsProcessing, useMessages, useStreamingToolId } from '../../store';
+import {
+	useChatStatus,
+	useIsLastMessageStreaming,
+	useIsProcessing,
+	useStreamingToolId,
+} from '../../store';
 
 /**
  * Animated typing dots indicator
@@ -97,14 +102,9 @@ export const GenerationStatus: React.FC = () => {
 	const isProcessing = useIsProcessing();
 	const status = useChatStatus();
 	const streamingToolId = useStreamingToolId();
-	const messages = useMessages();
+	const isTextStreaming = useIsLastMessageStreaming();
 	const [visible, setVisible] = useState(false);
 	const [displayStatus, setDisplayStatus] = useState('');
-
-	// Check if there's active text streaming (last assistant message is being updated)
-	const lastMessage = messages[messages.length - 1];
-	const isTextStreaming =
-		lastMessage?.type === 'assistant' && lastMessage.content && lastMessage.content.length > 0;
 
 	// Don't show status if there's active streaming (tool or text)
 	const hasActiveStream = !!streamingToolId || isTextStreaming;

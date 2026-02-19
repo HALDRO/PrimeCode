@@ -1,14 +1,78 @@
+import type { LucideProps } from 'lucide-react';
+import {
+	AlertCircle,
+	AtSign,
+	Book,
+	Bot,
+	Check,
+	CheckCircle,
+	ChevronDown,
+	ChevronRight,
+	Clock,
+	Coins,
+	Copy,
+	Download,
+	Edit3,
+	ExternalLink,
+	File,
+	FileText,
+	FolderOpen,
+	Globe,
+	Hash,
+	HelpCircle,
+	Image,
+	List,
+	Loader2,
+	MessageSquare,
+	Microchip,
+	Pause,
+	Play,
+	Plug,
+	Plus,
+	RefreshCw,
+	Search,
+	Server,
+	Settings,
+	Shield,
+	Sparkles,
+	Square,
+	Tag,
+	Terminal,
+	Timer,
+	Trash2,
+	Undo2,
+	Wand2,
+	X,
+	Zap,
+} from 'lucide-react';
+import React from 'react';
+
+// Helper: memoize a lucide icon to prevent re-renders with identical props
+const memoIcon = (Icon: React.FC<LucideProps>) => React.memo(Icon);
+
+// Hot-path icons that appear in frequently re-rendering parents
+export const CloseIcon = memoIcon(X);
+export const MessageIcon = memoIcon(MessageSquare);
+export const PlusIcon = memoIcon(Plus);
+export const SettingsIcon = memoIcon(Settings);
+export const HistoryIcon = memoIcon(Clock);
+export const TimerIcon = memoIcon(Timer);
+export const LoaderIcon = memoIcon(Loader2);
+export const SparklesIcon = memoIcon(Sparkles);
+export const TerminalIcon = memoIcon(Terminal);
+export const AtSignIcon = memoIcon(AtSign);
+export const ImageIcon = memoIcon(Image);
+export const BotIcon = memoIcon(Bot);
+export const ChevronDownIcon = memoIcon(ChevronDown);
+
+// Remaining icons — direct re-exports (less hot paths)
 export {
 	AlertCircle as AlertCircleIcon,
-	AtSign as AtSignIcon,
 	Book as BookIcon,
-	Bot as BotIcon,
 	Check as CheckIcon,
 	CheckCircle as CheckCircleIcon,
-	ChevronDown as ChevronDownIcon,
 	ChevronRight as ChevronRightIcon,
 	Clock as ClockIcon,
-	Clock as HistoryIcon,
 	Coins as TokensIcon,
 	Copy as CopyIcon,
 	Download as DownloadIcon,
@@ -21,31 +85,22 @@ export {
 	Globe as GlobeIcon,
 	Hash as HashIcon,
 	HelpCircle as HelpCircleIcon,
-	Image as ImageIcon,
 	List as ListIcon,
-	Loader2 as LoaderIcon,
-	MessageSquare as MessageIcon,
 	Microchip as McpIcon,
 	Pause as PauseIcon,
 	Play as PlayIcon,
 	Plug as PlugIcon,
-	Plus as PlusIcon,
 	RefreshCw as RefreshIcon,
 	Search as SearchIcon,
 	Server as ServerIcon,
-	Settings as SettingsIcon,
 	Shield as ShieldIcon,
-	Sparkles as SparklesIcon,
 	Square as StopIcon,
 	Tag as TagIcon,
-	Terminal as TerminalIcon,
-	Timer as TimerIcon,
 	Trash2 as TrashIcon,
 	Undo2 as Undo2Icon,
 	Wand2 as WandIcon,
-	X as CloseIcon,
 	Zap as ZapIcon,
-} from 'lucide-react';
+};
 // Custom SVG icons
 export {
 	AcceptIcon,

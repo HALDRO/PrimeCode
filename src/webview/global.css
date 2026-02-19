@@ -153,7 +153,9 @@
 	--dropdown-padding: var(--gap-4);
 
 	/* Tooltips */
-	--tooltip-bg: var(--vscode-editorWidget-background);
+	--tooltip-bg: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background));
+	--tooltip-fg: var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground));
+	--tooltip-border: var(--vscode-editorHoverWidget-border, var(--vscode-editorWidget-border));
 	--tooltip-padding: var(--gap-2) var(--gap-4);
 	--tooltip-radius: var(--radius-sm);
 	--tooltip-shadow: 0 2px 8px color-mix(in srgb, var(--vscode-editor-background) 60%, transparent);
@@ -329,7 +331,7 @@ pre {
 	background-color: var(--alpha-soft);
 }
 
-/* ===========================================
+/* =========================================== 
    UTILITY CLASSES
    =========================================== */
 /* Text sizes */

@@ -5,6 +5,9 @@
  *              sample data for UI testing. CSS variables are defined in global.css.
  */
 
+// WDYR must be imported BEFORE React to monkey-patch createElement
+import '../wdyr';
+
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 

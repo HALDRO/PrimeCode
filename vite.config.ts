@@ -14,6 +14,9 @@ import { resolve } from 'path';
 import { defineConfig } from 'vite';
 
 // React Compiler configuration
+// Set VITE_DISABLE_REACT_COMPILER=1 to disable for WDYR profiling:
+//   $env:VITE_DISABLE_REACT_COMPILER="1"; bun run dev
+const enableReactCompiler = !process.env.VITE_DISABLE_REACT_COMPILER;
 const ReactCompilerConfig = {
 	// Target React 19 (default, can be omitted)
 	// target: '19',
@@ -53,8 +56,11 @@ function serveDumpsPlugin() {
 export default defineConfig({
 	plugins: [
 		react({
+			// WDYR требует classic JSX transform (createElement вместо jsx/jsxs)
+			// При отключённом React Compiler переключаемся на classic
+			...(enableReactCompiler ? {} : { jsxRuntime: 'classic' }),
 			babel: {
-				plugins: [['babel-plugin-react-compiler', ReactCompilerConfig]],
+				plugins: enableReactCompiler ? [['babel-plugin-react-compiler', ReactCompilerConfig]] : [],
 			},
 		}),
 		tailwindcss(),

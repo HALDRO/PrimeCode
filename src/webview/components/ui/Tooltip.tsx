@@ -22,7 +22,7 @@ import {
 	useRole,
 	useTransitionStyles,
 } from '@floating-ui/react';
-import React, { type ReactNode, useCallback, useMemo, useState } from 'react';
+import React, { type ReactNode, useCallback, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 export type TooltipPosition = 'top' | 'bottom' | 'left' | 'right';
@@ -57,13 +57,13 @@ const TOOLTIP_OFFSET =
 		getComputedStyle(document.documentElement).getPropertyValue('--tooltip-offset') || '',
 	) || 6;
 
-/** Tooltip content styles - minimalist dark design */
+/** Tooltip content styles - uses VS Code native tooltip colors */
 const tooltipContentClassName =
-	'p-[var(--tooltip-padding-y)_var(--tooltip-padding-x)] bg-(--tooltip-bg) border border-(--alpha-10) rounded-(--tooltip-radius) shadow-[var(--tooltip-shadow)] text-xs leading-[1.3] text-(--alpha-90) whitespace-nowrap';
+	'p-[var(--tooltip-padding-y)_var(--tooltip-padding-x)] bg-(--tooltip-bg) border border-(--tooltip-border) rounded-(--tooltip-radius) shadow-[var(--tooltip-shadow)] text-xs leading-[1.3] text-(--tooltip-fg) whitespace-nowrap';
 
 /** Interactive tooltip - allows text wrapping and user interaction */
 const tooltipContentInteractiveClassName =
-	'p-[var(--tooltip-padding-y)_var(--tooltip-padding-x)] bg-(--tooltip-bg) border border-(--alpha-10) rounded-(--tooltip-radius) shadow-[var(--tooltip-shadow)] text-xs leading-[1.4] text-(--alpha-90) whitespace-pre-wrap break-words';
+	'p-[var(--tooltip-padding-y)_var(--tooltip-padding-x)] bg-(--tooltip-bg) border border-(--tooltip-border) rounded-(--tooltip-radius) shadow-[var(--tooltip-shadow)] text-xs leading-[1.4] text-(--tooltip-fg) whitespace-pre-wrap break-words';
 
 /**
  * Active Tooltip - only rendered when tooltip is activated
@@ -210,18 +210,29 @@ export const Tooltip: React.FC<TooltipProps> = React.memo(
 	}) => {
 		const [isActivated, setIsActivated] = useState(false);
 		const [referenceElement, setReferenceElement] = useState<HTMLElement | null>(null);
+		const isActivatedRef = useRef(false);
 
 		const handleMouseEnter = useCallback(() => {
-			if (!isActivated) {
+			if (!isActivatedRef.current) {
+				isActivatedRef.current = true;
 				setIsActivated(true);
 			}
-		}, [isActivated]);
+		}, []);
 
 		const handleDeactivate = useCallback(() => {
+			isActivatedRef.current = false;
 			setIsActivated(false);
 		}, []);
 
-		const wrapperCss = useMemo(() => ({ display, ...wrapperStyle }), [display, wrapperStyle]);
+		// Stable wrapper style — only recompute when display or wrapperStyle actually change
+		const wrapperCssRef = useRef<React.CSSProperties>({ display });
+		const prevDisplayRef = useRef(display);
+		const prevWrapperStyleRef = useRef(wrapperStyle);
+		if (display !== prevDisplayRef.current || wrapperStyle !== prevWrapperStyleRef.current) {
+			prevDisplayRef.current = display;
+			prevWrapperStyleRef.current = wrapperStyle;
+			wrapperCssRef.current = { display, ...wrapperStyle };
+		}
 
 		// Don't render tooltip if no content
 		if (!content) {
@@ -232,7 +243,7 @@ export const Tooltip: React.FC<TooltipProps> = React.memo(
 			<>
 				<span
 					ref={setReferenceElement}
-					style={wrapperCss}
+					style={wrapperCssRef.current}
 					className={className}
 					onMouseEnter={handleMouseEnter}
 					onFocus={handleMouseEnter}

@@ -74,6 +74,10 @@ export const useChatInputState = () =>
 		})),
 	);
 
+/** Select only the input string (primitive — no unnecessary re-renders) */
+export const useStoreInput = () =>
+	useChatStore((state: ChatState) => getActiveSession(state)?.input ?? '');
+
 /** Select chat actions only (stable references) */
 export const useChatActions = () => useChatStore((state: ChatState) => state.actions);
 
@@ -83,10 +87,14 @@ export const useTotalStats = () =>
 		useShallow((state: ChatState) => getActiveSession(state)?.totalStats ?? DEFAULT_TOTAL_STATS),
 	);
 
-/** Aggregate subagent token totals from subtask messages in active session */
+/** Aggregate subagent token totals from subtask messages in active session.
+ * Memoized by messages ref to avoid O(N) scan on every store change. */
+const subagentTotalsCache = { messages: null as Message[] | null, result: 0 };
 export const useSubagentTokenTotals = () =>
 	useChatStore((state: ChatState) => {
 		const messages = getActiveSession(state)?.messages ?? EMPTY_MESSAGES;
+		if (messages === subagentTotalsCache.messages) return subagentTotalsCache.result;
+		subagentTotalsCache.messages = messages;
 		let total = 0;
 		for (const msg of messages) {
 			if (msg.type === 'subtask') {
@@ -94,6 +102,7 @@ export const useSubagentTokenTotals = () =>
 				if (ct?.total) total += ct.total;
 			}
 		}
+		subagentTotalsCache.result = total;
 		return total;
 	});
 
@@ -108,6 +117,32 @@ const EMPTY_TURN_TOKENS: Record<
 > = {};
 export const useTurnTokens = () =>
 	useChatStore((state: ChatState) => getActiveSession(state)?.turnTokens ?? EMPTY_TURN_TOKENS);
+
+/** Select turn tokens for a specific message ID (avoids full-map subscription) */
+export const useMessageTurnTokens = (messageId: string | undefined) =>
+	useChatStore((state: ChatState) => {
+		if (!messageId) return undefined;
+		return getActiveSession(state)?.turnTokens[messageId];
+	});
+
+/** Whether the last message is an assistant message with streaming content */
+export const useIsLastMessageStreaming = () =>
+	useChatStore((state: ChatState) => {
+		const session = getActiveSession(state);
+		if (!session) return false;
+		const last = session.messages[session.messages.length - 1];
+		return last?.type === 'assistant' && !!last.content && last.content.length > 0;
+	});
+
+/** Context usage percentage, rounded to 1% to reduce rerender frequency */
+export const useContextPercentage = () => {
+	const contextLimit = useModelContextWindow();
+	return useChatStore((state: ChatState) => {
+		const stats = getActiveSession(state)?.totalStats ?? DEFAULT_TOTAL_STATS;
+		const contextTokens = stats.contextTokens ?? 0;
+		return Math.min(Math.floor((contextTokens / contextLimit) * 100), 100);
+	});
+};
 
 /** Select restore commits for active session */
 export const useRestoreCommits = () =>
@@ -132,14 +167,42 @@ export const useImprovingPromptRequestId = () =>
 /** Select prompt versions (original + improved) for toggle support */
 export const usePromptVersions = () => useChatStore((state: ChatState) => state.promptVersions);
 
-/** Select changed files panel state (active session) */
+/** Select changed files panel state (active session) — totalStats removed to prevent cascading rerenders */
 export const useChangedFilesState = () =>
 	useChatStore(
 		useShallow((state: ChatState) => ({
 			changedFiles: getActiveSession(state)?.changedFiles ?? EMPTY_CHANGED_FILES,
-			totalStats: getActiveSession(state)?.totalStats ?? DEFAULT_TOTAL_STATS,
 		})),
 	);
+
+/** Lightweight boolean check — does the session have any todos?
+ * Memoized by messages ref to avoid O(N) scan on every store change (e.g. keystrokes). */
+const hasTodosCache = { messages: null as Message[] | null, result: false };
+export const useHasTodos = () =>
+	useChatStore((state: ChatState) => {
+		const messages = getActiveSession(state)?.messages ?? EMPTY_MESSAGES;
+		if (messages === hasTodosCache.messages) return hasTodosCache.result;
+		hasTodosCache.messages = messages;
+		let result = false;
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const msg = messages[i];
+			if (
+				msg.type === 'tool_use' &&
+				'toolName' in msg &&
+				msg.toolName?.toLowerCase() === 'todowrite' &&
+				'rawInput' in msg &&
+				msg.rawInput
+			) {
+				const todos = (msg.rawInput as { todos?: unknown }).todos;
+				if (Array.isArray(todos) && todos.length > 0) {
+					result = true;
+					break;
+				}
+			}
+		}
+		hasTodosCache.result = result;
+		return result;
+	});
 
 /** Select only todo-related data from active session messages */
 export const useTodoState = () =>
@@ -239,6 +302,16 @@ export const useFilePickerState = () =>
 		})),
 	);
 
+/** Lightweight file picker controls — excludes workspaceFiles to avoid re-renders */
+export const useFilePickerControls = () =>
+	useUIStore(
+		useShallow((state: UIState) => ({
+			showFilePicker: state.showFilePicker,
+			setShowFilePicker: state.actions.setShowFilePicker,
+			setFileFilter: state.actions.setFileFilter,
+		})),
+	);
+
 export const useSlashCommandsState = () =>
 	useUIStore(
 		useShallow((state: UIState) => ({
@@ -275,8 +348,12 @@ export const useUIActions = () => useUIStore(state => state.actions);
 export const useMcpServers = () =>
 	useSettingsStore(useShallow((state: SettingsState) => state.mcpServers));
 
+// PERF: chatStore.actions is a stable reference (created once in zustand create()),
+// so we read it once outside the hook to avoid subscribing to chatStore on every render.
+const _chatActions = () => useChatStore.getState().actions;
+
 export const useModelSelection = () => {
-	const chatActions = useChatStore(state => state.actions);
+	const chatActions = _chatActions();
 
 	return useSettingsStore(
 		useShallow((state: SettingsState) => ({

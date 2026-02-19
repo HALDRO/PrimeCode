@@ -7,19 +7,15 @@
 
 import type React from 'react';
 import { cn } from '../../lib/cn';
-import { useModelContextWindow, useTotalStats } from '../../store';
+import { useContextPercentage } from '../../store';
 
 interface ContextWaterGlassProps {
 	isVisible?: boolean;
 }
 
 export const ContextWaterGlass: React.FC<ContextWaterGlassProps> = ({ isVisible = true }) => {
-	const totalStats = useTotalStats();
-	const contextLimit = useModelContextWindow();
-
-	// Context window is consumed by input tokens only — use latest API input
-	const contextTokens = totalStats.contextTokens ?? 0;
-	const percentage = Math.min((contextTokens / contextLimit) * 100, 100);
+	// Rounded to 1% in the selector to avoid rerenders on every token
+	const percentage = useContextPercentage();
 
 	// Pre-compute water colors - using static strings to avoid build issues
 	const waterColorFull =

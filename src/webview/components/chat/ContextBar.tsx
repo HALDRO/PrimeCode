@@ -21,7 +21,7 @@ import type React from 'react';
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { cn } from '../../lib/cn';
-import { useModelContextWindow, useTotalStats } from '../../store';
+import { useContextPercentage } from '../../store';
 import { SessionStatsDisplay } from '../ui';
 
 const VIEW_BOX_WIDTH = 100;
@@ -43,12 +43,8 @@ const MIDDLEWARE = [offset(6), flip({ padding: 8 }), shift({ padding: 8 })];
 export const ContextBar: React.FC = () => {
 	const [isOpen, setIsOpen] = useState(false);
 
-	const totalStats = useTotalStats();
-	const contextLimit = useModelContextWindow();
-
-	// Context window is consumed by input tokens only — use latest API input
-	const contextTokens = totalStats.contextTokens ?? 0;
-	const percentage = Math.min((contextTokens / contextLimit) * 100, 100);
+	// Rounded to 1% in the selector — rerenders only when percentage changes by a whole point
+	const percentage = useContextPercentage();
 
 	const { refs, floatingStyles, context } = useFloating({
 		open: isOpen,

@@ -11,6 +11,11 @@ import type { Components } from 'react-markdown';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
+
+// Stable plugin arrays — prevents ReactMarkdown from re-initializing on every render
+const REMARK_PLUGINS = [remarkGfm];
+const REHYPE_PLUGINS = [rehypeHighlight];
+
 import { CheckIcon, CopyIcon } from '../components/icons';
 import { IconButton, PathChip } from '../components/ui';
 import { cn } from '../lib/cn';
@@ -306,8 +311,8 @@ export const Markdown: React.FC<MarkdownProps> = React.memo(
 		return (
 			<div className={cn('markdown-body', className)}>
 				<ReactMarkdown
-					remarkPlugins={[remarkGfm]}
-					rehypePlugins={[rehypeHighlight]}
+					remarkPlugins={REMARK_PLUGINS}
+					rehypePlugins={REHYPE_PLUGINS}
 					components={components}
 					urlTransform={url => url}
 				>

@@ -6,19 +6,17 @@
  * centralizes per-message branching in one place.
  */
 
-import type React from 'react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { NormalizedEntry } from '../../../common/normalizedTypes';
 import { useSubtaskThread } from '../../hooks/useSubtaskChildren';
 import type { Message } from '../../store/chatStore';
 import { useMcpServers, useSubtaskAccessRequest } from '../../store/selectors';
-import { formatDuration, formatNumber, formatToolName } from '../../utils/format';
+import { formatNumber, formatToolName } from '../../utils/format';
 import { Markdown } from '../../utils/markdown';
 import {
 	BotIcon,
 	ChevronDownIcon,
 	ListIcon,
-	TimerIcon,
 	TodoCheckIcon,
 	TodoPendingIcon,
 	TodoProgressIcon,
@@ -26,6 +24,7 @@ import {
 	WandIcon,
 } from '../icons';
 import { AccessGate } from './AccessGate';
+import { SubtaskTimer } from './LiveStats';
 import { QuestionCard } from './QuestionCard';
 import {
 	InlineToolLine,
@@ -33,12 +32,10 @@ import {
 	SimpleTool,
 	shouldCollapseGroupedItem,
 	ThinkingMessage,
-	useElapsedTimer,
 } from './SimpleTool';
 import { ToolCard, ToolCardMessage } from './ToolCard';
 
 interface MessageItemContext {
-	isProcessing: boolean;
 	totalSections: number;
 }
 
@@ -128,10 +125,7 @@ const SubtaskItem: React.FC<{
 		};
 	}, [message.status, message.result, message.description, message.timestamp, message]);
 
-	// Live elapsed timer while subtask is running
 	const isRunning = message.status === 'running';
-	const liveElapsed = useElapsedTimer(isRunning, message.startTime);
-	const displayDuration = isRunning ? liveElapsed : totalDurationMs;
 
 	// Agent display name for the header
 	const agentLabel =
@@ -192,25 +186,22 @@ const SubtaskItem: React.FC<{
 				</>
 			}
 			headerRight={
-				tokenStats || displayDuration > 0 ? (
-					<span className="flex items-center gap-3 text-sm font-bold text-vscode-descriptionForeground">
-						{tokenStats && (
-							<span
-								className="flex items-center gap-1"
-								title={`Input: ${formatNumber(tokenStats.input)} · Output: ${formatNumber(tokenStats.output)}`}
-							>
-								<TokensIcon size={11} />
-								{formatNumber(tokenStats.total)}
-							</span>
-						)}
-						{displayDuration > 0 && (
-							<span className="flex items-center gap-1">
-								<TimerIcon size={11} />
-								{formatDuration(displayDuration)}
-							</span>
-						)}
-					</span>
-				) : undefined
+				<span className="flex items-center gap-3 text-sm font-bold text-vscode-descriptionForeground">
+					{tokenStats && (
+						<span
+							className="flex items-center gap-1"
+							title={`Input: ${formatNumber(tokenStats.input)} · Output: ${formatNumber(tokenStats.output)}`}
+						>
+							<TokensIcon size={11} />
+							{formatNumber(tokenStats.total)}
+						</span>
+					)}
+					<SubtaskTimer
+						isRunning={isRunning}
+						startTime={message.startTime}
+						fallbackMs={totalDurationMs}
+					/>
+				</span>
 			}
 			isCollapsible
 			expanded
@@ -418,47 +409,54 @@ const SimpleToolGroup: React.FC<{
 	);
 };
 
-export const MessageItem: React.FC<{
+export const MessageItem = React.memo<{
 	item: Message | Message[];
 	ctx: MessageItemContext;
 	collapseGroupedTools?: boolean;
-}> = ({ item, ctx, collapseGroupedTools = false }) => {
-	if (Array.isArray(item)) {
-		return <SimpleToolGroup messages={item} shouldCollapse={collapseGroupedTools} />;
-	}
+}>(
+	({ item, ctx, collapseGroupedTools = false }) => {
+		if (Array.isArray(item)) {
+			return <SimpleToolGroup messages={item} shouldCollapse={collapseGroupedTools} />;
+		}
 
-	switch (item.type) {
-		case 'tool_use':
-			return (
-				<div className="mb-(--tool-block-margin)">
-					<ToolCardMessage message={item} />
-				</div>
-			);
-		case 'access_request':
-			// All access requests are rendered inline inside the related ToolCard.
-			return null;
-		case 'question':
-			return <QuestionCard message={item as Extract<Message, { type: 'question' }>} />;
-		case 'subtask':
-			return <SubtaskItem message={item} ctx={ctx} />;
-		case 'assistant':
-			return (
-				<div
-					className="bg-transparent py-(--message-padding-y) mb-(--message-gap) text-(length:--font-size-base) leading-(--line-height-base) font-(family-name:--font-family-base)"
-					style={{ color: 'var(--input-text-color)' }}
-				>
-					<Markdown content={(item as { content: string }).content || ''} />
-				</div>
-			);
-		case 'thinking':
-			return (
-				<ThinkingMessage
-					content={(item as Extract<Message, { type: 'thinking' }>).content || ''}
-					durationMs={(item as Extract<Message, { type: 'thinking' }>).durationMs}
-					isStreaming={(item as Extract<Message, { type: 'thinking' }>).isStreaming}
-				/>
-			);
-		default:
-			return null;
-	}
-};
+		switch (item.type) {
+			case 'tool_use':
+				return (
+					<div className="mb-(--tool-block-margin)">
+						<ToolCardMessage message={item} />
+					</div>
+				);
+			case 'access_request':
+				// All access requests are rendered inline inside the related ToolCard.
+				return null;
+			case 'question':
+				return <QuestionCard message={item as Extract<Message, { type: 'question' }>} />;
+			case 'subtask':
+				return <SubtaskItem message={item} ctx={ctx} />;
+			case 'assistant':
+				return (
+					<div
+						className="bg-transparent py-(--message-padding-y) mb-(--message-gap) text-(length:--font-size-base) leading-(--line-height-base) font-(family-name:--font-family-base)"
+						style={{ color: 'var(--input-text-color)' }}
+					>
+						<Markdown content={(item as { content: string }).content || ''} />
+					</div>
+				);
+			case 'thinking':
+				return (
+					<ThinkingMessage
+						content={(item as Extract<Message, { type: 'thinking' }>).content || ''}
+						durationMs={(item as Extract<Message, { type: 'thinking' }>).durationMs}
+						isStreaming={(item as Extract<Message, { type: 'thinking' }>).isStreaming}
+					/>
+				);
+			default:
+				return null;
+		}
+	},
+	(prev, next) =>
+		prev.item === next.item &&
+		prev.ctx === next.ctx &&
+		prev.collapseGroupedTools === next.collapseGroupedTools,
+);
+MessageItem.displayName = 'MessageItem';

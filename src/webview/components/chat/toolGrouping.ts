@@ -207,3 +207,27 @@ export const shouldCollapseGroupedItem = (items: GroupedResponseItem[], index: n
 
 	return false;
 };
+
+/**
+ * Pre-compute collapse flags for all items in a single O(n) reverse pass.
+ * Returns a boolean[] where result[i] === shouldCollapseGroupedItem(items, i).
+ * This eliminates the O(n²) cost of calling shouldCollapseGroupedItem per item during render.
+ */
+export const precomputeCollapseFlags = (items: GroupedResponseItem[]): boolean[] => {
+	const flags = new Array<boolean>(items.length);
+	let hasCollapseTriggerAhead = false;
+
+	for (let i = items.length - 1; i >= 0; i--) {
+		const current = items[i];
+		if (Array.isArray(current) && getToolUseCount(current) >= MIN_SIMPLE_TOOL_GROUP_SIZE) {
+			flags[i] = hasCollapseTriggerAhead;
+		} else {
+			flags[i] = false;
+		}
+		if (itemTriggersCollapse(current)) {
+			hasCollapseTriggerAhead = true;
+		}
+	}
+
+	return flags;
+};

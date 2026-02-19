@@ -6,20 +6,24 @@
  */
 
 import React, { startTransition, useCallback, useEffect, useMemo } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { cn } from '../../lib/cn';
-import {
-	type ChatSession,
-	useChatActions,
-	useChatStore,
-	useHistoryDropdownState,
-	useUIActions,
-	useUIStore,
-} from '../../store';
+import { useChatActions, useChatStore, useHistoryDropdownState, useUIActions } from '../../store';
+import type { ChatState } from '../../store/chatStore';
+import { useUIStore } from '../../store/uiStore';
 import { proxyEventSource } from '../../utils/proxyEventSource';
 import { useVSCode } from '../../utils/vscode';
 import { CloseIcon, HistoryIcon, MessageIcon, PlusIcon, SettingsIcon } from '../icons';
 import { Button } from '../ui';
 import { HistoryDropdown } from './HistoryDropdown';
+
+/**
+ * Minimal tab data derived from store — avoids subscribing to the entire sessionsById.
+ * Only session IDs are needed for tabs; the full ChatSession object is not required.
+ */
+interface TabInfo {
+	id: string;
+}
 
 export const Header: React.FC = React.memo(() => {
 	// Optimized selectors
@@ -27,13 +31,20 @@ export const Header: React.FC = React.memo(() => {
 	const { setActiveModal, setServerStatus } = useUIActions();
 	const { postMessage } = useVSCode();
 	const { switchSession, closeSession } = useChatActions();
-	const { sessionsById, sessionOrder, activeSessionId } = useChatStore();
-	const { serverUrl, serverStatus } = useUIStore();
 
-	const sessions = useMemo(
-		() => sessionOrder.map(id => sessionsById[id]).filter((s): s is ChatSession => !!s),
-		[sessionOrder, sessionsById],
+	// PERF: Only subscribe to sessionOrder and activeSessionId — NOT sessionsById.
+	// sessionsById changes on every streaming event (Immer produce), but tabs only
+	// need the list of session IDs and which one is active.
+	const { sessionOrder, activeSessionId } = useChatStore(
+		useShallow((state: ChatState) => ({
+			sessionOrder: state.sessionOrder,
+			activeSessionId: state.activeSessionId,
+		})),
 	);
+	const serverUrl = useUIStore(state => state.serverUrl);
+	const serverStatus = useUIStore(state => state.serverStatus);
+
+	const sessions: TabInfo[] = useMemo(() => sessionOrder.map(id => ({ id })), [sessionOrder]);
 
 	// Subscribe to server events for connection status
 	useEffect(() => {

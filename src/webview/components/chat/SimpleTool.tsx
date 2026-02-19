@@ -208,7 +208,12 @@ export const ThinkingMessage: React.FC<ThinkingMessageProps> = ({
 // Simple tool grouping helpers — re-exported from dedicated utility module
 // -----------------------------------------------------------------------------
 
-export { groupToolMessages, liveToolGroups, shouldCollapseGroupedItem } from './toolGrouping';
+export {
+	groupToolMessages,
+	liveToolGroups,
+	precomputeCollapseFlags,
+	shouldCollapseGroupedItem,
+} from './toolGrouping';
 
 // -----------------------------------------------------------------------------
 // Inline / lightweight tool rendering
