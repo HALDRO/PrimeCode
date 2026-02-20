@@ -268,8 +268,7 @@ const PermissionsSettings: React.FC = () => {
 			</SettingsGroup>
 
 			<div className="p-3 bg-(--alpha-5) border border-(--alpha-10) rounded text-sm text-vscode-descriptionForeground mt-4 mb-4">
-				These settings are persisted in{' '}
-				<code className="bg-(--alpha-10) px-1 rounded">opencode.json</code>.
+				These settings are persisted per workspace and synced to the OpenCode server at runtime.
 			</div>
 
 			<GroupTitle>Configuration Files</GroupTitle>

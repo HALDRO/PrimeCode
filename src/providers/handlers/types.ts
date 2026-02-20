@@ -1,4 +1,5 @@
 import type * as vscode from 'vscode';
+import type { PermissionPolicies } from '../../common/permissions';
 import type { WebviewCommand } from '../../common/protocol';
 import type { ISessionState, ISettings } from '../../core/contracts';
 import type { OpenCodeExecutor } from '../../core/executor/OpenCode';
@@ -16,6 +17,8 @@ export interface HandlerContext {
 	services: ServiceRegistry;
 	/** Unified parent↔child session graph. Shared between ChatProvider and all handlers. */
 	sessionGraph: SessionGraph;
+	/** Returns current permission policies from ToolHandler. Used by SessionHandler for reconnect. */
+	getPermissionPolicies?: () => PermissionPolicies;
 	/** Register a checkpoint on the backend so the frontend can restore by commitId alone. */
 	registerCheckpoint?: (
 		commitId: string,

@@ -81,6 +81,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 		const handlerContext: HandlerContext = {
 			...baseContext,
+			// Lazy getter — ToolHandler is created below but the closure captures `this`
+			getPermissionPolicies: () => this.toolHandler.getPermissionPolicies(),
 			registerCheckpoint: (commitId, record) =>
 				this.restoreHandler.registerCheckpoint(commitId, record),
 		};
@@ -430,6 +432,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		const startedAt = Date.now();
 		const requests: Promise<unknown>[] = [
 			this.settingsHandler.handleMessage({ type: 'getSettings' }),
+			this.toolHandler.handleMessage({ type: 'getPermissions' }),
 			this.toolHandler.handleMessage({ type: 'getAccess' }),
 			this.settingsHandler.handleMessage({ type: 'getCommands' }),
 			this.settingsHandler.handleMessage({ type: 'getSkills' }),

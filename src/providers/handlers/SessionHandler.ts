@@ -1383,6 +1383,9 @@ export class SessionHandler implements WebviewMessageHandler {
 					this.context.settings.get('access.yoloMode') ||
 					false,
 			),
+			policies: this.context.getPermissionPolicies?.() as
+				| Partial<Record<string, string>>
+				| undefined,
 			serverTimeoutMs:
 				typeof opencodeServerTimeout === 'number' && Number.isFinite(opencodeServerTimeout)
 					? Math.max(0, opencodeServerTimeout) * 1000

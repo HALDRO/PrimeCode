@@ -1,3 +1,5 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import {
 	DEFAULT_POLICIES,
 	migrateLegacyPolicies,
@@ -163,40 +165,46 @@ export class ToolHandler implements WebviewMessageHandler {
 	}
 
 	/**
-	 * Push current permission policies to the running OpenCode server
-	 * via `PATCH /config { permission: { ... } }`.
+	 * Persist current permission policies into the project's `opencode.json`.
 	 *
-	 * The server's Config.Permission Zod schema defines all 16 named fields
-	 * plus `.catchall(PermissionRule)`, so every category is accepted.
-	 * After writing, the server calls `Instance.dispose()` which forces
-	 * a full state rebuild on the next request — agents pick up new rulesets.
+	 * OpenCode loads project config from `opencode.json` / `opencode.jsonc`
+	 * (via `findUp`), NOT from `config.json`. The old approach of using
+	 * `PATCH /config` wrote to `config.json` in the project root, which
+	 * OpenCode never reads back — making it effectively a no-op.
 	 *
-	 * Retries up to 3 times with 1s delay if the SDK client is not yet ready
-	 * (server still starting). This closes the timing gap where a policy
-	 * change during startup would be silently lost.
+	 * This method writes directly to `opencode.json` so that:
+	 * 1. Permissions survive server restarts (read by `Config.state()`)
+	 * 2. No stale `config.json` is created in the project root
+	 * 3. The file matches the documented OpenCode config format
 	 */
-	private async syncPoliciesToServer(retries = 3): Promise<void> {
-		const client = this.context.cli.getSdkClient?.();
-		if (!client) {
-			if (retries > 0) {
-				logger.debug(`[ToolHandler] No SDK client — retrying in 1s (${retries} left)`);
-				await new Promise(r => setTimeout(r, 1000));
-				return this.syncPoliciesToServer(retries - 1);
-			}
-			logger.warn('[ToolHandler] No SDK client after retries — sync skipped');
+	private async syncPoliciesToServer(): Promise<void> {
+		const workspaceRoot = this.context.settings.getWorkspaceRoot?.();
+		if (!workspaceRoot) {
+			logger.warn('[ToolHandler] No workspace root — sync skipped');
 			return;
 		}
 
+		const configPath = path.join(workspaceRoot, 'opencode.json');
 		const serverPermission = policiesToServerFormat(this.policies);
 
-		logger.info('[ToolHandler] Syncing all policies to server', serverPermission);
-		const { error } = await client.config.update({
-			body: { permission: serverPermission } as import('@opencode-ai/sdk').Config,
-		});
-		if (error) {
-			logger.warn('[ToolHandler] Server config update failed:', error);
-		} else {
-			logger.info('[ToolHandler] Policies synced to server successfully');
+		try {
+			// Read existing opencode.json (or start fresh)
+			let existing: Record<string, unknown> = {};
+			try {
+				const content = await fs.promises.readFile(configPath, 'utf-8');
+				existing = JSON.parse(content) as Record<string, unknown>;
+			} catch {
+				// File doesn't exist or is invalid — start with schema
+				existing = { $schema: 'https://opencode.ai/config.json' };
+			}
+
+			// Merge permission field
+			existing.permission = serverPermission;
+
+			await fs.promises.writeFile(configPath, `${JSON.stringify(existing, null, 2)}\n`, 'utf-8');
+			logger.info('[ToolHandler] Policies written to opencode.json', serverPermission);
+		} catch (e) {
+			logger.warn('[ToolHandler] Failed to write opencode.json:', e);
 		}
 	}
 
