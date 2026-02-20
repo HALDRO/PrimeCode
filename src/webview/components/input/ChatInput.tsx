@@ -19,6 +19,8 @@ import { useFileAttachments } from '../../hooks/useFileAttachments';
 import { cn } from '../../lib/cn';
 import {
 	useChatActions,
+	useDraftAttachments,
+	useDraftPlanMode,
 	useFilePickerControls,
 	useImprovingPromptRequestId,
 	useIsImprovingPrompt,
@@ -242,6 +244,7 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 			setImprovingPrompt,
 			clearPromptVersions,
 			togglePromptVersion,
+			clearDraftAttachments,
 		} = useChatActions();
 		const isProcessing = useIsProcessing();
 		const { selectedModel, proxyModels, opencodeProviders, getSessionModel } = useModelSelection();
@@ -286,6 +289,21 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 		const textareaRef = useRef<HTMLTextAreaElement>(null);
 		const filePickerTriggerIndexRef = useRef<number | null>(null);
 		const [planMode, setPlanMode] = useState(false);
+
+		// Restore draft attachments/planMode from cancelled queued messages
+		const draftAttachments = useDraftAttachments();
+		const draftPlanMode = useDraftPlanMode();
+
+		useEffect(() => {
+			if (!draftAttachments && draftPlanMode === undefined) return;
+			if (draftAttachments?.files) {
+				for (const f of draftAttachments.files) addFile(f);
+			}
+			if (draftPlanMode !== undefined) {
+				setPlanMode(draftPlanMode);
+			}
+			clearDraftAttachments();
+		}, [draftAttachments, draftPlanMode, addFile, clearDraftAttachments]);
 
 		const [previewImage, setPreviewImage] = useState<{
 			name: string;
@@ -520,7 +538,7 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 				attachedFiles.length > 0 ||
 				attachedImages.length > 0;
 
-			if (!hasContent || isProcessing) {
+			if (!hasContent) {
 				return;
 			}
 
@@ -560,6 +578,7 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 
 			// In VS Code, the extension echoes the user message back as a session_event.
 			// To avoid duplicates, we do not optimistic-add user messages here.
+			// When isProcessing, the extension will queue the message automatically.
 
 			postSessionMessage({
 				type: 'sendMessage',
@@ -579,7 +598,6 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 			codeSnippets,
 			attachedFiles,
 			attachedImages,
-			isProcessing,
 			isControlled,
 			controlledOnSend,
 			planMode,

@@ -849,7 +849,8 @@ export type ExtensionMessage =
 	| ServerInfoMessage
 	| SseEventMessage
 	| SseErrorMessage
-	| SseClosedMessage;
+	| SseClosedMessage
+	| QueueEventMessage;
 
 // #############################################################################
 //
@@ -1238,6 +1239,63 @@ export interface UndoAllChangesCommand {
 	type: 'undoAllChanges';
 }
 // =============================================================================
+// Message Queue Commands
+// =============================================================================
+
+/** Queued message data stored per-session on the extension side. */
+export interface QueuedMessageData {
+	/** Unique queue entry ID */
+	queueId: string;
+	/** Original message text */
+	text: string;
+	/** Model override */
+	model?: string;
+	/** Target session */
+	sessionId: string;
+	/** Plan mode flag */
+	planMode?: boolean;
+	/** Attachments */
+	attachments?: SendMessageCommand['attachments'];
+	/** Timestamp when queued */
+	queuedAt: number;
+}
+
+export interface CancelQueuedMessageCommand {
+	type: 'cancelQueuedMessage';
+	queueId: string;
+	sessionId: string;
+}
+
+export interface ForceQueuedMessageCommand {
+	type: 'forceQueuedMessage';
+	queueId: string;
+	sessionId: string;
+}
+
+export interface ReorderQueueCommand {
+	type: 'reorderQueue';
+	sessionId: string;
+	/** Ordered list of queueIds — new order for the queue */
+	queueIds: string[];
+}
+
+// Extension → Webview queue events
+export type QueueEventMessage = BaseExtensionMessage<
+	'messageQueue',
+	{
+		action: 'enqueued' | 'dequeued' | 'cancelled' | 'cleared';
+		sessionId: string;
+		queue: QueuedMessageData[];
+		/** The cancelled message text, returned to input on cancel */
+		cancelledText?: string;
+		/** The cancelled message attachments, restored on cancel */
+		cancelledAttachments?: SendMessageCommand['attachments'];
+		/** The cancelled message planMode, restored on cancel */
+		cancelledPlanMode?: boolean;
+	}
+>;
+
+// =============================================================================
 // Conversation & Orchestration Commands
 // =============================================================================
 
@@ -1324,7 +1382,10 @@ export type WebviewCommand =
 	| UndoFileChangesCommand
 	| UndoAllChangesCommand
 	| ClearAllConversationsCommand
-	| SyncAllCommand;
+	| SyncAllCommand
+	| CancelQueuedMessageCommand
+	| ForceQueuedMessageCommand
+	| ReorderQueueCommand;
 
 // =============================================================================
 // Utility

@@ -33,6 +33,7 @@ import type {
 } from '../../common';
 import { computeDiffLineStats, generateId } from '../../common';
 import type { NormalizedEntry } from '../../common/normalizedTypes';
+import type { QueuedMessageData } from '../../common/protocol';
 import { useUIStore } from './uiStore';
 
 export type { CommitInfo, ConversationMessage, SubtaskMessage, TotalStats };
@@ -82,6 +83,12 @@ export interface ChatSession {
 		string,
 		{ input: number; output: number; total: number; cacheRead: number; durationMs?: number }
 	>;
+	/** Queued messages waiting to be sent when generation completes. */
+	queuedMessages: QueuedMessageData[];
+	/** Draft attachments restored from a cancelled queued message. */
+	draftAttachments?: { files?: string[]; images?: unknown[]; codeSnippets?: unknown[] };
+	/** Draft planMode restored from a cancelled queued message. */
+	draftPlanMode?: boolean;
 }
 
 export interface ChatState {
@@ -133,6 +140,7 @@ export interface ChatActions {
 	setLoading: (isLoading: boolean, sessionId?: string) => void;
 	setInput: (input: string, sessionId?: string) => void;
 	appendInput: (text: string, sessionId?: string) => void;
+	clearDraftAttachments: (sessionId?: string) => void;
 	setStatus: (status: string, sessionId?: string) => void;
 	setStreamingToolId: (toolId: string | null, sessionId?: string) => void;
 
@@ -548,6 +556,7 @@ const createEmptySession = (id: string): ChatSession => ({
 	revertedFromMessageId: null,
 	totalStats: { ...DEFAULT_TOTAL_STATS },
 	turnTokens: {},
+	queuedMessages: [],
 });
 
 function resolveTargetSessionId(state: ChatState, sessionId?: string): string | undefined {
@@ -703,6 +712,50 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 				}
 				return;
 			}
+
+			// Handle message queue events
+			if (message.type === 'messageQueue') {
+				const { action, sessionId, queue, cancelledText, cancelledAttachments, cancelledPlanMode } =
+					(
+						message as {
+							type: string;
+							data: {
+								action: string;
+								sessionId: string;
+								queue: QueuedMessageData[];
+								cancelledText?: string;
+								cancelledAttachments?: {
+									files?: string[];
+									images?: unknown[];
+									codeSnippets?: unknown[];
+								};
+								cancelledPlanMode?: boolean;
+							};
+						}
+					).data;
+				set(
+					produce((state: ChatState) => {
+						const session = state.sessionsById[sessionId];
+						if (!session) return;
+						session.queuedMessages = queue;
+						// On cancel, restore the text to the session input
+						// Append if user already typed something to avoid losing their work
+						if (action === 'cancelled' && cancelledText) {
+							session.input = session.input.trim()
+								? `${session.input}\n\n${cancelledText}`
+								: cancelledText;
+							// Restore attachments and planMode so ChatInput can pick them up
+							if (cancelledAttachments) {
+								session.draftAttachments = cancelledAttachments;
+							}
+							if (cancelledPlanMode !== undefined) {
+								session.draftPlanMode = cancelledPlanMode;
+							}
+						}
+					}),
+				);
+				return;
+			}
 		},
 
 		dispatch: (targetId, eventType, payload) => {
@@ -797,6 +850,12 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 		appendInput: (text, sessionId) =>
 			mutateSession(set, sessionId ?? get().activeSessionId, s => {
 				s.input += text;
+			}),
+
+		clearDraftAttachments: sessionId =>
+			mutateSession(set, sessionId ?? get().activeSessionId, s => {
+				s.draftAttachments = undefined;
+				s.draftPlanMode = undefined;
 			}),
 
 		setStatus: (status, sessionId) => get().actions.updateSession({ status }, sessionId),

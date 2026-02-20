@@ -418,3 +418,27 @@ export const useModelContextWindow = () =>
 /** All transient notifications (top overlay) */
 export const useTransientNotifications = () =>
 	useUIStore((state: UIState) => state.notifications ?? EMPTY_NOTIFICATIONS);
+
+// ============================================
+// Message Queue Selectors
+// ============================================
+
+import type { QueuedMessageData } from '../../common/protocol';
+
+const EMPTY_QUEUE: QueuedMessageData[] = [];
+
+/** Select queued messages for active session */
+export const useQueuedMessages = () =>
+	useChatStore((state: ChatState) => getActiveSession(state)?.queuedMessages ?? EMPTY_QUEUE);
+
+/** Whether the active session has queued messages */
+export const useHasQueuedMessages = () =>
+	useChatStore((state: ChatState) => (getActiveSession(state)?.queuedMessages?.length ?? 0) > 0);
+
+/** Draft attachments restored from a cancelled queued message */
+export const useDraftAttachments = () =>
+	useChatStore((state: ChatState) => getActiveSession(state)?.draftAttachments);
+
+/** Draft planMode restored from a cancelled queued message */
+export const useDraftPlanMode = () =>
+	useChatStore((state: ChatState) => getActiveSession(state)?.draftPlanMode);

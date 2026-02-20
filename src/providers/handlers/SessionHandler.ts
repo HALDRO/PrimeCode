@@ -8,7 +8,7 @@ import type {
 } from '../../common';
 import { generateId } from '../../common';
 import { IMPROVE_PROMPT_DEFAULT_TEMPLATE } from '../../common/promptImprover';
-import type { CommandOf, WebviewCommand } from '../../common/protocol';
+import type { CommandOf, QueuedMessageData, WebviewCommand } from '../../common/protocol';
 import { computeDiffLineStats, isFileEditTool } from '../../common/toolRegistry';
 import {
 	buildTranscript,
@@ -57,6 +57,14 @@ export class SessionHandler implements WebviewMessageHandler {
 	private improvePromptController: AbortController | null = null;
 	private improvePromptActiveRequestId: string | null = null;
 
+	/** Per-session message queue — up to MAX_QUEUE_SIZE per session (FIFO). */
+	private static readonly MAX_QUEUE_SIZE = 3;
+	private readonly pendingMessages = new Map<string, QueuedMessageData[]>();
+	private queueIdCounter = 0;
+
+	/** Per-session sending lock — prevents race between processQueueOnIdle and onSendMessage. */
+	private readonly sendingLock = new Set<string>();
+
 	constructor(private context: HandlerContext) {}
 
 	async handleMessage(msg: WebviewCommand): Promise<void> {
@@ -78,6 +86,15 @@ export class SessionHandler implements WebviewMessageHandler {
 				break;
 			case 'stopRequest':
 				await this.onStopRequest(msg);
+				break;
+			case 'cancelQueuedMessage':
+				this.onCancelQueuedMessage(msg);
+				break;
+			case 'forceQueuedMessage':
+				await this.onForceQueuedMessage(msg);
+				break;
+			case 'reorderQueue':
+				this.onReorderQueue(msg);
 				break;
 			case 'improvePromptRequest':
 				await this.onImprovePromptRequest(msg);
@@ -211,6 +228,10 @@ export class SessionHandler implements WebviewMessageHandler {
 				return;
 			}
 			this.postStatus(targetSessionId, 'idle', 'Ready');
+
+			// Auto-dequeue: if there's a queued message, send it now.
+			// This is the OpenCode-style "callback resolution" pattern.
+			void this.processQueueOnIdle(targetSessionId);
 		} else if (status?.type === 'retry') {
 			this.context.bridge.session.status(targetSessionId, 'retrying', 'Retrying…', {
 				attempt: typeof status.attempt === 'number' ? status.attempt : 1,
@@ -565,6 +586,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		this.context.sessionState.startedSessions.delete(sessionId);
 		this.replayedSessions.delete(sessionId);
 		this.clearSessionStats(sessionId);
+		this.clearPendingMessage(sessionId);
 
 		// If closing active session, clear backend reference
 		if (this.context.sessionState.activeSessionId === sessionId) {
@@ -576,8 +598,200 @@ export class SessionHandler implements WebviewMessageHandler {
 	}
 
 	private async onSendMessage(msg: CommandOf<'sendMessage'>): Promise<void> {
-		const { text, model: uiModel, sessionId, messageID, attachments } = msg;
+		const { text, model: uiModel, sessionId, messageID, attachments, planMode } = msg;
+
+		// Resolve target session
+		const targetId = sessionId || this.context.sessionState.activeSessionId;
+
+		// If editing history, clear the queue — queued messages reference a future
+		// that is about to be truncated, so they would produce nonsensical context.
+		if (messageID && targetId) {
+			this.clearPendingMessage(targetId);
+		}
+
+		// If the target session is busy OR currently sending (lock held by processQueueOnIdle/force),
+		// and this is NOT a message edit, queue the message.
+		if (
+			targetId &&
+			!messageID &&
+			(this.context.cli.isSessionActive?.(targetId) || this.sendingLock.has(targetId))
+		) {
+			logger.info('[SessionHandler] Session busy or sending, queuing message', {
+				sessionId: targetId,
+				textLen: text.length,
+			});
+			this.enqueueMessage(targetId, text, uiModel, planMode, attachments);
+			return;
+		}
+
 		await this.handleSendMessage(text, uiModel, sessionId, messageID, attachments);
+	}
+
+	private onCancelQueuedMessage(msg: CommandOf<'cancelQueuedMessage'>): void {
+		const { sessionId, queueId } = msg;
+		const queue = this.pendingMessages.get(sessionId);
+		if (!queue) return;
+		const idx = queue.findIndex(e => e.queueId === queueId);
+		if (idx === -1) return;
+		const [removed] = queue.splice(idx, 1);
+		if (queue.length === 0) this.pendingMessages.delete(sessionId);
+		logger.info('[SessionHandler] Cancelled queued message', { sessionId, queueId });
+		this.context.bridge.queue.update(
+			'cancelled',
+			sessionId,
+			queue.length > 0 ? [...queue] : [],
+			removed.text,
+			removed.attachments,
+			removed.planMode,
+		);
+	}
+
+	private onReorderQueue(msg: CommandOf<'reorderQueue'>): void {
+		const { sessionId, queueIds } = msg;
+		const queue = this.pendingMessages.get(sessionId);
+		if (!queue || queue.length < 2) return;
+
+		// O(1) lookup via Map instead of O(N) includes
+		const queueMap = new Map(queue.map(e => [e.queueId, e]));
+		const reordered: QueuedMessageData[] = [];
+		for (const id of queueIds) {
+			const entry = queueMap.get(id);
+			if (entry) {
+				reordered.push(entry);
+				queueMap.delete(id);
+			}
+		}
+		// Safety: keep any entries not in queueIds at the end
+		reordered.push(...queueMap.values());
+
+		this.pendingMessages.set(sessionId, reordered);
+		this.context.bridge.queue.update('enqueued', sessionId, [...reordered]);
+	}
+
+	private async onForceQueuedMessage(msg: CommandOf<'forceQueuedMessage'>): Promise<void> {
+		const { sessionId, queueId } = msg;
+		const queue = this.pendingMessages.get(sessionId);
+		if (!queue) return;
+		const idx = queue.findIndex(e => e.queueId === queueId);
+		if (idx === -1) return;
+		const [entry] = queue.splice(idx, 1);
+		if (queue.length === 0) this.pendingMessages.delete(sessionId);
+
+		// Only stop if session is actually busy (avoids false "Stopped by user")
+		const isBusy = this.context.cli.isSessionActive?.(sessionId) ?? false;
+		if (isBusy) {
+			// onStopRequest already awaits abortSession() — no setTimeout needed
+			await this.onStopRequest({ type: 'stopRequest', sessionId });
+		}
+
+		// Notify webview of updated queue
+		const remaining = this.pendingMessages.get(sessionId) ?? [];
+		this.context.bridge.queue.update('dequeued', sessionId, [...remaining]);
+
+		// Acquire sending lock to prevent race with concurrent onSendMessage
+		this.sendingLock.add(sessionId);
+		try {
+			await this.handleSendMessage(
+				entry.text,
+				entry.model,
+				entry.sessionId,
+				undefined,
+				entry.attachments,
+				entry.planMode,
+			);
+		} finally {
+			this.sendingLock.delete(sessionId);
+		}
+	}
+
+	/**
+	 * Called when a session transitions to idle. Dequeues the FIRST message
+	 * (FIFO) and sends it. Remaining messages stay in queue for next idle.
+	 */
+	public async processQueueOnIdle(sessionId: string): Promise<void> {
+		const queue = this.pendingMessages.get(sessionId);
+		if (!queue || queue.length === 0) return;
+		const entry = queue[0];
+		queue.shift();
+		if (queue.length === 0) this.pendingMessages.delete(sessionId);
+
+		logger.info('[SessionHandler] Auto-dequeuing message on idle', {
+			sessionId,
+			queueId: entry.queueId,
+		});
+
+		const remaining = this.pendingMessages.get(sessionId) ?? [];
+		this.context.bridge.queue.update('dequeued', sessionId, [...remaining]);
+
+		// Acquire sending lock to prevent race with concurrent onSendMessage
+		this.sendingLock.add(sessionId);
+		try {
+			await this.handleSendMessage(
+				entry.text,
+				entry.model,
+				entry.sessionId,
+				undefined,
+				entry.attachments,
+				entry.planMode,
+			);
+		} catch (error) {
+			logger.error('[SessionHandler] Failed to send dequeued message, returning to input', error);
+			this.context.bridge.queue.update(
+				'cancelled',
+				sessionId,
+				[...remaining],
+				entry.text,
+				entry.attachments,
+				entry.planMode,
+			);
+		} finally {
+			this.sendingLock.delete(sessionId);
+		}
+	}
+
+	// =========================================================================
+	// Inline Message Queue (up to MAX_QUEUE_SIZE per session, FIFO)
+	// =========================================================================
+
+	private enqueueMessage(
+		sessionId: string,
+		text: string,
+		model?: string,
+		planMode?: boolean,
+		attachments?: QueuedMessageData['attachments'],
+	): void {
+		const queue = this.pendingMessages.get(sessionId) ?? [];
+		if (queue.length >= SessionHandler.MAX_QUEUE_SIZE) {
+			logger.warn('[SessionHandler] Queue full, rejecting message', { sessionId });
+			// Return text and attachments to input so user doesn't lose them
+			this.context.bridge.queue.update(
+				'cancelled',
+				sessionId,
+				[...queue],
+				text,
+				attachments,
+				planMode,
+			);
+			return;
+		}
+		const entry: QueuedMessageData = {
+			queueId: `q-${Date.now()}-${++this.queueIdCounter}`,
+			text,
+			model,
+			sessionId,
+			planMode,
+			attachments,
+			queuedAt: Date.now(),
+		};
+		queue.push(entry);
+		this.pendingMessages.set(sessionId, queue);
+		this.context.bridge.queue.update('enqueued', sessionId, [...queue]);
+	}
+
+	private clearPendingMessage(sessionId: string): void {
+		if (this.pendingMessages.delete(sessionId)) {
+			this.context.bridge.queue.update('cleared', sessionId, []);
+		}
 	}
 
 	private async onStopRequest(msg: CommandOf<'stopRequest'>): Promise<void> {
@@ -639,6 +853,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		explicitSessionId?: string,
 		messageIdToTruncate?: string,
 		attachments?: CommandOf<'sendMessage'>['attachments'],
+		_planMode?: boolean,
 	): Promise<void> {
 		// Clear stop guard for the target session — user is explicitly sending
 		// a new message, so SSE 'busy' events should be allowed through again.

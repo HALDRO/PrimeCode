@@ -367,6 +367,27 @@ export class OutboundBridge {
 	};
 
 	// =========================================================================
+	// Message Queue
+	// =========================================================================
+
+	public readonly queue = {
+		/** Notify webview of a queue state change (enqueued, dequeued, cancelled, cleared). */
+		update: (
+			action: 'enqueued' | 'dequeued' | 'cancelled' | 'cleared',
+			sessionId: string,
+			queue: import('../common/protocol').QueuedMessageData[],
+			cancelledText?: string,
+			cancelledAttachments?: import('../common/protocol').SendMessageCommand['attachments'],
+			cancelledPlanMode?: boolean,
+		): void => {
+			this.send({
+				type: 'messageQueue',
+				data: { action, sessionId, queue, cancelledText, cancelledAttachments, cancelledPlanMode },
+			});
+		},
+	};
+
+	// =========================================================================
 	// Generic data messages (settings, providers, MCP, etc.)
 	// =========================================================================
 

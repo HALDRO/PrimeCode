@@ -11,6 +11,7 @@ import { ChangedFilesPanel } from './components/chat/ChangedFilesPanel';
 import { GenerationStatus } from './components/chat/GenerationStatus';
 import { MessageItem } from './components/chat/MessageItem';
 import { NotificationOverlay } from './components/chat/NotificationOverlay.tsx';
+import { QueuedMessageBanner } from './components/chat/QueuedMessageBanner';
 import { precomputeCollapseFlags } from './components/chat/SimpleTool';
 import { UserMessage } from './components/chat/UserMessage';
 import { Header } from './components/header/Header';
@@ -405,6 +406,9 @@ export const App: React.FC = () => {
 					}}
 				>
 					<NotificationOverlay />
+					<div className="px-(--content-padding-x)">
+						<QueuedMessageBanner />
+					</div>
 					<ChatInput />
 				</div>
 
@@ -435,6 +439,7 @@ export const App: React.FC = () => {
 			>
 				<NotificationOverlay />
 				<div className="px-(--content-padding-x)">
+					<QueuedMessageBanner />
 					<ChangedFilesPanel />
 				</div>
 				<ChatInput />

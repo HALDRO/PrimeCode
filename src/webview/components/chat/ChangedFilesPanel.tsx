@@ -205,7 +205,7 @@ const TodoHoverPopup = React.memo<{ todos: TodoItem[] }>(({ todos }) => {
 									className={cn(
 										'text-sm truncate',
 										todo.status === 'completed'
-											? 'text-vscode-foreground opacity-50 line-through'
+											? 'text-vscode-foreground opacity-50'
 											: todo.status === 'cancelled'
 												? 'text-vscode-foreground opacity-40 line-through'
 												: 'text-vscode-foreground opacity-90',
@@ -227,7 +227,7 @@ TodoHoverPopup.displayName = 'TodoHoverPopup';
  * Isolated Todo display component - subscribes to messages independently
  * so ChangedFilesPanel doesn't rerender on every message change
  */
-const TodoSection: React.FC<{ hasFiles: boolean }> = React.memo(({ hasFiles }) => {
+const TodoSection: React.FC = React.memo(() => {
 	const currentTodos = useTodoState();
 	const [showTodoPopup, setShowTodoPopup] = useState(false);
 
@@ -237,7 +237,7 @@ const TodoSection: React.FC<{ hasFiles: boolean }> = React.memo(({ hasFiles }) =
 
 	return (
 		<div
-			className={cn('relative flex justify-center', !hasFiles ? 'flex-1' : '')}
+			className="relative flex"
 			onMouseEnter={() => setShowTodoPopup(true)}
 			onMouseLeave={() => setShowTodoPopup(false)}
 		>
@@ -305,18 +305,38 @@ const FileRow = React.memo<{
 ));
 FileRow.displayName = 'FileRow';
 
+/**
+ * Standalone stats panel — always visible when no changed files.
+ * TodoSection pinned to the left, session stats centered.
+ */
+const StandaloneStatsPanel: React.FC = React.memo(() => (
+	<div className="w-full box-border relative bg-transparent">
+		<div className="bg-(--panel-header-bg) rounded-t-lg border border-(--panel-header-border) border-b-0 @container/panel">
+			<div className="relative flex items-center h-(--tool-header-height) px-(--tool-header-padding) text-(--changed-files-font-size) font-(family-name:--vscode-font-family)">
+				{/* Left-pinned todo counter */}
+				<div className="shrink-0">
+					<TodoSection />
+				</div>
+				{/* Centered session stats — fill remaining space */}
+				<div className="flex-1 min-w-0">
+					<SessionStatsDisplay mode="footer" className="border-0 h-auto px-0" />
+				</div>
+			</div>
+		</div>
+	</div>
+));
+StandaloneStatsPanel.displayName = 'StandaloneStatsPanel';
+
 export const ChangedFilesPanel: React.FC = React.memo(() => {
 	const { changedFiles } = useChangedFilesState();
-	const currentTodos = useTodoState();
-
 	const hasFiles = changedFiles.length > 0;
-	const hasTodos = Boolean(currentTodos && currentTodos.length > 0);
 
-	// Do not render the panel until there are changed files or a todo list.
-	if (!hasFiles && !hasTodos) {
-		return null;
+	// When no changed files — always show SessionStatsDisplay
+	if (!hasFiles) {
+		return <StandaloneStatsPanel />;
 	}
 
+	// When changed files exist — show the full ChangedFilesPanel (stats inside expanded)
 	return <ChangedFilesPanelContent />;
 });
 ChangedFilesPanel.displayName = 'ChangedFilesPanel';
@@ -494,7 +514,7 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 						</span>
 
 						{/* Center section - Todo status */}
-						<TodoSection hasFiles={hasFiles} />
+						<TodoSection />
 
 						{/* Right section - action buttons */}
 						<div className="flex items-center gap-1 ml-2 shrink-0">
@@ -569,13 +589,7 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 					</div>
 				)}
 
-				{!hasFiles && (
-					<SessionStatsDisplay
-						mode="footer"
-						leftContent={<TodoSection hasFiles={false} />}
-						className="border-t-0 rounded-none"
-					/>
-				)}
+				{/* Stats shown only when expanded */}
 			</div>
 		</div>
 	);
