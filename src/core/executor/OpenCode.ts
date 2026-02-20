@@ -26,6 +26,7 @@ import type {
 import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk';
 
 import { Value } from '@sinclair/typebox/value';
+import { parseModelId } from '../../common';
 import { PERMISSION_CATEGORIES } from '../../common/permissions';
 import { QuestionRequestSchema } from '../../common/schemas';
 import { logger } from '../../utils/logger';
@@ -1013,8 +1014,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		const sid = targetSessionId || this.sessionId;
 		if (!sid || !this.directory) throw new Error('No active session to compact');
 
-		const modelSpec = this.parseModel(config.model);
-		if (!modelSpec) {
+		const parsed = parseModelId(config.model ?? '');
+		if (!parsed) {
 			this.emitToolResult('compact', 'Error: No model configured for compaction.', true, sid);
 			return;
 		}
@@ -1043,7 +1044,10 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 
 		try {
-			await this.sessionSummarize(this.directory, sid, modelSpec);
+			await this.sessionSummarize(this.directory, sid, {
+				providerID: parsed.providerId,
+				modelID: parsed.modelId,
+			});
 			// The session.compacted SSE event will emit tool_result when done.
 		} catch (error) {
 			this.pendingCompactIds.delete(sid);
@@ -1228,11 +1232,11 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		config: CLIConfig,
 		attachments?: Parameters<CLIExecutor['spawnFollowUp']>[3],
 	): Promise<void> {
-		const modelSpec = this.parseModel(config.model);
-		const modelProviderId = modelSpec?.providerID || '';
+		const parsed = parseModelId(config.model ?? '');
+		const modelProviderId = parsed?.providerId || '';
 
 		const modelOverride = modelProviderId
-			? { model: { providerID: modelProviderId, modelID: modelSpec?.modelID || '' } }
+			? { model: { providerID: modelProviderId, modelID: parsed?.modelId || '' } }
 			: {};
 
 		// Build prompt parts: text + file attachments
@@ -1288,19 +1292,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				...(config.agent ? { agent: config.agent } : {}),
 			},
 		});
-	}
-
-	private parseModel(model?: string): { providerID: string; modelID: string } | undefined {
-		if (!model || !model.trim()) return undefined;
-		const trimmed = model.trim();
-		const slash = trimmed.indexOf('/');
-		if (slash <= 0 || slash === trimmed.length - 1) return undefined;
-
-		const providerID = trimmed.slice(0, slash).trim();
-		const modelID = trimmed.slice(slash + 1).trim();
-		if (!providerID || !modelID) return undefined;
-
-		return { providerID, modelID };
 	}
 
 	// =========================================================================

@@ -1,14 +1,5 @@
-/**
- * @file UserMessage - displays user messages in chat with sticky positioning
- * @description Renders user messages with structured attachments (files, code snippets, images).
- *              Attachments are stored in message.attachments and displayed as clickable badges.
- *              Falls back to text parsing for legacy messages without structured attachments.
- *              Includes MessageStats with timing, tokens, model info, and file changes.
- *              Uses the unified ChatInput for a full-featured editing experience.
- *              Session-specific data (changedFiles, restoreCommits) now comes from chatStore.
- */
-
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { resolveModelDisplayName } from '../../../common';
 
 import { useElapsedTimer } from '../../hooks/useElapsedTimer';
 
@@ -361,7 +352,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 		const isProcessing = useIsProcessing();
 		const chatActions = useChatActions();
 		const { setEditingMessageId } = chatActions;
-		const { selectedModel, opencodeProviders } = useSettingsStore();
+		const { selectedModel, opencodeProviders, proxyModels } = useSettingsStore();
 		const customCommands = useSettingsStore(state => state.commands.custom);
 		const cliCommands = useSettingsStore(state => state.commands.cli);
 		const subagents = useSettingsStore(state => state.subagents);
@@ -433,24 +424,9 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 				if (!modelId || modelId === 'default') {
 					return 'Default';
 				}
-
-				// For OpenCode models (format: "providerId/modelId")
-				if (modelId.includes('/')) {
-					const [providerId, modelIdPart] = modelId.split('/');
-					const provider = opencodeProviders.find(p => p.id === providerId);
-					if (provider) {
-						const model = provider.models.find(m => m.id === modelIdPart);
-						if (model) {
-							return model.name;
-						}
-					}
-					// Fallback to modelId part if provider/model not found
-					return modelIdPart;
-				}
-
-				return modelId;
+				return resolveModelDisplayName(modelId, opencodeProviders, proxyModels);
 			},
-			[opencodeProviders],
+			[opencodeProviders, proxyModels],
 		);
 
 		const restoreCommit = useMemo(() => {

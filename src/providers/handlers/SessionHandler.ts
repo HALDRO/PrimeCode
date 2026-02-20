@@ -6,7 +6,7 @@ import type {
 	SessionMessageUpdate,
 	TotalStats,
 } from '../../common';
-import { generateId } from '../../common';
+import { generateId, parseModelId } from '../../common';
 import { IMPROVE_PROMPT_DEFAULT_TEMPLATE } from '../../common/promptImprover';
 import type { CommandOf, QueuedMessageData, WebviewCommand } from '../../common/protocol';
 import { computeDiffLineStats, isFileEditTool } from '../../common/toolRegistry';
@@ -867,21 +867,20 @@ export class SessionHandler implements WebviewMessageHandler {
 
 		if (config.provider === 'opencode' && typeof config.model === 'string' && config.model.trim()) {
 			const selectedModel = config.model.trim();
-			// OpenCode model must be "provider/model".
-			if (!selectedModel.includes('/')) {
+			const parsed = parseModelId(selectedModel);
+			if (!parsed) {
 				// Drop the override to avoid silent invalid routing.
 				config.model = undefined;
 				modelNotice = `Invalid OpenCode model selection: "${selectedModel}". Expected "provider/model". Please reselect a model in Settings.`;
 			} else {
-				const [providerId, modelId] = selectedModel.split('/', 2);
 				const sdkClient = this.context.cli.getSdkClient();
 				if (sdkClient) {
 					try {
 						const providers = (await this.context.services.openCodeClient.getConnectedProviders(
 							sdkClient,
 						)) as OpenCodeProviderData[];
-						const provider = providers.find(p => p.id === providerId);
-						const exists = provider?.models?.some(m => m.id === modelId) ?? false;
+						const provider = providers.find(p => p.id === parsed.providerId);
+						const exists = provider?.models?.some(m => m.id === parsed.modelId) ?? false;
 						if (!exists) {
 							config.model = undefined;
 							modelNotice = `Selected model "${selectedModel}" is unavailable. Please reconnect provider or choose another model in Settings.`;
@@ -1516,16 +1515,10 @@ export class SessionHandler implements WebviewMessageHandler {
 		logger.info(`[ImprovePrompt] Temp session: ${sessionId}`);
 
 		try {
-			// Parse model string safely: "provider/model" or "provider/namespace/model"
-			// Use indexOf + slice to handle models with slashes in their names
-			const modelOverride = params.model?.includes('/')
-				? (() => {
-						const firstSlash = params.model.indexOf('/');
-						return {
-							providerID: params.model.slice(0, firstSlash),
-							modelID: params.model.slice(firstSlash + 1),
-						};
-					})()
+			// Parse model string safely using shared utility
+			const parsedModel = params.model ? parseModelId(params.model) : undefined;
+			const modelOverride = parsedModel
+				? { providerID: parsedModel.providerId, modelID: parsedModel.modelId }
 				: undefined;
 
 			// 2. Synchronous prompt — blocks until the LLM finishes, returns full response

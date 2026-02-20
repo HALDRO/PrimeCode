@@ -506,12 +506,8 @@ export const InlineToolLine: React.FC<InlineToolLineProps> = ({
 	const completedCount = todos.filter(t => t.status === 'completed').length;
 	const totalCount = todos.length;
 
-	// Todo starts expanded only on initial creation (0 completed out of N).
-	// All subsequent states (updates, completion) start collapsed.
-	// User can manually toggle at any time.
-	const [todoExpanded, setTodoExpanded] = useState(
-		isTodoWrite && totalCount > 0 && completedCount === 0,
-	);
+	// Todo always starts collapsed. User can manually toggle to expand.
+	const [todoExpanded, setTodoExpanded] = useState(false);
 
 	const listEntries = useMemo(() => {
 		if (!isListDir) return [];

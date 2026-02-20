@@ -6,6 +6,7 @@
  */
 
 import { useShallow } from 'zustand/react/shallow';
+import { parseModelId } from '../../common';
 import {
 	type ChangedFile,
 	type ChatSession,
@@ -395,17 +396,15 @@ const STANDARD_MODEL_CONTEXT: Record<string, number> = {
 export const useModelContextWindow = () =>
 	useSettingsStore((state: SettingsState) => {
 		const { selectedModel, opencodeProviders, proxyModels } = state;
-		if (selectedModel.includes('/')) {
-			const slashIndex = selectedModel.indexOf('/');
-			const providerId = selectedModel.substring(0, slashIndex);
-			const modelId = selectedModel.substring(slashIndex + 1);
-			if (providerId === 'proxy' || providerId === 'oai') {
-				const proxyModel = proxyModels.find(m => m.id === modelId);
+		const parsed = parseModelId(selectedModel);
+		if (parsed) {
+			if (parsed.providerId === 'proxy' || parsed.providerId === 'oai') {
+				const proxyModel = proxyModels.find(m => m.id === parsed.modelId);
 				if (proxyModel?.contextLength) return proxyModel.contextLength;
 			}
-			const provider = opencodeProviders.find(p => p.id === providerId);
+			const provider = opencodeProviders.find(p => p.id === parsed.providerId);
 			if (provider) {
-				const model = provider.models.find(m => m.id === modelId);
+				const model = provider.models.find(m => m.id === parsed.modelId);
 				if (model?.limit?.context) return model.limit.context;
 			}
 		}

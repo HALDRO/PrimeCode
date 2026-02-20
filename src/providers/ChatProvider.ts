@@ -764,11 +764,20 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			}
 
 			case 'error': {
+				// Suppress abort errors when the user explicitly stopped the session.
+				// The backend emits a session.error ("The operation was aborted") after
+				// we call abortSession(), but the user already sees "Stopped by user"
+				// via the 'interrupted' message — showing the abort error is redundant.
+				const errorMsg = event.data.message || '';
+				if (this.sessionState.isStopGuarded(targetSessionId) && /abort/i.test(errorMsg)) {
+					break;
+				}
+
 				const errorId = `error-${now}`;
 				const errorData: import('../common').SessionMessageData = {
 					id: errorId,
 					type: 'error',
-					content: event.data.message || 'Unknown error',
+					content: errorMsg || 'Unknown error',
 					isError: true,
 					timestamp: new Date().toISOString(),
 					normalizedEntry: event.normalizedEntry,

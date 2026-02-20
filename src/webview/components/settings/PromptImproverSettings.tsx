@@ -6,6 +6,7 @@
 
 import type React from 'react';
 import { useCallback, useMemo, useRef, useState } from 'react';
+import { resolveModelDisplayName } from '../../../common';
 import { IMPROVE_PROMPT_DEFAULT_TEMPLATE } from '../../../common/promptImprover';
 import { cn } from '../../lib/cn';
 import { useSettingsActions, useSettingsStore } from '../../store';
@@ -16,7 +17,8 @@ import { Button, type DropdownMenuItem, TextArea } from '../ui';
 import { GroupTitle, SettingRow, SettingsGroup } from './SettingsUI';
 
 export const PromptImproverSettings: React.FC = () => {
-	const { promptImproveModel, promptImproveTemplate } = useSettingsStore();
+	const { promptImproveModel, promptImproveTemplate, opencodeProviders, proxyModels } =
+		useSettingsStore();
 	const { setSettings } = useSettingsActions();
 	const { postMessage } = useVSCode();
 	const [expanded, setExpanded] = useState(false);
@@ -66,9 +68,8 @@ export const PromptImproverSettings: React.FC = () => {
 
 	const selectedModelLabel = useMemo(() => {
 		if (!promptImproveModel) return 'Use main model';
-		const parts = promptImproveModel.split('/');
-		return parts.length > 1 ? parts.slice(1).join('/') : promptImproveModel;
-	}, [promptImproveModel]);
+		return resolveModelDisplayName(promptImproveModel, opencodeProviders, proxyModels);
+	}, [promptImproveModel, opencodeProviders, proxyModels]);
 
 	const currentTemplate = promptImproveTemplate || IMPROVE_PROMPT_DEFAULT_TEMPLATE;
 

@@ -15,6 +15,7 @@ import React, {
 	useState,
 } from 'react';
 
+import { resolveModelDisplayName } from '../../../common';
 import { useFileAttachments } from '../../hooks/useFileAttachments';
 import { cn } from '../../lib/cn';
 import {
@@ -726,21 +727,7 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 				return 'Default';
 			}
 
-			// Check proxy models
-			const proxyModel = proxyModels.find(m => m.id === effectiveSelectedModel);
-			if (proxyModel) {
-				return proxyModel.name;
-			}
-
-			// Handle OpenCode models (format: "providerId/modelId")
-			if (effectiveSelectedModel.includes('/')) {
-				const [providerId, modelId] = effectiveSelectedModel.split('/');
-				const provider = opencodeProviders.find(p => p.id === providerId);
-				const model = provider?.models.find(m => m.id === modelId);
-				return model?.name || modelId;
-			}
-
-			return effectiveSelectedModel;
+			return resolveModelDisplayName(effectiveSelectedModel, opencodeProviders, proxyModels);
 		}, [selectedModel, proxyModels, opencodeProviders, getSessionModel]);
 
 		return (

@@ -42,6 +42,66 @@ export const isNonDisconnectableProviderId = (providerId: string): boolean => {
 // =============================================================================
 
 /**
+ * Parses a composite model ID ("providerId/modelId") into its parts.
+ * Only splits on the first "/" so model IDs containing "/" are preserved.
+ *
+ * @example
+ * parseModelId("anthropic/claude-opus-4-5")  // { providerId: "anthropic", modelId: "claude-opus-4-5" }
+ * parseModelId("provider/ns/model")          // { providerId: "provider", modelId: "ns/model" }
+ * parseModelId("no-slash")                   // undefined
+ */
+export const parseModelId = (
+	compositeId: string,
+): { providerId: string; modelId: string } | undefined => {
+	if (!compositeId) return undefined;
+	const trimmed = compositeId.trim();
+	const slash = trimmed.indexOf('/');
+	if (slash <= 0 || slash === trimmed.length - 1) return undefined;
+	return {
+		providerId: trimmed.substring(0, slash),
+		modelId: trimmed.substring(slash + 1),
+	};
+};
+
+/**
+ * Resolves a composite model ID to its display name by looking up providers and proxy models.
+ * Returns model.name if found, otherwise falls back to the modelId part, or the raw ID.
+ *
+ * @example
+ * resolveModelDisplayName("minimax/minimax-m2.5-free", providers)  // "MiniMax M2.5 Free"
+ * resolveModelDisplayName("oai/gpt-4", providers, proxyModels)     // "GPT-4"
+ * resolveModelDisplayName("default", providers)                    // "default"
+ */
+export const resolveModelDisplayName = (
+	compositeId: string,
+	providers: ReadonlyArray<{ id: string; models: ReadonlyArray<{ id: string; name: string }> }>,
+	proxyModels?: ReadonlyArray<{ id: string; name: string }>,
+): string => {
+	if (!compositeId) return '';
+
+	const parsed = parseModelId(compositeId);
+
+	if (!parsed) {
+		// No slash — check proxy models by raw ID
+		if (proxyModels) {
+			const pm = proxyModels.find(m => m.id === compositeId);
+			if (pm) return pm.name;
+		}
+		return compositeId;
+	}
+
+	// Check proxy models for proxy/oai provider prefixes
+	if (proxyModels && (parsed.providerId === 'proxy' || parsed.providerId === 'oai')) {
+		const pm = proxyModels.find(m => m.id === parsed.modelId);
+		if (pm) return pm.name;
+	}
+
+	const provider = providers.find(p => p.id === parsed.providerId);
+	const model = provider?.models.find(m => m.id === parsed.modelId);
+	return model?.name || parsed.modelId;
+};
+
+/**
  * Strips any provider prefix from a model name (e.g., "oai/model" -> "model", "google/model" -> "model").
  * Provider prefix is the part before the first "/" that doesn't contain special characters like "[".
  *
