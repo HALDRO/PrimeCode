@@ -604,7 +604,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 		const showUnrevert = isRevertPoint && unrevertAvailable;
 		const showRestore = restoreCommit && !isRevertPoint;
 
-		const [isSticky, setIsSticky] = useState(false);
+		const [_isSticky, setIsSticky] = useState(false);
 		const containerRef = useRef<HTMLDivElement>(null);
 
 		// Use IntersectionObserver instead of per-instance scroll listeners.
@@ -665,7 +665,6 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 				<div
 					className={cn(
 						'flex flex-col relative w-full bg-(--input-bg) border border-(--input-border) rounded-(--input-radius) overflow-hidden transition-all duration-150 ease-out',
-						isSticky ? 'shadow-[0_4px_12px_0px_rgba(0,0,0,0.15)]' : 'shadow-none',
 					)}
 				>
 					{/* Restore/Unrevert buttons in top-right corner - mutually exclusive */}

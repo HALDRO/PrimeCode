@@ -55,7 +55,7 @@ export const PathChip: React.FC<PathChipProps> = ({
 	const canClick = Boolean(onClick);
 
 	const chip = (
-		<div
+		<span
 			className={cn(
 				'inline-flex items-center gap-(--gap-0-5) px-(--gap-1-5) py-0 h-(--badge-height) rounded-sm shrink-0 group/pathchip',
 				'text-xs border border-(--border-subtle) bg-transparent transition-colors duration-75 ease-out',
@@ -80,8 +80,8 @@ export const PathChip: React.FC<PathChipProps> = ({
 				}
 			}}
 		>
-			<div className="relative flex items-center justify-center w-(--icon-sm) h-(--icon-sm) shrink-0">
-				<div
+			<span className="relative flex items-center justify-center w-(--icon-sm) h-(--icon-sm) shrink-0">
+				<span
 					className={cn(
 						'transition-all duration-75 flex items-center justify-center',
 						onRemove && 'group-hover/pathchip:opacity-0 group-hover/pathchip:scale-50',
@@ -92,7 +92,7 @@ export const PathChip: React.FC<PathChipProps> = ({
 						size={14}
 						isFolder={isFolder ?? /[\\/]$/.test(path)}
 					/>
-				</div>
+				</span>
 				{onRemove && (
 					<button
 						type="button"
@@ -110,7 +110,7 @@ export const PathChip: React.FC<PathChipProps> = ({
 						<SmallCloseIcon size={12} />
 					</button>
 				)}
-			</div>
+			</span>
 
 			<span className="opacity-90 overflow-hidden text-ellipsis whitespace-nowrap leading-none mb-px">
 				{displayLabel}
@@ -121,7 +121,7 @@ export const PathChip: React.FC<PathChipProps> = ({
 					:{line}
 				</span>
 			)}
-		</div>
+		</span>
 	);
 
 	if (effectiveTitle) {

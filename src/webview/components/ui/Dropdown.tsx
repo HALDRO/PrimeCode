@@ -469,7 +469,7 @@ export function DropdownMenu<T>({
 				}}
 				onMouseLeave={() => setHoveredIndex(null)}
 				className={cn(
-					'flex items-center gap-(--gap-1-5) pl-(--gap-4) pr-(--gap-3) py-0 -mx-(--gap-2) rounded-sm cursor-pointer h-(--dropdown-item-height) text-sm leading-none',
+					'flex items-center gap-(--gap-1-5) pl-(--gap-4) pr-(--gap-3) py-0 -mx-(--gap-2) rounded-sm cursor-pointer h-(--dropdown-item-height) text-sm leading-[1.2]',
 					item.disabled
 						? 'cursor-not-allowed opacity-50 text-(--alpha-30)'
 						: item.danger
@@ -490,18 +490,22 @@ export function DropdownMenu<T>({
 						wrapperStyle={{ flex: 1, minWidth: 0, alignItems: 'center', gap: 'var(--gap-1-5)' }}
 					>
 						{item.icon && <span className="flex shrink-0 opacity-70">{item.icon}</span>}
-						<span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
+						<span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap leading-[1.2]">
 							{item.label}
 						</span>
-						{item.meta && <span className="shrink-0 text-(--alpha-40)">{item.meta}</span>}
+						{item.meta && (
+							<span className="shrink-0 text-(--alpha-40) leading-[1.2]">{item.meta}</span>
+						)}
 					</Tooltip>
 				) : (
 					<>
 						{item.icon && <span className="flex shrink-0 opacity-70">{item.icon}</span>}
-						<span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
+						<span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap leading-[1.2]">
 							{item.label}
 						</span>
-						{item.meta && <span className="shrink-0 text-(--alpha-40)">{item.meta}</span>}
+						{item.meta && (
+							<span className="shrink-0 text-(--alpha-40) leading-[1.2]">{item.meta}</span>
+						)}
 					</>
 				)}
 			</div>

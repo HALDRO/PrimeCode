@@ -702,26 +702,28 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 		};
 
 		const getModelDisplayName = useCallback(() => {
-			if (selectedModel === 'default') {
+			const effectiveSelectedModel = getSessionModel() ?? selectedModel;
+
+			if (effectiveSelectedModel === 'default') {
 				return 'Default';
 			}
 
 			// Check proxy models
-			const proxyModel = proxyModels.find(m => m.id === selectedModel);
+			const proxyModel = proxyModels.find(m => m.id === effectiveSelectedModel);
 			if (proxyModel) {
 				return proxyModel.name;
 			}
 
 			// Handle OpenCode models (format: "providerId/modelId")
-			if (selectedModel.includes('/')) {
-				const [providerId, modelId] = selectedModel.split('/');
+			if (effectiveSelectedModel.includes('/')) {
+				const [providerId, modelId] = effectiveSelectedModel.split('/');
 				const provider = opencodeProviders.find(p => p.id === providerId);
 				const model = provider?.models.find(m => m.id === modelId);
 				return model?.name || modelId;
 			}
 
-			return selectedModel;
-		}, [selectedModel, proxyModels, opencodeProviders]);
+			return effectiveSelectedModel;
+		}, [selectedModel, proxyModels, opencodeProviders, getSessionModel]);
 
 		return (
 			<div

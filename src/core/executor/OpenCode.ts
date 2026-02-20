@@ -39,6 +39,8 @@ import type { CLIConfig, CLIEvent, CLIExecutor } from './types';
 /** Single entry from `client.session.messages()` response. */
 type SessionMessageEntry = { info: Message; parts: Part[] };
 
+type AssistantInfo = Extract<Message, { role: 'assistant' }>;
+
 /**
  * Extended session status that includes an 'other' fallback for unknown status types.
  * Mirrors SDK `SessionStatus` but adds graceful degradation.
@@ -88,7 +90,22 @@ type OpenCodePart =
 				name?: string;
 			};
 	  }
+	| {
+			type: 'compaction';
+			messageID?: string;
+			sessionID?: string;
+			auto?: boolean;
+	  }
 	| { type: 'other'; raw: unknown; sessionID?: string };
+
+function isAssistantMessage(info: Message): info is AssistantInfo {
+	return info.role === 'assistant';
+}
+
+function getTokenTotal(tokens: AssistantInfo['tokens']): number {
+	const runtimeTotal = Reflect.get(tokens as object, 'total');
+	return typeof runtimeTotal === 'number' ? runtimeTotal : tokens.input + tokens.output;
+}
 
 // =============================================================================
 // Executor Implementation
@@ -112,6 +129,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 	/** All session IDs that are currently active (main + subagent children). */
 	private readonly activeSessions = new Set<string>();
+	/** Maps sessionID → pending compact tool_use ID, so SSE handler can emit matching tool_result. */
+	private readonly pendingCompactIds = new Map<string, string>();
 
 	/** Guards against concurrent ensureServer calls. */
 	private ensureServerPromise: Promise<void> | null = null;
@@ -643,6 +662,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			}> = [];
 			// Track current user message ID for assistant messages without parentID
 			let currentUserMessageId: string | undefined;
+			// Track pending compaction tool_use ID so the next compaction assistant emits tool_result
+			let pendingCompactToolId: string | undefined;
 
 			const events = messages.flatMap((msg: SessionMessageEntry) => {
 				const { info, parts } = msg;
@@ -674,9 +695,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 					// Collect cumulative snapshot for this turn (deltas computed after flatMap)
 					const turnKey = info.parentID || currentUserMessageId;
 					if (turnKey && (tokens.input > 0 || tokens.output > 0)) {
-						const total =
-							((tokens as Record<string, unknown>).total as number | undefined) ??
-							tokens.input + tokens.output;
+						const total = getTokenTotal(tokens);
 						// Compute per-assistant-message duration
 						let msgDuration = 0;
 						const msgCreated = info.time?.created;
@@ -697,12 +716,72 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 							durationMs: msgDuration,
 						});
 					}
+
+					// Handle compaction assistant messages — absorb into tool_result
+					const assistantInfo = info as Record<string, unknown>;
+					if (assistantInfo.mode === 'compaction' && pendingCompactToolId) {
+						// Extract text from parts for the summary content
+						const textParts = parts
+							.map(p => this.normalizePart(p))
+							.filter(
+								(p): p is { type: 'text'; text: string } =>
+									p.type === 'text' && Boolean((p as { text?: string }).text),
+							)
+							.map(p => (p as { text: string }).text);
+						if (textParts.length > 0) {
+							// Emit tool_result with the summary text, then clear pending
+							const toolId = pendingCompactToolId;
+							pendingCompactToolId = undefined;
+							return [
+								{
+									type: 'tool_result' as const,
+									data: {
+										tool_use_id: toolId,
+										name: 'Summarize Conversation',
+										tool: 'Summarize Conversation',
+										content: textParts.join('\n'),
+										is_error: false,
+									},
+									sessionId,
+								},
+							];
+						}
+						// Empty compaction assistant (aborted) — skip entirely
+						return [];
+					}
 				}
 
 				// For user messages, collect file parts to reconstruct attachments
 				if (role === 'user') {
 					currentUserMessageId = info.id;
-					const { content, attachments } = this.extractUserMessageParts(parts);
+					const { content, attachments, isCompaction } = this.extractUserMessageParts(parts);
+
+					// Compaction user messages — emit tool_use only, tool_result comes from next assistant
+					if (isCompaction) {
+						const compactId = `compact-hist-${info.id}`;
+						// If there's already a pending compaction (retry), don't emit another tool_use
+						// Just update the pending ID so the next assistant's text goes to the right tool_result
+						if (pendingCompactToolId) {
+							pendingCompactToolId = compactId;
+							return [];
+						}
+						pendingCompactToolId = compactId;
+						return [
+							{
+								type: 'tool_use' as const,
+								data: {
+									id: compactId,
+									name: 'Summarize Conversation',
+									tool: 'Summarize Conversation',
+									toolUseId: compactId,
+									input: {},
+									state: 'completed',
+									timestamp,
+								},
+								sessionId,
+							},
+						];
+					}
 
 					return [
 						{
@@ -886,7 +965,12 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		logger.info('[OpenCode] Metadata cache preloaded');
 	}
 
-	async executeCommand(command: string, _args: string[], config: CLIConfig): Promise<void> {
+	async executeCommand(
+		command: string,
+		_args: string[],
+		config: CLIConfig,
+		sessionId?: string,
+	): Promise<void> {
 		if (!this.serverUrl) await this.ensureServer(config);
 		if (!this.directory) throw new Error('OpenCode server not ready');
 
@@ -896,7 +980,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		switch (cmd) {
 			case 'compact':
 			case 'summarize':
-				await this.handleCompactCommand(config);
+				await this.handleCompactCommand(config, sessionId);
 				break;
 			case 'commands':
 				await this.handleListCommand('commands', () => this.listCommands(directory));
@@ -925,20 +1009,45 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 	}
 
-	private async handleCompactCommand(config: CLIConfig): Promise<void> {
-		if (!this.sessionId || !this.directory) throw new Error('No active session to compact');
+	private async handleCompactCommand(config: CLIConfig, targetSessionId?: string): Promise<void> {
+		const sid = targetSessionId || this.sessionId;
+		if (!sid || !this.directory) throw new Error('No active session to compact');
 
 		const modelSpec = this.parseModel(config.model);
 		if (!modelSpec) {
-			this.emitToolResult('compact', 'Error: No model configured for compaction.', true);
+			this.emitToolResult('compact', 'Error: No model configured for compaction.', true, sid);
 			return;
 		}
 
+		// Emit tool_use immediately in "running" state so the user sees a spinner card
+		const compactId = `compact-${Date.now()}`;
+		this.pendingCompactIds.set(sid, compactId);
+		this.emit('event', {
+			type: 'tool_use' as const,
+			data: {
+				id: compactId,
+				name: 'Summarize Conversation',
+				tool: 'Summarize Conversation',
+				toolUseId: compactId,
+				input: {},
+				state: 'running',
+				timestamp: new Date().toISOString(),
+			},
+			sessionId: sid,
+		});
+
+		// Ensure SSE stream is running — summarize triggers async server-side
+		// processing that emits message.part.updated, session.compacted, etc.
+		if (this.serverUrl) {
+			this.startEventStream(this.serverUrl, config.workspaceRoot);
+		}
+
 		try {
-			await this.sessionSummarize(this.directory, this.sessionId, modelSpec);
-			this.emitToolResult('compact', 'Session compacted successfully.');
+			await this.sessionSummarize(this.directory, sid, modelSpec);
+			// The session.compacted SSE event will emit tool_result when done.
 		} catch (error) {
-			this.emitToolResult('compact', `Error compacting session: ${String(error)}`, true);
+			this.pendingCompactIds.delete(sid);
+			this.emitToolResult('compact', `Error compacting session: ${String(error)}`, true, sid);
 		}
 	}
 
@@ -947,10 +1056,11 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		this.emitToolResult(name, JSON.stringify(data, null, 2));
 	}
 
-	private emitToolResult(name: string, content: string, isError = false): void {
+	private emitToolResult(name: string, content: string, isError = false, sessionId?: string): void {
 		this.emit('event', {
 			type: 'tool_result',
 			data: { tool_use_id: 'system', name, content, is_error: isError },
+			sessionId: sessionId || this.sessionId || undefined,
 		});
 	}
 
@@ -1296,6 +1406,58 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				});
 				break;
 			}
+			case 'session.compacted': {
+				// Compaction completed — emit tool_result to complete the running tool card
+				const props = (envelope as { type: string; properties: { sessionID: string } }).properties;
+				const sid = props.sessionID;
+				logger.info('[OpenCode] Session compacted', { sessionId: sid });
+
+				// Use the pending compact ID if we initiated it, otherwise create a new pair
+				const pendingId = this.pendingCompactIds.get(sid);
+				if (pendingId) {
+					// We already emitted tool_use in running state — just emit tool_result
+					this.pendingCompactIds.delete(sid);
+					this.emit('event', {
+						type: 'tool_result' as const,
+						data: {
+							tool_use_id: pendingId,
+							name: 'Summarize Conversation',
+							tool: 'Summarize Conversation',
+							content: 'Session context compacted successfully.',
+							is_error: false,
+						},
+						sessionId: sid,
+					});
+				} else {
+					// Auto-compaction from server (not user-initiated) — emit both tool_use + tool_result
+					const compactId = `compact-${Date.now()}`;
+					this.emit('event', {
+						type: 'tool_use' as const,
+						data: {
+							id: compactId,
+							name: 'Summarize Conversation',
+							tool: 'Summarize Conversation',
+							toolUseId: compactId,
+							input: {},
+							state: 'completed',
+							timestamp: new Date().toISOString(),
+						},
+						sessionId: sid,
+					});
+					this.emit('event', {
+						type: 'tool_result' as const,
+						data: {
+							tool_use_id: compactId,
+							name: 'Summarize Conversation',
+							tool: 'Summarize Conversation',
+							content: 'Session context compacted successfully.',
+							is_error: false,
+						},
+						sessionId: sid,
+					});
+				}
+				break;
+			}
 		}
 	}
 
@@ -1303,12 +1465,12 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		this.messageRoles.set(info.id, info.role);
 
 		// Extract token stats from assistant messages (OpenCode SSE format)
-		if (info.role === 'assistant') {
+		if (isAssistantMessage(info)) {
 			const { tokens } = info;
+			const userMessageId = info.parentID;
 			const input = tokens.input;
 			const output = tokens.output;
-			const total =
-				((tokens as Record<string, unknown>).total as number | undefined) ?? input + output;
+			const total = getTokenTotal(tokens);
 			const cacheRead = tokens.cache.read;
 
 			// Compute deltas from last known values (message.updated sends cumulative)
@@ -1399,6 +1561,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 						outputTokens: accum.output,
 						totalTokens: accumTotal,
 						cacheReadTokens: accum.cacheRead,
+						...(userMessageId ? { userMessageId } : {}),
 						...(durationMs ? { durationMs } : {}),
 					},
 					sessionId,
@@ -1601,6 +1764,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 	private extractUserMessageParts(parts: Part[]): {
 		content: string;
+		isCompaction?: boolean;
 		attachments?: {
 			files?: string[];
 			codeSnippets?: Array<{
@@ -1621,10 +1785,13 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			content: string;
 		}> = [];
 		const images: Array<{ id: string; name: string; dataUrl: string; path?: string }> = [];
+		let hasCompaction = false;
 
 		for (const sdkPart of parts) {
 			const part = this.normalizePart(sdkPart);
-			if (part.type === 'text' && part.text) {
+			if (part.type === 'compaction') {
+				hasCompaction = true;
+			} else if (part.type === 'text' && part.text) {
 				textParts.push(part.text);
 			} else if (part.type === 'file') {
 				if (part.mime.startsWith('image/')) {
@@ -1661,6 +1828,12 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 		const content = textParts.join('\n');
 		const hasAttachments = files.length > 0 || codeSnippets.length > 0 || images.length > 0;
+
+		// If this is a compaction message, return special marker
+		if (hasCompaction) {
+			return { content: '', isCompaction: true };
+		}
+
 		return {
 			content,
 			...(hasAttachments
@@ -1745,6 +1918,20 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				url: filePart.url,
 				filename: filePart.filename,
 				source: filePart.source,
+			};
+		}
+		if (raw.type === 'compaction') {
+			const compactionPart = raw as {
+				messageID: string;
+				sessionID: string;
+				type: 'compaction';
+				auto: boolean;
+			};
+			return {
+				type: 'compaction',
+				messageID: compactionPart.messageID,
+				sessionID: compactionPart.sessionID,
+				auto: compactionPart.auto,
 			};
 		}
 		return { type: 'other', raw, sessionID: 'sessionID' in raw ? raw.sessionID : undefined };

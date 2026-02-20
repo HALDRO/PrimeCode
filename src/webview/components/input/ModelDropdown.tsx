@@ -55,11 +55,15 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 		enabledOpenCodeModels,
 		disabledProviders,
 		setSessionModel,
+		getSessionModel,
 	} = useModelSelection();
 	const { setShowModelDropdown } = useModelDropdownState();
 
 	// OpenAI-compatible provider ID used by settings/UI
 	const OPENAI_COMPATIBLE_ID = OPENAI_COMPATIBLE_PROVIDER_ID;
+
+	// Use per-session model if set, otherwise fall back to workspace default
+	const effectiveModel = getSessionModel() ?? selectedModel;
 
 	// Filter proxy models to only show enabled ones (and only if proxy provider is not disabled)
 	const enabledProxyModelsList = useMemo(
@@ -131,14 +135,14 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 					onClick={props.onSelect}
 					onMouseEnter={props.onHover}
 					className={cn(
-						'flex items-center gap-(--gap-1-5) pl-(--gap-4) pr-(--gap-3) py-0 -mx-(--gap-2) rounded-sm cursor-pointer h-(--dropdown-item-height) text-sm leading-none transition-colors',
+						'flex items-center gap-(--gap-1-5) pl-(--gap-4) pr-(--gap-3) py-0 -mx-(--gap-2) rounded-sm cursor-pointer h-(--dropdown-item-height) text-sm leading-[1.2] transition-colors',
 						item.disabled ? 'cursor-not-allowed opacity-50 text-(--alpha-30)' : 'text-(--alpha-90)',
 						props.selected && !item.disabled && 'bg-(--alpha-10)',
 						isSelected && 'text-(--color-accent) font-medium bg-(--color-accent)/10',
 					)}
 				>
 					{item.icon && <span className="flex shrink-0 opacity-70">{item.icon}</span>}
-					<span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
+					<span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap leading-[1.2]">
 						{item.label}
 					</span>
 					{item.data.capabilities?.reasoning && (
@@ -146,7 +150,9 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 							<BrainSideIcon size={14} />
 						</span>
 					)}
-					{item.meta && <span className="shrink-0 text-xs text-(--alpha-40)">{item.meta}</span>}
+					{item.meta && (
+						<span className="shrink-0 text-xs text-(--alpha-40) leading-[1.2]">{item.meta}</span>
+					)}
 				</div>
 			);
 		},
@@ -154,7 +160,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 	);
 
 	// Resolve which model id to use for "active" highlighting
-	const effectiveActiveModel = activeModelId ?? selectedModel;
+	const effectiveActiveModel = activeModelId ?? effectiveModel;
 
 	// Build flat list of models with provider as badge
 	const items = useMemo((): DropdownMenuItem<ModelData>[] => {

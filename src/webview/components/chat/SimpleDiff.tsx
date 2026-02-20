@@ -74,6 +74,22 @@ function parseUnifiedDiff(diffText: string): DiffLine[] | null {
 }
 
 /**
+ * Extract best-effort file path from unified diff headers.
+ * Supports `+++ b/path`, `--- a/path`, and plain `+++ path` forms.
+ */
+function extractPathFromUnifiedDiff(diffText: string): string | undefined {
+	const lines = diffText.split('\n');
+	for (const line of lines) {
+		if (!line.startsWith('+++ ') && !line.startsWith('--- ')) continue;
+		const raw = line.slice(4).trim();
+		if (!raw || raw === '/dev/null') continue;
+		const normalized = raw.replace(/^([ab])\//, '');
+		if (normalized) return normalized;
+	}
+	return undefined;
+}
+
+/**
  * Convert raw text content into "all added" or "all removed" DiffLine[].
  * Used for Write (new file) and Delete cases where there's no before/after pair.
  */
@@ -196,6 +212,13 @@ export function resolveDiffData(params: {
 		if (change) {
 			hasDeleteChange = change.type === 'Delete';
 		}
+	} else if (actionRec?.type === 'ApplyPatch') {
+		const filesRaw = actionRec.files;
+		const firstFile = Array.isArray(filesRaw) ? asRecord(filesRaw[0]) : undefined;
+		if (firstFile) {
+			effectiveFilePath = typeof firstFile.path === 'string' ? firstFile.path : '';
+			hasDeleteChange = firstFile.status === 'delete';
+		}
 	}
 
 	// 2. Tool result metadata — try unified diff (O(N))
@@ -206,6 +229,10 @@ export function resolveDiffData(params: {
 	if (unifiedDiff) {
 		const parsed = parseUnifiedDiff(unifiedDiff);
 		if (parsed) lines = parsed;
+		if (!effectiveFilePath) {
+			const pathFromDiff = extractPathFromUnifiedDiff(unifiedDiff);
+			if (pathFromDiff) effectiveFilePath = pathFromDiff;
+		}
 	}
 
 	// 3. If no unified diff, try filediff path extraction

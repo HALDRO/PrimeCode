@@ -727,8 +727,22 @@ export class SessionHandler implements WebviewMessageHandler {
 				);
 			}
 
-			// Post user message and send to CLI
+			// Intercept internal slash commands that need special routing.
+			// /compact and /summarize must call the summarize API endpoint,
+			// not be sent as regular text prompts.
 			const isOpenCode = config.provider === 'opencode';
+			const slashMatch = text.trim().match(/^\/(\S+)(?:\s+(.*))?$/);
+			const slashCmd = slashMatch?.[1]?.toLowerCase();
+
+			if (isOpenCode && (slashCmd === 'compact' || slashCmd === 'summarize')) {
+				// Don't post user message — compact is a system operation
+				logger.info('[SessionHandler] Routing /compact to executeCommand', { sessionId: activeId });
+				this.postStatus(activeId, 'busy', 'Compacting session...');
+				await this.context.cli.executeCommand(text.trim(), [], config, activeId);
+				return;
+			}
+
+			// Post user message and send to CLI
 			const prefix = isOpenCode ? 'msg' : 'user';
 			// Reuse edited message ID for UI merge (prevents duplicate user bubble after edit).
 			const userMessageId = messageIdToTruncate || generateId(prefix);

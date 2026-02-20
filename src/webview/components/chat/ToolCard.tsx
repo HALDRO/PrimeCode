@@ -413,11 +413,15 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 
 		const isMcp = isMcpTool(toolName, mcpServerNames);
 		const isBash = isToolMatch(toolName, 'Bash') || actionType?.type === 'CommandRun';
+		const isSummarize = toolName === 'Summarize Conversation';
 
-		// Use normalized ActionType for file edits
+		// Use normalized ActionType for diff/file-edit style tools
 		const isFileEdit = actionType?.type === 'FileEdit';
+		const isApplyPatch = actionType?.type === 'ApplyPatch' || isToolMatch(toolName, 'apply_patch');
+		const isDiffTool = isFileEdit || isApplyPatch;
 		const isWebSearch = actionType?.type === 'WebSearch' || toolName.toLowerCase() === 'websearch';
 
+		const isRunning = message.isRunning ?? !toolResult;
 		const [expanded, setExpanded] = useState(defaultExpanded ?? false);
 		const [diffExpanded, setDiffExpanded] = useState(defaultExpanded ?? false);
 
@@ -429,9 +433,9 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 
 		if (!toolName) return null;
 
-		// Inline Card: Default for everything except MCP, Bash, File Edits, WebSearch, and tools with Access Requests
+		// Inline Card: Default for everything except MCP, Bash, Diff tools, WebSearch, Summarize, and tools with Access Requests
 		const hasAccessRequest = Boolean(accessRequest);
-		if (!isMcp && !isBash && !isFileEdit && !isWebSearch && !hasAccessRequest) {
+		if (!isMcp && !isBash && !isDiffTool && !isWebSearch && !isSummarize && !hasAccessRequest) {
 			return (
 				<InlineToolLine
 					toolName={toolName}
@@ -444,8 +448,8 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 			);
 		}
 
-		// 1) Diff Card (File Edits)
-		if (isFileEdit) {
+		// 1) Diff Card (File Edits / Apply Patch)
+		if (isDiffTool) {
 			return (
 				<FileEditCard
 					actionType={actionType}
@@ -475,12 +479,17 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 			<ToolCardLeadingIcon>
 				<GlobeIcon size={14} className="shrink-0" />
 			</ToolCardLeadingIcon>
+		) : isSummarize ? (
+			<ToolCardLeadingIcon>
+				<WandIcon size={14} className={cn('shrink-0', isRunning && 'animate-pulse')} />
+			</ToolCardLeadingIcon>
 		) : (
 			<ToolCardLeadingIcon>
 				<WandIcon size={14} className="shrink-0" />
 			</ToolCardLeadingIcon>
 		);
 		const label = isWebSearch ? 'Web Search' : isMcp ? 'MCP' : formatToolName(toolName);
+		const displayLabel = isSummarize && isRunning ? `${label}...` : label;
 
 		// Meta extraction
 		let meta = '';
@@ -502,7 +511,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 					<>
 						{icon}
 						<span className="text-sm text-vscode-foreground opacity-90 whitespace-nowrap">
-							{label}
+							{displayLabel}
 						</span>
 						{meta && (
 							<span className="text-sm text-vscode-foreground opacity-70 truncate">{meta}</span>

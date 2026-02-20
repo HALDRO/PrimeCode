@@ -182,6 +182,13 @@ export interface CLIExecutor extends EventEmitter {
 	): Promise<ChildProcess | null>;
 	/** Truncate session history at a specific message ID (OpenCode only). */
 	truncateSession?(sessionId: string, messageId: string, config: CLIConfig): Promise<void>;
+	/** Execute a slash command (e.g. /compact, /summarize) via the appropriate API. */
+	executeCommand(
+		command: string,
+		args: string[],
+		config: CLIConfig,
+		sessionId?: string,
+	): Promise<void>;
 	/** Spawn a process specifically for code review. */
 	spawnReview?(prompt: string, config: CLIConfig): Promise<ChildProcess | null>;
 	createNewSession(prompt: string, config: CLIConfig): Promise<ChildProcess | null>;

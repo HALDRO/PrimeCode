@@ -133,6 +133,7 @@ export function isFileEditTool(toolName: string): boolean {
 
 /** Check if a tool should NOT be grouped in the message list. */
 export function isNonGroupableTool(toolName: string): boolean {
+	if (toolName === 'Summarize Conversation') return true;
 	const canonical = resolveToolName(toolName);
 	return canonical ? NON_GROUPABLE_TOOLS.has(canonical) : false;
 }

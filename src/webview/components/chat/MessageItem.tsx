@@ -420,12 +420,16 @@ export const MessageItem = React.memo<{
 		}
 
 		switch (item.type) {
-			case 'tool_use':
+			case 'tool_use': {
+				const isCompactTool = item.toolName === 'Summarize Conversation';
 				return (
-					<div className="mb-(--tool-block-margin)">
+					<div
+						className={isCompactTool ? 'my-8 mb-(--tool-block-margin)' : 'mb-(--tool-block-margin)'}
+					>
 						<ToolCardMessage message={item} />
 					</div>
 				);
+			}
 			case 'access_request':
 				// All access requests are rendered inline inside the related ToolCard.
 				return null;

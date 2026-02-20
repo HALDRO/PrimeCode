@@ -225,7 +225,7 @@ export const Tooltip: React.FC<TooltipProps> = React.memo(
 		}, []);
 
 		// Stable wrapper style — only recompute when display or wrapperStyle actually change
-		const wrapperCssRef = useRef<React.CSSProperties>({ display });
+		const wrapperCssRef = useRef<React.CSSProperties>({ display, ...wrapperStyle });
 		const prevDisplayRef = useRef(display);
 		const prevWrapperStyleRef = useRef(wrapperStyle);
 		if (display !== prevDisplayRef.current || wrapperStyle !== prevWrapperStyleRef.current) {
