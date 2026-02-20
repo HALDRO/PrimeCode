@@ -1,5 +1,6 @@
 /// <reference types="@welldone-software/why-did-you-render" />
 
+import type { HookDifference } from '@welldone-software/why-did-you-render';
 import whyDidYouRender from '@welldone-software/why-did-you-render';
 import React from 'react';
 
@@ -30,15 +31,15 @@ whyDidYouRender(React, {
 
 		const details: Record<string, unknown> = {};
 
-		if (info.reason?.propsDifferences) {
-			details.props = info.reason.propsDifferences.map(d => ({
+		if (info.reason?.propsDifferences && Array.isArray(info.reason.propsDifferences)) {
+			details.props = info.reason.propsDifferences.map((d: HookDifference) => ({
 				path: d.pathString,
 				prev: summarize(d.prevValue),
 				next: summarize(d.nextValue),
 			}));
 		}
-		if (info.reason?.stateDifferences) {
-			details.state = info.reason.stateDifferences.map(d => ({
+		if (info.reason?.stateDifferences && Array.isArray(info.reason.stateDifferences)) {
+			details.state = info.reason.stateDifferences.map((d: HookDifference) => ({
 				path: d.pathString,
 				prev: summarize(d.prevValue),
 				next: summarize(d.nextValue),

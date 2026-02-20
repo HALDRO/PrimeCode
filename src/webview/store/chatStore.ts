@@ -31,7 +31,7 @@ import type {
 	SubtaskTranscriptPayload,
 	TotalStats,
 } from '../../common';
-import { generateId } from '../../common';
+import { computeDiffLineStats, generateId } from '../../common';
 import type { NormalizedEntry } from '../../common/normalizedTypes';
 import { useUIStore } from './uiStore';
 
@@ -284,6 +284,252 @@ function mergeOrAddMessage(messages: Message[], incoming: Message): void {
 	}
 }
 
+// =============================================================================
+// Dispatch event handlers — extracted to reduce cognitive complexity of dispatch()
+// =============================================================================
+
+function handleMessageEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
+	const msgData = (payload as SessionMessagePayload).message;
+
+	const message: Message = {
+		...msgData,
+		id: msgData.id || generateId('msg'),
+		timestamp: msgData.timestamp || new Date().toISOString(),
+	} as Message;
+
+	// Notification-like messages are transient UI overlays,
+	// and should not be stored in chat history/persistence.
+	if (
+		message.type === 'error' ||
+		message.type === 'interrupted' ||
+		message.type === 'system_notice'
+	) {
+		return;
+	}
+
+	mergeOrAddMessage(targetSession.messages, message);
+
+	// Clear retry info on success
+	if (message.type === 'assistant') {
+		targetSession.retryInfo = null;
+	}
+}
+
+function handleStatusEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
+	const s = payload as SessionStatusPayload;
+	targetSession.status =
+		s.status === 'retrying'
+			? s.retryInfo?.message || targetSession.status
+			: s.statusText || targetSession.status;
+	targetSession.isProcessing = s.status === 'busy' || s.status === 'retrying';
+	targetSession.isAutoRetrying = s.status === 'retrying';
+	if (s.status === 'retrying') targetSession.retryInfo = s.retryInfo || null;
+	else if (s.status === 'idle') targetSession.retryInfo = null;
+	targetSession.isLoading = Boolean(s.loadingMessage);
+}
+
+function handleStatsEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
+	const s = payload as SessionStatsPayload;
+	if (s.totalStats) Object.assign(targetSession.totalStats, s.totalStats);
+	if (s.modelID) targetSession.activeModelID = s.modelID;
+	if (s.providerID) targetSession.activeProviderID = s.providerID;
+}
+
+function handleTurnTokensEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
+	const t = payload as SessionTurnTokensPayload;
+	// Use explicit userMessageId from history replay, or fall back to last user message
+	const turnMsgId =
+		t.userMessageId || [...targetSession.messages].reverse().find(m => m.type === 'user')?.id;
+	if (turnMsgId) {
+		const existing = targetSession.turnTokens[turnMsgId];
+		// Accumulate deltas: turn_tokens now emit per-step deltas (not cumulative)
+		targetSession.turnTokens[turnMsgId] = {
+			input: (existing?.input ?? 0) + t.inputTokens,
+			output: (existing?.output ?? 0) + t.outputTokens,
+			total: (existing?.total ?? 0) + t.totalTokens,
+			cacheRead: (existing?.cacheRead ?? 0) + t.cacheReadTokens,
+			durationMs: t.durationMs ? (existing?.durationMs ?? 0) + t.durationMs : existing?.durationMs,
+		};
+	}
+}
+
+function handleCompleteEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
+	const completePartId = (payload as { partId?: string }).partId;
+	targetSession.messages.forEach(m => {
+		if ('partId' in m && m.partId === completePartId) {
+			if (m.type === 'thinking') {
+				m.isStreaming = false;
+				if (!m.durationMs && m.startTime && typeof m.startTime === 'number') {
+					m.durationMs = Date.now() - m.startTime;
+				}
+			} else if (m.type === 'assistant') {
+				m.isStreaming = false;
+			}
+		}
+	});
+	// Mark completed subtasks in a second pass.
+	for (const msg of targetSession.messages) {
+		if (msg.type !== 'subtask') continue;
+		const partId = (msg as Record<string, unknown>).partId as string | undefined;
+		if (partId !== completePartId) continue;
+		msg.status = msg.status === 'running' ? 'completed' : msg.status;
+		if (!msg.durationMs && msg.startTime) {
+			const start = new Date(msg.startTime).getTime();
+			if (start > 0) msg.durationMs = Date.now() - start;
+		}
+	}
+}
+
+function handleRestoreEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
+	const r = payload as SessionRestorePayload;
+	if (r.action === 'add_commit' && r.commit) {
+		if (!targetSession.restoreCommits.some(c => c.sha === r.commit?.sha)) {
+			targetSession.restoreCommits.push(r.commit);
+		}
+	} else if (r.action === 'set_commits') {
+		targetSession.restoreCommits = r.commits || [];
+	} else if (r.action === 'clear_commits') {
+		targetSession.restoreCommits = [];
+	} else if (r.action === 'unrevert_available') {
+		targetSession.unrevertAvailable = r.available ?? false;
+		// When unrevert becomes unavailable (after unrevert action), clear the reverted marker
+		if (!r.available) {
+			targetSession.revertedFromMessageId = null;
+		}
+	} else if (r.action === 'restore_input') {
+		targetSession.input = r.text || '';
+	} else if (r.action === 'success') {
+		if (r.canUnrevert !== undefined) targetSession.unrevertAvailable = r.canUnrevert;
+		// Mark the revert point so the UI dims messages after it
+		if (r.revertedFromMessageId) {
+			targetSession.revertedFromMessageId = r.revertedFromMessageId;
+		}
+	}
+}
+
+function handleFileEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
+	const f = payload as SessionFilePayload;
+	if (f.action === 'changed' && f.filePath) {
+		const fileName = f.fileName || f.filePath.split(/[/\\]/).pop() || f.filePath;
+
+		let linesAdded = f.linesAdded || 0;
+		let linesRemoved = f.linesRemoved || 0;
+
+		if (f.toolUseId && linesAdded === 0 && linesRemoved === 0) {
+			const toolMsg = targetSession.messages.find(
+				m => m.type === 'tool_use' && m.toolUseId === f.toolUseId,
+			);
+
+			if (toolMsg && toolMsg.type === 'tool_use' && toolMsg.rawInput) {
+				const raw = toolMsg.rawInput as Record<string, string>;
+				const oldContent = raw.old_string || raw.old_str || raw.oldString || '';
+				const newContent = raw.new_string || raw.new_str || raw.newString || raw.content || '';
+				const stats = computeDiffLineStats(oldContent, newContent);
+				linesAdded = stats.added;
+				linesRemoved = stats.removed;
+			}
+		}
+
+		const newFile = {
+			filePath: f.filePath,
+			fileName,
+			linesAdded,
+			linesRemoved,
+			toolUseId: f.toolUseId || '',
+			timestamp: Date.now(),
+		};
+
+		// Deduplicate by toolUseId (not filePath) so multiple edits to the
+		// same file are preserved as separate entries.  The panel groups and
+		// aggregates them by filePath for display.  This is critical for
+		// history replay: each replayed tool_use must produce its own entry,
+		// otherwise only the last edit per file survives a restart.
+		const toolId = f.toolUseId || '';
+		const existingIdx = toolId
+			? targetSession.changedFiles.findIndex(file => file.toolUseId === toolId)
+			: -1;
+		if (existingIdx !== -1) {
+			targetSession.changedFiles[existingIdx] = newFile;
+		} else {
+			targetSession.changedFiles.push(newFile);
+		}
+	} else if (f.action === 'undone' && f.filePath) {
+		targetSession.changedFiles = targetSession.changedFiles.filter(
+			file => file.filePath !== f.filePath,
+		);
+	} else if (f.action === 'all_undone') {
+		targetSession.changedFiles = [];
+	}
+}
+
+function handleAccessEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
+	const a = payload as SessionAccessPayload;
+	if (a.action === 'response') {
+		const msg = targetSession.messages.find(
+			m => m.type === 'access_request' && m.requestId === a.requestId,
+		);
+		if (msg && msg.type === 'access_request') {
+			msg.resolved = true;
+			msg.approved = a.approved;
+		}
+	}
+}
+
+function handleMessagesReloadEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
+	const r = payload as SessionMessagesReloadPayload;
+	targetSession.messages = (r.messages || []).map(m => ({
+		...m,
+		id: m.id || generateId('msg'),
+		timestamp: m.timestamp || new Date().toISOString(),
+	})) as Message[];
+}
+
+function handleDeleteMessagesAfterEvent(
+	targetSession: ChatSession,
+	payload: SessionEventPayload,
+): void {
+	const d = payload as SessionDeleteMessagesAfterPayload;
+	if (d.messageId) {
+		const idx = targetSession.messages.findIndex(m => m.id === d.messageId);
+		if (idx !== -1) {
+			// Don't delete messages — just mark them as reverted so they can be
+			// restored on unrevert. The UI will dim everything after this ID.
+			targetSession.revertedFromMessageId = d.messageId;
+		}
+	}
+}
+
+function handleMessageRemovedEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
+	const rm = payload as SessionMessageRemovedPayload;
+	if (rm.partId || rm.messageId) {
+		targetSession.messages = targetSession.messages.filter(m => {
+			const mPartId = 'partId' in m ? m.partId : undefined;
+			return mPartId !== rm.partId && m.id !== rm.messageId;
+		});
+	}
+}
+
+function handleSubtaskTranscriptEvent(
+	targetSession: ChatSession,
+	payload: SessionEventPayload,
+): void {
+	const tp = payload as SubtaskTranscriptPayload;
+	const subtaskMsg = targetSession.messages.find(
+		m => m.type === 'subtask' && m.id === tp.subtaskId,
+	);
+	if (subtaskMsg && subtaskMsg.type === 'subtask') {
+		if (!subtaskMsg.transcript) {
+			subtaskMsg.transcript = [];
+		}
+		const childMsg = {
+			...tp.childMessage,
+			id: tp.childMessage.id || generateId('child'),
+			timestamp: tp.childMessage.timestamp || new Date().toISOString(),
+		} as Message;
+		mergeOrAddMessage(subtaskMsg.transcript, childMsg);
+	}
+}
+
 const createEmptySession = (id: string): ChatSession => ({
 	id,
 	model: undefined,
@@ -462,8 +708,6 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 		dispatch: (targetId, eventType, payload) => {
 			set(
 				produce((state: ChatState) => {
-					// Auto-create session if it doesn't exist (for sub-sessions receiving events).
-					// Sessions intended for the tab bar are created via handleSessionCreated.
 					if (!state.sessionsById[targetId]) {
 						state.sessionsById[targetId] = createEmptySession(targetId);
 					}
@@ -472,257 +716,45 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 					targetSession.lastActive = Date.now();
 
 					switch (eventType) {
-						case 'message': {
-							const msgData = (payload as SessionMessagePayload).message;
-
-							const message: Message = {
-								...msgData,
-								id: msgData.id || generateId('msg'),
-								timestamp: msgData.timestamp || new Date().toISOString(),
-							} as Message;
-
-							// Notification-like messages are transient UI overlays,
-							// and should not be stored in chat history/persistence.
-							if (
-								message.type === 'error' ||
-								message.type === 'interrupted' ||
-								message.type === 'system_notice'
-							) {
-								break;
-							}
-
-							mergeOrAddMessage(targetSession.messages, message);
-
-							// Clear retry info on success
-							if (message.type === 'assistant') {
-								targetSession.retryInfo = null;
-							}
+						case 'message':
+							handleMessageEvent(targetSession, payload);
 							break;
-						}
-
-						case 'status': {
-							const s = payload as SessionStatusPayload;
-							targetSession.status =
-								s.status === 'retrying'
-									? s.retryInfo?.message || targetSession.status
-									: s.statusText || targetSession.status;
-							targetSession.isProcessing = s.status === 'busy' || s.status === 'retrying';
-							targetSession.isAutoRetrying = s.status === 'retrying';
-							if (s.status === 'retrying') targetSession.retryInfo = s.retryInfo || null;
-							else if (s.status === 'idle') targetSession.retryInfo = null;
-							targetSession.isLoading = Boolean(s.loadingMessage);
+						case 'status':
+							handleStatusEvent(targetSession, payload);
 							break;
-						}
-
-						case 'stats': {
-							const s = payload as SessionStatsPayload;
-							if (s.totalStats) Object.assign(targetSession.totalStats, s.totalStats);
-							if (s.modelID) targetSession.activeModelID = s.modelID;
-							if (s.providerID) targetSession.activeProviderID = s.providerID;
+						case 'stats':
+							handleStatsEvent(targetSession, payload);
 							break;
-						}
-
-						case 'turn_tokens': {
-							const t = payload as SessionTurnTokensPayload;
-							// Use explicit userMessageId from history replay, or fall back to last user message
-							const turnMsgId =
-								t.userMessageId ||
-								[...targetSession.messages].reverse().find(m => m.type === 'user')?.id;
-							if (turnMsgId) {
-								const existing = targetSession.turnTokens[turnMsgId];
-								// Accumulate deltas: turn_tokens now emit per-step deltas (not cumulative)
-								targetSession.turnTokens[turnMsgId] = {
-									input: (existing?.input ?? 0) + t.inputTokens,
-									output: (existing?.output ?? 0) + t.outputTokens,
-									total: (existing?.total ?? 0) + t.totalTokens,
-									cacheRead: (existing?.cacheRead ?? 0) + t.cacheReadTokens,
-									durationMs: t.durationMs
-										? (existing?.durationMs ?? 0) + t.durationMs
-										: existing?.durationMs,
-								};
-							}
+						case 'turn_tokens':
+							handleTurnTokensEvent(targetSession, payload);
 							break;
-						}
-
-						case 'complete': {
-							const completePartId = (payload as { partId?: string }).partId;
-							targetSession.messages.forEach(m => {
-								if ('partId' in m && m.partId === completePartId) {
-									if (m.type === 'thinking') {
-										m.isStreaming = false;
-										if (!m.durationMs && m.startTime && typeof m.startTime === 'number') {
-											m.durationMs = Date.now() - m.startTime;
-										}
-									} else if (m.type === 'assistant') {
-										m.isStreaming = false;
-									}
-								}
-							});
-							// Mark completed subtasks in a second pass.
-							for (const msg of targetSession.messages) {
-								if (msg.type !== 'subtask') continue;
-								const partId = (msg as Record<string, unknown>).partId as string | undefined;
-								if (partId !== completePartId) continue;
-								msg.status = msg.status === 'running' ? 'completed' : msg.status;
-								if (!msg.durationMs && msg.startTime) {
-									const start = new Date(msg.startTime).getTime();
-									if (start > 0) msg.durationMs = Date.now() - start;
-								}
-							}
+						case 'complete':
+							handleCompleteEvent(targetSession, payload);
 							break;
-						}
-
-						case 'restore': {
-							const r = payload as SessionRestorePayload;
-							if (r.action === 'add_commit' && r.commit) {
-								if (!targetSession.restoreCommits.some(c => c.sha === r.commit?.sha)) {
-									targetSession.restoreCommits.push(r.commit);
-								}
-							} else if (r.action === 'set_commits') {
-								targetSession.restoreCommits = r.commits || [];
-							} else if (r.action === 'clear_commits') {
-								targetSession.restoreCommits = [];
-							} else if (r.action === 'unrevert_available') {
-								targetSession.unrevertAvailable = r.available ?? false;
-								// When unrevert becomes unavailable (after unrevert action), clear the reverted marker
-								if (!r.available) {
-									targetSession.revertedFromMessageId = null;
-								}
-							} else if (r.action === 'restore_input') {
-								targetSession.input = r.text || '';
-							} else if (r.action === 'success') {
-								if (r.canUnrevert !== undefined) targetSession.unrevertAvailable = r.canUnrevert;
-								// Mark the revert point so the UI dims messages after it
-								if (r.revertedFromMessageId) {
-									targetSession.revertedFromMessageId = r.revertedFromMessageId;
-								}
-							}
+						case 'restore':
+							handleRestoreEvent(targetSession, payload);
 							break;
-						}
-
-						case 'file': {
-							const f = payload as SessionFilePayload;
-							if (f.action === 'changed' && f.filePath) {
-								const fileName = f.fileName || f.filePath.split(/[/\\]/).pop() || f.filePath;
-
-								// Recalculate diff stats logic inline or keep helper? Keeping logic inline for now to match original behavior roughly
-								let linesAdded = f.linesAdded || 0;
-								let linesRemoved = f.linesRemoved || 0;
-
-								if (f.toolUseId && linesAdded === 0 && linesRemoved === 0) {
-									const toolMsg = targetSession.messages.find(
-										m => m.type === 'tool_use' && m.toolUseId === f.toolUseId,
-									);
-
-									if (toolMsg && toolMsg.type === 'tool_use' && toolMsg.rawInput) {
-										const raw = toolMsg.rawInput as Record<string, string>;
-										const oldContent = raw.old_string || raw.old_str || raw.oldString || '';
-										const newContent =
-											raw.new_string || raw.new_str || raw.newString || raw.content || '';
-										const oldLineCount = oldContent ? oldContent.split('\n').length : 0;
-										const newLineCount = newContent ? newContent.split('\n').length : 0;
-										linesAdded = Math.max(0, newLineCount - oldLineCount);
-										linesRemoved = Math.max(0, oldLineCount - newLineCount);
-									}
-								}
-
-								const newFile = {
-									filePath: f.filePath,
-									fileName,
-									linesAdded,
-									linesRemoved,
-									toolUseId: f.toolUseId || '',
-									timestamp: Date.now(),
-								};
-
-								const existingIdx = targetSession.changedFiles.findIndex(
-									file => file.filePath === f.filePath,
-								);
-								if (existingIdx !== -1) {
-									targetSession.changedFiles[existingIdx] = newFile;
-								} else {
-									targetSession.changedFiles.push(newFile);
-								}
-							} else if (f.action === 'undone' && f.filePath) {
-								targetSession.changedFiles = targetSession.changedFiles.filter(
-									file => file.filePath !== f.filePath,
-								);
-							} else if (f.action === 'all_undone') {
-								targetSession.changedFiles = [];
-							}
+						case 'file':
+							handleFileEvent(targetSession, payload);
 							break;
-						}
-
-						case 'access': {
-							const a = payload as SessionAccessPayload;
-							if (a.action === 'response') {
-								const msg = targetSession.messages.find(
-									m => m.type === 'access_request' && m.requestId === a.requestId,
-								);
-								if (msg && msg.type === 'access_request') {
-									msg.resolved = true;
-									msg.approved = a.approved;
-								}
-							}
+						case 'access':
+							handleAccessEvent(targetSession, payload);
 							break;
-						}
-
-						case 'messages_reload': {
-							const r = payload as SessionMessagesReloadPayload;
-							targetSession.messages = (r.messages || []).map(m => ({
-								...m,
-								id: m.id || generateId('msg'),
-								timestamp: m.timestamp || new Date().toISOString(),
-							})) as Message[];
+						case 'messages_reload':
+							handleMessagesReloadEvent(targetSession, payload);
 							break;
-						}
-
-						case 'delete_messages_after': {
-							const d = payload as SessionDeleteMessagesAfterPayload;
-							if (d.messageId) {
-								const idx = targetSession.messages.findIndex(m => m.id === d.messageId);
-								if (idx !== -1) {
-									// Don't delete messages — just mark them as reverted so they can be
-									// restored on unrevert. The UI will dim everything after this ID.
-									targetSession.revertedFromMessageId = d.messageId;
-								}
-							}
+						case 'delete_messages_after':
+							handleDeleteMessagesAfterEvent(targetSession, payload);
 							break;
-						}
-
-						case 'message_removed': {
-							const rm = payload as SessionMessageRemovedPayload;
-							if (rm.partId || rm.messageId) {
-								targetSession.messages = targetSession.messages.filter(m => {
-									const mPartId = 'partId' in m ? m.partId : undefined;
-									return mPartId !== rm.partId && m.id !== rm.messageId;
-								});
-							}
+						case 'message_removed':
+							handleMessageRemovedEvent(targetSession, payload);
 							break;
-						}
-
 						case 'terminal':
 							// Terminal notifications are transient UI overlays; ignore in chat history.
 							break;
-
-						case 'subtask_transcript': {
-							const tp = payload as SubtaskTranscriptPayload;
-							const subtaskMsg = targetSession.messages.find(
-								m => m.type === 'subtask' && m.id === tp.subtaskId,
-							);
-							if (subtaskMsg && subtaskMsg.type === 'subtask') {
-								if (!subtaskMsg.transcript) {
-									subtaskMsg.transcript = [];
-								}
-								const childMsg = {
-									...tp.childMessage,
-									id: tp.childMessage.id || generateId('child'),
-									timestamp: tp.childMessage.timestamp || new Date().toISOString(),
-								} as Message;
-								mergeOrAddMessage(subtaskMsg.transcript, childMsg);
-							}
+						case 'subtask_transcript':
+							handleSubtaskTranscriptEvent(targetSession, payload);
 							break;
-						}
 					}
 				}),
 			);

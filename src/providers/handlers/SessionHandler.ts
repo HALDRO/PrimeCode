@@ -9,7 +9,7 @@ import type {
 import { generateId } from '../../common';
 import { IMPROVE_PROMPT_DEFAULT_TEMPLATE } from '../../common/promptImprover';
 import type { CommandOf, WebviewCommand } from '../../common/protocol';
-import { isFileEditTool } from '../../common/toolRegistry';
+import { computeDiffLineStats, isFileEditTool } from '../../common/toolRegistry';
 import {
 	buildTranscript,
 	extractFilePath,
@@ -77,7 +77,7 @@ export class SessionHandler implements WebviewMessageHandler {
 				await this.onSendMessage(msg);
 				break;
 			case 'stopRequest':
-				await this.onStopRequest();
+				await this.onStopRequest(msg);
 				break;
 			case 'improvePromptRequest':
 				await this.onImprovePromptRequest(msg);
@@ -580,19 +580,19 @@ export class SessionHandler implements WebviewMessageHandler {
 		await this.handleSendMessage(text, uiModel, sessionId, messageID, attachments);
 	}
 
-	private async onStopRequest(): Promise<void> {
-		const activeId = this.context.sessionState.activeSessionId;
+	private async onStopRequest(msg: CommandOf<'stopRequest'>): Promise<void> {
+		// Use the sessionId from the requesting tab, fall back to global active session
+		const targetId = msg.sessionId || this.context.sessionState.activeSessionId;
 
-		// Only process stop request if there's an active session
-		if (!activeId) {
-			logger.warn('[SessionHandler] Stop request ignored - no active session');
+		if (!targetId) {
+			logger.warn('[SessionHandler] Stop request ignored - no target session');
 			return;
 		}
 
-		// Collect the active session + its child sessions (subagents) only.
-		// Do NOT guard unrelated sessions from other tabs.
-		const sessionsToStop = new Set<string>([activeId]);
-		for (const childId of this.context.sessionGraph.getChildren(activeId)) {
+		// Collect the target session + its child sessions (subagents) only.
+		// Do NOT touch unrelated sessions from other tabs.
+		const sessionsToStop = new Set<string>([targetId]);
+		for (const childId of this.context.sessionGraph.getChildren(targetId)) {
 			sessionsToStop.add(childId);
 		}
 
@@ -602,16 +602,19 @@ export class SessionHandler implements WebviewMessageHandler {
 			this.context.sessionState.activateStopGuard(10_000, sid);
 		}
 
-		// Abort on the backend FIRST — wait for confirmation before updating UI.
-		// This ensures the button state reflects reality, not optimistic guesses.
+		// Abort only the targeted sessions on the backend, not all active sessions.
 		try {
-			await this.context.cli.abort();
+			await Promise.allSettled(
+				[...sessionsToStop].map(sid =>
+					this.context.cli.abortSession ? this.context.cli.abortSession(sid) : Promise.resolve(),
+				),
+			);
 		} catch (error) {
 			logger.error('[SessionHandler] Abort failed:', error);
 		}
 
 		// NOW update UI — backend has confirmed the stop.
-		this.postStatus(activeId, 'idle', 'Stopped');
+		this.postStatus(targetId, 'idle', 'Stopped');
 		this.postSessionMessage(
 			{
 				id: `interrupted-${Date.now()}`,
@@ -619,12 +622,12 @@ export class SessionHandler implements WebviewMessageHandler {
 				content: 'Stopped by user',
 				timestamp: new Date().toISOString(),
 			},
-			activeId,
+			targetId,
 		);
 
-		// Also force idle on child sessions (subagents) of the active session only
+		// Also force idle on child sessions (subagents) of the target session only
 		for (const sid of sessionsToStop) {
-			if (sid !== activeId) {
+			if (sid !== targetId) {
 				this.postStatus(sid, 'idle', 'Stopped');
 			}
 		}
@@ -1041,14 +1044,13 @@ export class SessionHandler implements WebviewMessageHandler {
 									: typeof input.content === 'string'
 										? input.content
 										: '';
-					const oldLines = oldContent ? String(oldContent).split('\n').length : 0;
-					const newLines = newContent ? String(newContent).split('\n').length : 0;
+					const diffStats = computeDiffLineStats(String(oldContent), String(newContent));
 
 					this.context.bridge.session.fileChanged(sessionId, {
 						filePath: filePathFromInput,
 						fileName: filePathFromInput.split(/[/\\]/).pop() || filePathFromInput,
-						linesAdded: Math.max(0, newLines - oldLines),
-						linesRemoved: Math.max(0, oldLines - newLines),
+						linesAdded: diffStats.added,
+						linesRemoved: diffStats.removed,
 						toolUseId,
 					});
 				}

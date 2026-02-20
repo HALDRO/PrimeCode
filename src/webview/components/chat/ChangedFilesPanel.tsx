@@ -341,8 +341,8 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 			>
 				{/* Header - only when files exist */}
 				{hasFiles && (
-					<div
-						role="button"
+					<button
+						type="button"
 						tabIndex={0}
 						onClick={() => setExpanded(!expanded)}
 						onKeyDown={e => {
@@ -431,7 +431,7 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 								</button>
 							</Tooltip>
 						</div>
-					</div>
+					</button>
 				)}
 
 				{expanded && hasFiles && (

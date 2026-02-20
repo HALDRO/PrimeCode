@@ -131,6 +131,51 @@ export function isFileEditTool(toolName: string): boolean {
 	);
 }
 
+/**
+ * Compute actual added/removed line counts by comparing old and new content.
+ * Unlike `max(0, newLines - oldLines)` which only captures the *net* delta,
+ * this walks both line arrays and counts every line that differs — matching
+ * the semantics of `git diff --numstat`.
+ *
+ * For write/create (no old content) all new lines count as added.
+ * For delete (no new content) all old lines count as removed.
+ * For edits, shared prefix/suffix are skipped; remaining old lines are
+ * "removed" and remaining new lines are "added".
+ */
+export function computeDiffLineStats(
+	oldContent: string,
+	newContent: string,
+): { added: number; removed: number } {
+	if (!oldContent && !newContent) return { added: 0, removed: 0 };
+	if (!oldContent) return { added: newContent.split('\n').length, removed: 0 };
+	if (!newContent) return { added: 0, removed: oldContent.split('\n').length };
+	if (oldContent === newContent) return { added: 0, removed: 0 };
+
+	const oldLines = oldContent.split('\n');
+	const newLines = newContent.split('\n');
+
+	// Common prefix
+	let prefixLen = 0;
+	const minLen = Math.min(oldLines.length, newLines.length);
+	while (prefixLen < minLen && oldLines[prefixLen] === newLines[prefixLen]) {
+		prefixLen++;
+	}
+
+	// Common suffix (not overlapping with prefix)
+	let suffixLen = 0;
+	while (
+		suffixLen < minLen - prefixLen &&
+		oldLines[oldLines.length - 1 - suffixLen] === newLines[newLines.length - 1 - suffixLen]
+	) {
+		suffixLen++;
+	}
+
+	return {
+		added: Math.max(0, newLines.length - prefixLen - suffixLen),
+		removed: Math.max(0, oldLines.length - prefixLen - suffixLen),
+	};
+}
+
 /** Check if a tool should NOT be grouped in the message list. */
 export function isNonGroupableTool(toolName: string): boolean {
 	if (toolName === 'Summarize Conversation') return true;

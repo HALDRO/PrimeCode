@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { PERMISSION_CATEGORIES, type PermissionCategory } from '../common/permissions';
 import type { WebviewCommand } from '../common/protocol';
-import { isFileEditTool, isTaskTool } from '../common/toolRegistry';
+import { computeDiffLineStats, isFileEditTool, isTaskTool } from '../common/toolRegistry';
 import { OpenCodeExecutor } from '../core/executor/OpenCode';
 import type { CLIEvent } from '../core/executor/types';
 import type { ServiceRegistry } from '../core/ServiceRegistry';
@@ -1130,14 +1130,13 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 										? toolInput.content
 										: '';
 
-					const oldLineCount = oldContent ? oldContent.split('\n').length : 0;
-					const newLineCount = newContent ? newContent.split('\n').length : 0;
+					const diffStats = computeDiffLineStats(oldContent, newContent);
 
 					this.bridge.session.fileChanged(targetSessionId, {
 						filePath,
 						fileName: filePath.split(/[/\\]/).pop() || filePath,
-						linesAdded: Math.max(0, newLineCount - oldLineCount),
-						linesRemoved: Math.max(0, oldLineCount - newLineCount),
+						linesAdded: diffStats.added,
+						linesRemoved: diffStats.removed,
 						toolUseId,
 					});
 					emittedFileChange = true;
