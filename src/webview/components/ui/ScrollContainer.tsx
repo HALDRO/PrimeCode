@@ -196,7 +196,7 @@ function ThumbUI({
 					width: `${thumbWidth}px`,
 					height: `${thumb.thumbState.height}px`,
 					borderRadius: `${thumbWidth / 2}px`,
-					backgroundColor: 'var(--alpha-soft)',
+					backgroundColor: 'color-mix(in srgb, var(--vscode-editor-foreground) 30%, transparent)',
 					opacity: thumb.opacity,
 					transition: thumb.dragging ? 'none' : 'opacity 0.2s ease',
 					cursor: thumb.dragging ? 'grabbing' : 'grab',
@@ -219,7 +219,7 @@ interface ScrollThumbProps {
 export const ScrollThumb: React.FC<ScrollThumbProps> = ({
 	scrollerRef,
 	autoHide = 'scroll',
-	thumbWidth = 6,
+	thumbWidth = 4,
 	minThumbHeight = 24,
 	autoHideDelay = 1200,
 }) => {
@@ -246,7 +246,7 @@ export const ScrollContainer = React.forwardRef<HTMLDivElement, ScrollContainerP
 			className,
 			style,
 			autoHide = 'scroll',
-			thumbWidth = 6,
+			thumbWidth = 4,
 			minThumbHeight = 24,
 			autoHideDelay = 1200,
 		},
@@ -266,14 +266,17 @@ export const ScrollContainer = React.forwardRef<HTMLDivElement, ScrollContainerP
 		const thumb = useScrollThumb(scrollerRef, { autoHide, autoHideDelay, minThumbHeight });
 
 		return (
-			<div className={cn('relative h-full w-full', className)} style={style}>
+			<div
+				className={cn('relative h-full w-full min-h-0 flex flex-col overflow-hidden', className)}
+				style={style}
+			>
 				<div
 					ref={handleScrollerRef}
+					className="flex-1 min-h-0"
 					style={{
 						overflowX: 'hidden',
 						overflowY: 'auto',
 						scrollbarWidth: 'none' as const,
-						height: '100%',
 					}}
 				>
 					{children}

@@ -1,6 +1,6 @@
 /**
  * @file NotificationOverlay - transient notification stack rendered above input area
- * @description Ephemeral overlay for error/interrupted/system notices.
+ * @description Ephemeral overlay for error/system notices with severity levels.
  *              Notifications are not part of chat history and are dismissed independently.
  */
 
@@ -10,14 +10,12 @@ import { cn } from '../../lib/cn';
 import {
 	useActiveSessionId,
 	useIsAutoRetrying,
-	useIsProcessing,
 	useRetryInfo,
 	useTransientNotifications,
 	useUIActions,
 } from '../../store';
-import type { TransientNotification } from '../../store/uiStore';
-import { useSessionMessage } from '../../utils/vscode';
-import { AlertCircleIcon, CloseIcon, ImprovePromptIcon, PauseIcon, PlayIcon } from '../icons';
+import type { NotificationSeverity, TransientNotification } from '../../store/uiStore';
+import { AlertCircleIcon, CheckIcon, CloseIcon, CopyIcon } from '../icons';
 import { IconButton } from '../ui';
 
 function splitTitleDetails(content: string): { title: string; details: string } {
@@ -28,62 +26,60 @@ function splitTitleDetails(content: string): { title: string; details: string } 
 	return { title: lines[0] ?? 'Notification', details: lines.slice(1).join('\n').trim() };
 }
 
-function getNotificationUI(type: TransientNotification['type']): {
+function getSeverityUI(severity: NotificationSeverity): {
 	icon: React.ReactNode;
 	accentColor: string;
-	resumeLabel: string;
-	canResume: boolean;
 } {
-	switch (type) {
+	switch (severity) {
+		case 'critical':
+			return {
+				icon: <AlertCircleIcon size={15} />,
+				accentColor: 'var(--color-error, #e74c3c)',
+			};
 		case 'error':
 			return {
 				icon: <AlertCircleIcon size={15} />,
 				accentColor: 'var(--color-error)',
-				resumeLabel: 'Resume',
-				canResume: true,
 			};
-		case 'interrupted':
+		case 'warning':
 			return {
-				icon: <PauseIcon size={15} />,
+				icon: <AlertCircleIcon size={15} />,
 				accentColor: 'var(--color-warning, #f0ad4e)',
-				resumeLabel: 'Continue',
-				canResume: true,
 			};
 		default:
 			return {
-				icon: <ImprovePromptIcon size={15} />,
+				icon: <AlertCircleIcon size={15} />,
 				accentColor: 'var(--color-accent)',
-				resumeLabel: 'OK',
-				canResume: false,
 			};
 	}
 }
 
 const NotificationCard: React.FC<{
 	notification: TransientNotification;
-	canResumeGlobal: boolean;
 	showRetryBadge: boolean;
 	isAutoRetrying: boolean;
 	retryInfo: { attempt: number; message: string; nextRetryAt?: string } | null;
-	onResume: () => void;
 	onDismiss: (id: string) => void;
-}> = ({
-	notification,
-	canResumeGlobal,
-	showRetryBadge,
-	isAutoRetrying,
-	retryInfo,
-	onResume,
-	onDismiss,
-}) => {
+}> = ({ notification, showRetryBadge, isAutoRetrying, retryInfo, onDismiss }) => {
 	const { title, details } = useMemo(
 		() => splitTitleDetails(notification.content),
 		[notification.content],
 	);
 	const [expanded, setExpanded] = useState(false);
-	const ui = useMemo(() => getNotificationUI(notification.type), [notification.type]);
+	const [copied, setCopied] = useState(false);
+	const ui = useMemo(() => getSeverityUI(notification.severity), [notification.severity]);
 	const hasDetails = Boolean(details);
-	const canResume = canResumeGlobal && ui.canResume && !isAutoRetrying;
+
+	const handleCopy = useCallback(
+		(e: React.MouseEvent) => {
+			e.stopPropagation();
+			void navigator.clipboard.writeText(notification.content).then(() => {
+				setCopied(true);
+				setTimeout(() => setCopied(false), 2000);
+			});
+		},
+		[notification.content],
+	);
 
 	return (
 		<div className="mb-(--gap-1)">
@@ -126,6 +122,28 @@ const NotificationCard: React.FC<{
 						<span className="text-sm text-vscode-foreground font-(family-name:--vscode-font-family) truncate">
 							{title}
 						</span>
+						{notification.count > 1 && (
+							<span
+								className="text-[10px] font-semibold px-1.5 py-0.5 rounded tabular-nums"
+								style={{
+									backgroundColor: `color-mix(in srgb, ${ui.accentColor} 15%, transparent)`,
+									color: ui.accentColor,
+								}}
+							>
+								&times;{notification.count}
+							</span>
+						)}
+						{notification.severity === 'critical' && (
+							<span
+								className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded"
+								style={{
+									backgroundColor: `color-mix(in srgb, ${ui.accentColor} 18%, transparent)`,
+									color: ui.accentColor,
+								}}
+							>
+								Critical
+							</span>
+						)}
 					</div>
 
 					<div className="flex items-center gap-1 shrink-0 ml-2">
@@ -143,27 +161,15 @@ const NotificationCard: React.FC<{
 							</span>
 						)}
 
-						{canResume && (
-							<button
-								type="button"
-								onClick={e => {
-									e.stopPropagation();
-									onResume();
-								}}
-								className={cn(
-									'flex items-center gap-1 px-2 h-(--btn-height) rounded text-xs font-medium',
-									'border-none cursor-pointer hover:opacity-85',
-								)}
-								style={{
-									backgroundColor: `color-mix(in srgb, ${ui.accentColor} 15%, transparent)`,
-									color: ui.accentColor,
-								}}
-								title="Continue execution"
-							>
-								<PlayIcon size={10} />
-								<span>{ui.resumeLabel}</span>
-							</button>
-						)}
+						{notification.type === 'error' || notification.severity === 'warning' ? (
+							<IconButton
+								icon={copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
+								onClick={handleCopy}
+								title={copied ? 'Copied!' : 'Copy error'}
+								size={20}
+								className="opacity-70 hover:opacity-100"
+							/>
+						) : null}
 
 						<IconButton
 							icon={<CloseIcon size={14} />}
@@ -198,20 +204,11 @@ const NotificationCard: React.FC<{
 export const NotificationOverlay: React.FC = () => {
 	const notifications = useTransientNotifications();
 	const activeSessionId = useActiveSessionId();
-	const isProcessing = useIsProcessing();
 	const isAutoRetrying = useIsAutoRetrying();
 	const retryInfo = useRetryInfo();
 	const { dismissNotification, clearNotifications } = useUIActions();
-	const { postSessionMessage } = useSessionMessage();
 
-	const canResume = Boolean(activeSessionId) && !isProcessing;
 	const previousSessionIdRef = useRef<string | undefined>(activeSessionId);
-
-	const handleResume = useCallback(() => {
-		if (!canResume) return;
-		postSessionMessage({ type: 'sendMessage', text: 'Continue from where you left off.' });
-		clearNotifications();
-	}, [canResume, clearNotifications, postSessionMessage]);
 
 	// Auto-dismiss transient notices when configured.
 	useEffect(() => {
@@ -259,11 +256,9 @@ export const NotificationOverlay: React.FC = () => {
 						>
 							<NotificationCard
 								notification={n}
-								canResumeGlobal={canResume}
 								showRetryBadge={index === 0}
 								isAutoRetrying={isAutoRetrying}
 								retryInfo={retryInfo}
-								onResume={handleResume}
 								onDismiss={dismissNotification}
 							/>
 						</div>

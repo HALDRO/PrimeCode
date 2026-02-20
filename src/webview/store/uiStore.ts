@@ -54,21 +54,70 @@ export interface UIActions {
 	handleExtensionMessage: (message: ExtensionMessage) => void;
 }
 
+/**
+ * Error severity levels inspired by OpenCode's error categorization:
+ * - critical: ProviderAuthError, ContextOverflowError — unrecoverable, needs user action
+ * - error: APIError, UnknownError — something went wrong, may be retryable
+ * - warning: MessageOutputLengthError, transient issues
+ * - info: system notices, non-error information
+ */
+export type NotificationSeverity = 'critical' | 'error' | 'warning' | 'info';
+
 export interface TransientNotification {
 	id: string;
-	type: SessionMessageData['type'] & ('error' | 'interrupted' | 'system_notice');
+	type: SessionMessageData['type'] & ('error' | 'system_notice');
 	content: string;
 	reason?: string;
+	severity: NotificationSeverity;
 	timestamp: string;
 	createdAt: number;
+	/** How many times this same notification was received */
+	count: number;
 	/** Auto-dismiss after this many ms (undefined => no auto-dismiss) */
 	autoDismissMs?: number;
 }
 
-type TransientNotificationInput = Omit<TransientNotification, 'id' | 'createdAt'> & {
+type TransientNotificationInput = Omit<
+	TransientNotification,
+	'id' | 'createdAt' | 'severity' | 'count'
+> & {
 	id?: string;
 	createdAt?: number;
+	severity?: NotificationSeverity;
 };
+
+/**
+ * Infer severity from notification type and content.
+ * Based on OpenCode's error categorization:
+ * - ProviderAuthError, ContextOverflow → critical
+ * - APIError, spawn failures → error
+ * - OutputLength, transient → warning
+ * - system_notice → info
+ */
+function inferSeverity(type: TransientNotification['type'], content: string): NotificationSeverity {
+	if (type === 'system_notice') return 'info';
+	const lower = content.toLowerCase();
+	// Critical: auth failures, context overflow, quota exhausted
+	if (
+		/\bauth\b/.test(lower) ||
+		/\bapi[_ ]?key\b/.test(lower) ||
+		/\bcontext[_ ]?(length[_ ]?exceeded|overflow)\b/.test(lower) ||
+		/\b(quota|insufficient[_ ]?quota)\b/.test(lower) ||
+		lower.includes('providerautherror') ||
+		lower.includes('contextoverflowerror')
+	) {
+		return 'critical';
+	}
+	// Warning: output length, rate limits
+	if (
+		/\boutput[_ ]?length\b/.test(lower) ||
+		/\brate[_ ]?limit\b/.test(lower) ||
+		lower.includes('too many requests')
+	) {
+		return 'warning';
+	}
+	return 'error';
+}
 
 export interface UIState {
 	activeModal: ModalType;
@@ -134,20 +183,41 @@ export const useUIStore = create<UIState>((set, get) => ({
 		pushNotification: notification => {
 			const id = notification.id || generateId('notif');
 			const createdAt = notification.createdAt ?? Date.now();
-			set(state => ({
-				notifications: [
-					{
-						id,
-						type: notification.type,
-						content: notification.content,
-						reason: notification.reason,
-						timestamp: notification.timestamp,
+			const severity =
+				notification.severity ?? inferSeverity(notification.type, notification.content);
+			set(state => {
+				// Deduplicate: increment count on existing notification with same type+content
+				const existingIdx = state.notifications.findIndex(
+					n => n.type === notification.type && n.content === notification.content,
+				);
+				if (existingIdx !== -1) {
+					const updated = [...state.notifications];
+					updated[existingIdx] = {
+						...updated[existingIdx],
+						count: updated[existingIdx].count + 1,
 						createdAt,
-						autoDismissMs: notification.autoDismissMs,
-					},
-					...state.notifications,
-				],
-			}));
+						timestamp: notification.timestamp,
+					};
+					return { notifications: updated };
+				}
+
+				return {
+					notifications: [
+						{
+							id,
+							type: notification.type,
+							content: notification.content,
+							reason: notification.reason,
+							severity,
+							timestamp: notification.timestamp,
+							createdAt,
+							count: 1,
+							autoDismissMs: notification.autoDismissMs,
+						},
+						...state.notifications,
+					],
+				};
+			});
 		},
 
 		dismissNotification: id =>
@@ -209,7 +279,8 @@ export const useUIStore = create<UIState>((set, get) => ({
 						| undefined;
 					if (!msg) break;
 					const t = msg.type;
-					if (t === 'error' || t === 'interrupted' || t === 'system_notice') {
+					// Skip 'interrupted' — user-initiated stops are not actionable notifications
+					if (t === 'error' || t === 'system_notice') {
 						const content = typeof msg.content === 'string' ? msg.content : '';
 						if (!content.trim()) break;
 						actions.pushNotification({
@@ -243,7 +314,8 @@ export const useUIStore = create<UIState>((set, get) => ({
 							| undefined;
 						if (!msg) continue;
 						const t = msg.type;
-						if (t === 'error' || t === 'interrupted' || t === 'system_notice') {
+						// Skip 'interrupted' — user-initiated stops are not actionable notifications
+						if (t === 'error' || t === 'system_notice') {
 							const content = typeof msg.content === 'string' ? msg.content : '';
 							if (!content.trim()) continue;
 							actions.pushNotification({

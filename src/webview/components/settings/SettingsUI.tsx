@@ -16,6 +16,7 @@ import {
 	CopyIcon,
 	ExternalLinkIcon,
 	RefreshIcon,
+	SearchIcon,
 	TerminalIcon,
 } from '../icons';
 import { ScrollContainer, Tooltip } from '../ui';
@@ -52,7 +53,7 @@ interface SettingsGroupProps {
 export const SettingsGroup: React.FC<SettingsGroupProps> = ({ children, className }) => (
 	<div
 		className={cn(
-			'border border-vscode-panel-border rounded overflow-hidden mb-(--gap-6) mx-(--gap-1) bg-(--alpha-5)',
+			'border border-vscode-panel-border rounded overflow-hidden mb-(--gap-6) mx-(--gap-1)',
 			className,
 		)}
 	>
@@ -95,7 +96,7 @@ export const SettingRow: React.FC<SettingRowProps> = ({
 
 	if (tooltip) {
 		return (
-			<Tooltip content={tooltip} position="top" delay={200} display="block">
+			<Tooltip content={tooltip} position="top" delay={200} display="contents">
 				{content}
 			</Tooltip>
 		);
@@ -145,7 +146,7 @@ export const StatusMessage: React.FC<StatusMessageProps> = ({
 	return (
 		<div
 			className={cn(
-				'text-2xs px-2 py-1 rounded flex items-center gap-1.5',
+				'text-xs px-2 py-1 rounded flex items-center gap-1.5',
 				isLoading && 'bg-vscode-button-background/10 text-vscode-button-background',
 				success &&
 					'bg-vscode-editorGutter-addedBackground/10 text-vscode-editorGutter-addedBackground',
@@ -155,19 +156,19 @@ export const StatusMessage: React.FC<StatusMessageProps> = ({
 		>
 			{isLoading && (
 				<>
-					<RefreshIcon size={9} className="animate-spin" />
+					<RefreshIcon size={11} className="animate-spin" />
 					{loadingText}
 				</>
 			)}
 			{success && !isLoading && (
 				<>
-					<CheckCircleIcon size={9} />
+					<CheckCircleIcon size={11} />
 					{successText}
 				</>
 			)}
 			{error && !isLoading && (
 				<>
-					<AlertCircleIcon size={9} />
+					<AlertCircleIcon size={11} />
 					{error}
 				</>
 			)}
@@ -261,7 +262,7 @@ export const ExpandableRow: React.FC<ExpandableRowProps> = ({
 				{badge}
 			</div>
 			<div className="flex items-center gap-2">
-				{subtitle && <span className="text-2xs text-vscode-descriptionForeground">{subtitle}</span>}
+				{subtitle && <span className="text-xs text-vscode-foreground">{subtitle}</span>}
 				{expanded ? (
 					<ChevronDownIcon size={12} className="text-vscode-descriptionForeground" />
 				) : (
@@ -270,7 +271,9 @@ export const ExpandableRow: React.FC<ExpandableRowProps> = ({
 			</div>
 		</button>
 		{expanded && (
-			<div className="bg-(--alpha-5) border-t border-(--border-subtle) space-y-0.5">{children}</div>
+			<div className="bg-vscode-editor-background border-t border-(--border-subtle) space-y-0.5">
+				{children}
+			</div>
 		)}
 	</div>
 );
@@ -283,19 +286,43 @@ interface ModelListProps {
 	children: React.ReactNode;
 	maxHeight?: number;
 	className?: string;
+	searchValue?: string;
+	onSearchChange?: (value: string) => void;
+	searchPlaceholder?: string;
 }
 
-export const ModelList: React.FC<ModelListProps> = ({ children, maxHeight = 160, className }) => (
-	<div className="p-(--gap-2)">
-		<ScrollContainer
-			className={cn('border border-vscode-panel-border rounded', className)}
-			style={{ maxHeight }}
-			autoHide="scroll"
-		>
-			<div className="divide-y divide-(--border-subtle)">{children}</div>
-		</ScrollContainer>
-	</div>
-);
+export const ModelList: React.FC<ModelListProps> = ({
+	children,
+	maxHeight = 160,
+	className,
+	searchValue,
+	onSearchChange,
+	searchPlaceholder = 'Search models...',
+}) => {
+	const showSearch = onSearchChange !== undefined;
+
+	return (
+		<div className="p-(--gap-2)">
+			<div className={cn('border border-vscode-panel-border rounded overflow-hidden', className)}>
+				{showSearch && (
+					<div className="flex items-center gap-1.5 px-2 py-1 border-b border-(--border-subtle) bg-(--alpha-5)">
+						<SearchIcon size={12} className="text-(--alpha-40) shrink-0" />
+						<input
+							type="text"
+							value={searchValue ?? ''}
+							onChange={e => onSearchChange(e.target.value)}
+							placeholder={searchPlaceholder}
+							className="w-full bg-transparent border-none p-0 outline-none text-sm text-(--alpha-90) placeholder:text-(--alpha-30)"
+						/>
+					</div>
+				)}
+				<ScrollContainer style={{ maxHeight }} autoHide="scroll">
+					<div className="divide-y divide-(--border-subtle)">{children}</div>
+				</ScrollContainer>
+			</div>
+		</div>
+	);
+};
 
 // =============================================================================
 // Model Item - Single model row in the list
@@ -340,7 +367,7 @@ export const SettingsBadge: React.FC<SettingsBadgeProps> = ({
 	};
 
 	return (
-		<span className={cn('text-2xs px-1 rounded', variantClasses[variant], className)}>
+		<span className={cn('text-xs px-1 rounded', variantClasses[variant], className)}>
 			{children}
 		</span>
 	);

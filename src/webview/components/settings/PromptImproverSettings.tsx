@@ -135,7 +135,7 @@ export const PromptImproverSettings: React.FC = () => {
 								onChange={e => saveSetting('promptImproveTemplate', e.target.value)}
 								rows={15}
 								className={cn(
-									'w-full bg-vscode-input-background border border-vscode-input-border rounded-sm p-1.5 text-sm font-mono mt-2',
+									'w-full bg-vscode-input-background border border-vscode-input-border rounded p-1.5 text-sm font-mono mt-2',
 									'focus:border-vscode-focusBorder focus:outline-none transition-all resize-none',
 								)}
 								placeholder={IMPROVE_PROMPT_DEFAULT_TEMPLATE}

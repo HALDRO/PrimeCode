@@ -4,14 +4,15 @@
  *              Header layout mirrors FileRow structure for perfect alignment.
  *              Also displays current Todo list status when available.
  *              Session-specific data (changedFiles, totalStats) now comes from chatStore.
- *              OPTIMIZED: Copy operations delegated to extension to avoid messages subscription.
+ *              Copy operations read directly from chatStore + navigator.clipboard.
  *              OPTIMIZED: Todo display extracted to separate component to isolate rerenders.
  */
 
 import React, { useCallback, useMemo, useState } from 'react';
 import { cn } from '../../lib/cn';
 import { useChangedFilesState, useChatActions, useTodoState } from '../../store';
-import type { ChangedFile } from '../../store/chatStore';
+import type { ChangedFile, Message } from '../../store/chatStore';
+import { useChatStore } from '../../store/chatStore';
 import { useUIActions } from '../../store/uiStore';
 import { useVSCode } from '../../utils/vscode';
 import {
@@ -43,6 +44,81 @@ interface TodoItem {
 interface CopyMenuItem {
 	label: string;
 	action: () => void;
+}
+
+// ─── Copy helpers (shared logic, no duplication) ───
+
+function getActiveMessages(): Message[] | undefined {
+	const state = useChatStore.getState();
+	const session = state.activeSessionId ? state.sessionsById[state.activeSessionId] : undefined;
+	return session?.messages;
+}
+
+function findLastUserIndex(msgs: Message[]): number {
+	for (let i = msgs.length - 1; i >= 0; i--) {
+		if (msgs[i].type === 'user') return i;
+	}
+	return -1;
+}
+
+function formatMessage(m: Message, mode: 'last' | 'all'): string | undefined {
+	if (m.type === 'user') return `## User\n${m.content}`;
+	if (m.type === 'assistant' && m.content) {
+		return mode === 'all' ? `## Assistant\n${m.content}` : m.content;
+	}
+	if (m.type === 'subtask' && m.result) {
+		return mode === 'all' ? `## Agent: ${m.agent}\n${m.result}` : `[${m.agent}] ${m.result}`;
+	}
+	if (m.type === 'question' && m.resolved && m.answers?.length) {
+		const parts: string[] = [];
+		for (let q = 0; q < m.questions.length; q++) {
+			const answer = m.answers[q]?.join(', ') ?? '';
+			if (answer) {
+				const prefix = mode === 'all' ? '## Question\n' : '';
+				parts.push(`${prefix}Q: ${m.questions[q].question}\nA: ${answer}`);
+			}
+		}
+		return parts.length ? parts.join('\n\n') : undefined;
+	}
+	return undefined;
+}
+
+function formatMessages(msgs: Message[], mode: 'last' | 'all'): string {
+	const parts: string[] = [];
+	for (const m of msgs) {
+		const text = formatMessage(m, mode);
+		if (text) parts.push(text);
+	}
+	return parts.join('\n\n');
+}
+
+/**
+ * Build copyable diffs from tool_result metadata.
+ * Uses the same unified diff source as SimpleDiff component (metadata.diff).
+ * Falls back to tool_use filePath header when no diff content available.
+ */
+function buildPatches(msgs: Message[]): string {
+	// Build a map of toolUseId → tool_result metadata for quick lookup
+	const resultMap = new Map<string, Record<string, unknown>>();
+	for (const m of msgs) {
+		if (m.type === 'tool_result' && m.toolUseId && m.metadata) {
+			resultMap.set(m.toolUseId, m.metadata as Record<string, unknown>);
+		}
+	}
+
+	const patches: string[] = [];
+	for (const m of msgs) {
+		if (m.type !== 'tool_use') continue;
+		const meta = resultMap.get(m.toolUseId);
+		if (!meta) continue;
+		// Extract unified diff from metadata — same source as SimpleDiff
+		const diff = meta.diff;
+		if (typeof diff === 'string' && diff.trim()) {
+			patches.push(diff.trim());
+		}
+		// No unified diff available — skip (no manual reconstruction)
+	}
+	return patches.join('\n\n');
 }
 
 const CopyDropdown = React.memo<{
@@ -297,22 +373,38 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 		clearChangedFiles();
 	}, [groupedFiles, postMessage, clearChangedFiles]);
 
-	// Copy operations delegated to extension side to avoid messages subscription
+	// ─── Copy operations: read directly from chatStore + clipboard ───
+
 	const handleCopyLastResponse = useCallback(() => {
-		postMessage({ type: 'copyLastResponse' });
-	}, [postMessage]);
+		const msgs = getActiveMessages();
+		if (!msgs) return;
+		const lastUserIdx = findLastUserIndex(msgs);
+		const slice = msgs.slice(Math.max(0, lastUserIdx));
+		const text = formatMessages(slice, 'last');
+		if (text) void navigator.clipboard.writeText(text);
+	}, []);
 
 	const handleCopyAllMessages = useCallback(() => {
-		postMessage({ type: 'copyAllMessages' });
-	}, [postMessage]);
+		const msgs = getActiveMessages();
+		if (!msgs) return;
+		const text = formatMessages(msgs, 'all');
+		if (text) void navigator.clipboard.writeText(text);
+	}, []);
 
 	const handleCopyLastDiffs = useCallback(() => {
-		postMessage({ type: 'copyLastDiffs' });
-	}, [postMessage]);
+		const msgs = getActiveMessages();
+		if (!msgs) return;
+		const lastUserIdx = findLastUserIndex(msgs);
+		const text = buildPatches(msgs.slice(Math.max(0, lastUserIdx)));
+		if (text) void navigator.clipboard.writeText(text);
+	}, []);
 
 	const handleCopyAllDiffs = useCallback(() => {
-		postMessage({ type: 'copyAllDiffs' });
-	}, [postMessage]);
+		const msgs = getActiveMessages();
+		if (!msgs) return;
+		const text = buildPatches(msgs);
+		if (text) void navigator.clipboard.writeText(text);
+	}, []);
 
 	const copyMenuItems = useMemo<CopyMenuItem[]>(
 		() => [

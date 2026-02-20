@@ -13,7 +13,6 @@ import type {
 	InstalledMcpServerMetadata,
 	MCPServerConfig,
 	MCPServersMap,
-	McpMarketplaceCatalog,
 	OpenCodeProviderData,
 	ParsedSubagent,
 	PlatformInfo,
@@ -676,24 +675,9 @@ export type McpStatusMessage = BaseExtensionMessage<
 >;
 
 // =============================================================================
-// MCP Marketplace (global)
+// MCP Installed Metadata
 // =============================================================================
 
-export type McpMarketplaceCatalogMessage = BaseExtensionMessage<
-	'mcpMarketplaceCatalog',
-	{ catalog: McpMarketplaceCatalog; error?: string }
->;
-export type McpMarketplaceInstallResultMessage = BaseExtensionMessage<
-	'mcpMarketplaceInstallResult',
-	{
-		name: string;
-		success: boolean;
-		error?: string;
-		installPrompt?: string;
-		githubUrl?: string;
-		openedUrl?: string;
-	}
->;
 export type McpInstalledMetadataMessage = BaseExtensionMessage<
 	'mcpInstalledMetadata',
 	{ metadata: Record<string, InstalledMcpServerMetadata> }
@@ -842,8 +826,6 @@ export type ExtensionMessage =
 	| OpenCodeMcpStatusMessage
 	| OpenCodeMcpAuthStartedMessage
 	| OpenCodeMcpAuthErrorMessage
-	| McpMarketplaceCatalogMessage
-	| McpMarketplaceInstallResultMessage
 	| McpInstalledMetadataMessage
 	| McpServersMessage
 	| McpServerSavedMessage
@@ -985,14 +967,6 @@ export interface GetRulesCommand {
 
 export interface LoadMCPServersCommand {
 	type: 'loadMCPServers';
-}
-export interface FetchMcpMarketplaceCatalogCommand {
-	type: 'fetchMcpMarketplaceCatalog';
-	forceRefresh: boolean;
-}
-export interface InstallMcpFromMarketplaceCommand {
-	type: 'installMcpFromMarketplace';
-	mcpId: string;
 }
 export interface SaveMCPServerCommand {
 	type: 'saveMCPServer';
@@ -1274,19 +1248,6 @@ export interface UndoFileChangesCommand {
 export interface UndoAllChangesCommand {
 	type: 'undoAllChanges';
 }
-export interface CopyLastResponseCommand {
-	type: 'copyLastResponse';
-}
-export interface CopyAllMessagesCommand {
-	type: 'copyAllMessages';
-}
-export interface CopyLastDiffsCommand {
-	type: 'copyLastDiffs';
-}
-export interface CopyAllDiffsCommand {
-	type: 'copyAllDiffs';
-}
-
 // =============================================================================
 // Conversation & Orchestration Commands
 // =============================================================================
@@ -1323,8 +1284,6 @@ export type WebviewCommand =
 	| GetSubagentsCommand
 	| GetRulesCommand
 	| LoadMCPServersCommand
-	| FetchMcpMarketplaceCatalogCommand
-	| InstallMcpFromMarketplaceCommand
 	| SaveMCPServerCommand
 	| DeleteMCPServerCommand
 	| OpenMcpConfigCommand
@@ -1376,10 +1335,6 @@ export type WebviewCommand =
 	| AcceptAllFilesCommand
 	| UndoFileChangesCommand
 	| UndoAllChangesCommand
-	| CopyLastResponseCommand
-	| CopyAllMessagesCommand
-	| CopyLastDiffsCommand
-	| CopyAllDiffsCommand
 	| ClearAllConversationsCommand
 	| SyncAllCommand;
 

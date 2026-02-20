@@ -71,6 +71,7 @@ export const ProviderManager: React.FC = () => {
 	const [selectedNewProvider, setSelectedNewProvider] = useState('');
 	const [editingApiKey, setEditingApiKey] = useState<string | null>(null);
 	const [editApiKeyInput, setEditApiKeyInput] = useState('');
+	const [modelSearch, setModelSearch] = useState('');
 
 	const isOpenCodeCLI = cliProvider === 'opencode';
 
@@ -168,11 +169,13 @@ export const ProviderManager: React.FC = () => {
 			setExpandedProvider(null);
 			setApiKeyInput('');
 			setSelectedNewProvider('');
+			setModelSearch('');
 			return;
 		}
 		setExpandedProvider(providerId);
 		setApiKeyInput('');
 		setSelectedNewProvider('');
+		setModelSearch('');
 	};
 
 	const canDisconnect = (providerId: string) => !isNonDisconnectableProviderId(providerId);
@@ -265,7 +268,7 @@ export const ProviderManager: React.FC = () => {
 					<button
 						type="button"
 						onClick={handleRefresh}
-						className="text-2xs text-vscode-descriptionForeground hover:text-vscode-foreground pr-1"
+						className="text-xs text-vscode-descriptionForeground hover:text-vscode-foreground pr-1"
 					>
 						<RefreshIcon size={10} />
 					</button>
@@ -398,7 +401,7 @@ export const ProviderManager: React.FC = () => {
 												<button
 													type="button"
 													onClick={() => handleDisconnectProvider(provider.id)}
-													className="text-2xs text-vscode-errorForeground/70 hover:text-vscode-errorForeground transition-colors"
+													className="text-xs text-vscode-errorForeground/70 hover:text-vscode-errorForeground transition-colors"
 												>
 													Disconnect
 												</button>
@@ -459,24 +462,31 @@ export const ProviderManager: React.FC = () => {
 									)}
 
 									{provider.models && provider.models.length > 0 ? (
-										<ModelList>
-											{provider.models.map(model => {
-												const isEnabled = isOpenCodeModelEnabled(provider.id, model.id);
-												return (
-													<ModelItem key={model.id} name={model.name} id={model.id}>
-														{model.capabilities?.reasoning && (
-															<BrainSideIcon
-																size={14}
-																style={{ color: 'rgba(168, 85, 247, 0.8)' }}
+										<ModelList searchValue={modelSearch} onSearchChange={setModelSearch}>
+											{provider.models
+												.filter(
+													model =>
+														!modelSearch ||
+														model.name.toLowerCase().includes(modelSearch.toLowerCase()) ||
+														model.id.toLowerCase().includes(modelSearch.toLowerCase()),
+												)
+												.map(model => {
+													const isEnabled = isOpenCodeModelEnabled(provider.id, model.id);
+													return (
+														<ModelItem key={model.id} name={model.name} id={model.id}>
+															{model.capabilities?.reasoning && (
+																<BrainSideIcon
+																	size={14}
+																	style={{ color: 'rgba(168, 85, 247, 0.8)' }}
+																/>
+															)}
+															<Switch
+																checked={isEnabled}
+																onChange={() => handleToggleOpenCodeModel(provider.id, model.id)}
 															/>
-														)}
-														<Switch
-															checked={isEnabled}
-															onChange={() => handleToggleOpenCodeModel(provider.id, model.id)}
-														/>
-													</ModelItem>
-												);
-											})}
+														</ModelItem>
+													);
+												})}
 										</ModelList>
 									) : (
 										<EmptyState>No models available</EmptyState>
@@ -528,6 +538,8 @@ const OpenAICompatibleConfig: React.FC<OpenAICompatibleConfigProps> = ({
 	onFetchModels,
 	onToggleModel,
 }) => {
+	const [modelSearch, setModelSearch] = useState('');
+
 	const status = testStatus.isLoading
 		? 'loading'
 		: testStatus.success
@@ -535,6 +547,14 @@ const OpenAICompatibleConfig: React.FC<OpenAICompatibleConfigProps> = ({
 			: testStatus.error
 				? 'error'
 				: 'idle';
+
+	const filteredModels = modelSearch
+		? models.filter(
+				m =>
+					m.name.toLowerCase().includes(modelSearch.toLowerCase()) ||
+					m.id.toLowerCase().includes(modelSearch.toLowerCase()),
+			)
+		: models;
 
 	return (
 		<>
@@ -589,8 +609,8 @@ const OpenAICompatibleConfig: React.FC<OpenAICompatibleConfigProps> = ({
 					)}
 
 					{models.length > 0 ? (
-						<ModelList>
-							{models.map(model => (
+						<ModelList searchValue={modelSearch} onSearchChange={setModelSearch}>
+							{filteredModels.map(model => (
 								<ModelItem key={model.id} name={model.name} id={model.id}>
 									<Switch
 										checked={enabledModels.includes(model.id)}

@@ -127,16 +127,6 @@ export interface LoadMCPServersCommand {
 	type: 'loadMCPServers';
 }
 
-export interface FetchMcpMarketplaceCatalogCommand {
-	type: 'fetchMcpMarketplaceCatalog';
-	forceRefresh: boolean;
-}
-
-export interface InstallMcpFromMarketplaceCommand {
-	type: 'installMcpFromMarketplace';
-	mcpId: string;
-}
-
 export interface SaveMCPServerCommand {
 	type: 'saveMCPServer';
 	name: string;
@@ -431,22 +421,6 @@ export interface UndoAllChangesCommand {
 	type: 'undoAllChanges';
 }
 
-export interface CopyLastResponseCommand {
-	type: 'copyLastResponse';
-}
-
-export interface CopyAllMessagesCommand {
-	type: 'copyAllMessages';
-}
-
-export interface CopyLastDiffsCommand {
-	type: 'copyLastDiffs';
-}
-
-export interface CopyAllDiffsCommand {
-	type: 'copyAllDiffs';
-}
-
 // =============================================================================
 // Conversation Commands (additional)
 // =============================================================================
@@ -491,8 +465,6 @@ export type WebviewCommand =
 	| GetRulesCommand
 	// MCP
 	| LoadMCPServersCommand
-	| FetchMcpMarketplaceCatalogCommand
-	| InstallMcpFromMarketplaceCommand
 	| SaveMCPServerCommand
 	| DeleteMCPServerCommand
 	| OpenMcpConfigCommand
@@ -548,10 +520,6 @@ export type WebviewCommand =
 	| AcceptAllFilesCommand
 	| UndoFileChangesCommand
 	| UndoAllChangesCommand
-	| CopyLastResponseCommand
-	| CopyAllMessagesCommand
-	| CopyLastDiffsCommand
-	| CopyAllDiffsCommand
 	// Conversation (additional)
 	| ClearAllConversationsCommand
 	// Orchestration

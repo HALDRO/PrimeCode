@@ -1,40 +1,24 @@
 /**
  * @file McpSettingsPanel
  * @description MCP management UI inside Settings > MCP tab.
- *              Provides inner tabs (Installed / Marketplace), showing installed servers with
- *              enable/disable, status, delete actions, command display, and expandable details.
- *              Edit/Add actions open .opencode/mcp.json in editor for direct editing.
- *              Uses Cline API for marketplace — installation is AI-assisted via README.
- *              Includes useIsMounted hook to prevent memory leaks during async operations.
+ *              Shows installed servers with enable/disable, status, delete actions,
+ *              and expandable tool details. Edit/Add actions open opencode.json in editor.
  */
 
 import type React from 'react';
 import { useMemo, useState } from 'react';
-import type { MCPServerConfig, McpMarketplaceItem } from '../../../common';
-import { useIsMounted } from '../../hooks/useIsMounted';
+import type { MCPServerConfig } from '../../../common';
 import { cn } from '../../lib/cn';
 import { useSettingsStore } from '../../store';
 import { useVSCode } from '../../utils/vscode';
-import { EditIcon, RefreshIcon, TrashIcon } from '../icons';
-import { Button, IconButton, Switch, TextInput } from '../ui';
-import { GroupTitle, SettingRow, SettingsBadge, SettingsGroup } from './SettingsUI';
-
-const MCP_TABS = [
-	{ id: 'installed', label: 'Installed' },
-	{ id: 'marketplace', label: 'Marketplace' },
-] as const;
-
-type McpTab = (typeof MCP_TABS)[number]['id'];
+import { EditIcon, TrashIcon } from '../icons';
+import { Button, IconButton, Switch } from '../ui';
+import { GroupTitle, SettingRow, SettingsGroup } from './SettingsUI';
 
 export const McpSettingsPanel: React.FC = () => {
 	const { postMessage } = useVSCode();
-	const { mcpServers, mcpStatus, mcpInstalledMetadata, mcpMarketplace } = useSettingsStore();
-	const isMounted = useIsMounted();
+	const { mcpServers, mcpStatus, mcpInstalledMetadata } = useSettingsStore();
 
-	const [activeTab, setActiveTab] = useState<McpTab>('installed');
-	const [search, setSearch] = useState('');
-	const [installing, setInstalling] = useState<string | null>(null);
-	const [sortBy, setSortBy] = useState<'name' | 'stars' | 'downloads'>('name');
 	const [expandedServers, setExpandedServers] = useState<Set<string>>(new Set());
 
 	const toggleExpanded = (name: string) => {
@@ -59,40 +43,6 @@ export const McpSettingsPanel: React.FC = () => {
 		});
 	}, [mcpServers, mcpInstalledMetadata, mcpStatus]);
 
-	const marketplaceItems = useMemo(() => {
-		const items = mcpMarketplace.catalog?.items ?? [];
-		const q = search.trim().toLowerCase();
-		const filtered = items
-			.filter(i => {
-				if (!q) {
-					return true;
-				}
-				// Search only by name
-				return i.name.toLowerCase().includes(q);
-			})
-			.slice();
-
-		// Stable sort: primary by selected option, secondary by name for consistency
-		filtered.sort((a, b) => {
-			if (sortBy === 'stars') {
-				const diff = (b.githubStars ?? 0) - (a.githubStars ?? 0);
-				if (diff !== 0) {
-					return diff;
-				}
-			} else if (sortBy === 'downloads') {
-				const diff = (b.downloadCount ?? 0) - (a.downloadCount ?? 0);
-				if (diff !== 0) {
-					return diff;
-				}
-			}
-			// Fallback to name for stable ordering
-			return a.name.localeCompare(b.name);
-		});
-
-		return filtered;
-	}, [mcpMarketplace.catalog, search, sortBy]);
-
-	// Open opencode.json in editor
 	const openMcpConfig = () => {
 		postMessage({ type: 'openMcpConfig' });
 	};
@@ -103,20 +53,6 @@ export const McpSettingsPanel: React.FC = () => {
 		postMessage({ type: 'saveMCPServer', name, config: { ...config, enabled } });
 	};
 
-	const installMcp = (item: McpMarketplaceItem) => {
-		setInstalling(item.mcpId);
-		postMessage({ type: 'installMcpFromMarketplace', mcpId: item.mcpId });
-		// Installing state will be cleared by message handler, but safeguard with timeout
-		setTimeout(() => {
-			if (isMounted()) {
-				setInstalling(null);
-			}
-		}, 8000);
-	};
-
-	const refreshMarketplace = () => {
-		postMessage({ type: 'fetchMcpMarketplaceCatalog', forceRefresh: true });
-	};
 	return (
 		<div className="animate-fade-in">
 			<GroupTitle>MCP</GroupTitle>
@@ -132,325 +68,134 @@ export const McpSettingsPanel: React.FC = () => {
 				</SettingRow>
 			</SettingsGroup>
 
-			<div className="flex items-center justify-center gap-1.5 px-1 py-1">
-				{MCP_TABS.map(t => (
-					<button
-						key={t.id}
-						type="button"
-						onClick={() => setActiveTab(t.id)}
-						className={cn(
-							'px-2 h-(--btn-height-sm) text-sm rounded-md border border-vscode-panel-border transition-all',
-							activeTab === t.id
-								? 'bg-vscode-list-hoverBackground text-vscode-foreground border-vscode-focusBorder'
-								: 'bg-transparent text-vscode-descriptionForeground hover:bg-(--alpha-5) hover:text-vscode-foreground',
-						)}
-					>
-						{t.label}
-					</button>
-				))}
-			</div>
+			<SettingsGroup>
+				{installedRows.length === 0 ? (
+					<div className="px-2.5 py-3 text-sm text-vscode-descriptionForeground text-center">
+						No MCP servers configured yet.
+						<br />
+						<button
+							type="button"
+							onClick={openMcpConfig}
+							className="text-vscode-textLink-foreground hover:text-vscode-textLink-activeForeground underline mt-1"
+						>
+							Add one in opencode.json
+						</button>
+					</div>
+				) : (
+					installedRows.map((r, idx) => {
+						const displayName = r.meta?.displayName || r.name;
+						const status = r.status?.status;
+						const enabled = r.config.enabled !== false;
+						const isExpanded = expandedServers.has(r.name);
+						const tools = r.status?.tools ?? [];
+						const toolsCount = tools.length;
+						const isLast = idx === installedRows.length - 1;
 
-			{activeTab === 'installed' && (
-				<SettingsGroup>
-					{installedRows.length === 0 ? (
-						<div className="px-2.5 py-3 text-sm text-vscode-descriptionForeground text-center">
-							No MCP servers configured yet.
-							<br />
-							<button
-								type="button"
-								onClick={openMcpConfig}
-								className="text-vscode-textLink-foreground hover:text-vscode-textLink-activeForeground underline mt-1"
-							>
-								Add one in .opencode/mcp.json
-							</button>
-						</div>
-					) : (
-						installedRows.map((r, idx) => {
-							const displayName = r.meta?.displayName || r.name;
-							const status = r.status?.status;
-							const enabled = r.config.enabled !== false;
-							const isExpanded = expandedServers.has(r.name);
-							const tools = r.status?.tools ?? [];
-							const toolsCount = tools.length;
-							const isLast = idx === installedRows.length - 1;
+						const dotColor = !enabled
+							? 'bg-(--alpha-20)'
+							: status === 'connected'
+								? 'bg-vscode-editorGutter-addedBackground'
+								: status === 'failed' || status === 'timeout'
+									? 'bg-vscode-errorForeground'
+									: status === 'needs_auth'
+										? 'bg-vscode-editorGutter-modifiedBackground'
+										: 'bg-(--alpha-30)';
 
-							// Status dot color
-							const dotColor = !enabled
-								? 'bg-(--alpha-20)'
-								: status === 'connected'
-									? 'bg-vscode-editorGutter-addedBackground'
-									: status === 'failed' || status === 'timeout'
-										? 'bg-vscode-errorForeground'
-										: status === 'needs_auth'
-											? 'bg-vscode-editorGutter-modifiedBackground'
-											: 'bg-(--alpha-30)';
-
-							return (
-								<div
-									key={r.name}
-									className={cn(
-										'px-2.5 py-2 hover:bg-vscode-list-hoverBackground transition-colors',
-										!isLast && 'border-b border-(--border-subtle)',
-										!enabled && 'opacity-50',
-									)}
-								>
-									{/* Main row */}
-									<div className="flex items-center gap-2.5">
-										{/* Circle avatar */}
-										<div
-											className={cn(
-												'w-6 h-6 rounded-full flex items-center justify-center text-sm font-semibold shrink-0',
-												enabled
-													? 'bg-(--alpha-10) text-vscode-foreground'
-													: 'bg-(--alpha-5) text-vscode-descriptionForeground',
-											)}
-										>
-											{displayName.charAt(0).toUpperCase()}
-										</div>
-
-										{/* Name + status dot + tools button */}
-										<div className="flex items-center gap-1.5 flex-1 min-w-0">
-											<span
-												className={cn(
-													'text-sm font-medium truncate',
-													enabled ? 'text-vscode-foreground' : 'text-vscode-descriptionForeground',
-												)}
-											>
-												{displayName}
-											</span>
-											{/* Status dot */}
-											<span
-												className={cn('w-1.5 h-1.5 rounded-full shrink-0', dotColor)}
-												title={status || 'unknown'}
-											/>
-											{/* Tools button */}
-											{enabled && toolsCount > 0 && (
-												<button
-													type="button"
-													onClick={() => toggleExpanded(r.name)}
-													className={cn(
-														'text-2xs px-1 py-0.5 rounded border transition-colors',
-														isExpanded
-															? 'bg-vscode-list-hoverBackground text-vscode-foreground border-vscode-focusBorder'
-															: 'bg-transparent text-vscode-descriptionForeground border-vscode-panel-border hover:bg-(--alpha-5) hover:text-vscode-foreground',
-													)}
-												>
-													{toolsCount} tools
-												</button>
-											)}
-										</div>
-
-										{/* Actions */}
-										<div className="flex items-center gap-1 shrink-0">
-											<IconButton
-												icon={<EditIcon size={10} />}
-												title="Edit in .opencode/mcp.json"
-												onClick={openMcpConfig}
-											/>
-											<IconButton
-												icon={<TrashIcon size={10} />}
-												title="Delete"
-												danger
-												onClick={() => deleteServer(r.name)}
-											/>
-											<Switch
-												checked={enabled}
-												onChange={val => toggleEnabled(r.name, r.config, val)}
-											/>
-										</div>
-									</div>
-
-									{/* Tools list (expandable) */}
-									{enabled && toolsCount > 0 && isExpanded && (
-										<div className="mt-1.5 pt-1.5 border-t border-(--border-subtle)">
-											<div className="flex flex-wrap gap-1">
-												{tools.map(tool => (
-													<span
-														key={tool.name}
-														className="text-xs px-1.5 py-0.5 rounded bg-(--alpha-5) text-vscode-descriptionForeground border border-vscode-panel-border font-mono"
-														title={tool.description || tool.name}
-													>
-														{tool.name}
-													</span>
-												))}
-											</div>
-										</div>
-									)}
-
-									{/* Error message */}
-									{r.status?.error && (
-										<div className="text-2xs text-vscode-errorForeground/70 mt-1 truncate">
-											{r.status.error}
-										</div>
-									)}
-								</div>
-							);
-						})
-					)}
-				</SettingsGroup>
-			)}
-
-			{activeTab === 'marketplace' && (
-				<>
-					{mcpMarketplace.error && (
-						<div className="p-2 mx-1 mb-2 bg-vscode-errorForeground/10 border border-vscode-errorForeground/20 rounded text-sm text-vscode-errorForeground">
-							{mcpMarketplace.error}
-						</div>
-					)}
-
-					<SettingsGroup>
-						{/* Search and sort controls */}
-						<div className="flex items-center gap-1 px-2.5 py-2 border-b border-(--border-subtle)">
-							<TextInput
-								value={search}
-								onChange={e => setSearch(e.target.value)}
-								placeholder="Search..."
-								className="w-full h-7"
-							/>
-							<button
-								type="button"
-								onClick={() => setSortBy('stars')}
-								title="Sort by Stars"
+						return (
+							<div
+								key={r.name}
 								className={cn(
-									'h-7 px-2 text-sm rounded border transition-colors shrink-0',
-									sortBy === 'stars'
-										? 'bg-vscode-list-hoverBackground text-vscode-foreground border-vscode-focusBorder'
-										: 'bg-transparent text-vscode-descriptionForeground border-vscode-panel-border hover:bg-(--alpha-5) hover:text-vscode-foreground',
+									'px-2.5 py-2 hover:bg-vscode-list-hoverBackground transition-colors',
+									!isLast && 'border-b border-(--border-subtle)',
+									!enabled && 'opacity-50',
 								)}
 							>
-								★
-							</button>
-							<button
-								type="button"
-								onClick={() => setSortBy('downloads')}
-								title="Sort by Downloads"
-								className={cn(
-									'h-7 px-2 text-sm rounded border transition-colors shrink-0',
-									sortBy === 'downloads'
-										? 'bg-vscode-list-hoverBackground text-vscode-foreground border-vscode-focusBorder'
-										: 'bg-transparent text-vscode-descriptionForeground border-vscode-panel-border hover:bg-(--alpha-5) hover:text-vscode-foreground',
-								)}
-							>
-								↓
-							</button>
-							<IconButton
-								icon={<RefreshIcon size={12} />}
-								title="Refresh"
-								onClick={refreshMarketplace}
-							/>
-						</div>
-
-						{/* Items list */}
-						{marketplaceItems.length === 0 ? (
-							<div className="px-2.5 py-3 text-sm text-vscode-descriptionForeground text-center">
-								{search
-									? 'No MCP servers found matching your search.'
-									: 'No MCP servers available.'}
-							</div>
-						) : (
-							marketplaceItems.map((item, idx) => {
-								const stars = item.githubStars ?? 0;
-								const downloads = item.downloadCount ?? 0;
-								const isInstalled = !!mcpServers[item.mcpId];
-								const isLast = idx === marketplaceItems.length - 1;
-
-								return (
+								<div className="flex items-center gap-2.5">
 									<div
-										key={item.mcpId}
 										className={cn(
-											'px-2.5 py-2 hover:bg-vscode-list-hoverBackground transition-colors',
-											!isLast && 'border-b border-(--border-subtle)',
+											'w-6 h-6 rounded-full flex items-center justify-center text-sm font-semibold shrink-0',
+											enabled
+												? 'bg-(--alpha-10) text-vscode-foreground'
+												: 'bg-(--alpha-5) text-vscode-descriptionForeground',
 										)}
 									>
-										{/* Main row */}
-										<div className="flex items-center gap-2.5">
-											{/* Circle avatar */}
-											<div
+										{displayName.charAt(0).toUpperCase()}
+									</div>
+
+									<div className="flex items-center gap-1.5 flex-1 min-w-0">
+										<span
+											className={cn(
+												'text-sm font-medium truncate',
+												enabled ? 'text-vscode-foreground' : 'text-vscode-descriptionForeground',
+											)}
+										>
+											{displayName}
+										</span>
+										<span
+											className={cn('w-1.5 h-1.5 rounded-full shrink-0', dotColor)}
+											title={status || 'unknown'}
+										/>
+										{enabled && toolsCount > 0 && (
+											<button
+												type="button"
+												onClick={() => toggleExpanded(r.name)}
 												className={cn(
-													'w-6 h-6 rounded-full flex items-center justify-center text-sm font-semibold shrink-0',
-													isInstalled
-														? 'bg-vscode-editorGutter-addedBackground/20 text-vscode-editorGutter-addedBackground'
-														: 'bg-(--alpha-10) text-vscode-foreground',
+													'text-xs px-1 py-0.5 rounded border transition-colors',
+													isExpanded
+														? 'bg-vscode-list-hoverBackground text-vscode-foreground border-vscode-focusBorder'
+														: 'bg-transparent text-vscode-descriptionForeground border-vscode-panel-border hover:bg-(--alpha-5) hover:text-vscode-foreground',
 												)}
 											>
-												{item.name.charAt(0).toUpperCase()}
-											</div>
-
-											{/* Name + stats */}
-											<div className="flex items-center gap-1.5 flex-1 min-w-0">
-												<span className="text-sm font-medium text-vscode-foreground truncate">
-													{item.name}
-												</span>
-												{/* Stats badges */}
-												{(stars > 0 || downloads > 0) && (
-													<div className="flex items-center gap-1.5 shrink-0">
-														{stars > 0 && (
-															<span
-																className="text-2xs px-1 py-0.5 rounded bg-transparent text-vscode-descriptionForeground border border-vscode-panel-border"
-																title="GitHub Stars"
-															>
-																★ {stars >= 1000 ? `${(stars / 1000).toFixed(1)}k` : stars}
-															</span>
-														)}
-														{downloads > 0 && (
-															<span
-																className="text-2xs px-1 py-0.5 rounded bg-transparent text-vscode-descriptionForeground border border-vscode-panel-border"
-																title="Downloads"
-															>
-																↓{' '}
-																{downloads >= 1000
-																	? `${(downloads / 1000).toFixed(1)}k`
-																	: downloads}
-															</span>
-														)}
-													</div>
-												)}
-											</div>
-
-											{/* Actions */}
-											<div className="flex items-center gap-1 shrink-0">
-												{isInstalled ? (
-													<SettingsBadge variant="green">Installed</SettingsBadge>
-												) : (
-													<Button
-														size="sm"
-														variant="secondary"
-														disabled={installing === item.mcpId}
-														onClick={() => installMcp(item)}
-													>
-														{installing === item.mcpId ? 'Loading...' : 'Install'}
-													</Button>
-												)}
-											</div>
-										</div>
-
-										{/* Description */}
-										{item.description && (
-											<div className="text-xs text-vscode-descriptionForeground mt-1 ml-(--gap-7) line-clamp-2">
-												{item.description}
-											</div>
-										)}
-
-										{/* Tags */}
-										{(item.tags || []).length > 0 && (
-											<div className="flex flex-wrap gap-1 mt-1.5 ml-(--gap-7)">
-												{(item.tags || []).slice(0, 5).map(t => (
-													<span
-														key={t}
-														className="text-xs px-1.5 py-0.5 rounded bg-(--alpha-5) text-vscode-descriptionForeground border border-vscode-panel-border font-mono"
-													>
-														{t}
-													</span>
-												))}
-											</div>
+												{toolsCount} tools
+											</button>
 										)}
 									</div>
-								);
-							})
-						)}
-					</SettingsGroup>
-				</>
-			)}
+
+									<div className="flex items-center gap-1 shrink-0">
+										<IconButton
+											icon={<EditIcon size={10} />}
+											title="Edit in opencode.json"
+											onClick={openMcpConfig}
+										/>
+										<IconButton
+											icon={<TrashIcon size={10} />}
+											title="Delete"
+											danger
+											onClick={() => deleteServer(r.name)}
+										/>
+										<Switch
+											checked={enabled}
+											onChange={val => toggleEnabled(r.name, r.config, val)}
+										/>
+									</div>
+								</div>
+
+								{enabled && toolsCount > 0 && isExpanded && (
+									<div className="mt-1.5 pt-1.5 border-t border-(--border-subtle)">
+										<div className="flex flex-wrap gap-1">
+											{tools.map(tool => (
+												<span
+													key={tool.name}
+													className="text-xs px-1.5 py-0.5 rounded bg-(--alpha-5) text-vscode-descriptionForeground border border-vscode-panel-border font-mono"
+													title={tool.description || tool.name}
+												>
+													{tool.name}
+												</span>
+											))}
+										</div>
+									</div>
+								)}
+
+								{r.status?.error && (
+									<div className="text-xs text-vscode-errorForeground/70 mt-1 truncate">
+										{r.status.error}
+									</div>
+								)}
+							</div>
+						);
+					})
+				)}
+			</SettingsGroup>
 		</div>
 	);
 };

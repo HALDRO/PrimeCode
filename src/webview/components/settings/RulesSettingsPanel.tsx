@@ -33,7 +33,7 @@ export const RulesSettingsPanel: React.FC = () => {
 
 	return (
 		<div className="animate-fade-in">
-			<div className="flex items-center justify-center gap-(--gap-1-5) border-b border-vscode-panel-border pb-1.5 mb-2 mt-1.5">
+			<div className="flex items-center justify-center gap-(--gap-1-5) px-1 py-1">
 				{[
 					{ id: 'rules', label: 'Rules' },
 					{ id: 'commands', label: 'Commands' },
@@ -46,7 +46,7 @@ export const RulesSettingsPanel: React.FC = () => {
 						key={tab.id}
 						onClick={() => setActiveTab(tab.id as typeof activeTab)}
 						className={cn(
-							'px-2 py-0.5 text-sm font-medium rounded transition-colors',
+							'px-2 h-(--btn-height-sm) text-sm rounded transition-colors',
 							activeTab === tab.id
 								? 'bg-vscode-list-hoverBackground text-vscode-foreground'
 								: 'text-vscode-descriptionForeground hover:bg-(--alpha-5) hover:text-vscode-foreground',

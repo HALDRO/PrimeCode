@@ -59,7 +59,7 @@ const NavButton = React.memo<{
 			onClick={onClick}
 			aria-label={item.label}
 			className={cn(
-				'flex items-center gap-1.5 px-1.5 h-(--btn-height-sm) bg-transparent border-none rounded-sm cursor-pointer transition-all duration-75 text-sm text-vscode-descriptionForeground',
+				'flex items-center gap-1.5 px-1.5 h-(--btn-height-sm) bg-transparent border-none rounded cursor-pointer transition-all duration-75 text-sm text-vscode-descriptionForeground',
 				'hover:bg-vscode-list-hoverBackground hover:text-vscode-foreground',
 				isActive && 'bg-vscode-list-hoverBackground text-vscode-foreground',
 				className ?? 'w-full',
@@ -267,9 +267,9 @@ const PermissionsSettings: React.FC = () => {
 				</SettingRow>
 			</SettingsGroup>
 
-			<div className="p-3 bg-white/3 border border-white/8 rounded text-sm text-white/60 mt-4 mb-4">
+			<div className="p-3 bg-(--alpha-5) border border-(--alpha-10) rounded text-sm text-vscode-descriptionForeground mt-4 mb-4">
 				These settings are persisted in{' '}
-				<code className="bg-white/10 px-1 rounded">opencode.json</code>.
+				<code className="bg-(--alpha-10) px-1 rounded">opencode.json</code>.
 			</div>
 
 			<GroupTitle>Configuration Files</GroupTitle>
