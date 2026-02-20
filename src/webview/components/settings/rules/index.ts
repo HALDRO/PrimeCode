@@ -1,5 +1,5 @@
 export * from './CommandsTab';
-export * from './HooksTab';
+export * from './PluginsTab';
 export * from './RulesTab';
 export * from './SkillsTab';
 export * from './SubagentsTab';

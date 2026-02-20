@@ -5,7 +5,6 @@
  * postMessageToVSCode). No more `msg.data` nesting — everything is flat.
  */
 
-import type { PermissionPolicies } from './protocol';
 import type { MCPServerConfig } from './schemas';
 
 // =============================================================================
@@ -107,12 +106,12 @@ export interface GetSkillsCommand {
 	type: 'getSkills';
 }
 
-export interface GetHooksCommand {
-	type: 'getHooks';
-}
-
 export interface GetSubagentsCommand {
 	type: 'getSubagents';
+}
+
+export interface GetPluginsCommand {
+	type: 'getPlugins';
 }
 
 export interface GetRulesCommand {
@@ -143,180 +142,7 @@ export interface OpenMcpConfigCommand {
 }
 
 // =============================================================================
-// Provider Commands
-// =============================================================================
-
-export interface ReloadAllProvidersCommand {
-	type: 'reloadAllProviders';
-}
-
-export interface CheckOpenCodeStatusCommand {
-	type: 'checkOpenCodeStatus';
-}
-
-export interface LoadOpenCodeProvidersCommand {
-	type: 'loadOpenCodeProviders';
-}
-
-export interface LoadAvailableProvidersCommand {
-	type: 'loadAvailableProviders';
-}
-
-export interface SetOpenCodeProviderAuthCommand {
-	type: 'setOpenCodeProviderAuth';
-	providerId: string;
-	apiKey: string;
-}
-
-export interface DisconnectOpenCodeProviderCommand {
-	type: 'disconnectOpenCodeProvider';
-	providerId: string;
-}
-
-export interface SetOpenCodeModelCommand {
-	type: 'setOpenCodeModel';
-	model: string;
-}
-
-export interface SelectModelCommand {
-	type: 'selectModel';
-	model: string;
-}
-
-export interface LoadProxyModelsCommand {
-	type: 'loadProxyModels';
-	baseUrl: string;
-	apiKey: string;
-}
-
-// =============================================================================
-// Tool / Access Commands
-// =============================================================================
-
-export interface AccessResponseCommand {
-	type: 'accessResponse';
-	id: string;
-	approved: boolean;
-	alwaysAllow?: boolean;
-	response?: 'once' | 'always' | 'reject';
-	sessionId?: string;
-	toolName?: string;
-}
-
-export interface GetPermissionsCommand {
-	type: 'getPermissions';
-}
-
-export interface SetPermissionsCommand {
-	type: 'setPermissions';
-	policies: Partial<PermissionPolicies>;
-	provider?: string;
-}
-
-export interface CheckDiscoveryStatusCommand {
-	type: 'checkDiscoveryStatus';
-}
-
-export interface GetAccessCommand {
-	type: 'getAccess';
-}
-
-export interface CheckCLIDiagnosticsCommand {
-	type: 'checkCLIDiagnostics';
-}
-
-// =============================================================================
-// File Commands
-// =============================================================================
-
-export interface OpenFileCommand {
-	type: 'openFile';
-	filePath: string;
-	line?: number;
-	startLine?: number;
-	endLine?: number;
-}
-
-export interface OpenFileDiffCommand {
-	type: 'openFileDiff';
-	filePath: string;
-	oldContent?: string;
-	newContent?: string;
-}
-
-export interface OpenExternalCommand {
-	type: 'openExternal';
-	url: string;
-}
-
-export interface GetImageDataCommand {
-	type: 'getImageData';
-	id?: string;
-	name?: string;
-	path?: string;
-}
-
-export interface GetClipboardContextCommand {
-	type: 'getClipboardContext';
-	text: string;
-}
-
-export interface GetWorkspaceFilesCommand {
-	type: 'getWorkspaceFiles';
-	searchTerm: string;
-}
-
-// =============================================================================
-// SSE Commands
-// =============================================================================
-
-export interface SseSubscribeCommand {
-	type: 'sseSubscribe';
-	id: string;
-	url: string;
-}
-
-export interface SseCloseCommand {
-	type: 'sseClose';
-	id: string;
-}
-
-// =============================================================================
-// Restore Commands
-// =============================================================================
-
-export interface RestoreCommitCommand {
-	type: 'restoreCommit';
-	commitId?: string;
-	data?: { commitId: string };
-}
-
-export interface UnrevertCommand {
-	type: 'unrevert';
-}
-
-// =============================================================================
-// Proxy Fetch Commands
-// =============================================================================
-
-export interface ProxyFetchCommand {
-	type: 'proxyFetch';
-	id: string;
-	url: string;
-	options?: {
-		method?: string;
-		headers?: Record<string, string>;
-		body?: string;
-	};
-}
-
-export interface ProxyFetchAbortCommand {
-	type: 'proxyFetchAbort';
-	id: string;
-}
-
-// =============================================================================
-// Agents CRUD Commands (Skills / Hooks / Commands / Subagents)
+// Agents CRUD Commands (Skills / Commands / Subagents)
 // =============================================================================
 
 export interface CreateSkillCommand {
@@ -324,7 +150,6 @@ export interface CreateSkillCommand {
 	name: string;
 	description: string;
 	content: string;
-	version?: string;
 }
 
 export interface DeleteSkillCommand {
@@ -334,26 +159,6 @@ export interface DeleteSkillCommand {
 
 export interface OpenSkillFileCommand {
 	type: 'openSkillFile';
-	name: string;
-}
-
-export interface CreateHookCommand {
-	type: 'createHook';
-	name: string;
-	enabled: boolean;
-	event: string;
-	pattern?: string;
-	action?: string;
-	content?: string;
-}
-
-export interface DeleteHookCommand {
-	type: 'deleteHook';
-	name: string;
-}
-
-export interface OpenHookFileCommand {
-	type: 'openHookFile';
 	name: string;
 }
 
@@ -389,6 +194,16 @@ export interface DeleteSubagentCommand {
 export interface OpenSubagentFileCommand {
 	type: 'openSubagentFile';
 	name: string;
+}
+
+export interface AddPluginCommand {
+	type: 'addPlugin';
+	plugin: string;
+}
+
+export interface RemovePluginCommand {
+	type: 'removePlugin';
+	plugin: string;
 }
 
 export interface ToggleRuleCommand {
@@ -460,60 +275,26 @@ export type WebviewCommand =
 	| UpdateSettingsCommand
 	| GetCommandsCommand
 	| GetSkillsCommand
-	| GetHooksCommand
 	| GetSubagentsCommand
+	| GetPluginsCommand
 	| GetRulesCommand
 	// MCP
 	| LoadMCPServersCommand
 	| SaveMCPServerCommand
 	| DeleteMCPServerCommand
 	| OpenMcpConfigCommand
-	// Provider
-	| ReloadAllProvidersCommand
-	| CheckOpenCodeStatusCommand
-	| LoadOpenCodeProvidersCommand
-	| LoadAvailableProvidersCommand
-	| SetOpenCodeProviderAuthCommand
-	| DisconnectOpenCodeProviderCommand
-	| SetOpenCodeModelCommand
-	| SelectModelCommand
-	| LoadProxyModelsCommand
-	// Tool / Access
-	| AccessResponseCommand
-	| GetPermissionsCommand
-	| SetPermissionsCommand
-	| CheckDiscoveryStatusCommand
-	| GetAccessCommand
-	| CheckCLIDiagnosticsCommand
-	// File
-	| OpenFileCommand
-	| OpenFileDiffCommand
-	| OpenExternalCommand
-	| GetImageDataCommand
-	| GetClipboardContextCommand
-	| GetWorkspaceFilesCommand
-	// SSE
-	| SseSubscribeCommand
-	| SseCloseCommand
-	// Restore
-	| RestoreCommitCommand
-	| UnrevertCommand
-	// Proxy
-	| ProxyFetchCommand
-	| ProxyFetchAbortCommand
 	// Agents CRUD
 	| CreateSkillCommand
 	| DeleteSkillCommand
 	| OpenSkillFileCommand
-	| CreateHookCommand
-	| DeleteHookCommand
-	| OpenHookFileCommand
 	| CreateCommandCommand
 	| DeleteCommandCommand
 	| OpenCommandFileCommand
 	| CreateSubagentCommand
 	| DeleteSubagentCommand
 	| OpenSubagentFileCommand
+	| AddPluginCommand
+	| RemovePluginCommand
 	| ToggleRuleCommand
 	// File Actions
 	| AcceptFileCommand

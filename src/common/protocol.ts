@@ -742,16 +742,6 @@ export type SkillsListMessage = BaseExtensionMessage<
 	}
 >;
 
-export type HooksListMessage = BaseExtensionMessage<
-	'hooksList',
-	{
-		hooks: import('./schemas').ParsedHook[];
-		isLoading: boolean;
-		error?: string;
-		meta?: { operation?: string; message?: string };
-	}
->;
-
 export type SubagentsListMessage = BaseExtensionMessage<
 	'subagentsList',
 	{
@@ -759,6 +749,15 @@ export type SubagentsListMessage = BaseExtensionMessage<
 		isLoading: boolean;
 		error?: string;
 		meta?: { operation?: string; message?: string };
+	}
+>;
+
+export type PluginsListMessage = BaseExtensionMessage<
+	'pluginsList',
+	{
+		plugins: string[];
+		isLoading: boolean;
+		error?: string;
 	}
 >;
 
@@ -835,8 +834,8 @@ export type ExtensionMessage =
 	| McpConfigStatusMessage
 	| CommandsListMessage
 	| SkillsListMessage
-	| HooksListMessage
 	| SubagentsListMessage
+	| PluginsListMessage
 	| CliDiagnosticsMessage
 	| ConversationListMessage
 	| AllConversationsClearedMessage
@@ -951,11 +950,11 @@ export interface GetCommandsCommand {
 export interface GetSkillsCommand {
 	type: 'getSkills';
 }
-export interface GetHooksCommand {
-	type: 'getHooks';
-}
 export interface GetSubagentsCommand {
 	type: 'getSubagents';
+}
+export interface GetPluginsCommand {
+	type: 'getPlugins';
 }
 export interface GetRulesCommand {
 	type: 'getRules';
@@ -1144,7 +1143,7 @@ export interface ProxyFetchAbortCommand {
 }
 
 // =============================================================================
-// Agents CRUD Commands (Skills / Hooks / Commands / Subagents)
+// Agents CRUD Commands (Skills / Commands / Subagents)
 // =============================================================================
 
 export interface CreateSkillCommand {
@@ -1152,7 +1151,6 @@ export interface CreateSkillCommand {
 	name: string;
 	description: string;
 	content: string;
-	version?: string;
 }
 export interface DeleteSkillCommand {
 	type: 'deleteSkill';
@@ -1160,24 +1158,6 @@ export interface DeleteSkillCommand {
 }
 export interface OpenSkillFileCommand {
 	type: 'openSkillFile';
-	name: string;
-}
-
-export interface CreateHookCommand {
-	type: 'createHook';
-	name: string;
-	enabled: boolean;
-	event: string;
-	pattern?: string;
-	action?: string;
-	content?: string;
-}
-export interface DeleteHookCommand {
-	type: 'deleteHook';
-	name: string;
-}
-export interface OpenHookFileCommand {
-	type: 'openHookFile';
 	name: string;
 }
 
@@ -1209,6 +1189,15 @@ export interface DeleteSubagentCommand {
 export interface OpenSubagentFileCommand {
 	type: 'openSubagentFile';
 	name: string;
+}
+
+export interface AddPluginCommand {
+	type: 'addPlugin';
+	plugin: string;
+}
+export interface RemovePluginCommand {
+	type: 'removePlugin';
+	plugin: string;
 }
 
 export interface ToggleRuleCommand {
@@ -1280,8 +1269,8 @@ export type WebviewCommand =
 	| UpdateSettingsCommand
 	| GetCommandsCommand
 	| GetSkillsCommand
-	| GetHooksCommand
 	| GetSubagentsCommand
+	| GetPluginsCommand
 	| GetRulesCommand
 	| LoadMCPServersCommand
 	| SaveMCPServerCommand
@@ -1319,15 +1308,14 @@ export type WebviewCommand =
 	| CreateSkillCommand
 	| DeleteSkillCommand
 	| OpenSkillFileCommand
-	| CreateHookCommand
-	| DeleteHookCommand
-	| OpenHookFileCommand
 	| CreateCommandCommand
 	| DeleteCommandCommand
 	| OpenCommandFileCommand
 	| CreateSubagentCommand
 	| DeleteSubagentCommand
 	| OpenSubagentFileCommand
+	| AddPluginCommand
+	| RemovePluginCommand
 	| ToggleRuleCommand
 	| CreateRuleCommand
 	| DeleteRuleCommand

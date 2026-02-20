@@ -30,7 +30,6 @@ const OPENCODE_GLOB = `${PATHS.OPENCODE_DIR}/**`;
 const PATH_SEGMENT_TO_TYPE: [segment: string, type: ResourceType][] = [
 	[PATHS.OPENCODE_COMMANDS_DIR, 'commands'],
 	[PATHS.OPENCODE_SKILLS_DIR, 'skills'],
-	[PATHS.OPENCODE_PLUGINS_DIR, 'hooks'],
 	[PATHS.OPENCODE_AGENTS_DIR, 'subagents'],
 ];
 

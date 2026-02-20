@@ -98,13 +98,12 @@ export interface SettingsActions {
 	setSubagents: (subagents: Partial<SettingsState['subagents']>) => void;
 	setCommands: (commands: Partial<SettingsState['commands']>) => void;
 	setSkills: (skills: Partial<SettingsState['skills']>) => void;
-	setHooks: (hooks: Partial<SettingsState['hooks']>) => void;
+	setPlugins: (plugins: Partial<SettingsState['plugins']>) => void;
 	setMcpServers: (servers: MCPServersMap) => void;
 	setMcpStatus: (status: SettingsState['mcpStatus']) => void;
 	setMcpInstalledMetadata: (
 		metadata: Record<string, import('../../common').InstalledMcpServerMetadata>,
 	) => void;
-	setMcpMarketplaceState: (state: Partial<SettingsState['mcpMarketplace']>) => void;
 	setAccess: (access: Access[]) => void;
 	setCLIDiagnostics: (diagnostics: Partial<CLIDiagnostics>) => void;
 	setOpenCodeProviders: (providers: OpenCodeProviderData[]) => void;
@@ -257,11 +256,6 @@ export interface SettingsState {
 		}
 	>;
 	mcpInstalledMetadata: Record<string, import('../../common').InstalledMcpServerMetadata>;
-	mcpMarketplace: {
-		isLoading: boolean;
-		error: string | null;
-		catalog: import('../../common').McpMarketplaceCatalog | null;
-	};
 
 	// Commands
 	commands: {
@@ -279,16 +273,16 @@ export interface SettingsState {
 		error?: string;
 	};
 
-	// Hooks
-	hooks: {
-		items: import('../../common').ParsedHook[];
+	// Subagents
+	subagents: {
+		items: import('../../common').ParsedSubagent[];
 		isLoading: boolean;
 		error?: string;
 	};
 
-	// Subagents
-	subagents: {
-		items: import('../../common').ParsedSubagent[];
+	// Plugins
+	plugins: {
+		items: string[];
 		isLoading: boolean;
 		error?: string;
 	};
@@ -358,7 +352,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 			openCodeConfig: undefined,
 		},
 		skills: [],
-		hooks: [],
 	},
 
 	rules: [],
@@ -402,7 +395,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 	mcpServers: {},
 	mcpStatus: {},
 	mcpInstalledMetadata: {},
-	mcpMarketplace: { isLoading: false, error: null, catalog: null },
 
 	commands: {
 		builtin: [],
@@ -418,7 +410,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 		error: undefined,
 	},
 
-	hooks: {
+	plugins: {
 		items: [],
 		isLoading: false,
 		error: undefined,
@@ -470,9 +462,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 			set(state => ({
 				skills: { ...state.skills, ...skills },
 			})),
-		setHooks: hooks =>
+		setPlugins: (plugins: Partial<SettingsState['plugins']>) =>
 			set(state => ({
-				hooks: { ...state.hooks, ...hooks },
+				plugins: { ...state.plugins, ...plugins },
 			})),
 		setSubagents: subagents =>
 			set(state => ({
@@ -481,8 +473,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 		setMcpServers: mcpServers => set({ mcpServers }),
 		setMcpStatus: mcpStatus => set(state => ({ mcpStatus: { ...state.mcpStatus, ...mcpStatus } })),
 		setMcpInstalledMetadata: mcpInstalledMetadata => set({ mcpInstalledMetadata }),
-		setMcpMarketplaceState: mcpMarketplace =>
-			set(state => ({ mcpMarketplace: { ...state.mcpMarketplace, ...mcpMarketplace } })),
 		setAccess: access => set({ access }),
 		setCLIDiagnostics: diagnostics =>
 			set(state => ({
@@ -588,19 +578,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 					}
 					break;
 
-				case 'hooksList':
-					if (message.data) {
-						const { hooks, isLoading, error, meta } = message.data as {
-							hooks: import('../../common').ParsedHook[];
-							isLoading: boolean;
-							error?: string;
-							meta?: { operation?: string; message?: string };
-						};
-						actions.setHooks({ items: hooks, isLoading, error });
-						handleLoadingMeta(meta, error, actions.setResourceOps);
-					}
-					break;
-
 				case 'subagentsList':
 					if (message.data) {
 						const { subagents, isLoading, error, meta } = message.data as {
@@ -611,6 +588,17 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 						};
 						actions.setSubagents({ items: subagents, isLoading, error });
 						handleLoadingMeta(meta, error, actions.setResourceOps);
+					}
+					break;
+
+				case 'pluginsList':
+					if (message.data) {
+						const { plugins, isLoading, error } = message.data as {
+							plugins: string[];
+							isLoading: boolean;
+							error?: string;
+						};
+						actions.setPlugins({ items: plugins, isLoading, error });
 					}
 					break;
 
@@ -807,32 +795,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 					}
 					break;
 
-				case 'mcpMarketplaceCatalog':
-					if (message.data) {
-						const data = message.data as {
-							catalog?: import('../../common').McpMarketplaceCatalog;
-							error?: string;
-						};
-						actions.setMcpMarketplaceState({
-							isLoading: false,
-							error: data.error ?? null,
-							catalog: data.catalog ?? null,
-						});
-					}
-					break;
-
-				case 'mcpMarketplaceInstallResult':
-					if (message.data) {
-						const data = message.data as {
-							success: boolean;
-							installPrompt?: string;
-						};
-						if (data.success && data.installPrompt) {
-							navigator.clipboard.writeText(data.installPrompt).catch(() => {});
-						}
-					}
-					break;
-
 				case 'mcpConfigStatus':
 					if (message.data) {
 						const data = message.data as {
@@ -859,6 +821,22 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 								}
 							>,
 						);
+					}
+					break;
+
+				case 'opencodeMcpStatus':
+					// OpenCode REST API MCP status — authoritative runtime state.
+					// Convert to the same format as mcpStatus so the settings panel can display it.
+					if (message.data) {
+						const openCodeData = message.data as Record<string, { status: string; error?: string }>;
+						const converted: Record<string, { status: string; error?: string }> = {};
+						for (const [name, entry] of Object.entries(openCodeData)) {
+							converted[name] = {
+								status: entry.status,
+								error: entry.error,
+							};
+						}
+						actions.setMcpStatus(converted);
 					}
 					break;
 			}

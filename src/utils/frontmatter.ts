@@ -5,14 +5,14 @@
 
 import * as yaml from 'js-yaml';
 
-const FRONTMATTER_REGEX = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/;
+const FRONTMATTER_REGEX = /^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/;
 
 /**
  * Parses a markdown string with YAML-like frontmatter.
  * Returns the frontmatter as a key-value object and the remaining body content.
  */
 export function parseFrontmatter(content: string): {
-	attributes: Record<string, string | boolean>;
+	attributes: Record<string, unknown>;
 	body: string;
 } {
 	const match = content.match(FRONTMATTER_REGEX);
@@ -25,27 +25,21 @@ export function parseFrontmatter(content: string): {
 	}
 
 	const [, frontmatterStr, body] = match;
-	const attributes: Record<string, string | boolean> = {};
 
 	try {
 		const loaded = yaml.load(frontmatterStr) as Record<string, unknown>;
 		if (typeof loaded === 'object' && loaded !== null) {
-			// Normalize values to string or boolean to match expected interface
-			for (const [key, value] of Object.entries(loaded)) {
-				if (typeof value === 'boolean') {
-					attributes[key] = value;
-				} else if (value !== undefined && value !== null) {
-					attributes[key] = String(value);
-				}
-			}
+			return {
+				attributes: loaded,
+				body: body.trim(),
+			};
 		}
 	} catch (e) {
 		console.warn('Failed to parse frontmatter YAML:', e);
-		// Fallback or empty on error
 	}
 
 	return {
-		attributes,
+		attributes: {},
 		body: body.trim(),
 	};
 }
@@ -53,11 +47,8 @@ export function parseFrontmatter(content: string): {
 /**
  * Creates a markdown string with YAML-like frontmatter.
  */
-export function stringifyFrontmatter(
-	attributes: Record<string, string | boolean | undefined>,
-	body: string,
-): string {
-	const cleanAttributes: Record<string, string | boolean> = {};
+export function stringifyFrontmatter(attributes: Record<string, unknown>, body: string): string {
+	const cleanAttributes: Record<string, unknown> = {};
 
 	for (const [key, value] of Object.entries(attributes)) {
 		if (value !== undefined && value !== '') {

@@ -111,15 +111,15 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 		const customList: CommandItem[] = commands.custom.map(cmd => ({
 			id: cmd.name,
 			name: cmd.name,
-			description: cmd.description,
+			description: cmd.description ?? '',
 			type: 'custom' as const,
-			prompt: cmd.prompt,
+			prompt: cmd.template,
 		}));
 
 		const subagentList: CommandItem[] = subagents.items.map(agent => ({
 			id: agent.name,
 			name: agent.name,
-			description: agent.description,
+			description: agent.description ?? '',
 			type: 'subagent' as const,
 			prompt: `@${agent.name}`,
 		}));

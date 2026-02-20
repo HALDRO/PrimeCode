@@ -29,11 +29,11 @@ export class SettingsHandler implements WebviewMessageHandler {
 			case 'getSkills':
 				await this.onGetSkills();
 				break;
-			case 'getHooks':
-				await this.onGetHooks();
-				break;
 			case 'getSubagents':
 				await this.onGetSubagents();
+				break;
+			case 'getPlugins':
+				await this.onGetPlugins();
 				break;
 			case 'getRules':
 				await this.onGetRules();
@@ -52,17 +52,17 @@ export class SettingsHandler implements WebviewMessageHandler {
 			case 'deleteSkill':
 				await this.onDeleteResource('skills', msg);
 				break;
-			case 'createHook':
-				await this.onCreateResource('hooks', msg);
-				break;
-			case 'deleteHook':
-				await this.onDeleteResource('hooks', msg);
-				break;
 			case 'createSubagent':
 				await this.onCreateResource('subagents', msg);
 				break;
 			case 'deleteSubagent':
 				await this.onDeleteResource('subagents', msg);
+				break;
+			case 'addPlugin':
+				await this.onAddPlugin(msg);
+				break;
+			case 'removePlugin':
+				await this.onRemovePlugin(msg);
 				break;
 			case 'toggleRule':
 				await this.onToggleRule(msg);
@@ -266,20 +266,6 @@ export class SettingsHandler implements WebviewMessageHandler {
 		}
 	}
 
-	private async onGetHooks(): Promise<void> {
-		this.context.bridge.data('hooksList', { hooks: [], isLoading: true });
-		try {
-			const hooks = await this.context.services.resources.getAll('hooks');
-			this.context.bridge.data('hooksList', { hooks, isLoading: false });
-		} catch (error) {
-			this.context.bridge.data('hooksList', {
-				hooks: [],
-				isLoading: false,
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
-	}
-
 	private async onGetSubagents(): Promise<void> {
 		this.context.bridge.data('subagentsList', { subagents: [], isLoading: true });
 		try {
@@ -291,6 +277,38 @@ export class SettingsHandler implements WebviewMessageHandler {
 				isLoading: false,
 				error: error instanceof Error ? error.message : String(error),
 			});
+		}
+	}
+
+	private async onGetPlugins(): Promise<void> {
+		this.context.bridge.data('pluginsList', { plugins: [], isLoading: true });
+		try {
+			const plugins = await this.context.services.mcpConfig.getPlugins();
+			this.context.bridge.data('pluginsList', { plugins, isLoading: false });
+		} catch (error) {
+			this.context.bridge.data('pluginsList', {
+				plugins: [],
+				isLoading: false,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+
+	private async onAddPlugin(msg: CommandOf<'addPlugin'>): Promise<void> {
+		try {
+			await this.context.services.mcpConfig.addPlugin(msg.plugin);
+			await this.onGetPlugins();
+		} catch (error) {
+			logger.error('[SettingsHandler] addPlugin failed:', error);
+		}
+	}
+
+	private async onRemovePlugin(msg: CommandOf<'removePlugin'>): Promise<void> {
+		try {
+			await this.context.services.mcpConfig.removePlugin(msg.plugin);
+			await this.onGetPlugins();
+		} catch (error) {
+			logger.error('[SettingsHandler] removePlugin failed:', error);
 		}
 	}
 
@@ -366,15 +384,6 @@ export class SettingsHandler implements WebviewMessageHandler {
 					content: String(m.content ?? ''),
 					version: String(m.version ?? '0.1.0'),
 				};
-			case 'hooks':
-				return {
-					name,
-					enabled: m.enabled !== false,
-					event: String(m.event ?? 'all'),
-					pattern: m.pattern ? String(m.pattern) : undefined,
-					action: m.action ? String(m.action) : undefined,
-					content: String(m.content ?? ''),
-				};
 			case 'subagents':
 				return {
 					name,
@@ -393,9 +402,6 @@ export class SettingsHandler implements WebviewMessageHandler {
 				break;
 			case 'skills':
 				await this.onGetSkills();
-				break;
-			case 'hooks':
-				await this.onGetHooks();
 				break;
 			case 'subagents':
 				await this.onGetSubagents();

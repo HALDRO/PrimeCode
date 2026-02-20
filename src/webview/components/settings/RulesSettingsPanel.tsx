@@ -1,6 +1,6 @@
 /**
  * @file RulesSettingsPanel.tsx
- * @description Settings panel for managing Rules, Skills, Hooks, and Commands.
+ * @description Settings panel for managing Rules, Skills, Commands, and Subagents.
  *              Acts as a unified "Rule Settings" view with sub-tabs.
  *              All items are stored in .opencode/ directory.
  */
@@ -11,14 +11,14 @@ import { cn } from '../../lib/cn';
 import { useSettingsStore } from '../../store';
 import { HelpCircleIcon } from '../icons';
 import { Tooltip } from '../ui';
-import { CommandsTab, HooksTab, RulesTab, SkillsTab, SubagentsTab } from './rules';
+import { CommandsTab, PluginsTab, RulesTab, SkillsTab, SubagentsTab } from './rules';
 import { OperationStatus } from './SettingsUI';
 
 const AgentsHelpContent = () => (
 	<div className="flex flex-col gap-1.5 text-sm">
 		<div className="font-semibold text-vscode-foreground">Configuration</div>
 		<div className="text-vscode-foreground">
-			All rules, commands, skills, hooks, and subagents are stored in{' '}
+			All rules, commands, skills, and subagents are stored in{' '}
 			<code className="bg-(--alpha-10) px-1 rounded text-xs">.opencode/</code> directory.
 		</div>
 		<div className="text-vscode-descriptionForeground text-xs">Manage everything in one place.</div>
@@ -27,7 +27,7 @@ const AgentsHelpContent = () => (
 
 export const RulesSettingsPanel: React.FC = () => {
 	const [activeTab, setActiveTab] = useState<
-		'rules' | 'commands' | 'skills' | 'hooks' | 'subagents'
+		'rules' | 'commands' | 'skills' | 'plugins' | 'subagents'
 	>('rules');
 	const { resourceOps } = useSettingsStore();
 
@@ -38,7 +38,7 @@ export const RulesSettingsPanel: React.FC = () => {
 					{ id: 'rules', label: 'Rules' },
 					{ id: 'commands', label: 'Commands' },
 					{ id: 'skills', label: 'Skills' },
-					{ id: 'hooks', label: 'Hooks' },
+					{ id: 'plugins', label: 'Plugins' },
 					{ id: 'subagents', label: 'Subagents' },
 				].map(tab => (
 					<button
@@ -72,7 +72,7 @@ export const RulesSettingsPanel: React.FC = () => {
 			{activeTab === 'commands' && <CommandsTab />}
 			{activeTab === 'rules' && <RulesTab />}
 			{activeTab === 'skills' && <SkillsTab />}
-			{activeTab === 'hooks' && <HooksTab />}
+			{activeTab === 'plugins' && <PluginsTab />}
 			{activeTab === 'subagents' && <SubagentsTab />}
 		</div>
 	);

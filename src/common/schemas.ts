@@ -20,15 +20,34 @@ export type CLIProviderType = Static<typeof CLIProviderTypeSchema>;
 // MCP Server Config Types (OpenCode native: opencode.json → mcp section)
 // =============================================================================
 
+/**
+ * OpenCode MCP server config (opencode.json → mcp section).
+ *
+ * Discriminated by `type`:
+ *   - "local"  → command[] + environment?  (stdio transport)
+ *   - "remote" → url + headers? + oauth?   (HTTP/SSE transport)
+ *
+ * OpenCode also allows override-only entries: `{ enabled: boolean }`
+ * (no type field) to toggle a server defined elsewhere in the config chain.
+ */
 export const McpServerSchema = Type.Object({
-	type: Type.Union([Type.Literal('stdio'), Type.Literal('http'), Type.Literal('sse')]),
+	type: Type.Optional(Type.Union([Type.Literal('local'), Type.Literal('remote')])),
 	command: Type.Optional(Type.Array(Type.String())),
 	url: Type.Optional(Type.String()),
-	env: Type.Optional(Type.Record(Type.String(), Type.String())),
+	environment: Type.Optional(Type.Record(Type.String(), Type.String())),
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
-	cwd: Type.Optional(Type.String()),
 	enabled: Type.Optional(Type.Boolean()),
 	timeout: Type.Optional(Type.Number()),
+	oauth: Type.Optional(
+		Type.Union([
+			Type.Object({
+				clientId: Type.Optional(Type.String()),
+				clientSecret: Type.Optional(Type.String()),
+				scope: Type.Optional(Type.String()),
+			}),
+			Type.Literal(false),
+		]),
+	),
 });
 export type McpServer = Static<typeof McpServerSchema>;
 
@@ -41,21 +60,20 @@ export type McpConfig = Static<typeof McpConfigSchema>;
 // MCP Server Types
 // =============================================================================
 
-const MCPServerTypeSchema = Type.Union([
-	Type.Literal('http'),
-	Type.Literal('sse'),
-	Type.Literal('stdio'),
-]);
+/**
+ * MCPServerConfig — webview/UI-facing representation of an MCP server.
+ * Uses the same local/remote types as OpenCode.
+ * Conversion between McpServer (disk) ↔ MCPServerConfig (UI) happens in McpConfigService.
+ */
+const MCPServerTypeSchema = Type.Union([Type.Literal('local'), Type.Literal('remote')]);
 
 export const MCPServerConfigSchema = Type.Object({
 	command: Type.Optional(Type.String()),
 	args: Type.Optional(Type.Array(Type.String())),
 	env: Type.Optional(Type.Record(Type.String(), Type.String())),
-	cwd: Type.Optional(Type.String()),
 	url: Type.Optional(Type.String()),
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
 	type: Type.Optional(MCPServerTypeSchema),
-	// UI/registry helpers (not part of raw mcp-servers.json, but used by this extension)
 	enabled: Type.Optional(Type.Boolean()),
 	timeoutMs: Type.Optional(Type.Number()),
 });
@@ -65,40 +83,17 @@ export const MCPServersMapSchema = Type.Record(Type.String(), MCPServerConfigSch
 export type MCPServersMap = Static<typeof MCPServersMapSchema>;
 
 // =============================================================================
-// MCP Marketplace & Installed Metadata (UI layer)
+// MCP Installed Metadata (UI layer)
 // =============================================================================
 
-export const McpMarketplaceItemSchema = Type.Object({
-	mcpId: Type.String(),
-	name: Type.String(),
-	author: Type.Optional(Type.String()),
-	description: Type.String(),
-	githubUrl: Type.Optional(Type.String()),
-	logoUrl: Type.Optional(Type.String()),
-	category: Type.Optional(Type.String()),
-	tags: Type.Array(Type.String()),
-	requiresApiKey: Type.Optional(Type.Boolean()),
-	isRecommended: Type.Optional(Type.Boolean()),
-	githubStars: Type.Optional(Type.Number()),
-	downloadCount: Type.Optional(Type.Number()),
-});
-export type McpMarketplaceItem = Static<typeof McpMarketplaceItemSchema>;
-
-export const McpMarketplaceCatalogSchema = Type.Object({
-	schemaVersion: Type.Number(),
-	items: Type.Array(McpMarketplaceItemSchema),
-});
-export type McpMarketplaceCatalog = Static<typeof McpMarketplaceCatalogSchema>;
-
 export const InstalledMcpServerMetadataSchema = Type.Object({
-	source: Type.Union([Type.Literal('marketplace'), Type.Literal('custom')]),
+	source: Type.Literal('custom'),
 	displayName: Type.Optional(Type.String()),
 	description: Type.Optional(Type.String()),
 	category: Type.Optional(Type.String()),
 	tags: Type.Optional(Type.Array(Type.String())),
 	icon: Type.Optional(Type.String()),
 	installedAt: Type.Optional(Type.String()),
-	marketplaceId: Type.Optional(Type.String()),
 });
 export type InstalledMcpServerMetadata = Static<typeof InstalledMcpServerMetadataSchema>;
 
@@ -484,15 +479,17 @@ export const RuleSchema = Type.Object({
 export type Rule = Static<typeof RuleSchema>;
 
 // =============================================================================
-// Agents / Commands / Skills / Hooks
+// Agents / Commands / Skills (OpenCode canonical formats)
 // =============================================================================
 
+/**
+ * ParsedCommand — matches OpenCode Command schema.
+ * OpenCode uses 'template' field, but we support 'prompt' as alias for backward compat.
+ */
 export const ParsedCommandSchema = Type.Object({
 	name: Type.String(),
-	description: Type.String(),
-	prompt: Type.String(),
-	allowedTools: Type.Optional(Type.Array(Type.String())),
-	argumentHint: Type.Optional(Type.String()),
+	description: Type.Optional(Type.String()),
+	template: Type.String(),
 	agent: Type.Optional(Type.String()),
 	model: Type.Optional(Type.String()),
 	subtask: Type.Optional(Type.Boolean()),
@@ -509,22 +506,27 @@ export const ParsedSkillSchema = Type.Object({
 });
 export type ParsedSkill = Static<typeof ParsedSkillSchema>;
 
-export const ParsedHookSchema = Type.Object({
-	name: Type.String(),
-	enabled: Type.Boolean(),
-	event: Type.String(),
-	pattern: Type.Optional(Type.String()),
-	action: Type.Optional(Type.String()),
-	content: Type.Optional(Type.String()),
-	path: Type.String(),
-});
-export type ParsedHook = Static<typeof ParsedHookSchema>;
-
+/**
+ * ParsedSubagent — matches OpenCode Agent schema from config.ts.
+ * Supports all OpenCode Agent fields: model, mode, permission, color, steps, temperature, disable, etc.
+ */
 export const ParsedSubagentSchema = Type.Object({
 	name: Type.String(),
-	description: Type.String(),
 	prompt: Type.String(),
 	path: Type.String(),
+	description: Type.Optional(Type.String()),
+	model: Type.Optional(Type.String()),
+	variant: Type.Optional(Type.String()),
+	temperature: Type.Optional(Type.Number()),
+	topP: Type.Optional(Type.Number()),
+	mode: Type.Optional(
+		Type.Union([Type.Literal('subagent'), Type.Literal('primary'), Type.Literal('all')]),
+	),
+	disable: Type.Optional(Type.Boolean()),
+	hidden: Type.Optional(Type.Boolean()),
+	color: Type.Optional(Type.String()),
+	steps: Type.Optional(Type.Number()),
+	options: Type.Optional(Type.Record(Type.String(), Type.Any())),
 });
 export type ParsedSubagent = Static<typeof ParsedSubagentSchema>;
 
@@ -541,13 +543,6 @@ export const DiscoveryStatusSchema = Type.Object({
 		openCodeConfig: Type.Optional(Type.String()),
 	}),
 	skills: Type.Array(
-		Type.Object({
-			name: Type.String(),
-			path: Type.String(),
-			type: Type.Literal('opencode'),
-		}),
-	),
-	hooks: Type.Array(
 		Type.Object({
 			name: Type.String(),
 			path: Type.String(),

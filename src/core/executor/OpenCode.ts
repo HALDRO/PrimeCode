@@ -1117,7 +1117,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 	}
 
-	private async getMcpStatus(directory: string): Promise<unknown> {
+	public async getMcpStatus(directory: string): Promise<unknown> {
 		if (this._cache.mcp && Date.now() - this._cache.mcp.time < 30 * 1000)
 			return this._cache.mcp.data;
 		try {

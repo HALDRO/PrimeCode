@@ -13,7 +13,7 @@ import type {
 	NormalizedEntry,
 } from '../../../common/normalizedTypes';
 
-import { isMcpTool, isToolMatch } from '../../constants';
+import { getMcpToolDisplayInfo, isMcpTool, isToolMatch } from '../../constants';
 import { cn } from '../../lib/cn';
 import { useAccessRequestByToolUseId, useMcpServers, useToolResultByToolId } from '../../store';
 import type { Message as WebviewMessage } from '../../store/chatStore';
@@ -420,6 +420,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		const isApplyPatch = actionType?.type === 'ApplyPatch' || isToolMatch(toolName, 'apply_patch');
 		const isDiffTool = isFileEdit || isApplyPatch;
 		const isWebSearch = actionType?.type === 'WebSearch' || toolName.toLowerCase() === 'websearch';
+		const isWebFetch = actionType?.type === 'WebFetch' || toolName.toLowerCase() === 'webfetch';
 
 		const isRunning = message.isRunning ?? !toolResult;
 		const [expanded, setExpanded] = useState(defaultExpanded ?? false);
@@ -433,9 +434,17 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 
 		if (!toolName) return null;
 
-		// Inline Card: Default for everything except MCP, Bash, Diff tools, WebSearch, Summarize, and tools with Access Requests
+		// Inline Card: Default for everything except MCP, Bash, Diff tools, WebSearch, WebFetch, Summarize, and tools with Access Requests
 		const hasAccessRequest = Boolean(accessRequest);
-		if (!isMcp && !isBash && !isDiffTool && !isWebSearch && !isSummarize && !hasAccessRequest) {
+		if (
+			!isMcp &&
+			!isBash &&
+			!isDiffTool &&
+			!isWebSearch &&
+			!isWebFetch &&
+			!isSummarize &&
+			!hasAccessRequest
+		) {
 			return (
 				<InlineToolLine
 					toolName={toolName}
@@ -466,7 +475,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 			);
 		}
 
-		// 2) MCP / Bash / WebSearch / Generic Card
+		// 2) MCP / Bash / WebSearch / WebFetch / Generic Card
 		const icon = isMcp ? (
 			<ToolCardLeadingIcon>
 				<McpIcon size={14} className="text-[#3b82f6] shrink-0" />
@@ -475,7 +484,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 			<ToolCardLeadingIcon>
 				<TerminalIcon size={14} className="shrink-0" />
 			</ToolCardLeadingIcon>
-		) : isWebSearch ? (
+		) : isWebSearch || isWebFetch ? (
 			<ToolCardLeadingIcon>
 				<GlobeIcon size={14} className="shrink-0" />
 			</ToolCardLeadingIcon>
@@ -488,7 +497,19 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 				<WandIcon size={14} className="shrink-0" />
 			</ToolCardLeadingIcon>
 		);
-		const label = isWebSearch ? 'Web Search' : isMcp ? 'MCP' : formatToolName(toolName);
+		// MCP display info: extract server + tool name from the raw tool identifier
+		const mcpInfo = isMcp ? getMcpToolDisplayInfo(toolName, mcpServerNames) : null;
+
+		const label = isWebSearch
+			? 'Web Search'
+			: isWebFetch
+				? 'Fetch'
+				: isMcp
+					? 'MCP'
+					: formatToolName(toolName);
+		// For MCP tools, show server name and tool name as secondary labels: "MCP · context7-mcp · resolve-library-id"
+		const mcpServerLabel = isMcp ? (mcpInfo?.server ?? '') : '';
+		const mcpToolLabel = isMcp ? (mcpInfo?.tool ?? toolName) : '';
 		const displayLabel = isSummarize && isRunning ? `${label}...` : label;
 
 		// Meta extraction
@@ -497,6 +518,8 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		else if (isBash) meta = (rawInput as { command?: string })?.command || '';
 		else if (isWebSearch && actionType?.type === 'WebSearch') meta = actionType.query;
 		else if (isWebSearch) meta = (rawInput as { query?: string })?.query || '';
+		else if (isWebFetch && actionType?.type === 'WebFetch') meta = actionType.url;
+		else if (isWebFetch) meta = (rawInput as { url?: string })?.url || '';
 		else if (isMcp) meta = rawInput ? JSON.stringify(rawInput) : '';
 
 		const fullText = content || '';
@@ -513,13 +536,23 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 						<span className="text-sm text-vscode-foreground opacity-90 whitespace-nowrap">
 							{displayLabel}
 						</span>
+						{mcpServerLabel && (
+							<span className="text-sm text-vscode-foreground opacity-70 whitespace-nowrap">
+								· {mcpServerLabel}
+							</span>
+						)}
+						{mcpToolLabel && (
+							<span className="text-sm text-vscode-foreground opacity-50 whitespace-nowrap">
+								· {mcpToolLabel}
+							</span>
+						)}
 						{meta && (
 							<span className="text-sm text-vscode-foreground opacity-70 truncate">{meta}</span>
 						)}
 					</>
 				}
 				headerRight={
-					hasBody ? (
+					meta ? (
 						<div
 							className={cn(
 								'opacity-0 transition-opacity duration-150 ease-out',
@@ -530,9 +563,9 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 								icon={<CopyIcon size={14} />}
 								onClick={e => {
 									e.stopPropagation();
-									navigator.clipboard.writeText(fullText);
+									navigator.clipboard.writeText(meta);
 								}}
-								title="Copy"
+								title="Copy request"
 								size={20}
 							/>
 						</div>
@@ -543,32 +576,51 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 				onToggle={() => setExpanded(prev => !prev)}
 				body={
 					hasBody ? (
-						<OverlayScrollbarsComponent
-							style={{ maxHeight: expanded ? undefined : `${PREVIEW_MAX_HEIGHT}px` }}
-							className="bg-(--tool-bg-header)"
-							options={{
-								scrollbars: {
-									theme: 'os-theme-dark',
-									autoHide: 'scroll',
-									autoHideDelay: 800,
-									clickScroll: true,
-								},
-								overflow: { x: 'scroll', y: 'scroll' },
-							}}
-							events={{ initialized: scrollToBottom }}
-							defer
-						>
-							<div className="p-(--tool-content-padding)">
-								<pre
-									className={cn(
-										'm-0 text-sm leading-(--line-height-code) whitespace-pre',
-										isError ? 'text-error opacity-100' : 'text-vscode-foreground opacity-90',
-									)}
-								>
-									{fullText}
-								</pre>
+						<div className="relative">
+							<OverlayScrollbarsComponent
+								style={{ maxHeight: expanded ? undefined : `${PREVIEW_MAX_HEIGHT}px` }}
+								className="bg-(--tool-bg-header)"
+								options={{
+									scrollbars: {
+										theme: 'os-theme-dark',
+										autoHide: 'scroll',
+										autoHideDelay: 800,
+										clickScroll: true,
+									},
+									overflow: { x: 'scroll', y: 'scroll' },
+								}}
+								events={{ initialized: scrollToBottom }}
+								defer
+							>
+								<div className="p-(--tool-content-padding)">
+									<pre
+										className={cn(
+											'm-0 text-sm leading-(--line-height-code) whitespace-pre',
+											isError ? 'text-error opacity-100' : 'text-vscode-foreground opacity-90',
+										)}
+									>
+										{fullText}
+									</pre>
+								</div>
+							</OverlayScrollbarsComponent>
+							<div
+								className={cn(
+									'absolute right-(--tool-content-padding) bottom-0',
+									'opacity-0 transition-opacity duration-150 ease-out',
+									'group-hover:opacity-100',
+								)}
+							>
+								<IconButton
+									icon={<CopyIcon size={14} />}
+									onClick={e => {
+										e.stopPropagation();
+										navigator.clipboard.writeText(fullText);
+									}}
+									title="Copy"
+									size={20}
+								/>
 							</div>
-						</OverlayScrollbarsComponent>
+						</div>
 					) : undefined
 				}
 				accessGate={

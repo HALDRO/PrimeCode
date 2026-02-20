@@ -25,25 +25,26 @@ const MCP_CONFIG_FILE = PATHS.OPENCODE_CONFIG;
 // =============================================================================
 
 /**
- * Convert McpServer to MCPServerConfig format (for webview/ping)
+ * Convert McpServer (disk format, OpenCode canonical) to MCPServerConfig (webview/ping format).
  */
 export function mcpServerToConfig(server: McpServer): import('../common').MCPServerConfig | null {
-	if (server.type === 'stdio' && server.command) {
+	if (server.type === 'local' || (!server.type && server.command)) {
+		if (!server.command || server.command.length === 0) return null;
 		const [command, ...args] = server.command;
 		return {
-			type: 'stdio',
+			type: 'local',
 			command,
 			args,
-			env: server.env,
-			cwd: server.cwd,
+			env: server.environment,
 			enabled: server.enabled,
 			timeoutMs: server.timeout,
 		};
 	}
 
-	if ((server.type === 'http' || server.type === 'sse') && server.url) {
+	if (server.type === 'remote' || (!server.type && server.url)) {
+		if (!server.url) return null;
 		return {
-			type: server.type,
+			type: 'remote',
 			url: server.url,
 			headers: server.headers,
 			enabled: server.enabled,
@@ -51,35 +52,40 @@ export function mcpServerToConfig(server: McpServer): import('../common').MCPSer
 		};
 	}
 
+	// Override-only entry (just { enabled: boolean }) — pass through
+	if (server.enabled !== undefined && !server.type && !server.command && !server.url) {
+		return { enabled: server.enabled };
+	}
+
 	return null;
 }
 
 /**
- * Convert MCPServerConfig to McpServer (inverse of agentsServerToMcpConfig)
+ * Convert MCPServerConfig (webview/UI format) to McpServer (disk format, OpenCode canonical).
  */
 export function configToMcpServer(config: import('../common').MCPServerConfig): McpServer | null {
-	const type = config.type;
-	if (type === 'stdio' || (!type && config.command)) {
+	if (config.type === 'local' || (!config.type && config.command)) {
 		if (!config.command) return null;
 		return {
-			type: 'stdio',
+			type: 'local',
 			command: [config.command, ...(config.args ?? [])],
-			env: config.env,
-			cwd: config.cwd,
+			environment: config.env,
 			enabled: config.enabled,
 			timeout: config.timeoutMs,
 		};
 	}
-	if (type === 'http' || type === 'sse' || (!type && config.url)) {
+
+	if (config.type === 'remote' || (!config.type && config.url)) {
 		if (!config.url) return null;
 		return {
-			type: type === 'sse' ? 'sse' : 'http',
+			type: 'remote',
 			url: config.url,
 			headers: config.headers,
 			enabled: config.enabled,
 			timeout: config.timeoutMs,
 		};
 	}
+
 	return null;
 }
 
@@ -308,5 +314,71 @@ export class McpConfigService {
 		}
 
 		return configPath;
+	}
+
+	// =========================================================================
+	// Plugins Operations
+	// =========================================================================
+
+	/**
+	 * Get list of plugins from opencode.json
+	 * Plugins are stored in the `plugin` field as string[]
+	 */
+	public async getPlugins(): Promise<string[]> {
+		const configPath = this.getProjectMcpConfigPath();
+		if (!configPath) return [];
+
+		const config = await this._readJsonFile<Record<string, unknown>>(configPath);
+		if (!config) return [];
+
+		const plugins = config.plugin;
+		return Array.isArray(plugins) ? plugins.filter((p): p is string => typeof p === 'string') : [];
+	}
+
+	/**
+	 * Add a plugin to opencode.json
+	 */
+	public async addPlugin(plugin: string): Promise<void> {
+		const configPath = this.getProjectMcpConfigPath();
+		if (!configPath) {
+			logger.warn('[McpConfigService] No workspace root, cannot add plugin');
+			return;
+		}
+
+		let config = await this._readJsonFile<Record<string, unknown>>(configPath);
+		if (!config) config = {};
+
+		const plugins = Array.isArray(config.plugin)
+			? (config.plugin as string[]).filter((p): p is string => typeof p === 'string')
+			: [];
+
+		if (!plugins.includes(plugin)) {
+			plugins.push(plugin);
+			config.plugin = plugins;
+			await this._writeJsonFile(configPath, config);
+			logger.info(`[McpConfigService] Added plugin: ${plugin}`);
+		}
+	}
+
+	/**
+	 * Remove a plugin from opencode.json
+	 */
+	public async removePlugin(plugin: string): Promise<void> {
+		const configPath = this.getProjectMcpConfigPath();
+		if (!configPath) {
+			logger.warn('[McpConfigService] No workspace root, cannot remove plugin');
+			return;
+		}
+
+		const config = await this._readJsonFile<Record<string, unknown>>(configPath);
+		if (!config) return;
+
+		const plugins = Array.isArray(config.plugin)
+			? (config.plugin as string[]).filter((p): p is string => typeof p === 'string')
+			: [];
+
+		config.plugin = plugins.filter(p => p !== plugin);
+		await this._writeJsonFile(configPath, config);
+		logger.info(`[McpConfigService] Removed plugin: ${plugin}`);
 	}
 }

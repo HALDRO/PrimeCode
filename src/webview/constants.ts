@@ -102,17 +102,68 @@ export const isMcpTool = (toolName: string | undefined, mcpServerNames?: string[
 	}
 
 	// OpenCode format: ServerName_tool-name
-	// Check if tool name starts with any known MCP server name followed by underscore
+	// OpenCode CLI normalizes server keys by replacing dots and slashes with underscores,
+	// e.g. "github.com/upstash/context7-mcp" → "github_com_upstash_context7-mcp"
+	// So we must normalize server names the same way before matching.
 	if (mcpServerNames && mcpServerNames.length > 0) {
 		const toolNameLower = toolName.toLowerCase();
 		return mcpServerNames.some(serverName => {
-			const serverLower = serverName.toLowerCase();
-			// Match: servername_ at the start (case-insensitive)
-			return toolNameLower.startsWith(`${serverLower}_`);
+			const normalized = serverName.replace(/[./]/g, '_').toLowerCase();
+			return toolNameLower.startsWith(`${normalized}_`);
 		});
 	}
 
 	return false;
+};
+
+/**
+ * Extract display-friendly server name and tool name from an MCP tool identifier.
+ *
+ * Handles both formats:
+ * - Legacy: mcp__server__tool or mcp_server_tool
+ * - OpenCode: github_com_upstash_context7-mcp_resolve-library-id
+ *
+ * @returns `{ server, tool }` with human-readable names, or null if not MCP
+ */
+export const getMcpToolDisplayInfo = (
+	toolName: string | undefined,
+	mcpServerNames?: string[],
+): { server: string; tool: string } | null => {
+	if (!toolName) return null;
+
+	// Legacy prefixed format: mcp__server__tool or mcp_server_tool
+	if (toolName.startsWith('mcp__')) {
+		const rest = toolName.slice(5); // strip "mcp__"
+		const idx = rest.indexOf('__');
+		if (idx !== -1) {
+			return { server: rest.slice(0, idx), tool: rest.slice(idx + 2) };
+		}
+		return { server: rest, tool: rest };
+	}
+	if (toolName.startsWith('mcp_')) {
+		const rest = toolName.slice(4); // strip "mcp_"
+		const idx = rest.indexOf('_');
+		if (idx !== -1) {
+			return { server: rest.slice(0, idx), tool: rest.slice(idx + 1) };
+		}
+		return { server: rest, tool: rest };
+	}
+
+	// OpenCode format: match against known server names
+	if (mcpServerNames && mcpServerNames.length > 0) {
+		const toolNameLower = toolName.toLowerCase();
+		for (const serverName of mcpServerNames) {
+			const normalized = serverName.replace(/[./]/g, '_').toLowerCase();
+			if (toolNameLower.startsWith(`${normalized}_`)) {
+				const tool = toolName.slice(normalized.length + 1); // strip "servername_"
+				// Extract last segment of server name for display (e.g. "context7-mcp" from "github.com/upstash/context7-mcp")
+				const serverDisplay = serverName.split('/').pop() || serverName;
+				return { server: serverDisplay, tool };
+			}
+		}
+	}
+
+	return null;
 };
 
 // ============================================================================

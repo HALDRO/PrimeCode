@@ -1,13 +1,14 @@
 /**
  * @file ResourceService
- * @description Unified service for all agent resources (commands, skills, hooks, subagents).
+ * @description Unified service for all agent resources (commands, skills, subagents).
  *              Config-driven implementation. Uses vscode.workspace.fs for Remote Development.
+ *              Supports both singular and plural directory names (command/ and commands/).
  */
 
 import * as path from 'node:path';
 import yaml from 'js-yaml';
 import * as vscode from 'vscode';
-import type { ParsedCommand, ParsedHook, ParsedSkill, ParsedSubagent } from '../common';
+import type { ParsedCommand, ParsedSkill, ParsedSubagent } from '../common';
 import { PATHS } from '../common/constants';
 import { parseFrontmatter, stringifyFrontmatter } from '../utils/frontmatter';
 import { normalizeToPosixPath } from '../utils/path';
@@ -16,9 +17,9 @@ import { normalizeToPosixPath } from '../utils/path';
 // Types
 // =============================================================================
 
-export type ResourceType = 'commands' | 'skills' | 'hooks' | 'subagents';
+export type ResourceType = 'commands' | 'skills' | 'subagents';
 
-type ResourceItem = ParsedCommand | ParsedSkill | ParsedHook | ParsedSubagent;
+type ResourceItem = ParsedCommand | ParsedSkill | ParsedSubagent;
 
 interface ResourceConfig<T extends ResourceItem> {
 	dir: string;
@@ -27,13 +28,13 @@ interface ResourceConfig<T extends ResourceItem> {
 	getFileName: (name: string) => string;
 	getNameFromFileName: (fileName: string) => string;
 	parse: (
-		attrs: Record<string, string | boolean>,
+		attrs: Record<string, unknown>,
 		body: string,
 		fileName: string,
 		buildPath: (...s: string[]) => string,
 	) => T;
 	stringify: (item: Partial<T> & { name: string }) => {
-		attributes: Record<string, string | boolean | undefined>;
+		attributes: Record<string, unknown>;
 		body: string;
 	};
 	/** Custom save logic (e.g. subagents use yaml.dump) */
@@ -59,14 +60,8 @@ const CONFIGS: Record<ResourceType, ResourceConfig<ResourceItem>> = {
 		getNameFromFileName: fn => fn.replace(/\.md$/, ''),
 		parse: (attrs, body, fileName, buildPath) => ({
 			name: fileName.replace(/\.md$/, ''),
-			description: String(attrs.description || ''),
-			prompt: body,
-			allowedTools: attrs['allowed-tools']
-				? String(attrs['allowed-tools'])
-						.split(',')
-						.map((s: string) => s.trim())
-				: undefined,
-			argumentHint: attrs['argument-hint'] ? String(attrs['argument-hint']) : undefined,
+			description: attrs.description ? String(attrs.description) : undefined,
+			template: body,
 			agent: attrs.agent ? String(attrs.agent) : undefined,
 			model: attrs.model ? String(attrs.model) : undefined,
 			subtask: attrs.subtask === true,
@@ -75,49 +70,11 @@ const CONFIGS: Record<ResourceType, ResourceConfig<ResourceItem>> = {
 		stringify: (item: Partial<ParsedCommand> & { name: string }) => ({
 			attributes: {
 				description: item.description,
-				'allowed-tools': item.allowedTools?.join(', '),
-				'argument-hint': item.argumentHint,
 				agent: item.agent,
 				model: item.model,
 				subtask: item.subtask,
 			},
-			body: item.prompt ?? '',
-		}),
-	},
-
-	hooks: {
-		dir: PATHS.OPENCODE_PLUGINS_DIR,
-		subdirLayout: false,
-		getFileName: name => `hookify.${name}.local.md`,
-		getNameFromFileName: fn =>
-			fn
-				.replace(/^hookify\./, '')
-				.replace(/\.local\.md$/, '')
-				.replace(/\.md$/, ''),
-		parse: (attrs, body, fileName, buildPath) => {
-			const nameFromFile = fileName
-				.replace(/^hookify\./, '')
-				.replace(/\.local\.md$/, '')
-				.replace(/\.md$/, '');
-			return {
-				name: String(attrs.name || nameFromFile),
-				enabled: attrs.enabled !== false,
-				event: String(attrs.event || 'all'),
-				pattern: attrs.pattern ? String(attrs.pattern) : undefined,
-				action: attrs.action ? String(attrs.action) : undefined,
-				content: body,
-				path: buildPath(fileName),
-			};
-		},
-		stringify: (item: Partial<ParsedHook> & { name: string }) => ({
-			attributes: {
-				name: item.name,
-				enabled: item.enabled,
-				event: item.event,
-				pattern: item.pattern,
-				action: item.action,
-			},
-			body: item.content ?? '',
+			body: item.template ?? '',
 		}),
 	},
 
@@ -156,26 +113,64 @@ const CONFIGS: Record<ResourceType, ResourceConfig<ResourceItem>> = {
 					: inferredName;
 			return {
 				name,
-				description: typeof attrs.description === 'string' ? attrs.description : 'Subagent',
 				prompt: body.trim(),
 				path: buildPath(fileName),
+				description: typeof attrs.description === 'string' ? attrs.description : undefined,
+				model: typeof attrs.model === 'string' ? attrs.model : undefined,
+				variant: typeof attrs.variant === 'string' ? attrs.variant : undefined,
+				temperature: typeof attrs.temperature === 'number' ? attrs.temperature : undefined,
+				topP: typeof attrs.top_p === 'number' ? attrs.top_p : undefined,
+				mode:
+					attrs.mode === 'subagent' || attrs.mode === 'primary' || attrs.mode === 'all'
+						? attrs.mode
+						: undefined,
+				disable: typeof attrs.disable === 'boolean' ? attrs.disable : undefined,
+				hidden: typeof attrs.hidden === 'boolean' ? attrs.hidden : undefined,
+				color: typeof attrs.color === 'string' ? attrs.color : undefined,
+				steps: typeof attrs.steps === 'number' ? attrs.steps : undefined,
+				options:
+					typeof attrs.options === 'object' && attrs.options !== null
+						? (attrs.options as Record<string, unknown>)
+						: undefined,
 			};
 		},
 		stringify: (item: Partial<ParsedSubagent> & { name: string }) => ({
-			attributes: { name: item.name, description: item.description },
+			attributes: {
+				name: item.name,
+				description: item.description,
+				model: item.model,
+				variant: item.variant,
+				temperature: item.temperature,
+				top_p: item.topP,
+				mode: item.mode,
+				disable: item.disable,
+				hidden: item.hidden,
+				color: item.color,
+				steps: item.steps,
+				options: item.options,
+			},
 			body: item.prompt ?? '',
 		}),
 		customSave: async (item, helpers) => {
 			const safeName = helpers.sanitizeName(item.name).replace(/\s/g, '-');
 			await helpers.ensureDir(helpers.dirUri);
-			const sub = item as Partial<ParsedSubagent> & { opencode?: Record<string, unknown> };
+			const sub = item as Partial<ParsedSubagent>;
 			const attrs: Record<string, unknown> = {
 				name: safeName,
-				description: sub.description,
-				...(sub.opencode ? { opencode: sub.opencode } : {}),
+				...(sub.description && { description: sub.description }),
+				...(sub.model && { model: sub.model }),
+				...(sub.variant && { variant: sub.variant }),
+				...(sub.temperature !== undefined && { temperature: sub.temperature }),
+				...(sub.topP !== undefined && { top_p: sub.topP }),
+				...(sub.mode && { mode: sub.mode }),
+				...(sub.disable !== undefined && { disable: sub.disable }),
+				...(sub.hidden !== undefined && { hidden: sub.hidden }),
+				...(sub.color && { color: sub.color }),
+				...(sub.steps !== undefined && { steps: sub.steps }),
+				...(sub.options && { options: sub.options }),
 			};
 			const yamlStr = yaml.dump(attrs, { lineWidth: -1 }).trim();
-			const content = `---\n${yamlStr}\n---\n\n${((item as Partial<ParsedSubagent>).prompt ?? '').trim()}\n`;
+			const content = `---\n${yamlStr}\n---\n\n${(sub.prompt ?? '').trim()}\n`;
 			const uri = vscode.Uri.joinPath(helpers.dirUri, `${safeName}.md`);
 			await helpers.writeTextFile(uri, content);
 		},

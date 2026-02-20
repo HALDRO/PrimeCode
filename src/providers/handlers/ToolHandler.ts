@@ -209,7 +209,6 @@ export class ToolHandler implements WebviewMessageHandler {
 			},
 			permissions: {},
 			skills: [],
-			hooks: [],
 		});
 	}
 

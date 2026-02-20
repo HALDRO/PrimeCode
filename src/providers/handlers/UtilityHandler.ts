@@ -17,7 +17,6 @@ import type { HandlerContext, WebviewMessageHandler } from './types';
 const RESOURCE_TYPE_MAP: Record<string, ResourceType> = {
 	openCommandFile: 'commands',
 	openSkillFile: 'skills',
-	openHookFile: 'hooks',
 	openSubagentFile: 'subagents',
 };
 
@@ -33,7 +32,6 @@ export class UtilityHandler implements WebviewMessageHandler {
 				return;
 			case 'openCommandFile':
 			case 'openSkillFile':
-			case 'openHookFile':
 			case 'openSubagentFile':
 				return this.handleOpenResourceFile(msg);
 			case 'acceptFile':

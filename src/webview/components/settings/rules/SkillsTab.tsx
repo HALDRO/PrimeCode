@@ -37,7 +37,6 @@ export const SkillsTab: React.FC = () => {
 			name: newSkillName,
 			description: newSkillDesc,
 			content: newSkillContent,
-			version: '0.1.0',
 		});
 
 		setIsCreatingSkill(false);

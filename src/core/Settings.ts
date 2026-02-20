@@ -46,7 +46,6 @@ export interface PrimeCodeSettings {
 interface AgentsConfig {
 	commands: unknown[];
 	skills: unknown[];
-	hooks: unknown[];
 	subagents: unknown[];
 	rules: unknown[];
 }
@@ -147,7 +146,7 @@ export class Settings implements ISettings {
 		const configPath = this.getAgentsConfigPath();
 
 		if (!fs.existsSync(configPath)) {
-			return { commands: [], skills: [], hooks: [], subagents: [], rules: [] };
+			return { commands: [], skills: [], subagents: [], rules: [] };
 		}
 
 		try {
@@ -155,7 +154,7 @@ export class Settings implements ISettings {
 			return JSON.parse(content);
 		} catch (error) {
 			logger.error('[Settings] Failed to read agents config:', error);
-			return { commands: [], skills: [], hooks: [], subagents: [], rules: [] };
+			return { commands: [], skills: [], subagents: [], rules: [] };
 		}
 	}
 

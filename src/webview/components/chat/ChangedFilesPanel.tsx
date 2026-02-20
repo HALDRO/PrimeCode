@@ -9,8 +9,9 @@
  */
 
 import React, { useCallback, useMemo, useState } from 'react';
+import { isMcpTool } from '../../constants';
 import { cn } from '../../lib/cn';
-import { useChangedFilesState, useChatActions, useTodoState } from '../../store';
+import { useChangedFilesState, useChatActions, useMcpServers, useTodoState } from '../../store';
 import type { ChangedFile, Message } from '../../store/chatStore';
 import { useChatStore } from '../../store/chatStore';
 import { useUIActions } from '../../store/uiStore';
@@ -61,7 +62,19 @@ function findLastUserIndex(msgs: Message[]): number {
 	return -1;
 }
 
-function formatMessage(m: Message, mode: 'last' | 'all'): string | undefined {
+/** Check if a tool_result should be included in copy output (MCP, WebSearch, WebFetch) */
+function isCopyableToolResult(m: Message, mcpServerNames: string[]): boolean {
+	if (m.type !== 'tool_result') return false;
+	const name = (m as { toolName?: string }).toolName?.toLowerCase() ?? '';
+	if (name === 'websearch' || name === 'webfetch') return true;
+	return isMcpTool((m as { toolName?: string }).toolName, mcpServerNames);
+}
+
+function formatMessage(
+	m: Message,
+	mode: 'last' | 'all',
+	mcpServerNames: string[],
+): string | undefined {
 	if (m.type === 'user') return `## User\n${m.content}`;
 	if (m.type === 'assistant' && m.content) {
 		return mode === 'all' ? `## Assistant\n${m.content}` : m.content;
@@ -80,13 +93,21 @@ function formatMessage(m: Message, mode: 'last' | 'all'): string | undefined {
 		}
 		return parts.length ? parts.join('\n\n') : undefined;
 	}
+	// Include tool results from MCP, WebSearch, WebFetch
+	if (isCopyableToolResult(m, mcpServerNames)) {
+		const toolName = (m as { toolName?: string }).toolName ?? 'Tool';
+		const content = (m as { content?: string }).content ?? '';
+		if (!content.trim()) return undefined;
+		const prefix = mode === 'all' ? `## ${toolName}\n` : '';
+		return `${prefix}${content}`;
+	}
 	return undefined;
 }
 
-function formatMessages(msgs: Message[], mode: 'last' | 'all'): string {
+function formatMessages(msgs: Message[], mode: 'last' | 'all', mcpServerNames: string[]): string {
 	const parts: string[] = [];
 	for (const m of msgs) {
-		const text = formatMessage(m, mode);
+		const text = formatMessage(m, mode, mcpServerNames);
 		if (text) parts.push(text);
 	}
 	return parts.join('\n\n');
@@ -306,6 +327,8 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 	const hasFiles = changedFiles.length > 0;
 	const { clearChangedFiles, removeChangedFile } = useChatActions();
 	const { showConfirmDialog } = useUIActions();
+	const mcpServers = useMcpServers();
+	const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
 	const [expanded, setExpanded] = useState(false);
 	const [showCopyDropdown, setShowCopyDropdown] = useState(false);
 
@@ -380,16 +403,16 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 		if (!msgs) return;
 		const lastUserIdx = findLastUserIndex(msgs);
 		const slice = msgs.slice(Math.max(0, lastUserIdx));
-		const text = formatMessages(slice, 'last');
+		const text = formatMessages(slice, 'last', mcpServerNames);
 		if (text) void navigator.clipboard.writeText(text);
-	}, []);
+	}, [mcpServerNames]);
 
 	const handleCopyAllMessages = useCallback(() => {
 		const msgs = getActiveMessages();
 		if (!msgs) return;
-		const text = formatMessages(msgs, 'all');
+		const text = formatMessages(msgs, 'all', mcpServerNames);
 		if (text) void navigator.clipboard.writeText(text);
-	}, []);
+	}, [mcpServerNames]);
 
 	const handleCopyLastDiffs = useCallback(() => {
 		const msgs = getActiveMessages();

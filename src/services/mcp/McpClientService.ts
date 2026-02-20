@@ -8,7 +8,6 @@
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
@@ -131,8 +130,9 @@ export class McpClientService {
 	}
 
 	private _createTransport(config: MCPServerConfig): Transport {
-		if (config.type === 'stdio' || (!config.type && config.command)) {
-			if (!config.command) throw new Error('No command specified for stdio transport');
+		// "local" type → StdioClientTransport
+		if (config.type === 'local' || (!config.type && config.command)) {
+			if (!config.command) throw new Error('No command specified for local transport');
 
 			const env = { ...process.env, ...(config.env || {}) } as Record<string, string>;
 			// Clean undefined env values to prevent spawn errors
@@ -146,16 +146,13 @@ export class McpClientService {
 				command: config.command,
 				args: config.args || [],
 				env,
-				cwd: config.cwd,
 			});
 		}
 
-		if (config.url) {
+		// "remote" type → StreamableHTTP transport
+		if (config.type === 'remote' || (!config.type && config.url)) {
+			if (!config.url) throw new Error('No URL specified for remote transport');
 			const url = new URL(config.url);
-			if (config.type === 'sse') {
-				return new SSEClientTransport(url);
-			}
-			// Default to StreamableHTTP for 'http' or unspecified type with URL
 			return new StreamableHTTPClientTransport(url, {
 				requestInit: config.headers ? { headers: config.headers } : undefined,
 			});

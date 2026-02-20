@@ -306,18 +306,18 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				'updateSettings',
 				'getCommands',
 				'getSkills',
-				'getHooks',
 				'getSubagents',
+				'getPlugins',
 				'getRules',
 				// Resource CRUD
 				'createCommand',
 				'deleteCommand',
 				'createSkill',
 				'deleteSkill',
-				'createHook',
-				'deleteHook',
 				'createSubagent',
 				'deleteSubagent',
+				'addPlugin',
+				'removePlugin',
 				'toggleRule',
 				'createRule',
 				'deleteRule',
@@ -328,14 +328,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		// MCP
 		r.register(
 			this.mcpHandler,
-			[
-				'loadMCPServers',
-				'fetchMcpMarketplaceCatalog',
-				'installMcpFromMarketplace',
-				'saveMCPServer',
-				'deleteMCPServer',
-				'openMcpConfig',
-			],
+			['loadMCPServers', 'saveMCPServer', 'deleteMCPServer', 'openMcpConfig'],
 			'mcp',
 		);
 
@@ -404,7 +397,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				'proxyFetchAbort',
 				'openCommandFile',
 				'openSkillFile',
-				'openHookFile',
 				'openSubagentFile',
 				'acceptFile',
 				'acceptAllFiles',
@@ -441,13 +433,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			this.toolHandler.handleMessage({ type: 'getAccess' }),
 			this.settingsHandler.handleMessage({ type: 'getCommands' }),
 			this.settingsHandler.handleMessage({ type: 'getSkills' }),
-			this.settingsHandler.handleMessage({ type: 'getHooks' }),
 			this.settingsHandler.handleMessage({ type: 'getSubagents' }),
 			this.mcpHandler.handleMessage({ type: 'loadMCPServers' }),
-			this.mcpHandler.handleMessage({
-				type: 'fetchMcpMarketplaceCatalog',
-				forceRefresh: false,
-			}),
 			this.providerHandler.handleMessage({
 				type: 'loadProxyModels',
 				baseUrl: '',
