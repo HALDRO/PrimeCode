@@ -34,7 +34,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private sessionState: SessionState;
 	private disposables: vscode.Disposable[] = [];
 	private sessionGraph = new SessionGraph();
-	private openCodeInitTimer: ReturnType<typeof setInterval> | null = null;
 
 	// Session / subtask tracking (delegated to SubtaskManager)
 	private readonly subtaskManager: SubtaskManager;
@@ -171,8 +170,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 	/**
 	 * Single-point OpenCode initialization.
-	 * Polls for workspace root availability because VS Code may not populate
-	 * `workspaceFolders` synchronously at extension activation time.
+	 * Uses onDidChangeWorkspaceFolders event instead of polling when
+	 * workspace root is not immediately available.
 	 */
 	private scheduleOpenCodeInit(): void {
 		if (this.cli.getProvider() !== 'opencode') return;
@@ -190,37 +189,17 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			return;
 		}
 
-		// Workspace not ready yet — poll every 1s for up to 15s
-		logger.info('[ChatProvider] Workspace root not available, polling until ready...');
-		let attempts = 0;
-		const MAX_ATTEMPTS = 15;
-		const INTERVAL_MS = 1000;
-
-		this.openCodeInitTimer = setInterval(() => {
-			attempts++;
+		// Workspace not ready yet — wait for the event instead of polling
+		logger.info('[ChatProvider] Workspace root not available, waiting for event...');
+		const disposable = vscode.workspace.onDidChangeWorkspaceFolders(() => {
 			const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-
 			if (workspaceRoot) {
-				this.clearOpenCodeInitTimer();
-				logger.info(`[ChatProvider] Workspace root appeared after ${attempts}s, starting OpenCode`);
+				disposable.dispose();
+				logger.info('[ChatProvider] Workspace root appeared via event, starting OpenCode');
 				void this.doStartOpenCode(workspaceRoot);
-				return;
 			}
-
-			if (attempts >= MAX_ATTEMPTS) {
-				this.clearOpenCodeInitTimer();
-				logger.warn(
-					`[ChatProvider] Workspace root not available after ${MAX_ATTEMPTS}s, OpenCode not started`,
-				);
-			}
-		}, INTERVAL_MS);
-	}
-
-	private clearOpenCodeInitTimer(): void {
-		if (this.openCodeInitTimer) {
-			clearInterval(this.openCodeInitTimer);
-			this.openCodeInitTimer = null;
-		}
+		});
+		this.disposables.push(disposable);
 	}
 
 	private async doStartOpenCode(workspaceRoot: string): Promise<void> {
@@ -554,6 +533,14 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		// Skip verbose per-token logging for high-frequency delta events
 		if (event.type !== 'thinking' && event.type !== 'message') {
 			logger.debug(`[ChatProvider] handleCliEvent: ${event.type}`, event.data);
+		}
+
+		// When SSE delivers the real server-assigned user message ID, update checkpoints
+		// so that revert uses the correct ID the server actually knows about.
+		if (event.type === 'user_message_resolved') {
+			const { serverMessageId, sessionId } = event.data;
+			this.restoreHandler.resolveServerMessageId(sessionId, serverMessageId);
+			return;
 		}
 
 		if (event.type === 'session_updated') {
@@ -1330,7 +1317,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	}
 
 	dispose(): void {
-		this.clearOpenCodeInitTimer();
 		this.subtaskManager.clearAll();
 		for (const disposable of this.disposables) {
 			disposable.dispose();

@@ -476,10 +476,15 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 						data: { commitId: restoreCommit.id },
 					});
 				}
-				// When editing and sending, delete messages immediately (not just mark as reverted)
+				// Remove this message AND everything after it from the UI.
+				// The backend will truncate server history to this message (removing it
+				// from the server too), then create a brand new user message with a new ID.
+				// This prevents duplication on session restore: the old message is gone
+				// from both UI and server, replaced by the new one.
 				if (message.id) {
-					// This will keep the current message but remove everything after it
 					chatActions.deleteMessagesAfterId(message.id);
+					// Also remove the message itself — backend generates a fresh one
+					chatActions.removeMessageByPartId(message.id);
 				}
 				// Clear unrevert state - user is sending a new message, unrevert no longer makes sense
 				chatActions.setUnrevertAvailable(false);
@@ -513,7 +518,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 					type: 'sendMessage',
 					text,
 					attachments: hasAttachments ? editAttachments : undefined,
-					// Pass the ID of the message being edited so the backend knows to replace/truncate history
+					// Pass the ID of the message being edited so the backend knows to truncate history
 					messageID: message.id,
 				});
 				setEditingMessageId(null);

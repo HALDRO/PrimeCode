@@ -969,10 +969,26 @@ export class SessionHandler implements WebviewMessageHandler {
 				return;
 			}
 
-			// Post user message and send to CLI
+			if (!activeId) throw new Error('No active session after initialization');
+
+			// OpenCode edit flow: truncate FIRST, then post user message.
+			// This prevents message duplication on session restore: if we posted
+			// the user message first and then truncated, the server would still
+			// have the original message. On restore, both would appear.
+			// By truncating first, the server history is clean before we send.
+			if (isOpenCode && messageIdToTruncate) {
+				logger.info('[SessionHandler] Editing message: revert then resend', {
+					messageId: messageIdToTruncate,
+				});
+				await this.context.cli.truncateSession(activeId, messageIdToTruncate, config);
+			}
+
+			// Post user message and send to CLI.
+			// For edits: generate a NEW id — the old message was truncated on the server,
+			// and the UI already removed messages after it via deleteMessagesAfterId.
+			// Reusing the old ID would cause the server to have a different ID than the UI.
 			const prefix = isOpenCode ? 'msg' : 'user';
-			// Reuse edited message ID for UI merge (prevents duplicate user bubble after edit).
-			const userMessageId = messageIdToTruncate || generateId(prefix);
+			const userMessageId = generateId(prefix);
 			const hasAttachments =
 				attachments?.files?.length ||
 				attachments?.codeSnippets?.length ||
@@ -991,44 +1007,28 @@ export class SessionHandler implements WebviewMessageHandler {
 			);
 
 			// Emit checkpoint so the "Restore to Checkpoint" button appears on this user message
-			if (activeId) {
-				const commitId = generateId('checkpoint');
-				// Register on backend so RestoreHandler can resolve commitId → API params
-				this.context.registerCheckpoint?.(commitId, {
-					sessionId: activeId,
-					messageId: userMessageId,
-					associatedMessageId: userMessageId,
-					isOpenCode,
-				});
+			const commitId = generateId('checkpoint');
+			// Register on backend so RestoreHandler can resolve commitId → API params
+			this.context.registerCheckpoint?.(commitId, {
+				sessionId: activeId,
+				messageId: userMessageId,
+				associatedMessageId: userMessageId,
+				isOpenCode,
+			});
 
-				this.context.bridge.session.restore(activeId, {
-					action: 'add_commit',
-					commit: {
-						id: commitId,
-						sha: commitId,
-						message: 'Checkpoint before message',
-						timestamp: new Date().toISOString(),
-						associatedMessageId: userMessageId,
-					},
-				});
-			}
+			this.context.bridge.session.restore(activeId, {
+				action: 'add_commit',
+				commit: {
+					id: commitId,
+					sha: commitId,
+					message: 'Checkpoint before message',
+					timestamp: new Date().toISOString(),
+					associatedMessageId: userMessageId,
+				},
+			});
 
 			this.postStatus(activeId, 'busy', 'Working...');
 			this.initializeSessionStats(activeId);
-
-			if (!activeId) throw new Error('No active session after initialization');
-
-			// OpenCode edit flow (matches opencode-gui reference):
-			// 1. Revert session to the edited message (truncates history on server)
-			// 2. Send a clean prompt WITHOUT messageID (server treats it as a new message)
-			// File restore is handled separately by RestoreHandler when the user
-			// explicitly confirms via the "Restore & Send" dialog.
-			if (isOpenCode && messageIdToTruncate) {
-				logger.info('[SessionHandler] Editing message: revert then resend', {
-					messageId: messageIdToTruncate,
-				});
-				await this.context.cli.truncateSession(activeId, messageIdToTruncate, config);
-			}
 
 			await this.context.cli.spawnFollowUp(text, activeId, config, attachments);
 		} catch (error) {

@@ -149,6 +149,14 @@ export interface NormalizedLogEventData {
 	[key: string]: unknown;
 }
 
+/** Emitted when SSE `message.updated` arrives for a user message, carrying the real server-assigned ID. */
+export interface UserMessageResolvedEventData {
+	/** The real OpenCode server-assigned message ID. */
+	serverMessageId: string;
+	/** The session this message belongs to. */
+	sessionId: string;
+}
+
 // -- Discriminated union variants ---------------------------------------------
 
 export type CLIEvent =
@@ -162,7 +170,8 @@ export type CLIEvent =
 	| (CLIEventBase & { type: 'question'; data: QuestionEventData })
 	| (CLIEventBase & { type: 'session_updated'; data: SessionUpdatedEventData })
 	| (CLIEventBase & { type: 'turn_tokens'; data: TurnTokensEventData })
-	| (CLIEventBase & { type: 'normalized_log'; data: NormalizedLogEventData });
+	| (CLIEventBase & { type: 'normalized_log'; data: NormalizedLogEventData })
+	| (CLIEventBase & { type: 'user_message_resolved'; data: UserMessageResolvedEventData });
 
 export interface CLIExecutor extends EventEmitter {
 	ensureServer(config: CLIConfig): Promise<void>;

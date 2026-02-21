@@ -501,6 +501,18 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 	}
 
+	async unrevertSession(sessionId: string, config: CLIConfig): Promise<void> {
+		if (!this.serverUrl) throw new Error('OpenCode server not running');
+
+		logger.info('[OpenCode] Unreverting session', { sessionId });
+
+		const client = this.requireSdk();
+		await client.session.unrevert({
+			path: { id: sessionId },
+			query: { directory: config.workspaceRoot },
+		});
+	}
+
 	async createNewSession(prompt: string, config: CLIConfig): Promise<ChildProcess> {
 		if (!this.serverUrl) throw new Error('OpenCode server not running');
 
@@ -1482,6 +1494,19 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 	private handleMessageUpdated(info: Message, sessionId?: string): void {
 		this.messageRoles.set(info.id, info.role);
+
+		// When we receive a user message from the server, emit the real server-assigned ID
+		// so RestoreHandler can update checkpoints from local IDs to real ones.
+		if (info.role === 'user' && sessionId) {
+			this.emit('event', {
+				type: 'user_message_resolved',
+				data: {
+					serverMessageId: info.id,
+					sessionId,
+				},
+				sessionId,
+			});
+		}
 
 		// Store agent/mode from assistant messages for later use in part events
 		if (isAssistantMessage(info)) {
