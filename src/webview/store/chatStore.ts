@@ -87,8 +87,8 @@ export interface ChatSession {
 	queuedMessages: QueuedMessageData[];
 	/** Draft attachments restored from a cancelled queued message. */
 	draftAttachments?: { files?: string[]; images?: unknown[]; codeSnippets?: unknown[] };
-	/** Draft planMode restored from a cancelled queued message. */
-	draftPlanMode?: boolean;
+	/** Draft agent restored from a cancelled queued message (e.g. 'plan', 'build'). */
+	draftAgent?: string;
 }
 
 export interface ChatState {
@@ -140,7 +140,7 @@ export interface ChatActions {
 	setLoading: (isLoading: boolean, sessionId?: string) => void;
 	setInput: (input: string, sessionId?: string) => void;
 	appendInput: (text: string, sessionId?: string) => void;
-	clearDraftAttachments: (sessionId?: string) => void;
+	clearDraftState: (sessionId?: string) => void;
 	setStatus: (status: string, sessionId?: string) => void;
 	setStreamingToolId: (toolId: string | null, sessionId?: string) => void;
 
@@ -715,24 +715,23 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
 			// Handle message queue events
 			if (message.type === 'messageQueue') {
-				const { action, sessionId, queue, cancelledText, cancelledAttachments, cancelledPlanMode } =
-					(
-						message as {
-							type: string;
-							data: {
-								action: string;
-								sessionId: string;
-								queue: QueuedMessageData[];
-								cancelledText?: string;
-								cancelledAttachments?: {
-									files?: string[];
-									images?: unknown[];
-									codeSnippets?: unknown[];
-								};
-								cancelledPlanMode?: boolean;
+				const { action, sessionId, queue, cancelledText, cancelledAttachments, cancelledAgent } = (
+					message as {
+						type: string;
+						data: {
+							action: string;
+							sessionId: string;
+							queue: QueuedMessageData[];
+							cancelledText?: string;
+							cancelledAttachments?: {
+								files?: string[];
+								images?: unknown[];
+								codeSnippets?: unknown[];
 							};
-						}
-					).data;
+							cancelledAgent?: string;
+						};
+					}
+				).data;
 				set(
 					produce((state: ChatState) => {
 						const session = state.sessionsById[sessionId];
@@ -744,12 +743,12 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 							session.input = session.input.trim()
 								? `${session.input}\n\n${cancelledText}`
 								: cancelledText;
-							// Restore attachments and planMode so ChatInput can pick them up
+							// Restore attachments and agent so ChatInput can pick them up
 							if (cancelledAttachments) {
 								session.draftAttachments = cancelledAttachments;
 							}
-							if (cancelledPlanMode !== undefined) {
-								session.draftPlanMode = cancelledPlanMode;
+							if (cancelledAgent !== undefined) {
+								session.draftAgent = cancelledAgent;
 							}
 						}
 					}),
@@ -852,10 +851,10 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 				s.input += text;
 			}),
 
-		clearDraftAttachments: sessionId =>
+		clearDraftState: sessionId =>
 			mutateSession(set, sessionId ?? get().activeSessionId, s => {
 				s.draftAttachments = undefined;
-				s.draftPlanMode = undefined;
+				s.draftAgent = undefined;
 			}),
 
 		setStatus: (status, sessionId) => get().actions.updateSession({ status }, sessionId),

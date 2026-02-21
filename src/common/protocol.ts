@@ -108,6 +108,8 @@ export interface AssistantMessageData extends SessionMessageBase {
 	contextId?: string;
 	isStreaming?: boolean;
 	isDelta?: boolean;
+	/** The agent that produced this response (e.g. 'build', 'plan'). */
+	agent?: string;
 }
 
 export interface ThinkingMessageData extends SessionMessageBase {
@@ -390,9 +392,8 @@ export interface SubtaskTranscriptPayload {
 // Question Event Payload (OpenCode question tool)
 // =============================================================================
 
-// QuestionOption, QuestionInfo, QuestionToolRef are derived from TypeBox schemas in schemas.ts.
-// Re-export them here for backward compatibility with existing imports.
-export type { QuestionInfo, QuestionOption, QuestionToolRef } from './schemas';
+// QuestionInfo is derived from TypeBox schema in schemas.ts.
+export type { QuestionInfo } from './schemas';
 
 export type QuestionAnswer = string[];
 
@@ -752,6 +753,21 @@ export type SubagentsListMessage = BaseExtensionMessage<
 	}
 >;
 
+export type AgentsListMessage = BaseExtensionMessage<
+	'agentsList',
+	{
+		agents: Array<{
+			id: string;
+			mode?: string;
+			description?: string;
+			builtIn?: boolean;
+			hidden?: boolean;
+		}>;
+		isLoading: boolean;
+		error?: string;
+	}
+>;
+
 export type PluginsListMessage = BaseExtensionMessage<
 	'pluginsList',
 	{
@@ -835,6 +851,7 @@ export type ExtensionMessage =
 	| CommandsListMessage
 	| SkillsListMessage
 	| SubagentsListMessage
+	| AgentsListMessage
 	| PluginsListMessage
 	| CliDiagnosticsMessage
 	| ConversationListMessage
@@ -885,7 +902,8 @@ export interface SendMessageCommand {
 	model?: string;
 	sessionId?: string;
 	messageID?: string;
-	planMode?: boolean;
+	/** Agent override for this message (e.g. 'plan', 'build'). */
+	agent?: string;
 	attachments?: {
 		files?: string[];
 		codeSnippets?: Array<{
@@ -953,6 +971,9 @@ export interface GetSkillsCommand {
 }
 export interface GetSubagentsCommand {
 	type: 'getSubagents';
+}
+export interface GetAgentsCommand {
+	type: 'getAgents';
 }
 export interface GetPluginsCommand {
 	type: 'getPlugins';
@@ -1252,8 +1273,8 @@ export interface QueuedMessageData {
 	model?: string;
 	/** Target session */
 	sessionId: string;
-	/** Plan mode flag */
-	planMode?: boolean;
+	/** Agent override (e.g. 'plan', 'build') */
+	agent?: string;
 	/** Attachments */
 	attachments?: SendMessageCommand['attachments'];
 	/** Timestamp when queued */
@@ -1290,8 +1311,8 @@ export type QueueEventMessage = BaseExtensionMessage<
 		cancelledText?: string;
 		/** The cancelled message attachments, restored on cancel */
 		cancelledAttachments?: SendMessageCommand['attachments'];
-		/** The cancelled message planMode, restored on cancel */
-		cancelledPlanMode?: boolean;
+		/** The cancelled message agent, restored on cancel */
+		cancelledAgent?: string;
 	}
 >;
 
@@ -1328,6 +1349,7 @@ export type WebviewCommand =
 	| GetCommandsCommand
 	| GetSkillsCommand
 	| GetSubagentsCommand
+	| GetAgentsCommand
 	| GetPluginsCommand
 	| GetRulesCommand
 	| LoadMCPServersCommand

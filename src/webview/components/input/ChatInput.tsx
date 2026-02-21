@@ -20,8 +20,8 @@ import { useFileAttachments } from '../../hooks/useFileAttachments';
 import { cn } from '../../lib/cn';
 import {
 	useChatActions,
+	useDraftAgent,
 	useDraftAttachments,
-	useDraftPlanMode,
 	useFilePickerControls,
 	useImprovingPromptRequestId,
 	useIsImprovingPrompt,
@@ -43,10 +43,10 @@ import {
 	ImageIcon,
 	ImprovePromptIcon,
 	LoaderIcon,
-	PlanIcon,
 	TerminalIcon,
 } from '../icons';
 import { type AnchorRectLike, Button, IconButton, PathChip, TextArea } from '../ui';
+import { AgentButtonIcon, AgentDropdown, getAgentLabel } from './AgentDropdown';
 import { FilePickerDropdown } from './FilePickerDropdown';
 import { ModelDropdown } from './ModelDropdown';
 import { SendButton } from './SendButton';
@@ -245,7 +245,7 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 			setImprovingPrompt,
 			clearPromptVersions,
 			togglePromptVersion,
-			clearDraftAttachments,
+			clearDraftState,
 		} = useChatActions();
 		const isProcessing = useIsProcessing();
 		const { selectedModel, proxyModels, opencodeProviders, getSessionModel } = useModelSelection();
@@ -289,22 +289,26 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 		// UI Refs and local state
 		const textareaRef = useRef<HTMLTextAreaElement>(null);
 		const filePickerTriggerIndexRef = useRef<number | null>(null);
-		const [planMode, setPlanMode] = useState(false);
+		const [selectedAgent, setSelectedAgent] = useState<string | undefined>(undefined);
+		const [showAgentDropdown, setShowAgentDropdown] = useState(false);
+		const [agentButtonAnchorElement, setAgentButtonAnchorElement] = useState<HTMLElement | null>(
+			null,
+		);
 
-		// Restore draft attachments/planMode from cancelled queued messages
+		// Restore draft attachments/agent from cancelled queued messages
 		const draftAttachments = useDraftAttachments();
-		const draftPlanMode = useDraftPlanMode();
+		const draftAgent = useDraftAgent();
 
 		useEffect(() => {
-			if (!draftAttachments && draftPlanMode === undefined) return;
+			if (!draftAttachments && draftAgent === undefined) return;
 			if (draftAttachments?.files) {
 				for (const f of draftAttachments.files) addFile(f);
 			}
-			if (draftPlanMode !== undefined) {
-				setPlanMode(draftPlanMode);
+			if (draftAgent !== undefined) {
+				setSelectedAgent(draftAgent);
 			}
-			clearDraftAttachments();
-		}, [draftAttachments, draftPlanMode, addFile, clearDraftAttachments]);
+			clearDraftState();
+		}, [draftAttachments, draftAgent, addFile, clearDraftState]);
 
 		const [previewImage, setPreviewImage] = useState<{
 			name: string;
@@ -584,7 +588,7 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 			postSessionMessage({
 				type: 'sendMessage',
 				text: inputValue.trim(),
-				planMode,
+				agent: selectedAgent,
 				model: sessionModel,
 				attachments: hasAttachments ? attachments : undefined,
 			});
@@ -593,7 +597,7 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 			setStoreInput('');
 			clearAll();
 			clearPromptVersions();
-			setPlanMode(false);
+			setSelectedAgent(undefined);
 		}, [
 			inputValue,
 			codeSnippets,
@@ -601,7 +605,7 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 			attachedImages,
 			isControlled,
 			controlledOnSend,
-			planMode,
+			selectedAgent,
 			postSessionMessage,
 			clearRevertedMessages,
 			setStoreInput,
@@ -953,23 +957,43 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 						<div className="h-(--input-toolbar-height) flex items-center justify-between pl-(--gap-2) pr-0 box-border shrink-0">
 							{/* Left Toolbar - can shrink */}
 							<div className="flex items-center gap-(--gap-0-5) z-5 min-w-0 overflow-hidden">
-								<Button
-									variant="ghost"
-									size="xs"
-									onClick={() => setPlanMode(!planMode)}
-									className={cn(
-										'h-(--input-toolbar-height) rounded-md select-none text-sm font-(family-name:--vscode-font-family) shrink-0 flex items-center gap-2 px-(--gap-1-5) transition-all duration-200 border',
-										planMode
-											? 'text-vscode-button-background bg-vscode-button-background/10 border-vscode-button-background/30'
-											: 'text-vscode-foreground opacity-70 hover:opacity-100 bg-transparent hover:bg-(--alpha-5) border-transparent',
+								<div className="relative shrink-0">
+									<Button
+										variant="ghost"
+										size="xs"
+										onClick={e => {
+											setAgentButtonAnchorElement(e.currentTarget as HTMLElement);
+											setShowAgentDropdown(!showAgentDropdown);
+										}}
+										className={cn(
+											'h-(--input-toolbar-height) rounded-md select-none text-sm font-(family-name:--vscode-font-family) shrink-0 flex items-center gap-2 px-(--gap-1-5) transition-all duration-200 border',
+											selectedAgent
+												? 'text-vscode-button-background bg-vscode-button-background/10 border-vscode-button-background/30'
+												: 'text-vscode-foreground opacity-70 hover:opacity-100 bg-transparent hover:bg-(--alpha-5) border-transparent',
+										)}
+									>
+										<AgentButtonIcon
+											agentId={selectedAgent}
+											size={14}
+											className={cn(
+												'transition-transform duration-200',
+												selectedAgent && 'scale-110',
+											)}
+										/>
+										<span>{getAgentLabel(selectedAgent)}</span>
+										<ChevronIcon expanded={showAgentDropdown} size={10} className="shrink-0" />
+									</Button>
+									{showAgentDropdown && (
+										<AgentDropdown
+											anchorElement={agentButtonAnchorElement}
+											onSelect={agent => {
+												setSelectedAgent(agent);
+												setShowAgentDropdown(false);
+											}}
+											onClose={() => setShowAgentDropdown(false)}
+										/>
 									)}
-								>
-									<PlanIcon
-										size={14}
-										className={cn('transition-transform duration-200', planMode && 'scale-110')}
-									/>
-									<span>Plan</span>
-								</Button>
+								</div>
 
 								<div className="relative min-w-0">
 									<Button

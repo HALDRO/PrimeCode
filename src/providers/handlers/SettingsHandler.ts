@@ -32,6 +32,9 @@ export class SettingsHandler implements WebviewMessageHandler {
 			case 'getSubagents':
 				await this.onGetSubagents();
 				break;
+			case 'getAgents':
+				await this.onGetAgents();
+				break;
 			case 'getPlugins':
 				await this.onGetPlugins();
 				break;
@@ -274,6 +277,37 @@ export class SettingsHandler implements WebviewMessageHandler {
 		} catch (error) {
 			this.context.bridge.data('subagentsList', {
 				subagents: [],
+				isLoading: false,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+
+	private async onGetAgents(): Promise<void> {
+		this.context.bridge.data('agentsList', { agents: [], isLoading: true });
+		try {
+			const serverInfo = this.context.cli.getOpenCodeServerInfo();
+			if (!serverInfo?.directory) {
+				this.context.bridge.data('agentsList', { agents: [], isLoading: false });
+				return;
+			}
+			const data = await this.context.cli.listAgents(serverInfo.directory);
+			// CLI returns Array<Agent> with `name` field — normalize to `id` for the UI
+			const agents = Array.isArray(data)
+				? data
+						.filter((a): a is Record<string, unknown> => a != null && typeof a === 'object')
+						.map(a => ({
+							id: typeof a.name === 'string' ? a.name : String(a.name ?? ''),
+							mode: typeof a.mode === 'string' ? a.mode : undefined,
+							description: typeof a.description === 'string' ? a.description : undefined,
+							builtIn: typeof a.builtIn === 'boolean' ? a.builtIn : undefined,
+							hidden: typeof a.hidden === 'boolean' ? a.hidden : undefined,
+						}))
+				: [];
+			this.context.bridge.data('agentsList', { agents, isLoading: false });
+		} catch (error) {
+			this.context.bridge.data('agentsList', {
+				agents: [],
 				isLoading: false,
 				error: error instanceof Error ? error.message : String(error),
 			});

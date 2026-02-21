@@ -24,6 +24,9 @@ import { ToolHandler } from './handlers/ToolHandler';
 import type { HandlerContext } from './handlers/types';
 import { UtilityHandler } from './handlers/UtilityHandler';
 
+/** Commands whose errors should not be surfaced as chat messages (file/UI ops). */
+const SILENT_COMMANDS = new Set(['openFile', 'openFileDiff', 'openExternal', 'getImageData']);
+
 export class ChatProvider implements vscode.WebviewViewProvider {
 	private view?: vscode.WebviewView;
 	private cli: OpenCodeExecutor;
@@ -312,6 +315,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				'getCommands',
 				'getSkills',
 				'getSubagents',
+				'getAgents',
 				'getPlugins',
 				'getRules',
 				// Resource CRUD
@@ -440,6 +444,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			this.settingsHandler.handleMessage({ type: 'getCommands' }),
 			this.settingsHandler.handleMessage({ type: 'getSkills' }),
 			this.settingsHandler.handleMessage({ type: 'getSubagents' }),
+			this.settingsHandler.handleMessage({ type: 'getAgents' }),
 			this.mcpHandler.handleMessage({ type: 'loadMCPServers' }),
 			this.providerHandler.handleMessage({
 				type: 'loadProxyModels',
@@ -518,8 +523,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			logger.error(`[ChatProvider] Error handling message:`, error);
 
 			// Don't surface file/UI operation errors as chat messages — they are not actionable for the user
-			const silentCommands = new Set(['openFile', 'openFileDiff', 'openExternal', 'getImageData']);
-			if (silentCommands.has(msg.type)) return;
+			if (SILENT_COMMANDS.has(msg.type)) return;
 
 			const errorSessionId = this.sessionState.activeSessionId;
 			if (errorSessionId) {

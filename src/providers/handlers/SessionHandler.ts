@@ -598,7 +598,8 @@ export class SessionHandler implements WebviewMessageHandler {
 	}
 
 	private async onSendMessage(msg: CommandOf<'sendMessage'>): Promise<void> {
-		const { text, model: uiModel, sessionId, messageID, attachments, planMode } = msg;
+		const { text, model: uiModel, sessionId, messageID, attachments, agent } = msg;
+		const resolvedAgent = agent;
 
 		// Resolve target session
 		const targetId = sessionId || this.context.sessionState.activeSessionId;
@@ -620,11 +621,11 @@ export class SessionHandler implements WebviewMessageHandler {
 				sessionId: targetId,
 				textLen: text.length,
 			});
-			this.enqueueMessage(targetId, text, uiModel, planMode, attachments);
+			this.enqueueMessage(targetId, text, uiModel, resolvedAgent, attachments);
 			return;
 		}
 
-		await this.handleSendMessage(text, uiModel, sessionId, messageID, attachments);
+		await this.handleSendMessage(text, uiModel, sessionId, messageID, attachments, resolvedAgent);
 	}
 
 	private onCancelQueuedMessage(msg: CommandOf<'cancelQueuedMessage'>): void {
@@ -633,16 +634,18 @@ export class SessionHandler implements WebviewMessageHandler {
 		if (!queue) return;
 		const idx = queue.findIndex(e => e.queueId === queueId);
 		if (idx === -1) return;
-		const [removed] = queue.splice(idx, 1);
-		if (queue.length === 0) this.pendingMessages.delete(sessionId);
+		const removed = queue[idx];
+		const newQueue = queue.filter(e => e.queueId !== queueId);
+		if (newQueue.length === 0) this.pendingMessages.delete(sessionId);
+		else this.pendingMessages.set(sessionId, newQueue);
 		logger.info('[SessionHandler] Cancelled queued message', { sessionId, queueId });
 		this.context.bridge.queue.update(
 			'cancelled',
 			sessionId,
-			queue.length > 0 ? [...queue] : [],
+			newQueue.length > 0 ? [...newQueue] : [],
 			removed.text,
 			removed.attachments,
-			removed.planMode,
+			removed.agent,
 		);
 	}
 
@@ -674,8 +677,10 @@ export class SessionHandler implements WebviewMessageHandler {
 		if (!queue) return;
 		const idx = queue.findIndex(e => e.queueId === queueId);
 		if (idx === -1) return;
-		const [entry] = queue.splice(idx, 1);
-		if (queue.length === 0) this.pendingMessages.delete(sessionId);
+		const entry = queue[idx];
+		const newQueue = queue.filter(e => e.queueId !== queueId);
+		if (newQueue.length === 0) this.pendingMessages.delete(sessionId);
+		else this.pendingMessages.set(sessionId, newQueue);
 
 		// Only stop if session is actually busy (avoids false "Stopped by user")
 		const isBusy = this.context.cli.isSessionActive?.(sessionId) ?? false;
@@ -697,7 +702,7 @@ export class SessionHandler implements WebviewMessageHandler {
 				entry.sessionId,
 				undefined,
 				entry.attachments,
-				entry.planMode,
+				entry.agent,
 			);
 		} finally {
 			this.sendingLock.delete(sessionId);
@@ -732,7 +737,7 @@ export class SessionHandler implements WebviewMessageHandler {
 				entry.sessionId,
 				undefined,
 				entry.attachments,
-				entry.planMode,
+				entry.agent,
 			);
 		} catch (error) {
 			logger.error('[SessionHandler] Failed to send dequeued message, returning to input', error);
@@ -742,7 +747,7 @@ export class SessionHandler implements WebviewMessageHandler {
 				[...remaining],
 				entry.text,
 				entry.attachments,
-				entry.planMode,
+				entry.agent,
 			);
 		} finally {
 			this.sendingLock.delete(sessionId);
@@ -757,7 +762,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		sessionId: string,
 		text: string,
 		model?: string,
-		planMode?: boolean,
+		agent?: string,
 		attachments?: QueuedMessageData['attachments'],
 	): void {
 		const queue = this.pendingMessages.get(sessionId) ?? [];
@@ -770,7 +775,7 @@ export class SessionHandler implements WebviewMessageHandler {
 				[...queue],
 				text,
 				attachments,
-				planMode,
+				agent,
 			);
 			return;
 		}
@@ -779,7 +784,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			text,
 			model,
 			sessionId,
-			planMode,
+			agent,
 			attachments,
 			queuedAt: Date.now(),
 		};
@@ -853,7 +858,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		explicitSessionId?: string,
 		messageIdToTruncate?: string,
 		attachments?: CommandOf<'sendMessage'>['attachments'],
-		_planMode?: boolean,
+		agent?: string,
 	): Promise<void> {
 		// Clear stop guard for the target session — user is explicitly sending
 		// a new message, so SSE 'busy' events should be allowed through again.
@@ -863,6 +868,11 @@ export class SessionHandler implements WebviewMessageHandler {
 		}
 
 		const config = this.buildSendConfig(uiModel);
+
+		// Per-message agent override takes precedence over the global opencode.agent setting.
+		if (agent) {
+			config.agent = agent;
+		}
 		let modelNotice: string | undefined;
 
 		if (config.provider === 'opencode' && typeof config.model === 'string' && config.model.trim()) {
@@ -1188,6 +1198,25 @@ export class SessionHandler implements WebviewMessageHandler {
 				const toolUseId = data.toolUseId || `hist-tool-${Math.random()}`;
 				const filePathFromInput = extractFilePath(input);
 
+				// Question tool — render as resolved QuestionCard instead of generic tool card
+				if (toolName.toLowerCase() === 'question') {
+					const questions = Array.isArray(input.questions)
+						? (input.questions as import('../../common/schemas').QuestionInfo[])
+						: [];
+					this.postSessionMessage(
+						{
+							id: `question-${toolUseId}`,
+							type: 'question',
+							requestId: toolUseId,
+							questions,
+							resolved: true,
+							timestamp: data.timestamp || new Date().toISOString(),
+						},
+						sessionId,
+					);
+					continue;
+				}
+
 				if (options?.mode === 'parent' && toolName === 'task') {
 					const graph = this.context.sessionGraph;
 					const childSessionId = graph.getChildByTaskId(toolUseId);
@@ -1276,6 +1305,81 @@ export class SessionHandler implements WebviewMessageHandler {
 				const data = event.data;
 				const toolName = data.tool || 'unknown';
 				const toolUseId = data.tool_use_id || `hist-tool-${Math.random()}`;
+
+				// Extract answers from question tool_result and merge into the existing QuestionCard
+				if (toolName.toLowerCase() === 'question') {
+					const content = data.content;
+					const inputData = (data.input as Record<string, unknown>) || {};
+					const questionsArr = Array.isArray(inputData.questions)
+						? (inputData.questions as Array<{
+								question: string;
+								options: Array<{ label: string }>;
+							}>)
+						: [];
+					let answers: string[][] | undefined;
+
+					// Try parsing content as structured answers (JSON)
+					if (typeof content === 'string') {
+						try {
+							const parsed = JSON.parse(content);
+							if (Array.isArray(parsed)) {
+								answers = parsed as string[][];
+							} else if (parsed && Array.isArray(parsed.answers)) {
+								answers = parsed.answers as string[][];
+							}
+						} catch {
+							// Not JSON — try parsing human-readable "question"="answer" pairs
+							// CLI format: User has answered your questions: "Q1"="A1", "Q2"="A2". You can now continue...
+							const pairRegex = /"([^"]+)"="([^"]+)"/g;
+							const pairs: Array<{ question: string; answer: string }> = [];
+							for (
+								let pairMatch = pairRegex.exec(content);
+								pairMatch !== null;
+								pairMatch = pairRegex.exec(content)
+							) {
+								pairs.push({ question: pairMatch[1], answer: pairMatch[2] });
+							}
+
+							if (pairs.length > 0 && questionsArr.length > 0) {
+								// Build answers array aligned with questions
+								answers = questionsArr.map(q => {
+									const pair = pairs.find(p => p.question === q.question);
+									if (!pair) return [];
+									// Split comma-separated values and return ALL parts
+									// (QuestionCard separates option labels from custom text itself)
+									return pair.answer
+										.split(', ')
+										.map(s => s.trim())
+										.filter(Boolean);
+								});
+							} else if (content.trim()) {
+								answers = [[content.trim()]];
+							}
+						}
+					} else if (Array.isArray(content)) {
+						answers = content as string[][];
+					} else if (content && typeof content === 'object') {
+						const obj = content as Record<string, unknown>;
+						if (Array.isArray(obj.answers)) {
+							answers = obj.answers as string[][];
+						}
+					}
+
+					// Post merge update with answers (mergeOrAddMessage will merge by ID)
+					if (answers && answers.length > 0) {
+						this.postSessionMessage(
+							{
+								id: `question-${toolUseId}`,
+								type: 'question' as const,
+								resolved: true,
+								answers,
+								timestamp: data.timestamp || new Date().toISOString(),
+							},
+							sessionId,
+						);
+					}
+					continue;
+				}
 
 				if (options?.mode === 'parent' && toolName === 'task') {
 					const graph = this.context.sessionGraph;

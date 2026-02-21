@@ -512,7 +512,6 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 				postSessionMessage({
 					type: 'sendMessage',
 					text,
-					planMode: false,
 					attachments: hasAttachments ? editAttachments : undefined,
 					// Pass the ID of the message being edited so the backend knows to replace/truncate history
 					messageID: message.id,

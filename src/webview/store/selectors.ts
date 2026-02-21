@@ -438,6 +438,6 @@ export const useHasQueuedMessages = () =>
 export const useDraftAttachments = () =>
 	useChatStore((state: ChatState) => getActiveSession(state)?.draftAttachments);
 
-/** Draft planMode restored from a cancelled queued message */
-export const useDraftPlanMode = () =>
-	useChatStore((state: ChatState) => getActiveSession(state)?.draftPlanMode);
+/** Draft agent restored from a cancelled queued message */
+export const useDraftAgent = () =>
+	useChatStore((state: ChatState) => getActiveSession(state)?.draftAgent);

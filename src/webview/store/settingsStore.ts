@@ -96,6 +96,7 @@ export interface SettingsActions {
 	setEnabledProxyModels: (models: string[]) => void;
 	setProxyTestStatus: (status: Partial<SettingsState['proxyTestStatus']>) => void;
 	setSubagents: (subagents: Partial<SettingsState['subagents']>) => void;
+	setAgents: (agents: Partial<SettingsState['agents']>) => void;
 	setCommands: (commands: Partial<SettingsState['commands']>) => void;
 	setSkills: (skills: Partial<SettingsState['skills']>) => void;
 	setPlugins: (plugins: Partial<SettingsState['plugins']>) => void;
@@ -280,6 +281,19 @@ export interface SettingsState {
 		error?: string;
 	};
 
+	// CLI Agents (primary agents from OpenCode: build, plan, custom)
+	agents: {
+		items: Array<{
+			id: string;
+			mode?: string;
+			description?: string;
+			builtIn?: boolean;
+			hidden?: boolean;
+		}>;
+		isLoading: boolean;
+		error?: string;
+	};
+
 	// Plugins
 	plugins: {
 		items: string[];
@@ -422,6 +436,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 		error: undefined,
 	},
 
+	agents: {
+		items: [],
+		isLoading: false,
+		error: undefined,
+	},
+
 	mcpConfig: {
 		hasProjectConfig: false,
 		projectPath: undefined,
@@ -469,6 +489,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 		setSubagents: subagents =>
 			set(state => ({
 				subagents: { ...state.subagents, ...subagents },
+			})),
+		setAgents: agents =>
+			set(state => ({
+				agents: { ...state.agents, ...agents },
 			})),
 		setMcpServers: mcpServers => set({ mcpServers }),
 		setMcpStatus: mcpStatus => set(state => ({ mcpStatus: { ...state.mcpStatus, ...mcpStatus } })),
@@ -588,6 +612,17 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 						};
 						actions.setSubagents({ items: subagents, isLoading, error });
 						handleLoadingMeta(meta, error, actions.setResourceOps);
+					}
+					break;
+
+				case 'agentsList':
+					if (message.data) {
+						const { agents, isLoading, error } = message.data as {
+							agents: SettingsState['agents']['items'];
+							isLoading: boolean;
+							error?: string;
+						};
+						actions.setAgents({ items: agents, isLoading, error });
 					}
 					break;
 

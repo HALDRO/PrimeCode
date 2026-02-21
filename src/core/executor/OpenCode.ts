@@ -109,6 +109,32 @@ function getTokenTotal(tokens: AssistantInfo['tokens']): number {
 }
 
 // =============================================================================
+// TTL Cache Helper
+// =============================================================================
+
+/** Simple time-based cache with configurable TTL per instance. */
+class TtlCache<T> {
+	private data: T | null = null;
+	private timestamp = 0;
+	constructor(private readonly ttlMs: number) {}
+
+	get(): T | null {
+		if (this.data !== null && Date.now() - this.timestamp < this.ttlMs) return this.data;
+		return null;
+	}
+
+	set(value: T): T {
+		this.data = value;
+		this.timestamp = Date.now();
+		return value;
+	}
+
+	clear(): void {
+		this.data = null;
+	}
+}
+
+// =============================================================================
 // Executor Implementation
 // =============================================================================
 
@@ -126,6 +152,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	private readonly seenToolCalls = new Set<string>();
 	private readonly completedToolCalls = new Set<string>();
 	private readonly messageRoles = new Map<string, 'user' | 'assistant'>();
+	/** Maps messageID → agent name (e.g. 'plan', 'build') from assistant messages. */
+	private readonly messageAgents = new Map<string, string>();
 	private lastEmittedStatus = new Map<string, string>();
 
 	/** All session IDs that are currently active (main + subagent children). */
@@ -147,13 +175,12 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		{ input: number; output: number; cacheRead: number }
 	>();
 
-	private readonly CACHE_TTL = 5 * 60 * 1000;
-	private _cache: {
-		commands?: { data: Array<{ name: string; description?: string }>; time: number };
-		providers?: { data: unknown; time: number };
-		modes?: { data: unknown; time: number };
-		mcp?: { data: unknown; time: number };
-	} = {};
+	private readonly _commandsCache = new TtlCache<Array<{ name: string; description?: string }>>(
+		5 * 60 * 1000,
+	);
+	private readonly _providersCache = new TtlCache<unknown>(5 * 60 * 1000);
+	private readonly _agentsCache = new TtlCache<unknown>(5 * 60 * 1000);
+	private readonly _mcpCache = new TtlCache<unknown>(30 * 1000);
 
 	// Keep track of the server process wrapper to close it properly if needed
 	private serverInstance: { close(): void } | null = null;
@@ -398,7 +425,10 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		this.directory = null;
 		this.sdkClient = null;
 		this.lastEmittedStatus.clear();
-		this._cache = {};
+		this._commandsCache.clear();
+		this._providersCache.clear();
+		this._agentsCache.clear();
+		this._mcpCache.clear();
 	}
 
 	/** Returns the SDK client or throws if not initialized. */
@@ -1082,53 +1112,49 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	private async listCommands(
 		directory: string,
 	): Promise<Array<{ name: string; description?: string }>> {
-		if (this._cache.commands && Date.now() - this._cache.commands.time < this.CACHE_TTL)
-			return this._cache.commands.data;
+		const cached = this._commandsCache.get();
+		if (cached) return cached;
 		try {
 			const client = this.requireSdk();
 			const { data } = await client.command.list({ query: { directory } });
 			const commands = (data ?? []) as Array<{ name: string; description?: string }>;
-			this._cache.commands = { data: commands, time: Date.now() };
-			return commands;
+			return this._commandsCache.set(commands);
 		} catch {
 			return [];
 		}
 	}
 
 	private async listConfigProviders(directory: string): Promise<unknown> {
-		if (this._cache.providers && Date.now() - this._cache.providers.time < this.CACHE_TTL)
-			return this._cache.providers.data;
+		const cached = this._providersCache.get();
+		if (cached) return cached;
 		try {
 			const client = this.requireSdk();
 			const { data } = await client.config.providers({ query: { directory } });
-			this._cache.providers = { data, time: Date.now() };
-			return data;
+			return this._providersCache.set(data);
 		} catch {
 			return {};
 		}
 	}
 
-	private async listAgents(directory: string): Promise<unknown> {
-		if (this._cache.modes && Date.now() - this._cache.modes.time < this.CACHE_TTL)
-			return this._cache.modes.data;
+	public async listAgents(directory: string): Promise<unknown> {
+		const cached = this._agentsCache.get();
+		if (cached) return cached;
 		try {
 			const client = this.requireSdk();
 			const { data } = await client.app.agents({ query: { directory } });
-			this._cache.modes = { data, time: Date.now() };
-			return data;
+			return this._agentsCache.set(data);
 		} catch {
 			return [];
 		}
 	}
 
 	public async getMcpStatus(directory: string): Promise<unknown> {
-		if (this._cache.mcp && Date.now() - this._cache.mcp.time < 30 * 1000)
-			return this._cache.mcp.data;
+		const cached = this._mcpCache.get();
+		if (cached) return cached;
 		try {
 			const client = this.requireSdk();
 			const { data } = await client.mcp.status({ query: { directory } });
-			this._cache.mcp = { data, time: Date.now() };
-			return data;
+			return this._mcpCache.set(data);
 		} catch {
 			return {};
 		}
@@ -1173,6 +1199,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				path: { id: sessionId },
 				query: { directory: config.workspaceRoot },
 			});
+			// Clean up per-session metadata to prevent unbounded Map growth
+			this.cleanupSessionMessages(sessionId);
 			logger.info(`[OpenCodeExecutor] Session deleted: ${sessionId}`);
 			return true;
 		} catch (error) {
@@ -1455,8 +1483,13 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	private handleMessageUpdated(info: Message, sessionId?: string): void {
 		this.messageRoles.set(info.id, info.role);
 
-		// Extract token stats from assistant messages (OpenCode SSE format)
+		// Store agent/mode from assistant messages for later use in part events
 		if (isAssistantMessage(info)) {
+			// SDK Message type doesn't expose `mode`, but the runtime object carries it.
+			const mode = (info as Message & { mode?: string }).mode;
+			if (mode && mode !== 'compaction') {
+				this.messageAgents.set(info.id, mode);
+			}
 			const { tokens } = info;
 			const userMessageId = info.parentID;
 			const input = tokens.input;
@@ -1643,16 +1676,29 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (part.type !== 'text') return;
 		if (part.messageID && this.messageRoles.get(part.messageID) === 'user') return;
 
+		// Resolve agent from the parent message (set in handleMessageUpdated)
+		const agent = part.messageID ? this.messageAgents.get(part.messageID) : undefined;
+
 		if (delta) {
 			this.emit('event', {
 				type: 'message',
-				data: { content: delta, partId: part.messageID, isDelta: true },
+				data: {
+					content: delta,
+					partId: part.messageID,
+					isDelta: true,
+					...(agent ? { agent } : {}),
+				},
 				sessionId,
 			});
 		} else if (part.text) {
 			const entry = this.logNormalizer.normalizeMessage(part.text, 'assistant');
 			const eventBase = {
-				data: { content: part.text, partId: part.messageID, isDelta: false },
+				data: {
+					content: part.text,
+					partId: part.messageID,
+					isDelta: false,
+					...(agent ? { agent } : {}),
+				},
 				normalizedEntry: entry,
 				sessionId,
 			};
@@ -1682,6 +1728,10 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (part.type !== 'tool' || !part.callID) return;
 		const { callID, tool: name = 'unknown', state } = part;
 		const status = state?.status;
+
+		// Skip question tool — it's handled separately via question.asked SSE event
+		// and rendered as a dedicated QuestionCard, not as a generic tool card.
+		if (name.toLowerCase() === 'question') return;
 
 		if ((status === 'pending' || status === 'running') && !this.seenToolCalls.has(callID)) {
 			this.seenToolCalls.add(callID);
@@ -1968,10 +2018,24 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		this.eventAbort = null;
 		this.seenToolCalls.clear();
 		this.completedToolCalls.clear();
+		this.messageRoles.clear();
+		this.messageAgents.clear();
+		this.pendingCompactIds.clear();
 		this.lastEmittedStatus.clear();
 		this.lastMessageTokens.clear();
 		this.turnTokenDeltas.clear();
 		this.activeSessions.clear();
+	}
+
+	/** Remove per-message metadata for a given session to prevent unbounded Map growth. */
+	private cleanupSessionMessages(sessionId: string): void {
+		// messageRoles/messageAgents/lastMessageTokens are keyed by messageID, not sessionID.
+		// We don't have a session→messages index, so we rely on activeSessions tracking.
+		// When a session is deleted, remove it from activeSessions so future SSE events
+		// for this session are ignored and no new entries accumulate.
+		this.activeSessions.delete(sessionId);
+		this.pendingCompactIds.delete(sessionId);
+		this.lastEmittedStatus.delete(sessionId);
 	}
 
 	async dispose(): Promise<void> {

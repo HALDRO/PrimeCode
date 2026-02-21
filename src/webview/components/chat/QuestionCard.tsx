@@ -12,8 +12,8 @@ import { cn } from '../../lib/cn';
 import { useChatActions } from '../../store';
 import type { Message } from '../../store/chatStore';
 import { useSessionMessage } from '../../utils/vscode';
-import { CheckIcon, ChevronDownIcon, CloseIcon } from '../icons';
-import { GlowDot } from '../ui';
+import { CheckIcon, ChevronDownIcon, CloseIcon, HelpCircleIcon } from '../icons';
+import { ChevronIcon } from '../icons/CustomIcons';
 
 type QuestionMessage = Extract<Message, { type: 'question' }>;
 
@@ -22,26 +22,8 @@ interface QuestionCardProps {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Resolved (collapsed) state                                        */
+/*  (ResolvedSummary removed — resolved state now uses the same card) */
 /* ------------------------------------------------------------------ */
-
-const ResolvedSummary: React.FC<{ answers?: string[][] }> = ({ answers }) => {
-	const summary = answers
-		? answers
-				.map(a => a.join(', '))
-				.filter(Boolean)
-				.join(' · ') || 'Dismissed'
-		: 'Dismissed';
-
-	return (
-		<div className="flex items-center gap-1.5 py-px ml-0.5">
-			<GlowDot color="var(--color-success)" glow="var(--glow-success)" />
-			<span className="text-sm leading-none text-vscode-foreground opacity-70 truncate">
-				{summary}
-			</span>
-		</div>
-	);
-};
 
 /* ------------------------------------------------------------------ */
 /*  Option button (radio / checkbox style)                            */
@@ -53,46 +35,49 @@ const OptionButton: React.FC<{
 	selected: boolean;
 	multiple: boolean;
 	recommended?: boolean;
+	disabled?: boolean;
 	onClick: () => void;
-}> = ({ label, description, selected, multiple, recommended, onClick }) => (
+}> = ({ label, description, selected, multiple, recommended, disabled, onClick }) => (
 	<button
 		type="button"
-		onClick={onClick}
+		onClick={disabled ? undefined : onClick}
 		className={cn(
-			'group/opt flex items-center gap-2.5 w-full text-left',
+			'group/opt flex items-start gap-2.5 w-full text-left',
 			'px-2.5 py-1.5 rounded-md border transition-all duration-150',
 			'focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder',
+			disabled && 'cursor-default',
 			selected
 				? 'border-[var(--vscode-focusBorder)] bg-[var(--vscode-focusBorder)]/8'
-				: 'border-(--tool-border-color) bg-transparent hover:bg-(--alpha-5)',
+				: 'border-(--tool-border-color) bg-transparent',
+			!disabled && !selected && 'hover:bg-(--alpha-5)',
 		)}
 	>
 		{/* indicator */}
 		<span
 			className={cn(
-				'flex items-center justify-center shrink-0 transition-colors duration-150',
+				'flex items-center justify-center shrink-0 mt-1 transition-colors duration-150',
 				'border',
 				multiple ? 'w-3.5 h-3.5 rounded-sm' : 'w-3.5 h-3.5 rounded-full',
 				selected
 					? 'border-[var(--vscode-focusBorder)] bg-[var(--vscode-focusBorder)]'
-					: 'border-(--tool-border-color) bg-transparent group-hover/opt:border-vscode-foreground/40',
+					: 'border-(--tool-border-color) bg-transparent',
+				!disabled && !selected && 'group-hover/opt:border-vscode-foreground/40',
 			)}
 		>
-			{selected && (
-				<span className={cn(multiple ? 'text-white' : '', 'flex items-center justify-center')}>
-					{multiple ? (
-						<CheckIcon size={10} />
-					) : (
-						<span className="block w-1.5 h-1.5 rounded-full bg-white" />
-					)}
-				</span>
-			)}
+			{selected &&
+				(multiple ? (
+					<CheckIcon size={10} className="text-white" />
+				) : (
+					<span className="block w-[6px] h-[6px] rounded-full bg-white" />
+				))}
 		</span>
 
 		{/* label + description */}
 		<span className="flex flex-col min-w-0 gap-px flex-1">
-			<span className="flex items-center gap-1.5">
-				<span className="text-sm text-vscode-foreground leading-tight truncate">{label}</span>
+			<span className="flex items-start gap-1.5">
+				<span className="text-sm text-vscode-foreground leading-tight break-words whitespace-normal">
+					{label}
+				</span>
 				{recommended && (
 					<span className="text-[10px] px-1 py-px rounded bg-[var(--vscode-focusBorder)]/15 text-[var(--vscode-focusBorder)] font-medium shrink-0">
 						Recommended
@@ -100,7 +85,7 @@ const OptionButton: React.FC<{
 				)}
 			</span>
 			{description && (
-				<span className="text-xs text-vscode-foreground/50 leading-tight truncate">
+				<span className="text-xs text-vscode-foreground/50 leading-tight break-words whitespace-normal">
 					{description}
 				</span>
 			)}
@@ -145,25 +130,6 @@ const StepDots: React.FC<{ total: number; current: number; onDotClick: (i: numbe
 };
 
 /* ------------------------------------------------------------------ */
-/*  Question icon SVG                                                 */
-/* ------------------------------------------------------------------ */
-
-const QuestionIcon: React.FC = () => (
-	<svg
-		width="16"
-		height="16"
-		viewBox="0 0 16 16"
-		fill="currentColor"
-		className="text-info"
-		role="img"
-		aria-label="Question"
-	>
-		<title>Question</title>
-		<path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1ZM6.5 5.5a1.5 1.5 0 1 1 3 0c0 .56-.31 1.05-.77 1.3A1.75 1.75 0 0 0 7.75 8.5v.25a.25.25 0 0 0 .5 0V8.5c0-.52.33-.97.8-1.14A2 2 0 0 0 6.5 5.5ZM8 11.5a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5Z" />
-	</svg>
-);
-
-/* ------------------------------------------------------------------ */
 /*  Main component                                                    */
 /* ------------------------------------------------------------------ */
 
@@ -175,31 +141,36 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ message }) => {
 
 	const isCarousel = questions.length > 1;
 	const [step, setStep] = useState(0);
+	const [expanded, setExpanded] = useState(!resolved);
 
 	const [selections, setSelections] = useState<Set<string>[]>(() =>
 		questions.map(() => new Set<string>()),
 	);
 	const [customInputs, setCustomInputs] = useState<string[]>(() => questions.map(() => ''));
 
-	const toggleOption = useCallback((qIdx: number, label: string, multiple: boolean) => {
-		setSelections(prev => {
-			const next = [...prev];
-			const set = new Set(next[qIdx]);
-			if (multiple) {
-				if (set.has(label)) set.delete(label);
-				else set.add(label);
-			} else {
-				if (set.has(label)) {
-					set.delete(label);
+	const toggleOption = useCallback(
+		(qIdx: number, label: string, multiple: boolean) => {
+			if (resolved) return;
+			setSelections(prev => {
+				const next = [...prev];
+				const set = new Set(next[qIdx]);
+				if (multiple) {
+					if (set.has(label)) set.delete(label);
+					else set.add(label);
 				} else {
-					set.clear();
-					set.add(label);
+					if (set.has(label)) {
+						set.delete(label);
+					} else {
+						set.clear();
+						set.add(label);
+					}
 				}
-			}
-			next[qIdx] = set;
-			return next;
-		});
-	}, []);
+				next[qIdx] = set;
+				return next;
+			});
+		},
+		[resolved],
+	);
 
 	const updateCustomInput = useCallback((qIdx: number, value: string) => {
 		setCustomInputs(prev => {
@@ -218,17 +189,33 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ message }) => {
 		});
 		postSessionMessage({ type: 'questionResponse', requestId, answers });
 		if (id) updateMessage(id, { resolved: true, answers });
+		setExpanded(false);
 	}, [questions, selections, customInputs, requestId, id, postSessionMessage, updateMessage]);
 
 	const handleDismiss = useCallback(() => {
 		postSessionMessage({ type: 'questionReject', requestId });
 		if (id) updateMessage(id, { resolved: true });
+		setExpanded(false);
 	}, [requestId, id, postSessionMessage, updateMessage]);
-
-	if (resolved) return <ResolvedSummary answers={savedAnswers} />;
 
 	const q = questions[step];
 	if (!q) return null;
+
+	// Build the set of selected labels for the current step
+	const optionLabels = new Set(q.options.map(o => o.label));
+	const stepAnswers = resolved ? (savedAnswers?.[step] ?? []) : [];
+	const resolvedSelections = new Set(stepAnswers.filter(a => optionLabels.has(a)));
+	const customAnswer = stepAnswers.find(a => !optionLabels.has(a)) ?? '';
+
+	const activeSelections = resolved ? resolvedSelections : (selections[step] ?? new Set());
+
+	// Summary text for collapsed resolved header
+	const summaryText = resolved
+		? savedAnswers
+				?.map(a => a.join(', '))
+				.filter(Boolean)
+				.join(' · ') || 'Answered'
+		: '';
 
 	const stepHasAnswer =
 		(selections[step]?.size ?? 0) > 0 || (customInputs[step]?.trim().length ?? 0) > 0;
@@ -247,174 +234,273 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ message }) => {
 
 	return (
 		<div className="mb-(--tool-block-margin)">
-			<div className="bg-(--tool-bg-header) border border-(--tool-border-color) rounded-lg overflow-hidden">
-				{/* Header */}
-				<div className="flex items-center justify-between h-(--tool-header-height) px-(--tool-header-padding)">
-					<div className="flex items-center gap-2">
-						<span className="flex items-center justify-center w-[18px] h-[18px] shrink-0">
-							<QuestionIcon />
-						</span>
-						<span className="text-sm font-medium text-vscode-foreground">
-							{isCarousel ? `Question ${step + 1} of ${questions.length}` : 'Question'}
-						</span>
-					</div>
-					{isCarousel && <StepDots total={questions.length} current={step} onDotClick={setStep} />}
-				</div>
-
-				{/* Body — single question at a time */}
-				<div className="px-(--tool-content-padding) pb-2">
-					{q.header && (
-						<div className="text-xs font-medium text-vscode-foreground/50 uppercase tracking-wide mb-1">
-							{q.header}
-						</div>
-					)}
-					<div className="text-sm text-vscode-foreground mb-2 whitespace-pre-wrap">
-						{q.question}
-					</div>
-
-					{q.options.length > 0 && (
-						<div className="flex flex-col gap-1 mb-2">
-							{q.options.map(opt => (
-								<OptionButton
-									key={opt.label}
-									label={opt.label}
-									description={opt.description}
-									selected={selections[step]?.has(opt.label) ?? false}
-									multiple={!!q.multiple}
-									recommended={opt.recommended}
-									onClick={() => toggleOption(step, opt.label, !!q.multiple)}
-								/>
-							))}
-						</div>
-					)}
-
-					{/* Always-visible "Other" free-text input */}
-					<div className="relative">
-						<input
-							ref={inputRef}
-							type="text"
-							value={customInputs[step] ?? ''}
-							onChange={e => updateCustomInput(step, e.target.value)}
-							onKeyDown={e => {
-								if (e.key === 'Enter') {
-									if (isLastStep && (stepHasAnswer || customInputs[step]?.trim())) {
-										handleSubmit();
-									} else if (!isLastStep) {
-										goNext();
-									}
-								}
-							}}
-							placeholder="Other…"
-							className={cn(
-								'w-full text-sm pl-2.5 pr-8 py-1.5 rounded-md',
-								'bg-vscode-input-background border border-(--tool-border-color)',
-								'text-vscode-foreground placeholder:text-vscode-foreground/30',
-								'outline-none focus:border-[var(--vscode-focusBorder)]',
-								'transition-colors duration-150',
-							)}
-						/>
-						{customInputs[step]?.trim() && (
-							<button
-								type="button"
-								onClick={() => updateCustomInput(step, '')}
-								className="absolute right-2 top-1/2 -translate-y-1/2 text-vscode-foreground/30 hover:text-vscode-foreground/60"
-								aria-label="Clear"
-							>
-								<CloseIcon size={12} />
-							</button>
-						)}
-					</div>
-				</div>
-
-				{/* Footer — navigation + actions */}
-				<div className="flex items-center justify-between px-(--tool-content-padding) py-1.5 border-t border-(--tool-border-color)">
-					<div className="flex items-center gap-1.5">
-						{/* Back button (carousel only) */}
-						{isCarousel && step > 0 && (
-							<button
-								type="button"
-								onClick={goBack}
-								className={cn(
-									'inline-flex items-center gap-1 h-[22px] px-2 rounded-md',
-									'text-sm text-vscode-foreground/50',
-									'hover:text-vscode-foreground hover:bg-(--alpha-5)',
-									'focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder',
-									'transition-colors duration-150',
-								)}
-							>
-								<ChevronDownIcon size={14} className="rotate-90" />
-								<span>Back</span>
-							</button>
-						)}
-
-						{/* Next / Submit button */}
-						<div
-							className={cn(
-								'inline-flex items-stretch overflow-hidden rounded-md',
-								'border border-(--tool-border-color)',
-							)}
-						>
-							<button
-								type="button"
-								onClick={goNext}
-								disabled={!stepHasAnswer && isLastStep && !canSubmit}
-								className={cn(
-									'inline-flex items-center gap-1.5 h-[22px] px-2.5',
-									'bg-vscode-button-secondaryBackground text-vscode-button-secondaryForeground',
-									'hover:bg-vscode-button-secondaryHoverBackground',
-									'focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder',
-									'disabled:opacity-40 disabled:cursor-not-allowed',
-									'transition-colors duration-150',
-								)}
-							>
-								{isLastStep ? (
-									<>
-										<CheckIcon size={14} />
-										<span className="text-sm font-medium">Submit</span>
-									</>
-								) : (
-									<>
-										<span className="text-sm font-medium">Next</span>
-										<ChevronDownIcon size={14} className="-rotate-90" />
-									</>
-								)}
-							</button>
-						</div>
-
-						{/* Skip (carousel, non-last step) */}
-						{isCarousel && !isLastStep && (
-							<button
-								type="button"
-								onClick={goNext}
-								className={cn(
-									'inline-flex items-center h-[22px] px-2 rounded-md',
-									'text-sm text-vscode-foreground/35',
-									'hover:text-vscode-foreground/60 hover:bg-(--alpha-5)',
-									'focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder',
-									'transition-colors duration-150',
-								)}
-							>
-								Skip
-							</button>
-						)}
-					</div>
-
-					{/* Dismiss */}
+			<div
+				className={cn(
+					'bg-(--tool-bg-header) border border-(--tool-border-color) rounded-lg overflow-hidden',
+				)}
+			>
+				{/* Header — clickable to toggle when resolved */}
+				{resolved ? (
 					<button
 						type="button"
-						onClick={handleDismiss}
+						onClick={() => setExpanded(prev => !prev)}
 						className={cn(
-							'inline-flex items-center gap-1 h-[22px] px-2 rounded-md',
-							'text-sm text-vscode-foreground/35',
-							'hover:text-vscode-foreground/60 hover:bg-(--alpha-5)',
-							'focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder',
-							'transition-colors duration-150',
+							'group/qh flex items-center gap-2 w-full h-(--tool-header-height) px-(--tool-header-padding)',
+							'bg-transparent border-none text-left cursor-pointer hover:bg-(--alpha-5)',
 						)}
 					>
-						<CloseIcon size={12} />
-						<span>Dismiss</span>
+						<span className="flex items-center justify-center w-[18px] h-[18px] shrink-0">
+							<span className="group-hover/qh:hidden">
+								<HelpCircleIcon size={16} className="text-info" />
+							</span>
+							<span className="hidden group-hover/qh:inline-flex">
+								<ChevronIcon expanded={expanded} size={12} />
+							</span>
+						</span>
+						<span className="text-sm font-medium text-vscode-foreground shrink-0">Question</span>
+						{!expanded && summaryText && (
+							<>
+								<span className="text-sm text-vscode-descriptionForeground">·</span>
+								<span className="text-sm leading-none text-vscode-foreground opacity-60 min-w-0 truncate">
+									{summaryText}
+								</span>
+							</>
+						)}
 					</button>
-				</div>
+				) : (
+					<div className="flex items-center justify-between h-(--tool-header-height) px-(--tool-header-padding)">
+						<div className="flex items-center gap-2">
+							<span className="flex items-center justify-center w-[18px] h-[18px] shrink-0">
+								<HelpCircleIcon size={16} className="text-info" />
+							</span>
+							<span className="text-sm font-medium text-vscode-foreground">
+								{isCarousel ? `Question ${step + 1} of ${questions.length}` : 'Question'}
+							</span>
+						</div>
+						{isCarousel && (
+							<StepDots total={questions.length} current={step} onDotClick={setStep} />
+						)}
+					</div>
+				)}
+
+				{/* Body — visible when expanded (always for active, toggle for resolved) */}
+				{expanded && (
+					<div className="px-(--tool-content-padding) pb-2">
+						{resolved && isCarousel && (
+							<div className="flex items-center justify-between mb-2">
+								<span className="text-sm text-vscode-foreground/50">
+									Question {step + 1} of {questions.length}
+								</span>
+								<StepDots total={questions.length} current={step} onDotClick={setStep} />
+							</div>
+						)}
+						{q.header && (
+							<div className="text-xs font-medium text-vscode-foreground/50 uppercase tracking-wide mb-1">
+								{q.header}
+							</div>
+						)}
+						<div className="text-sm text-vscode-foreground mb-2 whitespace-pre-wrap">
+							{q.question}
+						</div>
+
+						{q.options.length > 0 && (
+							<div className="flex flex-col gap-1 mb-2">
+								{q.options.map(opt => (
+									<OptionButton
+										key={opt.label}
+										label={opt.label}
+										description={opt.description}
+										selected={activeSelections.has(opt.label)}
+										multiple={!!q.multiple}
+										recommended={opt.recommended}
+										disabled={!!resolved}
+										onClick={() => toggleOption(step, opt.label, !!q.multiple)}
+									/>
+								))}
+							</div>
+						)}
+
+						{/* "Other" input — read-only when resolved, editable when active */}
+						{resolved ? (
+							customAnswer ? (
+								<div
+									className={cn(
+										'w-full text-sm pl-2.5 py-1.5 rounded-md',
+										'bg-vscode-input-background border border-(--tool-border-color)',
+										'text-vscode-foreground opacity-60',
+									)}
+								>
+									{customAnswer}
+								</div>
+							) : null
+						) : (
+							<div className="relative">
+								<input
+									ref={inputRef}
+									type="text"
+									value={customInputs[step] ?? ''}
+									onChange={e => updateCustomInput(step, e.target.value)}
+									onKeyDown={e => {
+										if (e.key === 'Enter') {
+											if (isLastStep && (stepHasAnswer || customInputs[step]?.trim())) {
+												handleSubmit();
+											} else if (!isLastStep) {
+												goNext();
+											}
+										}
+									}}
+									placeholder="Other…"
+									className={cn(
+										'w-full text-sm pl-2.5 pr-8 py-1.5 rounded-md',
+										'bg-vscode-input-background border border-(--tool-border-color)',
+										'text-vscode-foreground placeholder:text-vscode-foreground/30',
+										'outline-none focus:border-[var(--vscode-focusBorder)]',
+										'transition-colors duration-150',
+									)}
+								/>
+								{customInputs[step]?.trim() && (
+									<button
+										type="button"
+										onClick={() => updateCustomInput(step, '')}
+										className="absolute right-2 top-1/2 -translate-y-1/2 text-vscode-foreground/30 hover:text-vscode-foreground/60"
+										aria-label="Clear"
+									>
+										<CloseIcon size={12} />
+									</button>
+								)}
+							</div>
+						)}
+					</div>
+				)}
+
+				{/* Resolved carousel navigation */}
+				{resolved && expanded && isCarousel && (
+					<div className="flex items-center justify-center gap-2 px-(--tool-content-padding) py-1.5 border-t border-(--tool-border-color)">
+						<button
+							type="button"
+							onClick={goBack}
+							disabled={step === 0}
+							className={cn(
+								'inline-flex items-center gap-1 h-[22px] px-2 rounded-md',
+								'text-sm text-vscode-foreground/50',
+								'hover:text-vscode-foreground hover:bg-(--alpha-5)',
+								'focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder',
+								'disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent',
+								'transition-colors duration-150',
+							)}
+						>
+							<ChevronDownIcon size={14} className="rotate-90" />
+							<span>Back</span>
+						</button>
+						<span className="text-xs text-vscode-foreground/40">
+							{step + 1} / {questions.length}
+						</span>
+						<button
+							type="button"
+							onClick={() => setStep(s => Math.min(s + 1, questions.length - 1))}
+							disabled={step === questions.length - 1}
+							className={cn(
+								'inline-flex items-center gap-1 h-[22px] px-2 rounded-md',
+								'text-sm text-vscode-foreground/50',
+								'hover:text-vscode-foreground hover:bg-(--alpha-5)',
+								'focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder',
+								'disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent',
+								'transition-colors duration-150',
+							)}
+						>
+							<span>Next</span>
+							<ChevronDownIcon size={14} className="-rotate-90" />
+						</button>
+					</div>
+				)}
+
+				{/* Footer — only when not resolved and expanded */}
+				{!resolved && expanded && (
+					<div className="flex items-center justify-between px-(--tool-content-padding) py-1.5 border-t border-(--tool-border-color)">
+						<div className="flex items-center gap-1.5">
+							{isCarousel && step > 0 && (
+								<button
+									type="button"
+									onClick={goBack}
+									className={cn(
+										'inline-flex items-center gap-1 h-[22px] px-2 rounded-md',
+										'text-sm text-vscode-foreground/50',
+										'hover:text-vscode-foreground hover:bg-(--alpha-5)',
+										'focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder',
+										'transition-colors duration-150',
+									)}
+								>
+									<ChevronDownIcon size={14} className="rotate-90" />
+									<span>Back</span>
+								</button>
+							)}
+
+							<div
+								className={cn(
+									'inline-flex items-stretch overflow-hidden rounded-md',
+									'border border-(--tool-border-color)',
+								)}
+							>
+								<button
+									type="button"
+									onClick={goNext}
+									disabled={!stepHasAnswer && isLastStep && !canSubmit}
+									className={cn(
+										'inline-flex items-center gap-1.5 h-[22px] px-2.5',
+										'bg-vscode-button-secondaryBackground text-vscode-button-secondaryForeground',
+										'hover:bg-vscode-button-secondaryHoverBackground',
+										'focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder',
+										'disabled:opacity-40 disabled:cursor-not-allowed',
+										'transition-colors duration-150',
+									)}
+								>
+									{isLastStep ? (
+										<>
+											<CheckIcon size={14} />
+											<span className="text-sm font-medium">Submit</span>
+										</>
+									) : (
+										<>
+											<span className="text-sm font-medium">Next</span>
+											<ChevronDownIcon size={14} className="-rotate-90" />
+										</>
+									)}
+								</button>
+							</div>
+
+							{isCarousel && !isLastStep && (
+								<button
+									type="button"
+									onClick={goNext}
+									className={cn(
+										'inline-flex items-center h-[22px] px-2 rounded-md',
+										'text-sm text-vscode-foreground/35',
+										'hover:text-vscode-foreground/60 hover:bg-(--alpha-5)',
+										'focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder',
+										'transition-colors duration-150',
+									)}
+								>
+									Skip
+								</button>
+							)}
+						</div>
+
+						<button
+							type="button"
+							onClick={handleDismiss}
+							className={cn(
+								'inline-flex items-center gap-1 h-[22px] px-2 rounded-md',
+								'text-sm text-vscode-foreground/35',
+								'hover:text-vscode-foreground/60 hover:bg-(--alpha-5)',
+								'focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder',
+								'transition-colors duration-150',
+							)}
+						>
+							<CloseIcon size={12} />
+							<span>Dismiss</span>
+						</button>
+					</div>
+				)}
 			</div>
 		</div>
 	);

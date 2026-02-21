@@ -11,7 +11,6 @@ export type {
 	CommandOf,
 	ExtensionMessage,
 	PermissionPolicies,
-	QuestionOption,
 	SessionAccessPayload,
 	SessionDeleteMessagesAfterPayload,
 	SessionEventBatchMessage,

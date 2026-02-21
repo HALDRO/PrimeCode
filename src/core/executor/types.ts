@@ -49,6 +49,8 @@ export interface MessageEventData {
 	partId?: string;
 	isDelta: boolean;
 	timestamp?: string;
+	/** The agent that produced this message (e.g. 'build', 'plan'). */
+	agent?: string;
 }
 
 export interface ThinkingEventData {

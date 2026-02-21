@@ -130,7 +130,6 @@ export const QuestionOptionSchema = Type.Object({
 	description: Type.String(),
 	recommended: Type.Optional(Type.Boolean()),
 });
-export type QuestionOption = Static<typeof QuestionOptionSchema>;
 
 export const QuestionInfoSchema = Type.Object({
 	question: Type.String(),
@@ -145,7 +144,6 @@ export const QuestionToolRefSchema = Type.Object({
 	messageID: Type.String(),
 	callID: Type.String(),
 });
-export type QuestionToolRef = Static<typeof QuestionToolRefSchema>;
 
 /** Shape of the SSE question.asked payload after validation. */
 export const QuestionRequestSchema = Type.Object({
@@ -153,7 +151,6 @@ export const QuestionRequestSchema = Type.Object({
 	questions: Type.Array(QuestionInfoSchema),
 	tool: Type.Optional(QuestionToolRefSchema),
 });
-export type QuestionRequest = Static<typeof QuestionRequestSchema>;
 
 // =============================================================================
 // Access Types
@@ -239,6 +236,8 @@ export const ConversationMessageSchema = Type.Union([
 		contextId: Type.Optional(Type.String()),
 		isStreaming: Type.Optional(Type.Boolean()),
 		isDelta: Type.Optional(Type.Boolean()),
+		/** The agent that produced this response (e.g. 'build', 'plan'). */
+		agent: Type.Optional(Type.String()),
 	}),
 	Type.Object({
 		id: Type.Optional(Type.String()),

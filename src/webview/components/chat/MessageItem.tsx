@@ -437,15 +437,24 @@ export const MessageItem = React.memo<{
 				return <QuestionCard message={item as Extract<Message, { type: 'question' }>} />;
 			case 'subtask':
 				return <SubtaskItem message={item} ctx={ctx} />;
-			case 'assistant':
+			case 'assistant': {
+				const assistantAgent = item.agent;
+				const agentBadge =
+					assistantAgent && assistantAgent !== 'build' ? (
+						<span className="inline-flex items-center text-xs font-medium px-1.5 py-0.5 rounded-sm bg-vscode-badge-background text-vscode-badge-foreground mb-1">
+							{assistantAgent.charAt(0).toUpperCase() + assistantAgent.slice(1)}
+						</span>
+					) : null;
 				return (
 					<div
 						className="bg-transparent py-(--message-padding-y) mb-(--message-gap) text-(length:--font-size-base) leading-(--line-height-base) font-(family-name:--font-family-base)"
 						style={{ color: 'var(--input-text-color)' }}
 					>
+						{agentBadge}
 						<Markdown content={(item as { content: string }).content || ''} />
 					</div>
 				);
+			}
 			case 'thinking':
 				return (
 					<ThinkingMessage

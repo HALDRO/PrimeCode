@@ -35,7 +35,8 @@ export interface SendMessageCommand {
 	model?: string;
 	sessionId?: string;
 	messageID?: string;
-	planMode?: boolean;
+	/** Agent override for this message (e.g. 'plan', 'build'). */
+	agent?: string;
 	attachments?: {
 		files?: string[];
 		codeSnippets?: Array<{
@@ -108,6 +109,10 @@ export interface GetSkillsCommand {
 
 export interface GetSubagentsCommand {
 	type: 'getSubagents';
+}
+
+export interface GetAgentsCommand {
+	type: 'getAgents';
 }
 
 export interface GetPluginsCommand {
@@ -276,6 +281,7 @@ export type WebviewCommand =
 	| GetCommandsCommand
 	| GetSkillsCommand
 	| GetSubagentsCommand
+	| GetAgentsCommand
 	| GetPluginsCommand
 	| GetRulesCommand
 	// MCP

@@ -62,7 +62,7 @@ export function extractFilePath(input: Record<string, unknown>): string | undefi
 
 /** Map a `message` CLI event to an AssistantMessageData. */
 export function mapMessageEvent(
-	data: { content?: string; partId?: string; timestamp?: string },
+	data: { content?: string; partId?: string; timestamp?: string; agent?: string },
 	opts?: MapperOptions,
 ): AssistantMessageData {
 	const partId = data.partId;
@@ -73,6 +73,7 @@ export function mapMessageEvent(
 		isDelta: false,
 		timestamp: resolveTimestamp(data.timestamp),
 		normalizedEntry: opts?.normalizedEntry,
+		...(data.agent ? { agent: data.agent } : {}),
 	};
 }
 
