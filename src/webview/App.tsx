@@ -30,6 +30,7 @@ import {
 	useMcpServers,
 	useMessages,
 	useRevertedFromMessageId,
+	useTurnTokens,
 } from './store';
 import { groupMessagesIntoSections, type MessageSection } from './utils/groupSections';
 
@@ -218,6 +219,7 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 	const isProcessing = useIsProcessing();
 	const revertedFromMessageId = useRevertedFromMessageId();
 	const { changedFiles } = useChangedFilesState();
+	const turnTokens = useTurnTokens();
 
 	const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
 
@@ -229,11 +231,11 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 			mcpServerNames,
 			revertedFromMessageId,
 			changedFiles,
-			undefined, // turnTokens removed — fetched per-message in UserMessage
+			turnTokens,
 			isProcessing,
 		);
 		return stabilizeSections(raw, prevSectionsRef);
-	}, [messages, mcpServerNames, revertedFromMessageId, changedFiles, isProcessing]);
+	}, [messages, mcpServerNames, revertedFromMessageId, changedFiles, turnTokens, isProcessing]);
 
 	const virtuosoComponents = useMemo(
 		() => ({

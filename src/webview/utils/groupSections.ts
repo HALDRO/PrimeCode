@@ -121,12 +121,25 @@ export const groupMessagesIntoSections = (
 		sections.push(currentSection);
 	}
 
-	// Second pass: fill in isFirst/isLast and nextUserMessageTs
+	// Second pass: fill in isFirst/isLast, nextUserMessageTs, and convert
+	// cumulative token snapshots to per-turn deltas.
+	// CLI sends cumulative `total` (context window size at each step), so
+	// subtracting the previous turn's total gives the real tokens spent on
+	// this specific turn.
+	let prevTotal = 0;
 	for (let i = 0; i < sections.length; i++) {
 		sections[i].stats.isFirst = i === 0;
 		sections[i].stats.isLast = i === sections.length - 1;
 		sections[i].stats.nextUserMessageTs =
 			i < sections.length - 1 ? new Date(sections[i + 1].userMessage.timestamp).getTime() : null;
+
+		// Convert cumulative snapshot → per-turn delta
+		const snap = sections[i].stats.tokenCount;
+		if (snap !== null && snap > 0) {
+			const delta = Math.max(0, snap - prevTotal);
+			prevTotal = snap;
+			sections[i].stats.tokenCount = delta > 0 ? delta : null;
+		}
 	}
 
 	return sections;
@@ -193,31 +206,12 @@ function computeSectionStats(
 		}
 	}
 
-	// Token count: prefer real per-turn data from the backend, fall back to heuristic.
+	// Token count: only use real per-turn data from the backend. No fallback/heuristic.
 	let tokenCount: number | null = null;
 	const userMsgId = section.userMessage.id;
 	const realTokens = userMsgId ? turnTokens[userMsgId] : undefined;
-	if (realTokens) {
+	if (realTokens && realTokens.total > 0) {
 		tokenCount = realTokens.total;
-	} else {
-		const userMsg = section.userMessage as Record<string, unknown>;
-		if (userMsg.tokenCount && typeof userMsg.tokenCount === 'number') {
-			tokenCount = userMsg.tokenCount;
-		} else {
-			let total = 0;
-			for (const msg of rawResponses) {
-				if (msg.type === 'tool_result' && 'estimatedTokens' in msg && msg.estimatedTokens) {
-					total += msg.estimatedTokens;
-				}
-				if (msg.type === 'thinking' && 'reasoningTokens' in msg && msg.reasoningTokens) {
-					total += msg.reasoningTokens;
-				}
-				if (msg.type === 'assistant' && 'content' in msg && msg.content) {
-					total += Math.ceil(msg.content.length / 4);
-				}
-			}
-			if (total > 0) tokenCount = total;
-		}
 	}
 
 	// Duration: prefer real per-turn data from the backend

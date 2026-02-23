@@ -348,15 +348,19 @@ function handleTurnTokensEvent(targetSession: ChatSession, payload: SessionEvent
 	// Use explicit userMessageId from history replay, or fall back to last user message
 	const turnMsgId =
 		t.userMessageId || [...targetSession.messages].reverse().find(m => m.type === 'user')?.id;
+
 	if (turnMsgId) {
 		const existing = targetSession.turnTokens[turnMsgId];
-		// Accumulate deltas: turn_tokens now emit per-step deltas (not cumulative)
+		// Snapshot overwrite: totalTokens from CLI is the context window size (last value wins).
+		// Skip zero-total events (empty/aborted messages) to avoid overwriting real data.
+		// Duration is summed across steps (each step = separate API call).
+		const hasRealTokens = t.totalTokens > 0;
 		targetSession.turnTokens[turnMsgId] = {
-			input: (existing?.input ?? 0) + t.inputTokens,
-			output: (existing?.output ?? 0) + t.outputTokens,
-			total: (existing?.total ?? 0) + t.totalTokens,
-			cacheRead: (existing?.cacheRead ?? 0) + t.cacheReadTokens,
-			durationMs: t.durationMs ? (existing?.durationMs ?? 0) + t.durationMs : existing?.durationMs,
+			input: hasRealTokens ? t.inputTokens : (existing?.input ?? 0),
+			output: hasRealTokens ? t.outputTokens : (existing?.output ?? 0),
+			total: hasRealTokens ? t.totalTokens : (existing?.total ?? 0),
+			cacheRead: hasRealTokens ? t.cacheReadTokens : (existing?.cacheRead ?? 0),
+			durationMs: t.durationMs ?? existing?.durationMs,
 		};
 	}
 }

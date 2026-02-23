@@ -164,16 +164,14 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	/** Guards against concurrent ensureServer calls. */
 	private ensureServerPromise: Promise<void> | null = null;
 
-	// Token stats tracking for message.updated events (per-message cumulative → delta)
+	// Token stats tracking: snapshot of last known tokens per assistant message (for session_updated delta detection)
 	private readonly lastMessageTokens = new Map<
 		string,
 		{ input: number; output: number; cacheRead: number }
 	>();
-	// Accumulated deltas per message for turn_tokens emission (reset on emit)
-	private readonly turnTokenDeltas = new Map<
-		string,
-		{ input: number; output: number; cacheRead: number }
-	>();
+	// Per-turn (keyed by userMessageId) accumulated duration and last total snapshot.
+	// Token total is a snapshot (last value wins), but duration must be summed across steps.
+	private readonly turnAccum = new Map<string, { total: number; durationMs: number }>();
 
 	private readonly _commandsCache = new TtlCache<Array<{ name: string; description?: string }>>(
 		5 * 60 * 1000,
@@ -688,17 +686,13 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			let lastModelID: string | undefined;
 			let lastProviderID: string | undefined;
 
-			// Track per-turn token deltas keyed by parent user message ID.
-			// SDK gives cumulative input tokens, so we compute deltas between user turns.
-			// We collect cumulative snapshots first, then convert to deltas after flatMap.
-			const turnCumulativeSnapshots: Array<{
-				turnKey: string;
-				input: number;
-				output: number;
-				total: number;
-				cacheRead: number;
-				durationMs: number;
-			}> = [];
+			// Track per-turn token snapshots keyed by parent user message ID.
+			// `total` from CLI is the context window snapshot — last value per turn wins.
+			// Duration is summed across steps within a turn.
+			const turnSnapshots = new Map<
+				string,
+				{ total: number; input: number; output: number; cacheRead: number; durationMs: number }
+			>();
 			// Track current user message ID for assistant messages without parentID
 			let currentUserMessageId: string | undefined;
 			// Track pending compaction tool_use ID so the next compaction assistant emits tool_result
@@ -731,7 +725,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 						totalModelDuration += completed - created;
 					}
 
-					// Collect cumulative snapshot for this turn (deltas computed after flatMap)
+					// Collect snapshot for this turn (last value wins; delta computed on frontend)
 					const turnKey = info.parentID || currentUserMessageId;
 					if (turnKey && (tokens.input > 0 || tokens.output > 0)) {
 						const total = getTokenTotal(tokens);
@@ -746,13 +740,14 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 						) {
 							msgDuration = msgCompleted - msgCreated;
 						}
-						turnCumulativeSnapshots.push({
-							turnKey,
+						// Update snapshot: total is last-wins, duration is summed
+						const existing = turnSnapshots.get(turnKey);
+						turnSnapshots.set(turnKey, {
+							total, // snapshot — last value wins (context window size)
 							input: tokens.input,
 							output: tokens.output,
-							total,
 							cacheRead: tokens.cache.read,
-							durationMs: msgDuration,
+							durationMs: (existing?.durationMs ?? 0) + msgDuration,
 						});
 					}
 
@@ -914,47 +909,17 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				});
 			});
 
-			// Compute per-turn deltas from cumulative snapshots and emit turn_tokens events.
-			// SDK input tokens are cumulative (total context sent), output tokens are per-step.
-			// We deduplicate snapshots per turnKey (keep last), then compute input/cacheRead deltas.
-			const lastSnapshotByTurn = new Map<
-				string,
-				{ input: number; output: number; total: number; cacheRead: number; durationMs: number }
-			>();
-			const turnKeyOrder: string[] = [];
-			for (const snap of turnCumulativeSnapshots) {
-				if (!lastSnapshotByTurn.has(snap.turnKey)) {
-					turnKeyOrder.push(snap.turnKey);
-				}
-				const existing = lastSnapshotByTurn.get(snap.turnKey);
-				lastSnapshotByTurn.set(snap.turnKey, {
-					input: snap.input,
-					output: snap.output,
-					total: snap.total,
-					cacheRead: snap.cacheRead,
-					durationMs: (existing?.durationMs ?? 0) + snap.durationMs,
-				});
-			}
-
-			let prevInput = 0;
-			let prevCacheRead = 0;
-			for (const turnKey of turnKeyOrder) {
-				const snap = lastSnapshotByTurn.get(turnKey);
-				if (!snap) continue;
-				const deltaInput = Math.max(0, snap.input - prevInput);
-				const deltaCacheRead = Math.max(0, snap.cacheRead - prevCacheRead);
-				// output is already per-step from SDK, no delta needed
-				const deltaTotal = deltaInput + snap.output;
-				prevInput = snap.input;
-				prevCacheRead = snap.cacheRead;
-
+			// Emit turn_tokens with snapshot totals per user turn.
+			// `total` from CLI is the context window size — that's what we show per user message.
+			// Duration is summed across steps within a turn. Total is last-wins snapshot.
+			for (const [turnKey, snap] of turnSnapshots) {
 				events.push({
 					type: 'turn_tokens' as const,
 					data: {
-						inputTokens: deltaInput,
+						inputTokens: snap.input,
 						outputTokens: snap.output,
-						totalTokens: deltaTotal,
-						cacheReadTokens: deltaCacheRead,
+						totalTokens: snap.total,
+						cacheReadTokens: snap.cacheRead,
 						...(snap.durationMs > 0 ? { durationMs: snap.durationMs } : {}),
 						userMessageId: turnKey,
 					},
@@ -1505,37 +1470,17 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			const total = getTokenTotal(tokens);
 			const cacheRead = tokens.cache.read;
 
-			// Compute deltas from last known values (message.updated sends cumulative)
-			const prev = this.lastMessageTokens.get(info.id) ?? {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-			};
-			const deltaInput = Math.max(0, input - prev.input);
-			const deltaOutput = Math.max(0, output - prev.output);
-			const deltaCacheRead = Math.max(0, cacheRead - prev.cacheRead);
-
+			// Detect token changes for session_updated emission (context bar, etc.)
+			const prev = this.lastMessageTokens.get(info.id) ?? { input: 0, output: 0, cacheRead: 0 };
+			const hasTokenDelta =
+				input !== prev.input || output !== prev.output || cacheRead !== prev.cacheRead;
 			this.lastMessageTokens.set(info.id, { input, output, cacheRead });
 
-			// Accumulate deltas for turn_tokens emission (consumed on completed)
-			const prevAccum = this.turnTokenDeltas.get(info.id) ?? {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-			};
-			this.turnTokenDeltas.set(info.id, {
-				input: prevAccum.input + deltaInput,
-				output: prevAccum.output + deltaOutput,
-				cacheRead: prevAccum.cacheRead + deltaCacheRead,
-			});
-
-			// Always emit modelID/providerID when present (even if token deltas are zero)
-			// so the UI can display the active model from the very first SSE event.
 			const modelID = info.modelID || undefined;
 			const providerID = info.providerID || undefined;
 
-			// Only emit token stats if there's actual token delta
-			if (deltaInput > 0 || deltaOutput > 0 || deltaCacheRead > 0) {
+			// Emit session_updated with token snapshot for context bar / session stats
+			if (hasTokenDelta) {
 				this.emit('event', {
 					type: 'session_updated',
 					data: {
@@ -1551,61 +1496,65 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 					sessionId,
 				});
 			} else if (modelID) {
-				// No token delta but we have model info — emit it standalone
-				this.emit('event', {
-					type: 'session_updated',
-					data: { modelID, providerID },
-					sessionId,
-				});
+				this.emit('event', { type: 'session_updated', data: { modelID, providerID }, sessionId });
 			}
 
-			// If assistant message has a completed timestamp, emit finished with totalStats
+			// On step completion: emit turn_tokens with the SNAPSHOT total (not deltas).
+			// `total` from CLI is the context window size — that's what we show per user message.
+			// Duration is summed across steps within a turn.
 			const completed = info.time.completed;
-			if (typeof completed === 'number') {
-				const started = info.time.created;
-				const durationMs = started > 0 ? completed - started : undefined;
+			const hasCompleted = typeof completed === 'number';
+			const started = info.time.created;
+			const durationMs = hasCompleted && started > 0 ? completed - started : undefined;
+			const finish = (info as Record<string, unknown>).finish as string | undefined;
+			const isStepDone = hasCompleted || !!finish;
 
+			if (isStepDone) {
+				// Emit requestCount + currentDuration for session-level stats
 				this.emit('event', {
 					type: 'session_updated',
 					data: {
-						totalStats: {
-							requestCount: 1,
-							currentDuration: durationMs,
-						},
+						totalStats: { requestCount: 1, ...(durationMs ? { currentDuration: durationMs } : {}) },
 						modelID,
 						providerID,
 					},
 					sessionId,
 				});
 
-				// Emit per-turn token deltas using accumulated values (not instant delta)
-				// Instant delta may be 0 if tokens were already consumed by earlier updates
-				const accum = this.turnTokenDeltas.get(info.id) ?? {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-				};
-				const accumTotal = accum.input + accum.output;
-				this.emit('event', {
-					type: 'turn_tokens',
-					data: {
-						inputTokens: accum.input,
-						outputTokens: accum.output,
-						totalTokens: accumTotal,
-						cacheReadTokens: accum.cacheRead,
-						...(userMessageId ? { userMessageId } : {}),
-						...(durationMs ? { durationMs } : {}),
-					},
-					sessionId,
-				});
-				// Reset accumulated deltas for this message
-				this.turnTokenDeltas.delete(info.id);
+				// Accumulate duration per user turn, but total is always a snapshot (last wins).
+				// Skip zero-total steps (empty/aborted messages) to avoid overwriting real data.
+				if (userMessageId) {
+					const prev = this.turnAccum.get(userMessageId) ?? { total: 0, durationMs: 0 };
+					this.turnAccum.set(userMessageId, {
+						total: total > 0 ? total : prev.total, // keep previous if current is 0
+						durationMs: prev.durationMs + (durationMs ?? 0),
+					});
+				}
 
-				this.emit('event', {
-					type: 'finished',
-					data: { reason: 'message_completed' },
-					sessionId,
-				});
+				// Emit turn_tokens with snapshot total + accumulated duration
+				if (total > 0) {
+					const accum = userMessageId ? this.turnAccum.get(userMessageId) : undefined;
+					this.emit('event', {
+						type: 'turn_tokens',
+						data: {
+							inputTokens: input,
+							outputTokens: output,
+							totalTokens: total,
+							cacheReadTokens: cacheRead,
+							...(userMessageId ? { userMessageId } : {}),
+							...(accum ? { durationMs: accum.durationMs } : durationMs ? { durationMs } : {}),
+						},
+						sessionId,
+					});
+				}
+
+				if (hasCompleted) {
+					this.emit('event', {
+						type: 'finished',
+						data: { reason: 'message_completed' },
+						sessionId,
+					});
+				}
 			}
 		}
 	}
@@ -2064,7 +2013,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		this.pendingCompactIds.clear();
 		this.lastEmittedStatus.clear();
 		this.lastMessageTokens.clear();
-		this.turnTokenDeltas.clear();
+		this.turnAccum.clear();
 		this.activeSessions.clear();
 	}
 
