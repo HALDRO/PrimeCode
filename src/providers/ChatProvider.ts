@@ -87,6 +87,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			getPermissionPolicies: () => this.toolHandler.getPermissionPolicies(),
 			registerCheckpoint: (commitId, record) =>
 				this.restoreHandler.registerCheckpoint(commitId, record),
+			cleanupSessionRestore: sessionId => this.restoreHandler.cleanupSession(sessionId),
+			isSessionReverted: sessionId => this.restoreHandler.isSessionReverted(sessionId),
 		};
 
 		this.sessionHandler = new SessionHandler(handlerContext);
@@ -535,14 +537,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			logger.debug(`[ChatProvider] handleCliEvent: ${event.type}`, event.data);
 		}
 
-		// When SSE delivers the real server-assigned user message ID, update checkpoints
-		// so that revert uses the correct ID the server actually knows about.
-		if (event.type === 'user_message_resolved') {
-			const { serverMessageId, sessionId } = event.data;
-			this.restoreHandler.resolveServerMessageId(sessionId, serverMessageId);
-			return;
-		}
-
 		if (event.type === 'session_updated') {
 			// CRITICAL: Before routing session_updated to the handler (which adds sessionId
 			// to startedSessions), check if this is a child session that needs deferred linking.
@@ -676,7 +670,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				const partId =
 					e.partId || this.activeAssistantPartIds.get(targetSessionId) || `part-${now}`;
 				this.activeAssistantPartIds.set(targetSessionId, partId);
-				const messageId = partId.startsWith('msg-') ? partId : `msg-${partId}`;
+				const isMsgId = partId.startsWith('msg-') || partId.startsWith('msg_');
+				const messageId = isMsgId ? partId : `msg-${partId}`;
 
 				const msgData: import('../common').SessionMessageData = {
 					id: messageId,
@@ -721,7 +716,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				}
 				this.activeThinkingPartIds.set(targetSessionId, partId);
 
-				const thinkingId = partId.startsWith('thinking-') ? partId : `thinking-${partId}`;
+				const isThinkingId = partId.startsWith('thinking-') || partId.startsWith('thinking_');
+				const thinkingId = isThinkingId ? partId : `thinking-${partId}`;
 				const isFirstChunk = !prevThinkingPartId || prevThinkingPartId !== partId;
 
 				const thinkingData: import('../common').SessionMessageData = {

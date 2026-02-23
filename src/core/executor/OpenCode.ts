@@ -489,16 +489,12 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 		logger.info('[OpenCode] Reverting session history to message', { sessionId, messageId });
 
-		try {
-			const client = this.requireSdk();
-			await client.session.revert({
-				path: { id: sessionId },
-				body: { messageID: messageId },
-				query: { directory: config.workspaceRoot },
-			});
-		} catch (e) {
-			logger.warn('[OpenCode] Revert endpoint failed (non-fatal)', e);
-		}
+		const client = this.requireSdk();
+		await client.session.revert({
+			path: { id: sessionId },
+			body: { messageID: messageId },
+			query: { directory: config.workspaceRoot },
+		});
 	}
 
 	async unrevertSession(sessionId: string, config: CLIConfig): Promise<void> {
@@ -1494,19 +1490,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 	private handleMessageUpdated(info: Message, sessionId?: string): void {
 		this.messageRoles.set(info.id, info.role);
-
-		// When we receive a user message from the server, emit the real server-assigned ID
-		// so RestoreHandler can update checkpoints from local IDs to real ones.
-		if (info.role === 'user' && sessionId) {
-			this.emit('event', {
-				type: 'user_message_resolved',
-				data: {
-					serverMessageId: info.id,
-					sessionId,
-				},
-				sessionId,
-			});
-		}
 
 		// Store agent/mode from assistant messages for later use in part events
 		if (isAssistantMessage(info)) {

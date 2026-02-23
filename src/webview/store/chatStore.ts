@@ -409,7 +409,12 @@ function handleRestoreEvent(targetSession: ChatSession, payload: SessionEventPay
 	} else if (r.action === 'success') {
 		if (r.canUnrevert !== undefined) targetSession.unrevertAvailable = r.canUnrevert;
 		// Mark the revert point so the UI dims messages after it
-		if (r.revertedFromMessageId) {
+		// Defensive: if unrevert is no longer available, clear the revert marker
+		// unconditionally. Otherwise, apply the revert point. Using else-if prevents
+		// a theoretical edge case where both fields arrive in one payload.
+		if (r.canUnrevert === false) {
+			targetSession.revertedFromMessageId = null;
+		} else if (r.revertedFromMessageId) {
 			targetSession.revertedFromMessageId = r.revertedFromMessageId;
 		}
 	}

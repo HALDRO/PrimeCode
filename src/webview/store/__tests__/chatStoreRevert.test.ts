@@ -96,7 +96,7 @@ describe('chatStore revert/unrevert state', () => {
 			expect(getSession('s1').unrevertAvailable).toBe(false);
 		});
 
-		it('should not clear revertedFromMessageId on success without it', () => {
+		it('should clear revertedFromMessageId on success with canUnrevert=false', () => {
 			createSession('s1', [userMsg('u1')]);
 
 			dispatchRestore('s1', {
@@ -105,14 +105,15 @@ describe('chatStore revert/unrevert state', () => {
 				revertedFromMessageId: 'u1',
 			});
 
-			// Second success without revertedFromMessageId
+			// Second success with canUnrevert=false (unrevert completed)
 			dispatchRestore('s1', {
 				action: 'success',
 				canUnrevert: false,
 			});
 
-			// revertedFromMessageId stays — only unrevert_available clears it
-			expect(getSession('s1').revertedFromMessageId).toBe('u1');
+			// revertedFromMessageId is now cleared atomically with canUnrevert
+			// to prevent UI desync (dimmed messages with no unrevert button)
+			expect(getSession('s1').revertedFromMessageId).toBeNull();
 		});
 	});
 

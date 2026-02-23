@@ -20,7 +20,7 @@ import {
 	mapUserEvent,
 } from '../../core/eventToMessage';
 import { LogNormalizer } from '../../core/executor/LogNormalizer';
-import type { CLIEvent } from '../../core/executor/types';
+import type { CLIConfig, CLIEvent } from '../../core/executor/types';
 import { logger } from '../../utils/logger';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
@@ -475,6 +475,11 @@ export class SessionHandler implements WebviewMessageHandler {
 
 		// Batch all replay messages into a single postMessage to reduce overhead.
 		// startCollect() buffers session_event messages; flushCollected() sends them as one batch.
+		// Restore revert state from persisted workspaceState.
+		// If this session was reverted before the extension restarted,
+		// we need to re-apply the revert marker so messages stay dimmed.
+		const isReverted = this.context.isSessionReverted?.(sessionId) ?? false;
+
 		this.context.bridge.startCollect();
 		try {
 			// Surface child sessions as subtask cards if parent history is compacted
@@ -517,6 +522,41 @@ export class SessionHandler implements WebviewMessageHandler {
 			}
 		} finally {
 			this.context.bridge.flushCollected();
+		}
+
+		// After replay is flushed, restore revert state if this session was
+		// reverted before the extension restarted. This must happen AFTER
+		// flushCollected() so the messages are already in the webview store
+		// and the revert marker can dim them correctly.
+		if (isReverted) {
+			// Find the last user message ID to use as the revert point.
+			// The OpenCode server's session.revert field tracks the real revert point,
+			// but we don't have it here. The last user message in the replayed history
+			// is the closest approximation — messages after it were reverted.
+			// Reverse search without allocating a copy (findLast unavailable in extension tsconfig)
+			let lastUserEvent: CLIEvent | undefined;
+			for (let i = parentHistory.length - 1; i >= 0; i--) {
+				const ev = parentHistory[i];
+				if (ev.type === 'normalized_log' && (ev.data as { role?: string }).role === 'user') {
+					lastUserEvent = ev;
+					break;
+				}
+			}
+			const lastUserMessageId = lastUserEvent
+				? (lastUserEvent.data as { messageId?: string }).messageId
+				: undefined;
+
+			if (lastUserMessageId) {
+				this.context.bridge.session.restore(sessionId, {
+					action: 'success',
+					canUnrevert: true,
+					revertedFromMessageId: lastUserMessageId,
+				});
+				logger.info('[SessionHandler] Restored revert state after replay', {
+					sessionId,
+					revertedFromMessageId: lastUserMessageId,
+				});
+			}
 		}
 	}
 
@@ -1030,6 +1070,11 @@ export class SessionHandler implements WebviewMessageHandler {
 			this.postStatus(activeId, 'busy', 'Working...');
 			this.initializeSessionStats(activeId);
 
+			// Pass our client-generated ID to the server so it uses it as the
+			// real user message ID (OpenCode prompt.ts: id = input.messageID ?? ...).
+			// This eliminates the need for SSE-based ID reconciliation.
+			config.messageID = userMessageId;
+
 			await this.context.cli.spawnFollowUp(text, activeId, config, attachments);
 		} catch (error) {
 			logger.error('[SessionHandler] Failed to spawn CLI:', error);
@@ -1441,6 +1486,10 @@ export class SessionHandler implements WebviewMessageHandler {
 				// Clean up local state if this was the active session
 				this.context.sessionState.startedSessions.delete(sessionId);
 				this.clearSessionStats(sessionId);
+				this.clearPendingMessage(sessionId);
+
+				// Clean up restore/revert state for deleted session
+				this.context.cleanupSessionRestore?.(sessionId);
 
 				if (this.context.sessionState.activeSessionId === sessionId) {
 					this.context.sessionState.activeSessionId = undefined;
@@ -1674,7 +1723,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		};
 	}
 
-	private buildSendConfig(uiModel?: string) {
+	private buildSendConfig(uiModel?: string): CLIConfig {
 		const { provider, workspaceRoot } = this.buildBaseConfig();
 
 		const savedModel = this.context.extensionContext.globalState.get<string>(

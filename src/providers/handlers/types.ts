@@ -29,6 +29,10 @@ export interface HandlerContext {
 			isOpenCode: boolean;
 		},
 	) => void;
+	/** Clean up restore/revert state when a session is deleted. */
+	cleanupSessionRestore?: (sessionId: string) => void;
+	/** Check if a session is currently in reverted state (persisted across restarts). */
+	isSessionReverted?: (sessionId: string) => boolean;
 }
 
 export interface WebviewMessageHandler {

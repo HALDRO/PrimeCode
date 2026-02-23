@@ -564,20 +564,21 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 
 		const handleRestore = useCallback(() => {
 			if (restoreCommit) {
-				// Frontend only sends commitId — backend resolves everything else
-				// Do NOT clear revertedFromMessageId here — the backend will send
-				// a 'success' event with the correct revertedFromMessageId.
-				postMessage({
+				// Frontend only sends commitId — backend resolves everything else.
+				// Pass sessionId explicitly for multi-chat safety: if the user
+				// switches tabs between clicking and backend processing, the
+				// correct session is still targeted.
+				postSessionMessage({
 					type: 'restoreCommit',
 					data: { commitId: restoreCommit.id },
 				});
 			}
-		}, [restoreCommit, postMessage]);
+		}, [restoreCommit, postSessionMessage]);
 
 		const handleUnrevert = useCallback(() => {
-			// Backend resolves the active session — no need to send sessionId
-			postMessage({ type: 'unrevert' });
-		}, [postMessage]);
+			// Pass sessionId explicitly for multi-chat safety.
+			postSessionMessage({ type: 'unrevert' });
+		}, [postSessionMessage]);
 
 		// Show unrevert on the REVERT POINT section (the message the user clicked Restore on).
 		// Show restore on any message that has a checkpoint and is NOT in a reverted state.

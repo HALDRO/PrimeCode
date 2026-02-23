@@ -1144,9 +1144,11 @@ export interface RestoreCommitCommand {
 	type: 'restoreCommit';
 	commitId?: string;
 	data?: { commitId: string };
+	sessionId?: string;
 }
 export interface UnrevertCommand {
 	type: 'unrevert';
+	sessionId?: string;
 }
 
 // =============================================================================

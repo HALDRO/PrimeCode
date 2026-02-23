@@ -235,15 +235,13 @@ describe('RestoreHandler', () => {
 			);
 		});
 
-		it('should notify UI with canUnrevert=false after unrevert', async () => {
+		it('should notify UI with single unrevert_available=false after unrevert', async () => {
 			ctx.sessionState.activeSessionId = 'session-1';
 
 			await handler.handleMessage({ type: 'unrevert' } as any);
 
-			expect(ctx.bridge.session.restore).toHaveBeenCalledWith('session-1', {
-				action: 'success',
-				canUnrevert: false,
-			});
+			// Single atomic notification — no more race between two events
+			expect(ctx.bridge.session.restore).toHaveBeenCalledTimes(1);
 			expect(ctx.bridge.session.restore).toHaveBeenCalledWith('session-1', {
 				action: 'unrevert_available',
 				available: false,
