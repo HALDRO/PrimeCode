@@ -6,7 +6,7 @@
 
 import type { OverlayScrollbars } from 'overlayscrollbars';
 import { OverlayScrollbarsComponent } from 'overlayscrollbars-react';
-import React, { type ReactNode, useMemo, useState } from 'react';
+import React, { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import type {
 	LspDiagnostic,
 	LspDiagnosticsByFile,
@@ -522,11 +522,23 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		else if (isWebFetch) meta = (rawInput as { url?: string })?.url || '';
 		else if (isMcp) meta = rawInput ? JSON.stringify(rawInput) : '';
 
-		const fullText = content || '';
+		const fullText = content || message.streamingOutput || '';
 		const hasBody = fullText.trim().length > 0;
 		const lineCount = hasBody ? fullText.split('\n').length : 0;
 		const needsExpand = lineCount > 6;
 		const showAccessGate = accessRequest && !accessRequest.resolved && accessRequest.requestId;
+
+		// Auto-scroll streaming output to bottom
+		const streamingViewportRef = useRef<HTMLElement | null>(null);
+		const handleOsInitialized = (instance: OverlayScrollbars) => {
+			streamingViewportRef.current = instance.elements().viewport;
+			scrollToBottom(instance);
+		};
+		useEffect(() => {
+			if (!isRunning || !message.streamingOutput) return;
+			const el = streamingViewportRef.current;
+			if (el) el.scrollTop = el.scrollHeight;
+		}, [isRunning, message.streamingOutput]);
 
 		return (
 			<ToolCard
@@ -589,7 +601,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 									},
 									overflow: { x: 'scroll', y: 'scroll' },
 								}}
-								events={{ initialized: scrollToBottom }}
+								events={{ initialized: handleOsInitialized }}
 								defer
 							>
 								<div className="p-(--tool-content-padding)">

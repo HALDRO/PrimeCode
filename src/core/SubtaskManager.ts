@@ -101,6 +101,11 @@ export class SubtaskManager {
 		return this.pendingToolIds.has(toolUseId);
 	}
 
+	/** Check if a toolUseId is registered (pending or already linked). */
+	isRegistered(toolUseId: string): boolean {
+		return this.pendingToolIds.has(toolUseId) || this.toolToParentSession.has(toolUseId);
+	}
+
 	getParentSession(toolUseId: string): string | undefined {
 		return this.toolToParentSession.get(toolUseId);
 	}

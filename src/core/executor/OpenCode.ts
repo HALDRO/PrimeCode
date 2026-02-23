@@ -149,8 +149,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	private eventAbort: AbortController | null = null;
 	private eventStreamRunning = false;
 
-	private readonly seenToolCalls = new Set<string>();
-	private readonly completedToolCalls = new Set<string>();
+	/** Unified tool call lifecycle state — replaces separate seenToolCalls/taskToolsPendingInput/completedToolCalls Sets. */
+	private readonly toolCallStates = new Map<string, { completed: boolean; hasInput: boolean }>();
 	private readonly messageRoles = new Map<string, 'user' | 'assistant'>();
 	/** Maps messageID → agent name (e.g. 'plan', 'build') from assistant messages. */
 	private readonly messageAgents = new Map<string, string>();
@@ -1732,6 +1732,32 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 	}
 
+	/** Emit a tool_use event — shared helper to avoid duplication. */
+	private emitToolUse(
+		callID: string,
+		name: string,
+		state: { input?: unknown; title?: string; metadata?: unknown } | undefined,
+		status: string | undefined,
+		sessionId?: string,
+	): void {
+		const inputObj = (state?.input ?? {}) as Record<string, unknown>;
+		const normalized = this.logNormalizer.normalizeToolUse(name, inputObj, callID);
+		const evt = {
+			data: {
+				id: callID,
+				name,
+				input: state?.input,
+				state: status,
+				title: state?.title,
+				metadata: state?.metadata,
+			},
+			normalizedEntry: normalized,
+			sessionId,
+		};
+		this.emit('event', { type: 'tool_use', ...evt });
+		this.emit('event', { type: 'normalized_log', ...evt });
+	}
+
 	private handleToolPart(part: OpenCodePart, sessionId?: string): void {
 		if (part.type !== 'tool' || !part.callID) return;
 		const { callID, tool: name = 'unknown', state } = part;
@@ -1741,31 +1767,39 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		// and rendered as a dedicated QuestionCard, not as a generic tool card.
 		if (name.toLowerCase() === 'question') return;
 
-		if ((status === 'pending' || status === 'running') && !this.seenToolCalls.has(callID)) {
-			this.seenToolCalls.add(callID);
-			const normalized = this.logNormalizer.normalizeToolUse(
-				name,
-				(state?.input ?? {}) as Record<string, unknown>,
-				callID,
-			);
-			const evt = {
-				data: {
-					id: callID,
-					name,
-					input: state?.input,
-					state: status,
-					title: state?.title,
-					metadata: state?.metadata,
-				},
-				normalizedEntry: normalized,
-				sessionId,
-			};
-			this.emit('event', { type: 'tool_use', ...evt });
-			this.emit('event', { type: 'normalized_log', ...evt });
+		const current = this.toolCallStates.get(callID);
+		const isTask = name === 'task' || name === 'Task';
+		const inputObj = (state?.input ?? {}) as Record<string, unknown>;
+		const hasInputNow = Object.keys(inputObj).length > 0;
+
+		if (status === 'pending' || status === 'running') {
+			const isFirstSeen = !current;
+			const taskAwaitingInput = isTask && current && !current.hasInput && hasInputNow;
+
+			if (isFirstSeen || taskAwaitingInput) {
+				// First emission OR task tool re-emit with input that was missing before.
+				this.emitToolUse(callID, name, state, status, sessionId);
+				this.toolCallStates.set(callID, { completed: false, hasInput: hasInputNow });
+			} else if (status === 'running' && current && !current.completed) {
+				// Intermediate update for a running tool — forward metadata (e.g. bash streaming output).
+				const meta = state?.metadata as Record<string, unknown> | undefined;
+				if (meta && Object.keys(meta).length > 0) {
+					this.emit('event', {
+						type: 'tool_streaming',
+						data: {
+							id: callID,
+							name,
+							streamingOutput: typeof meta.output === 'string' ? meta.output : undefined,
+							metadata: meta,
+						},
+						sessionId,
+					});
+				}
+			}
 		}
 
-		if ((status === 'completed' || status === 'error') && !this.completedToolCalls.has(callID)) {
-			this.completedToolCalls.add(callID);
+		if ((status === 'completed' || status === 'error') && !current?.completed) {
+			this.toolCallStates.set(callID, { completed: true, hasInput: hasInputNow });
 			const isTask = name === 'task' || name === 'Task';
 			const taskInput = isTask ? (state?.input as unknown) : undefined;
 			const taskInputRecord =
@@ -2024,8 +2058,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		this.sessionId = null;
 		this.eventStreamRunning = false;
 		this.eventAbort = null;
-		this.seenToolCalls.clear();
-		this.completedToolCalls.clear();
+		this.toolCallStates.clear();
 		this.messageRoles.clear();
 		this.messageAgents.clear();
 		this.pendingCompactIds.clear();

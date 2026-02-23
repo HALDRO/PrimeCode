@@ -86,6 +86,13 @@ export interface ToolResultEventData {
 	timestamp?: string;
 }
 
+export interface ToolStreamingEventData {
+	id?: string;
+	name?: string;
+	streamingOutput?: string;
+	metadata?: Record<string, unknown>;
+}
+
 export interface ErrorEventData {
 	message: string;
 }
@@ -156,6 +163,7 @@ export type CLIEvent =
 	| (CLIEventBase & { type: 'thinking'; data: ThinkingEventData })
 	| (CLIEventBase & { type: 'tool_use'; data: ToolUseEventData })
 	| (CLIEventBase & { type: 'tool_result'; data: ToolResultEventData })
+	| (CLIEventBase & { type: 'tool_streaming'; data: ToolStreamingEventData })
 	| (CLIEventBase & { type: 'error'; data: ErrorEventData })
 	| (CLIEventBase & { type: 'finished'; data: FinishedEventData })
 	| (CLIEventBase & { type: 'permission'; data: PermissionEventData })

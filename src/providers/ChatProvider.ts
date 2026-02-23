@@ -745,6 +745,21 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				break;
 			}
 
+			case 'tool_streaming': {
+				const e = event.data;
+				if (e.id) {
+					const updateMsg: import('../common').SessionMessageUpdate = {
+						id: e.id,
+						type: 'tool_use' as const,
+						timestamp: new Date().toISOString(),
+					};
+					if (e.streamingOutput) updateMsg.streamingOutput = e.streamingOutput;
+					if (e.metadata) updateMsg.metadata = e.metadata;
+					this.dispatchSessionMessage(targetSessionId, isChildSession, updateMsg);
+				}
+				break;
+			}
+
 			case 'tool_result': {
 				this.handleToolResult(event, targetSessionId, isChildSession);
 				break;
@@ -953,10 +968,32 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				return;
 			}
 
+			const input = (e.input as Record<string, unknown>) || {};
+
+			// Re-emitted tool_use with input that was missing on first emission.
+			// Update the existing subtask card with prompt/description/agent.
+			if (this.subtaskManager.isRegistered(toolUseId)) {
+				const hasInput = Object.keys(input).length > 0;
+				if (hasInput) {
+					this.sessionHandler.postSessionMessage(
+						{
+							id: toolUseId,
+							type: 'subtask' as const,
+							agent: ChatProvider.safeString(input.subagent_type),
+							prompt: ChatProvider.safeString(input.prompt),
+							description: ChatProvider.safeString(input.description),
+							toolInput: JSON.stringify(e.input),
+							rawInput: input,
+							timestamp: new Date().toISOString(),
+						} satisfies import('../common').SessionMessageUpdate,
+						parentSessionId,
+					);
+				}
+				return;
+			}
+
 			// Child session ID is unknown — deferred linking will resolve it later.
 			this.subtaskManager.registerSubtask(toolUseId, parentSessionId);
-
-			const input = (e.input as Record<string, unknown>) || {};
 
 			this.sessionHandler.postSessionMessage(
 				{
@@ -965,9 +1002,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					partId: toolUseId,
 					toolUseId,
 					toolName,
-					agent: (input.subagent_type as string) || 'subagent',
-					prompt: (input.prompt as string) || '',
-					description: (input.description as string) || 'Running subtask...',
+					agent: ChatProvider.safeString(input.subagent_type) || 'subagent',
+					prompt: ChatProvider.safeString(input.prompt) || '',
+					description: ChatProvider.safeString(input.description) || 'Running subtask...',
 					status: 'running',
 					startTime: new Date().toISOString(),
 					toolInput: e.input ? JSON.stringify(e.input) : '',
@@ -1207,6 +1244,24 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	}
 
 	// ─── Child → Parent Transcript Routing ───────────────────────────────────
+
+	/** Safely extract a non-empty string from unknown LLM input. */
+	private static safeString(val: unknown): string | undefined {
+		return typeof val === 'string' && val.trim().length > 0 ? val : undefined;
+	}
+
+	/** Dispatch a message to the correct target — child routes to parent transcript, otherwise direct post. */
+	private dispatchSessionMessage(
+		targetSessionId: string,
+		isChildSession: boolean,
+		msg: import('../common').SessionMessageData | import('../common').SessionMessageUpdate,
+	): void {
+		if (isChildSession) {
+			this.routeToParentTranscript(targetSessionId, msg as import('../common').SessionMessageData);
+		} else {
+			this.sessionHandler.postSessionMessage(msg, targetSessionId);
+		}
+	}
 
 	/**
 	 * Route a child session message into the parent subtask's transcript.
