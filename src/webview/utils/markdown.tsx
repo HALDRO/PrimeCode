@@ -28,6 +28,7 @@ import { vscode } from './vscode';
 interface MarkdownProps {
 	content: string;
 	className?: string;
+	isStreaming?: boolean;
 }
 
 // ----------------------------------------------------------------------

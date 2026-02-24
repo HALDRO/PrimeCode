@@ -135,8 +135,10 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 					onClick={props.onSelect}
 					onMouseEnter={props.onHover}
 					className={cn(
-						'flex items-center gap-(--gap-1-5) pl-(--gap-4) pr-(--gap-3) py-0 -mx-(--gap-2) my-px rounded-md cursor-pointer h-(--dropdown-item-height) text-sm leading-[1.2] transition-colors',
-						item.disabled ? 'cursor-not-allowed opacity-50 text-(--alpha-30)' : 'text-(--alpha-90)',
+						'flex items-center gap-(--gap-1-5) pl-(--gap-4) pr-(--gap-3) py-0 my-px rounded-md cursor-pointer h-(--dropdown-item-height) text-sm leading-[1.2] transition-colors',
+						item.disabled
+							? 'cursor-not-allowed opacity-50 text-(--alpha-30)'
+							: 'text-(--alpha-90) hover:bg-(--alpha-8)',
 						props.selected && !item.disabled && 'bg-(--alpha-10)',
 						isSelected && 'text-(--color-accent) font-medium bg-(--color-accent)/10',
 					)}

@@ -85,10 +85,26 @@ export const Header: React.FC = React.memo(() => {
 
 	const handleCloseSession = useCallback(
 		(sessionId: string) => {
+			const isClosingActive = sessionId === activeSessionId;
 			closeSession(sessionId);
 			postMessage({ type: 'closeSession', sessionId });
+
+			// When closing the active tab, closeSession in Zustand silently picks a new
+			// activeSessionId but never notifies the backend. Without a switchSession
+			// message the backend won't replay history for the newly-active session,
+			// leaving the user with an empty chat.
+			if (isClosingActive) {
+				// Read the new activeSessionId that closeSession just set.
+				const newActiveId = useChatStore.getState().activeSessionId;
+				if (newActiveId) {
+					startTransition(() => {
+						switchSession(newActiveId);
+					});
+					postMessage({ type: 'switchSession', sessionId: newActiveId });
+				}
+			}
 		},
-		[closeSession, postMessage],
+		[activeSessionId, closeSession, postMessage, switchSession],
 	);
 
 	const handleCreateSession = useCallback(() => {
@@ -192,7 +208,7 @@ export const Header: React.FC = React.memo(() => {
 			<header className="z-50 relative flex justify-between items-center select-none px-(--layout-padding-x) min-h-(--header-height) gap-(--gap-0-5)">
 				{/* Left side - Chat Tabs (Icons only) */}
 				<div className="flex items-center h-full overflow-hidden flex-1">
-					<div className="flex items-center h-full max-w-full overflow-x-auto no-scrollbar gap-(--gap-0-5)">
+					<div className="flex items-center h-full max-w-full overflow-x-auto scrollbar-thin-x gap-(--gap-0-5)">
 						{sessions.map((session, index) => (
 							<SessionTab key={session.id} sessionId={session.id} index={index} />
 						))}

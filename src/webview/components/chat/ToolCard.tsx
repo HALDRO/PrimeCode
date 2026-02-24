@@ -6,7 +6,7 @@
 
 import type { OverlayScrollbars } from 'overlayscrollbars';
 import { OverlayScrollbarsComponent } from 'overlayscrollbars-react';
-import React, { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import React, { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
 	LspDiagnostic,
 	LspDiagnosticsByFile,
@@ -40,6 +40,17 @@ const TOOL_CARD_HEADER_CLASSES =
 	'flex items-center justify-between w-full h-(--tool-header-height) px-(--tool-header-padding) bg-(--tool-bg-header) select-none';
 
 const PREVIEW_MAX_HEIGHT = 120;
+
+/** Module-level constant — avoids recreating nested object on every render */
+const OVERLAY_SCROLLBAR_OPTIONS = {
+	scrollbars: {
+		theme: 'os-theme-dark' as const,
+		autoHide: 'scroll' as const,
+		autoHideDelay: 800,
+		clickScroll: true,
+	},
+	overflow: { x: 'scroll' as const, y: 'scroll' as const },
+};
 
 /** Scroll an OverlayScrollbars viewport to the bottom. */
 const scrollToBottom = (instance: OverlayScrollbars) => {
@@ -512,28 +523,33 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		const mcpToolLabel = isMcp ? (mcpInfo?.tool ?? toolName) : '';
 		const displayLabel = isSummarize && isRunning ? `${label}...` : label;
 
-		// Meta extraction
-		let meta = '';
-		if (actionType?.type === 'CommandRun') meta = actionType.command;
-		else if (isBash) meta = (rawInput as { command?: string })?.command || '';
-		else if (isWebSearch && actionType?.type === 'WebSearch') meta = actionType.query;
-		else if (isWebSearch) meta = (rawInput as { query?: string })?.query || '';
-		else if (isWebFetch && actionType?.type === 'WebFetch') meta = actionType.url;
-		else if (isWebFetch) meta = (rawInput as { url?: string })?.url || '';
-		else if (isMcp) meta = rawInput ? JSON.stringify(rawInput) : '';
+		// Meta extraction (memoized to avoid JSON.stringify on every render)
+		const meta = useMemo(() => {
+			if (actionType?.type === 'CommandRun') return actionType.command;
+			if (isBash) return (rawInput as { command?: string })?.command || '';
+			if (isWebSearch && actionType?.type === 'WebSearch') return actionType.query;
+			if (isWebSearch) return (rawInput as { query?: string })?.query || '';
+			if (isWebFetch && actionType?.type === 'WebFetch') return actionType.url;
+			if (isWebFetch) return (rawInput as { url?: string })?.url || '';
+			if (isMcp) return rawInput ? JSON.stringify(rawInput) : '';
+			return '';
+		}, [actionType, isBash, isWebSearch, isWebFetch, isMcp, rawInput]);
 
 		const fullText = content || message.streamingOutput || '';
 		const hasBody = fullText.trim().length > 0;
-		const lineCount = hasBody ? fullText.split('\n').length : 0;
+		const lineCount = useMemo(
+			() => (hasBody ? fullText.split('\n').length : 0),
+			[hasBody, fullText],
+		);
 		const needsExpand = lineCount > 6;
 		const showAccessGate = accessRequest && !accessRequest.resolved && accessRequest.requestId;
 
 		// Auto-scroll streaming output to bottom
 		const streamingViewportRef = useRef<HTMLElement | null>(null);
-		const handleOsInitialized = (instance: OverlayScrollbars) => {
+		const handleOsInitialized = useCallback((instance: OverlayScrollbars) => {
 			streamingViewportRef.current = instance.elements().viewport;
 			scrollToBottom(instance);
-		};
+		}, []);
 		useEffect(() => {
 			if (!isRunning || !message.streamingOutput) return;
 			const el = streamingViewportRef.current;
@@ -592,15 +608,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 							<OverlayScrollbarsComponent
 								style={{ maxHeight: expanded ? undefined : `${PREVIEW_MAX_HEIGHT}px` }}
 								className="bg-(--tool-bg-header)"
-								options={{
-									scrollbars: {
-										theme: 'os-theme-dark',
-										autoHide: 'scroll',
-										autoHideDelay: 800,
-										clickScroll: true,
-									},
-									overflow: { x: 'scroll', y: 'scroll' },
-								}}
+								options={OVERLAY_SCROLLBAR_OPTIONS}
 								events={{ initialized: handleOsInitialized }}
 								defer
 							>

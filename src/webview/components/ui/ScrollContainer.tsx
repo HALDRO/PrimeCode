@@ -141,6 +141,7 @@ function useScrollThumb(
 		thumbState,
 		opacity,
 		dragging,
+		hovered,
 		setHovered,
 		setVisible,
 		showAndScheduleHide,
@@ -161,6 +162,7 @@ function ThumbUI({
 	thumbWidth: number;
 }) {
 	if (!thumb.thumbState.show) return null;
+	const activeWidth = thumb.hovered || thumb.dragging ? thumbWidth + 2 : thumbWidth;
 	return (
 		<div
 			ref={thumb.trackRef}
@@ -193,12 +195,12 @@ function ThumbUI({
 					position: 'absolute',
 					right: 1,
 					top: thumb.thumbState.top,
-					width: `${thumbWidth}px`,
+					width: `${activeWidth}px`,
 					height: `${thumb.thumbState.height}px`,
-					borderRadius: `${thumbWidth / 2}px`,
+					borderRadius: `${activeWidth / 2}px`,
 					backgroundColor: 'color-mix(in srgb, var(--vscode-editor-foreground) 30%, transparent)',
 					opacity: thumb.opacity,
-					transition: thumb.dragging ? 'none' : 'opacity 0.2s ease',
+					transition: thumb.dragging ? 'none' : 'opacity 0.2s ease, width 0.15s ease',
 					cursor: thumb.dragging ? 'grabbing' : 'grab',
 				}}
 			/>

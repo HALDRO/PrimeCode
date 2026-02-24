@@ -968,6 +968,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 						state.sessionOrder = state.sessionOrder.filter(id => id !== sessionId);
 						if (state.activeSessionId === sessionId) {
 							state.activeSessionId = state.sessionOrder[state.sessionOrder.length - 1];
+							state.editingMessageId = null;
 						}
 					}
 				}),

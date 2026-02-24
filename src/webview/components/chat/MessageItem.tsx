@@ -68,10 +68,10 @@ type SubtaskExpandState = 'preview' | 'expanded';
 
 const SUBTASK_PREVIEW_MAX_HEIGHT = 150;
 
-const SubtaskItem: React.FC<{
+const SubtaskItem = React.memo<{
 	message: Extract<Message, { type: 'subtask' }>;
 	ctx: MessageItemContext;
-}> = ({ message, ctx }) => {
+}>(({ message, ctx }) => {
 	const [expandState, setExpandState] = useState<SubtaskExpandState>('preview');
 	const [promptExpanded, setPromptExpanded] = useState(false);
 	const mcpServers = useMcpServers();
@@ -276,14 +276,15 @@ const SubtaskItem: React.FC<{
 			}
 		/>
 	);
-};
+});
+SubtaskItem.displayName = 'SubtaskItem';
 
 const TOOL_GROUP_PREVIEW_MAX_HEIGHT = 120;
 
-const SimpleToolGroup: React.FC<{
+const SimpleToolGroup = React.memo<{
 	messages: Message[];
 	shouldCollapse: boolean;
-}> = ({ messages, shouldCollapse }) => {
+}>(({ messages, shouldCollapse }) => {
 	const isLive = liveToolGroups.has(messages);
 	const toolUseMessages = useMemo(
 		() =>
@@ -380,7 +381,10 @@ const SimpleToolGroup: React.FC<{
 								className="py-1 text-sm leading-(--line-height-base) font-(family-name:--font-family-base)"
 								style={{ color: 'var(--input-text-color)' }}
 							>
-								<Markdown content={(msg as { content: string }).content || ''} />
+								<Markdown
+									content={(msg as { content: string }).content || ''}
+									isStreaming={(msg as { isStreaming?: boolean }).isStreaming}
+								/>
 							</div>
 						);
 					}
@@ -407,7 +411,8 @@ const SimpleToolGroup: React.FC<{
 			</div>
 		</SimpleTool>
 	);
-};
+});
+SimpleToolGroup.displayName = 'SimpleToolGroup';
 
 export const MessageItem = React.memo<{
 	item: Message | Message[];
@@ -451,7 +456,10 @@ export const MessageItem = React.memo<{
 						style={{ color: 'var(--input-text-color)' }}
 					>
 						{agentBadge}
-						<Markdown content={(item as { content: string }).content || ''} />
+						<Markdown
+							content={(item as { content: string }).content || ''}
+							isStreaming={(item as { isStreaming?: boolean }).isStreaming}
+						/>
 					</div>
 				);
 			}

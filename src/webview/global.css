@@ -331,6 +331,38 @@ pre {
 	background-color: var(--alpha-soft);
 }
 
+/* Thin 4px horizontal scrollbar for tab containers */
+.scrollbar-thin-x {
+	scrollbar-width: thin;
+	scrollbar-color: transparent transparent;
+}
+
+.scrollbar-thin-x:hover {
+	scrollbar-color: var(--alpha-muted) transparent;
+}
+
+.scrollbar-thin-x::-webkit-scrollbar {
+	height: 4px;
+}
+
+.scrollbar-thin-x::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+.scrollbar-thin-x::-webkit-scrollbar-thumb {
+	background-color: transparent;
+	border-radius: var(--radius-sm);
+	transition: background-color 0.2s;
+}
+
+.scrollbar-thin-x:hover::-webkit-scrollbar-thumb {
+	background-color: var(--alpha-muted);
+}
+
+.scrollbar-thin-x::-webkit-scrollbar-thumb:hover {
+	background-color: var(--alpha-soft);
+}
+
 /* =========================================== 
    UTILITY CLASSES
    =========================================== */

@@ -78,7 +78,7 @@ export const Select: React.FC<SelectProps> = ({
 								onClick={onSelect}
 								onMouseEnter={onHover}
 								className={cn(
-									'flex items-center px-(--gap-4) py-(--gap-1) -mx-(--gap-2) my-px rounded-md cursor-pointer h-(--dropdown-item-height) text-sm leading-[1.2] transition-colors',
+									'flex items-center px-(--gap-4) py-(--gap-1) my-px rounded-md cursor-pointer h-(--dropdown-item-height) text-sm leading-[1.2] transition-colors hover:bg-(--alpha-8)',
 									hovered ? 'bg-(--alpha-10) text-vscode-foreground' : 'text-(--alpha-70)',
 									isSelected && 'text-(--color-accent) font-medium bg-(--color-accent)/10',
 								)}
