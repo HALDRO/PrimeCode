@@ -7,7 +7,7 @@ const watch = process.argv.includes('--watch');
 const extensionConfig = {
 	entryPoints: ['./src/extension.ts'],
 	bundle: true,
-	outfile: './out/extension.js',
+	outfile: './dist/extension.js',
 	external: [
 		'vscode', // vscode is provided by VS Code runtime
 		'@anthropic-ai/claude-agent-sdk', // SDK uses import.meta.url which breaks when bundled to CJS

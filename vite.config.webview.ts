@@ -4,7 +4,7 @@
  *              Uses Rollup's inlineDynamicImports to create a single JS file without ES module imports.
  *              React Compiler (babel-plugin-react-compiler) enabled for automatic memoization.
  *              Process polyfill is now injected via HTML template (see src/webview/components/index.ts).
- *              Outputs to out/webview.js and out/webview.css for VS Code webview consumption.
+ *              Outputs to dist/webview.js and dist/webview.css for VS Code webview consumption.
  */
 
 import { resolve } from 'node:path';
@@ -28,8 +28,8 @@ export default defineConfig({
 	],
 	build: {
 		// Output directory for VS Code extension
-		outDir: resolve(__dirname, 'out'),
-		emptyOutDir: false, // Don't clear out/ as it contains extension.js
+		outDir: resolve(__dirname, 'dist'),
+		emptyOutDir: false, // Don't clear dist/ as it contains extension.js
 		sourcemap: false, // No sourcemaps for production webview
 		minify: 'esbuild',
 
@@ -46,7 +46,7 @@ export default defineConfig({
 				// Ensure single file output
 				inlineDynamicImports: true,
 				// CSS output filename
-				assetFileNames: (assetInfo) => {
+				assetFileNames: assetInfo => {
 					if (assetInfo.name?.endsWith('.css')) {
 						return 'webview.css';
 					}

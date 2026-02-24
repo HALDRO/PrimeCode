@@ -3,19 +3,23 @@
 	"displayName": "PrimeCode",
 	"description": "OpenCode-first AI coding assistant for VS Code",
 	"version": "0.2.0",
-	"main": "./out/extension.js",
+	"main": "./dist/extension.js",
+	"files": [
+		"dist",
+		"public"
+	],
 	"scripts": {
 		"vscode:prepublish": "npm run build",
 		"build": "npm run build:extension && npm run build:webview",
 		"build:extension": "node esbuild.config.mjs --production",
 		"build:webview": "vite build --config vite.config.webview.ts",
-		"watch": "concurrently \"npm run watch:extension\" \"vite build --config vite.config.webview.ts --watch\"",
+		"watch": "concurrently \"npm run watch:extension\" \"npm run watch:webview\"",
 		"watch:extension": "node esbuild.config.mjs --watch",
 		"watch:webview": "vite build --config vite.config.webview.ts --watch",
 		"dev": "vite",
-		"pack": "vsce package --no-dependencies --out PrimeCode-$npm_package_version.vsix",
-		"release": "vsce publish --no-dependencies",
-		"lint:tsc": "tsc -b --pretty false ./tsconfig.json",
+		"pack": "vsce package",
+		"release": "vsce publish",
+		"lint:tsc": "tsc --noEmit --pretty false -p ./tsconfig.json && tsc --noEmit --pretty false -p ./src/webview/tsconfig.json",
 		"lint:biome": "biome check --max-diagnostics=500 src/",
 		"lint": "npm run lint:fix && npm run lint:tsc",
 		"lint:fix": "biome check --write --unsafe src/",
@@ -39,7 +43,7 @@
 		],
 		"ignore": [
 			"docs/**",
-			"out/**"
+			"dist/**"
 		]
 	},
 	"dependencies": {

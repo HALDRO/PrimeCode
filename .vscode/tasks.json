@@ -6,7 +6,7 @@
 		{
 			"label": "watch",
 			"type": "shell",
-			"command": "bun run watch",
+			"command": "npm run watch",
 			"isBackground": true,
 			"group": {
 				"kind": "build",
@@ -40,7 +40,7 @@
 		{
 			"label": "build",
 			"type": "shell",
-			"command": "bun run build",
+			"command": "npm run build",
 			"group": "build",
 			"problemMatcher": ["$tsc"],
 			"presentation": {

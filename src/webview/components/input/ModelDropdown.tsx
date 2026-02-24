@@ -71,7 +71,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 			disabledProviders.includes(OPENAI_COMPATIBLE_ID)
 				? []
 				: proxyModels.filter(m => enabledProxyModels.includes(m.id)),
-		[proxyModels, enabledProxyModels, disabledProviders, OPENAI_COMPATIBLE_ID],
+		[proxyModels, enabledProxyModels, disabledProviders],
 	);
 
 	// Filter OpenCode models to only show enabled ones from non-disabled providers
