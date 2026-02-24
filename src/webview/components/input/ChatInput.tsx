@@ -1,153 +1,61 @@
 /**
- * @file ChatInput - Unified message composer component
- * @description A single, highly configurable component for both main chat input and message editing.
- *              Supports attachments, slash commands, file picking, model selection, and plan mode.
- *              Can be used in "controlled" mode (for editing) or "store" mode (for main chat).
+ * @file ChatInputNew — Refactored ChatInput orchestrator using CM6
+ * @description Replaces the old textarea+backdrop overlay with CodeMirror 6.
+ *              All sub-concerns are extracted into dedicated components and hooks.
  */
 
-import React, {
-	useCallback,
-	useDeferredValue,
-	useEffect,
-	useLayoutEffect,
-	useMemo,
-	useRef,
-	useState,
-} from 'react';
-
-import { resolveModelDisplayName } from '../../../common';
+import { keymap } from '@codemirror/view';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useChatInputController } from '../../hooks/useChatInputController';
+import { useDropdownTriggers } from '../../hooks/useDropdownTriggers';
 import { useFileAttachments } from '../../hooks/useFileAttachments';
 import { cn } from '../../lib/cn';
+import { useFilePickerControls, useSettingsStore, useSlashCommandsState } from '../../store';
+import { useVSCode } from '../../utils/vscode';
 import {
-	useChatActions,
-	useDraftAgent,
-	useDraftAttachments,
-	useFilePickerControls,
-	useImprovingPromptRequestId,
-	useIsImprovingPrompt,
-	useIsProcessing,
-	useModelSelection,
-	usePromptVersions,
-	useSettingsStore,
-	useSlashCommandsState,
-	useStoreInput,
-} from '../../store';
-import { useUIStore } from '../../store/uiStore';
-import { getShortFileName } from '../../utils/format';
-import { getMessageHighlights } from '../../utils/messageParser';
-
-import { useSessionMessage, useVSCode } from '../../utils/vscode';
-import {
-	AtSignIcon,
-	ChevronIcon,
-	ImageIcon,
-	ImprovePromptIcon,
-	LoaderIcon,
-	TerminalIcon,
-} from '../icons';
-import { type AnchorRectLike, Button, IconButton, PathChip, TextArea } from '../ui';
-import { AgentButtonIcon, AgentDropdown, getAgentLabel } from './AgentDropdown';
-import { FilePickerDropdown } from './FilePickerDropdown';
-import { ModelDropdown } from './ModelDropdown';
+	chatHighlighter,
+	chatKeymap,
+	dropHandler,
+	pasteHandler,
+	triggerDetector,
+	validCommandsFacet,
+	validSubagentsFacet,
+} from '.';
+import { AttachmentsBar } from './AttachmentsBar';
+import { EditorCore, type EditorCoreRef } from './EditorCore';
+import { ImagePreviewModal } from './ImagePreviewModal';
+import { InputToolbar } from './InputToolbar';
 import { SendButton } from './SendButton';
-import { SlashCommandsDropdown } from './SlashCommandsDropdown';
-
-/**
- * Computes anchor rect for dropdown positioning at a specific character index.
- */
-function getTextareaCaretAnchorRectAtIndex(
-	textarea: HTMLTextAreaElement,
-	charIndex?: number,
-): AnchorRectLike {
-	const value = textarea.value ?? '';
-	const targetIndex = charIndex ?? textarea.selectionStart ?? value.length;
-	const textareaRect = textarea.getBoundingClientRect();
-	const computed = window.getComputedStyle(textarea);
-
-	const mirror = document.createElement('div');
-	mirror.style.position = 'fixed';
-	mirror.style.left = `${textareaRect.left}px`;
-	mirror.style.top = `${textareaRect.top}px`;
-	mirror.style.width = `${textareaRect.width}px`;
-	mirror.style.height = `${textareaRect.height}px`;
-	mirror.style.visibility = 'hidden';
-	mirror.style.pointerEvents = 'none';
-	mirror.style.overflow = 'auto';
-	mirror.style.whiteSpace = 'pre-wrap';
-	mirror.style.wordWrap = 'break-word';
-	mirror.style.overflowWrap = 'break-word';
-
-	mirror.style.fontFamily = computed.fontFamily;
-	mirror.style.fontSize = computed.fontSize;
-	mirror.style.fontWeight = computed.fontWeight;
-	mirror.style.fontStyle = computed.fontStyle;
-	mirror.style.letterSpacing = computed.letterSpacing;
-	mirror.style.textTransform = computed.textTransform;
-	mirror.style.lineHeight = computed.lineHeight;
-	mirror.style.textAlign = computed.textAlign;
-	mirror.style.direction = computed.direction;
-	mirror.style.tabSize = computed.tabSize;
-
-	mirror.style.boxSizing = computed.boxSizing;
-	mirror.style.padding = computed.padding;
-	mirror.style.border = computed.border;
-
-	mirror.textContent = value.slice(0, targetIndex);
-	const marker = document.createElement('span');
-	marker.textContent = value.slice(targetIndex) || '\u200b';
-	mirror.appendChild(marker);
-
-	document.body.appendChild(mirror);
-	mirror.scrollTop = textarea.scrollTop;
-	mirror.scrollLeft = textarea.scrollLeft;
-
-	const markerRect = marker.getBoundingClientRect();
-	document.body.removeChild(mirror);
-
-	const lineHeight = Number.parseFloat(computed.lineHeight || '') || 18;
-	const height = Math.max(1, markerRect.height || lineHeight);
-	const left = markerRect.left;
-	const top = markerRect.top;
-
-	return {
-		left,
-		right: left + 1,
-		top,
-		bottom: top + height,
-		width: 1,
-		height,
-	};
-}
 
 interface ChatInputProps {
-	/** If provided, use this value instead of the global chat store's input */
 	value?: string;
-	/** Callback for value changes in controlled mode */
 	onChange?: (value: string) => void;
-	/** Custom send handler. If not provided, uses the default store-based send. */
-	onSend?: (text: string) => void;
-	/** Custom cancel handler. Usually used for exiting edit mode. */
+	onSend?: (
+		text: string,
+		currentAttachments?: {
+			files: string[];
+			codeSnippets: Array<{
+				filePath: string;
+				startLine: number;
+				endLine: number;
+				content: string;
+			}>;
+			images: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
+		},
+	) => void;
 	onCancel?: () => void;
-	/** Whether the input should automatically focus on mount */
 	autoFocus?: boolean;
-	/** Additional class names for the container */
 	className?: string;
-	/** Placeholder text */
 	placeholder?: string;
-	/** Whether to hide the changed files panel (usually hidden in edit mode) */
 	hideFilesPanel?: boolean;
-	/** Whether to hide the context bar */
 	hideContextBar?: boolean;
-	/** Initial attached files (for edit mode) */
 	initialFiles?: string[];
-	/** Initial code snippets (for edit mode) */
 	initialCodeSnippets?: Array<{
 		filePath: string;
 		startLine: number;
 		endLine: number;
 		content: string;
 	}>;
-	/** Initial images (for edit mode) */
 	initialImages?: Array<{
 		id: string;
 		name: string;
@@ -155,69 +63,6 @@ interface ChatInputProps {
 		path?: string;
 	}>;
 }
-
-/**
- * Fullscreen image preview modal with click-outside and close button support.
- * Opens on click, closes on backdrop click or close button.
- */
-const ImagePreviewModal: React.FC<{
-	dataUrl: string;
-	name: string;
-	onClose: () => void;
-}> = ({ dataUrl, name, onClose }) => {
-	const contentRef = useRef<HTMLDivElement>(null);
-
-	// Close on Escape key
-	useEffect(() => {
-		const handleKeyDown = (e: KeyboardEvent) => {
-			if (e.key === 'Escape') {
-				onClose();
-			}
-		};
-		window.addEventListener('keydown', handleKeyDown);
-		return () => window.removeEventListener('keydown', handleKeyDown);
-	}, [onClose]);
-
-	// Close on click outside content
-	const handleBackdropClick = useCallback(
-		(e: React.MouseEvent) => {
-			if (contentRef.current && !contentRef.current.contains(e.target as Node)) {
-				onClose();
-			}
-		},
-		[onClose],
-	);
-
-	return (
-		<div
-			className="fixed inset-0 z-9999 flex items-center justify-center bg-black/(--image-preview-backdrop) animate-fade-in cursor-pointer"
-			onClick={handleBackdropClick}
-		>
-			<div
-				ref={contentRef}
-				className="relative max-w-(--image-preview-max-vw) max-h-(--image-preview-max-vh) cursor-default animate-preview-in-modal"
-			>
-				{/* Close button */}
-				<button
-					type="button"
-					onClick={onClose}
-					className="absolute -top-(--image-preview-close-offset) -right-(--image-preview-close-offset) z-10 w-(--image-preview-close-size) h-(--image-preview-close-size) flex items-center justify-center rounded-full bg-(--alpha-10) text-vscode-foreground hover:bg-(--alpha-20) hover:text-vscode-foreground transition-colors duration-150 cursor-pointer"
-					title="Close"
-				>
-					<span className="text-sm leading-none">×</span>
-				</button>
-
-				{/* Image */}
-				<img
-					src={dataUrl}
-					alt={name}
-					className="max-w-(--image-preview-max-vw) max-h-(--image-preview-max-vh) object-contain"
-				/>
-			</div>
-		</div>
-	);
-};
-ImagePreviewModal.displayName = 'ImagePreviewModal';
 
 export const ChatInput: React.FC<ChatInputProps> = React.memo(
 	({
@@ -233,43 +78,8 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 		initialImages = [],
 	}) => {
 		const { postMessage } = useVSCode();
-		const { postSessionMessage } = useSessionMessage();
+		const editorRef = useRef<EditorCoreRef>(null);
 
-		// Store-based state — use primitive selectors to avoid wasteful re-renders.
-		// useStoreInput returns a string (primitive comparison), useChatActions returns
-		// a stable object created once in zustand create().
-		const storeInput = useStoreInput();
-		const {
-			setInput: setStoreInput,
-			clearRevertedMessages,
-			setImprovingPrompt,
-			clearPromptVersions,
-			togglePromptVersion,
-			clearDraftState,
-		} = useChatActions();
-		const isProcessing = useIsProcessing();
-		const { selectedModel, proxyModels, opencodeProviders, getSessionModel } = useModelSelection();
-		const customCommands = useSettingsStore(state => state.commands.custom);
-		const cliCommands = useSettingsStore(state => state.commands.cli);
-		const subagents = useSettingsStore(state => state.subagents);
-		const { showSlashCommands, setShowSlashCommands, setSlashFilter } = useSlashCommandsState();
-		const { showFilePicker, setShowFilePicker, setFileFilter } = useFilePickerControls();
-		const [showModelDropdown, setShowModelDropdown] = useState(false);
-
-		// Prompt Improver state from global store
-		const isImproving = useIsImprovingPrompt();
-		const currentImproveRequestId = useImprovingPromptRequestId();
-		const promptVersions = usePromptVersions();
-
-		// Derived values
-		const isControlled = controlledValue !== undefined;
-		const inputValue = isControlled ? controlledValue : storeInput;
-
-		// PERFORMANCE: Defer the value used for expensive rendering (backdrop highlights).
-		// Typing updates textarea instantly; highlight recalculation happens at lower priority.
-		const deferredInputValue = useDeferredValue(inputValue);
-
-		// Attachments hook
 		const {
 			attachedFiles,
 			attachedImages,
@@ -286,151 +96,48 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 			handlePaste,
 		} = useFileAttachments({ initialFiles, initialCodeSnippets, initialImages });
 
-		// UI Refs and local state
-		const textareaRef = useRef<HTMLTextAreaElement>(null);
-		const filePickerTriggerIndexRef = useRef<number | null>(null);
-		const [selectedAgent, setSelectedAgent] = useState<string | undefined>(undefined);
-		const [showAgentDropdown, setShowAgentDropdown] = useState(false);
-		const [agentButtonAnchorElement, setAgentButtonAnchorElement] = useState<HTMLElement | null>(
+		const controller = useChatInputController({
+			controlledValue,
+			controlledOnChange,
+			controlledOnSend,
+			attachments: {
+				files: attachedFiles,
+				images: attachedImages,
+				codeSnippets,
+				clearAll,
+				addFile,
+			},
+		});
+
+		const dropdowns = useDropdownTriggers();
+		const { showSlashCommands, setShowSlashCommands, setSlashFilter } = useSlashCommandsState();
+		const { showFilePicker, setShowFilePicker, setFileFilter } = useFilePickerControls();
+		const [showModelDropdown, setShowModelDropdown] = useState(false);
+		const [modelBtnAnchor, setModelBtnAnchor] = useState<HTMLElement | null>(null);
+		const [previewImage, setPreviewImage] = useState<{ name: string; dataUrl: string } | null>(
 			null,
 		);
 
-		// Restore draft attachments/agent from cancelled queued messages
-		const draftAttachments = useDraftAttachments();
-		const draftAgent = useDraftAgent();
+		const customCommands = useSettingsStore(s => s.commands.custom);
+		const cliCommands = useSettingsStore(s => s.commands.cli);
+		const subagents = useSettingsStore(s => s.subagents);
 
-		useEffect(() => {
-			if (!draftAttachments && draftAgent === undefined) return;
-			if (draftAttachments?.files) {
-				for (const f of draftAttachments.files) addFile(f);
-			}
-			if (draftAgent !== undefined) {
-				setSelectedAgent(draftAgent);
-			}
-			clearDraftState();
-		}, [draftAttachments, draftAgent, addFile, clearDraftState]);
-
-		const [previewImage, setPreviewImage] = useState<{
-			name: string;
-			dataUrl: string;
-		} | null>(null);
-		const [caretAnchorRect, setCaretAnchorRect] = useState<AnchorRectLike | null>(null);
-		const [filePickerAnchorRect, setFilePickerAnchorRect] = useState<AnchorRectLike | null>(null);
-		const [slashCommandsAnchorRect, setSlashCommandsAnchorRect] = useState<AnchorRectLike | null>(
-			null,
+		const validCommands = useMemo(
+			() =>
+				new Set([
+					...cliCommands.map(c => c.name.toLowerCase()),
+					...customCommands.map(c => c.name.toLowerCase()),
+				]),
+			[cliCommands, customCommands],
 		);
-		const [slashButtonAnchorElement, setSlashButtonAnchorElement] = useState<HTMLElement | null>(
-			null,
+		const validSubagentNames = useMemo(
+			() => new Set(subagents.items.map(a => a.name.toLowerCase())),
+			[subagents.items],
 		);
-		const [fileButtonAnchorElement, setFileButtonAnchorElement] = useState<HTMLElement | null>(
-			null,
-		);
-		const [modelButtonAnchorElement, setModelButtonAnchorElement] = useState<HTMLElement | null>(
-			null,
-		);
-		const backdropRef = useRef<HTMLDivElement>(null);
 
-		// Sync scroll between textarea and backdrop
-		const handleScroll = useCallback(() => {
-			if (textareaRef.current && backdropRef.current) {
-				backdropRef.current.scrollTop = textareaRef.current.scrollTop;
-				backdropRef.current.scrollLeft = textareaRef.current.scrollLeft;
-			}
-		}, []);
-
-		// Focus on mount if requested
-		useEffect(() => {
-			if (autoFocus && textareaRef.current) {
-				textareaRef.current.focus();
-				const len = textareaRef.current.value.length;
-				textareaRef.current.setSelectionRange(len, len);
-			}
-		}, [autoFocus]);
-
-		// Find all commands and subagents in input and calculate their positions for highlighting
-		const commandHighlights = useMemo(() => {
-			// Build set of valid command names from dynamic CLI + custom commands
-			const validCommandNames = new Set([
-				...cliCommands.map(cmd => cmd.name.toLowerCase()),
-				...customCommands.map(cmd => cmd.name.toLowerCase()),
-			]);
-			const validSubagentNames = new Set(subagents.items.map(a => a.name.toLowerCase()));
-
-			return getMessageHighlights(deferredInputValue, validCommandNames, validSubagentNames);
-		}, [deferredInputValue, cliCommands, customCommands, subagents.items]);
-
-		// Caret tracking for dropdowns
-		useEffect(() => {
-			const el = textareaRef.current;
-			if (!el) {
-				return;
-			}
-
-			const update = () => {
-				const next = getTextareaCaretAnchorRectAtIndex(el);
-				// PERF: Only update state if the rect actually changed.
-				// getTextareaCaretAnchorRectAtIndex creates a new object every call,
-				// causing wasteful re-renders when values are identical.
-				setCaretAnchorRect(prev => {
-					if (
-						prev &&
-						next &&
-						prev.left === next.left &&
-						prev.right === next.right &&
-						prev.top === next.top &&
-						prev.bottom === next.bottom &&
-						prev.width === next.width &&
-						prev.height === next.height
-					) {
-						return prev;
-					}
-					return next;
-				});
-			};
-
-			update();
-			el.addEventListener('keyup', update);
-			el.addEventListener('click', update);
-			el.addEventListener('mouseup', update);
-			el.addEventListener('scroll', update);
-			window.addEventListener('resize', update);
-			window.addEventListener('scroll', update, true);
-			return () => {
-				el.removeEventListener('keyup', update);
-				el.removeEventListener('click', update);
-				el.removeEventListener('mouseup', update);
-				el.removeEventListener('scroll', update);
-				window.removeEventListener('resize', update);
-				window.removeEventListener('scroll', update, true);
-			};
-		}, []);
-
-		// Reset trigger indices when dropdowns close
-		useEffect(() => {
-			if (!showFilePicker) {
-				filePickerTriggerIndexRef.current = null;
-				setFilePickerAnchorRect(null);
-			}
-		}, [showFilePicker]);
-
-		// Position dropdowns accurately
-		useLayoutEffect(() => {
-			const el = textareaRef.current;
-			if (!el || !showFilePicker || filePickerAnchorRect) {
-				return;
-			}
-			const triggerIndex = filePickerTriggerIndexRef.current;
-			if (triggerIndex == null) {
-				return;
-			}
-			setFilePickerAnchorRect(getTextareaCaretAnchorRectAtIndex(el, triggerIndex));
-		}, [filePickerAnchorRect, showFilePicker]);
-
-		// Cleanup global dropdown states on unmount to prevent them from "leaking"
-		// to the main chat input after editing is finished.
 		useEffect(() => {
 			return () => {
-				if (isControlled) {
+				if (controller.isControlled) {
 					setShowSlashCommands(false);
 					setShowFilePicker(false);
 					setShowModelDropdown(false);
@@ -438,301 +145,126 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 					setFileFilter('');
 				}
 			};
-		}, [isControlled, setShowSlashCommands, setShowFilePicker, setSlashFilter, setFileFilter]);
-
-		// Auto-resize textarea — re-measure whenever the input value changes.
-		// The 0px trick is needed because inside a CSS grid overlay, setting 'auto'
-		// causes scrollHeight to return the grid-stretched height, not the content height.
-		useLayoutEffect(() => {
-			// Read inputValue so the linter keeps it as a dependency (triggers re-measure on change).
-			void inputValue;
-			const el = textareaRef.current;
-			if (el) {
-				el.style.height = '0px';
-				el.style.height = `${Math.min(el.scrollHeight, 266)}px`;
-			}
-		}, [inputValue]);
-
-		const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-			const value = e.target.value;
-
-			if (isControlled && controlledOnChange) {
-				controlledOnChange(value);
-			} else {
-				setStoreInput(value);
-			}
-
-			if (showSlashCommands) {
-				const lastSlashIndex = value.lastIndexOf('/');
-				if (lastSlashIndex >= 0) {
-					const afterSlash = value.substring(lastSlashIndex);
-					// Find the end of the command token (first space or end of string)
-					const spaceIndex = afterSlash.indexOf(' ');
-					if (spaceIndex >= 0) {
-						// User typed a space — close dropdown
-						setShowSlashCommands(false);
-						setSlashFilter('');
-						setSlashCommandsAnchorRect(null);
-					} else {
-						setSlashFilter(afterSlash);
-					}
-				} else {
-					setShowSlashCommands(false);
-					setSlashFilter('');
-					setSlashCommandsAnchorRect(null);
-				}
-			} else if (!showFilePicker) {
-				// Re-open slash dropdown if cursor is inside an incomplete /command token
-				const textarea = e.target;
-				const cursorPos = textarea.selectionStart ?? value.length;
-				// Walk backwards from cursor to find a '/' that starts a command token
-				const beforeCursor = value.substring(0, cursorPos);
-				const lastSlashIndex = beforeCursor.lastIndexOf('/');
-				if (lastSlashIndex >= 0) {
-					const token = value.substring(lastSlashIndex, cursorPos);
-					// Only re-open if the token has no spaces (still typing a command)
-					if (!token.includes(' ') && token.length > 1) {
-						setShowSlashCommands(true);
-						setSlashFilter(token);
-						setSlashButtonAnchorElement(null);
-						setSlashCommandsAnchorRect(getTextareaCaretAnchorRectAtIndex(textarea, lastSlashIndex));
-					}
-				}
-			}
-
-			if (showFilePicker) {
-				const triggerIndex = filePickerTriggerIndexRef.current;
-				const atIndex = triggerIndex ?? value.lastIndexOf('@');
-				if (atIndex >= 0 && value[atIndex] === '@') {
-					const filterText = value.substring(atIndex + 1);
-					if (filterText.includes(' ')) {
-						setShowFilePicker(false);
-						setFileFilter('');
-						setFilePickerAnchorRect(null);
-						filePickerTriggerIndexRef.current = null;
-					} else {
-						setFileFilter(filterText);
-					}
-				} else {
-					setShowFilePicker(false);
-					setFileFilter('');
-					setFilePickerAnchorRect(null);
-					filePickerTriggerIndexRef.current = null;
-				}
-			} else {
-				const lastChar = value.slice(-1);
-				if (lastChar === '@') {
-					const prevChar = value.slice(-2, -1);
-					if (!prevChar || prevChar === ' ' || prevChar === '\n') {
-						if (!filePickerAnchorRect) {
-							const atIndex = value.length - 1;
-							filePickerTriggerIndexRef.current = atIndex;
-							setFilePickerAnchorRect(getTextareaCaretAnchorRectAtIndex(e.target, atIndex));
-						}
-						setShowFilePicker(true);
-						setFileFilter('');
-					}
-				}
-			}
-		};
-
-		const handleSend = useCallback(() => {
-			const hasContent =
-				inputValue.trim() ||
-				codeSnippets.length > 0 ||
-				attachedFiles.length > 0 ||
-				attachedImages.length > 0;
-
-			if (!hasContent) {
-				return;
-			}
-
-			if (isControlled && controlledOnSend) {
-				controlledOnSend(inputValue);
-				return;
-			}
-
-			// Build structured attachments
-			const attachments = {
-				files: attachedFiles.length > 0 ? attachedFiles : undefined,
-				codeSnippets:
-					codeSnippets.length > 0
-						? codeSnippets.map(s => ({
-								filePath: s.filePath,
-								startLine: s.startLine,
-								endLine: s.endLine,
-								content: s.content,
-							}))
-						: undefined,
-				images:
-					attachedImages.length > 0
-						? attachedImages.map(img => ({
-								id: img.id,
-								name: img.name,
-								dataUrl: img.dataUrl,
-								path: img.path,
-							}))
-						: undefined,
-			};
-
-			// Check if we have any attachments
-			const hasAttachments = attachments.files || attachments.codeSnippets || attachments.images;
-
-			// Resolve per-session model override (fallback: workspace default)
-			const sessionModel = getSessionModel();
-
-			// In VS Code, the extension echoes the user message back as a session_event.
-			// To avoid duplicates, we do not optimistic-add user messages here.
-			// When isProcessing, the extension will queue the message automatically.
-
-			postSessionMessage({
-				type: 'sendMessage',
-				text: inputValue.trim(),
-				agent: selectedAgent,
-				model: sessionModel,
-				attachments: hasAttachments ? attachments : undefined,
-			});
-			// Clear any messages marked as reverted before sending new message
-			clearRevertedMessages();
-			setStoreInput('');
-			clearAll();
-			clearPromptVersions();
-			setSelectedAgent(undefined);
 		}, [
-			inputValue,
-			codeSnippets,
-			attachedFiles,
-			attachedImages,
-			isControlled,
-			controlledOnSend,
-			selectedAgent,
-			postSessionMessage,
-			clearRevertedMessages,
-			setStoreInput,
-			clearAll,
-			clearPromptVersions,
-			getSessionModel,
+			controller.isControlled,
+			setShowSlashCommands,
+			setShowFilePicker,
+			setSlashFilter,
+			setFileFilter,
 		]);
 
-		const handleStop = () => postSessionMessage({ type: 'stopRequest' });
+		const handleFileSelect = useCallback(
+			(filePath: string) => {
+				addFile(filePath);
 
-		const handleImprovePrompt = useCallback(() => {
-			if (isImproving) {
-				// Cancel current request
-				if (currentImproveRequestId) {
-					postMessage({ type: 'cancelImprovePrompt', requestId: currentImproveRequestId });
-				}
-				// Reset state immediately for UI responsiveness
-				setImprovingPrompt(false, null);
-				return;
-			}
+				// Precise @filter removal via CM6 dispatch
+				const view = editorRef.current?.view;
+				const triggerPos = dropdowns.filePickerTriggerIndex;
 
-			if (!inputValue.trim()) {
-				// Instant error — no backend call needed
-				useUIStore.getState().actions.pushNotification({
-					type: 'error',
-					content: 'Cannot improve an empty prompt',
-					timestamp: new Date().toISOString(),
-					autoDismissMs: 4000,
-				});
-				return;
-			}
-
-			const requestId = crypto.randomUUID();
-			setImprovingPrompt(true, requestId);
-
-			// Do NOT pass the chat model here — Prompt Improver uses its own model
-			// from settings (promptImprove.model), resolved in SessionHandler.
-			postMessage({
-				type: 'improvePromptRequest',
-				text: inputValue,
-				requestId,
-			});
-		}, [inputValue, isImproving, currentImproveRequestId, postMessage, setImprovingPrompt]);
-		const handleKeyDown = (e: React.KeyboardEvent) => {
-			// Block Enter when dropdown is open - let dropdown handle selection
-			if (e.key === 'Enter' && !e.shiftKey) {
-				if (showSlashCommands || showFilePicker) {
-					// Don't send message, dropdown will handle Enter for selection
-					return;
-				}
-				e.preventDefault();
-				handleSend();
-				return;
-			}
-
-			if (e.key === 'Escape') {
-				if (showSlashCommands || showFilePicker) {
-					setShowSlashCommands(false);
-					setShowFilePicker(false);
-					e.stopPropagation();
-				} else if (onCancel) {
-					onCancel();
-				}
-				return;
-			}
-
-			if (e.key === '/' && !showSlashCommands && !showFilePicker) {
-				setShowSlashCommands(true);
-				setSlashFilter('');
-				setSlashButtonAnchorElement(null);
-				if (textareaRef.current) {
-					const slashIndex = textareaRef.current.selectionStart ?? textareaRef.current.value.length;
-					setSlashCommandsAnchorRect(
-						getTextareaCaretAnchorRectAtIndex(textareaRef.current, slashIndex),
-					);
-				}
-				return;
-			}
-
-			if (e.key === '@' && !showFilePicker && !showSlashCommands) {
-				const selectionStart = (e.target as HTMLTextAreaElement).selectionStart;
-				const text = (e.target as HTMLTextAreaElement).value;
-				const prevChar = selectionStart > 0 ? text[selectionStart - 1] : '';
-
-				if (!prevChar || prevChar === ' ' || prevChar === '\n') {
-					setShowFilePicker(true);
-					setFileFilter('');
-					if (textareaRef.current) {
-						const atIndex = textareaRef.current.selectionStart ?? textareaRef.current.value.length;
-						filePickerTriggerIndexRef.current = atIndex;
-						setFilePickerAnchorRect(
-							getTextareaCaretAnchorRectAtIndex(textareaRef.current, atIndex),
-						);
-					}
-					return;
-				}
-			}
-		};
-
-		const handleFileSelect = (filePath: string) => {
-			addFile(filePath);
-			const lastAtIndex = inputValue.lastIndexOf('@');
-			if (lastAtIndex >= 0) {
-				const beforeAt = inputValue.substring(0, lastAtIndex);
-				const newVal = beforeAt.trim();
-				if (isControlled && controlledOnChange) {
-					controlledOnChange(newVal);
+				if (view && triggerPos !== null) {
+					const currentPos = view.state.selection.main.head;
+					view.dispatch({
+						changes: { from: triggerPos, to: currentPos, insert: '' },
+					});
+					view.focus();
 				} else {
-					setStoreInput(newVal);
+					// Fallback: string-based removal
+					const lastAt = controller.inputValue.lastIndexOf('@');
+					if (lastAt >= 0) {
+						controller.setInputValue(controller.inputValue.substring(0, lastAt).trim());
+					}
 				}
+
+				setShowFilePicker(false);
+				setFileFilter('');
+			},
+			[addFile, dropdowns.filePickerTriggerIndex, controller, setShowFilePicker, setFileFilter],
+		);
+
+		const handleOpenFile = useCallback(
+			(filePath: string, startLine?: number, endLine?: number) => {
+				postMessage({ type: 'openFile', filePath, startLine, endLine });
+			},
+			[postMessage],
+		);
+
+		const dropdownsOpen = showSlashCommands || showFilePicker;
+
+		// Stable refs for CM6 callbacks — prevents cmExtensions from being
+		// recreated on every keystroke, which would trigger compartment.reconfigure()
+		// on every character input (massive perf hit).
+		const handleSendRef = useRef(controller.handleSend);
+		handleSendRef.current = controller.handleSend;
+		const onCancelRef = useRef(onCancel);
+		onCancelRef.current = onCancel;
+		const dropdownsOpenRef = useRef(dropdownsOpen);
+		dropdownsOpenRef.current = dropdownsOpen;
+		const showSlashRef = useRef(showSlashCommands);
+		showSlashRef.current = showSlashCommands;
+		const showFilePickerRef = useRef(showFilePicker);
+		showFilePickerRef.current = showFilePicker;
+		const triggerCallbacksRef = useRef(dropdowns.triggerCallbacks);
+		triggerCallbacksRef.current = dropdowns.triggerCallbacks;
+		const handlePasteRef = useRef(handlePaste);
+		handlePasteRef.current = handlePaste;
+
+		// Stable wrappers that read from refs — identity never changes
+		const stableOnSubmit = useCallback(() => {
+			if (showSlashRef.current || showFilePickerRef.current) return false;
+			handleSendRef.current();
+			return true;
+		}, []);
+		const stableOnCancel = useCallback(() => {
+			if (showSlashRef.current || showFilePickerRef.current) {
+				setShowSlashCommands(false);
+				setShowFilePicker(false);
+				return true;
 			}
-			setShowFilePicker(false);
-			setFileFilter('');
-			setFilePickerAnchorRect(null);
-			filePickerTriggerIndexRef.current = null;
-			setTimeout(() => textareaRef.current?.focus(), 50);
-		};
-
-		const getModelDisplayName = useCallback(() => {
-			const effectiveSelectedModel = getSessionModel() ?? selectedModel;
-
-			if (effectiveSelectedModel === 'default') {
-				return 'Default';
+			if (onCancelRef.current) {
+				onCancelRef.current();
+				return true;
 			}
+			return false;
+		}, [setShowSlashCommands, setShowFilePicker]);
+		const stableDropdownsOpen = useCallback(() => dropdownsOpenRef.current, []);
+		const stableTriggerCallbacks = useRef<typeof dropdowns.triggerCallbacks>({
+			onSlashTrigger: (...args) => triggerCallbacksRef.current.onSlashTrigger(...args),
+			onSlashUpdate: (...args) => triggerCallbacksRef.current.onSlashUpdate(...args),
+			onSlashClose: () => triggerCallbacksRef.current.onSlashClose(),
+			onAtTrigger: (...args) => triggerCallbacksRef.current.onAtTrigger(...args),
+			onAtUpdate: (...args) => triggerCallbacksRef.current.onAtUpdate(...args),
+			onAtClose: () => triggerCallbacksRef.current.onAtClose(),
+		});
+		const stablePaste = useCallback((e: React.ClipboardEvent) => handlePasteRef.current(e), []);
 
-			return resolveModelDisplayName(effectiveSelectedModel, opencodeProviders, proxyModels);
-		}, [selectedModel, proxyModels, opencodeProviders, getSessionModel]);
+		// CM6 extensions — created once, never recreated.
+		// Only validCommands/validSubagentNames change when settings update (rare).
+		const cmExtensions = useMemo(
+			() => [
+				chatHighlighter,
+				dropHandler,
+				keymap.of([
+					{ key: 'ArrowUp', run: () => stableDropdownsOpen() },
+					{ key: 'ArrowDown', run: () => stableDropdownsOpen() },
+				]),
+				chatKeymap({ onSubmit: stableOnSubmit, onCancel: stableOnCancel }),
+				triggerDetector(stableTriggerCallbacks.current),
+				pasteHandler(stablePaste),
+				validCommandsFacet.of(validCommands),
+				validSubagentsFacet.of(validSubagentNames),
+			],
+			[
+				validCommands,
+				validSubagentNames,
+				stableOnSubmit,
+				stableOnCancel,
+				stableDropdownsOpen,
+				stablePaste,
+			],
+		);
+
+		const hasAttachments =
+			attachedFiles.length > 0 || codeSnippets.length > 0 || attachedImages.length > 0;
 
 		return (
 			<div
@@ -751,7 +283,6 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 					onDragLeave={handleDragLeave}
 					onDrop={handleDrop}
 				>
-					{/* Left Side: Attachments, TextArea, Toolbar */}
 					<div className="flex-1 min-w-0 flex flex-col relative pb-(--gap-0-5)">
 						{isDragOver && (
 							<div className="absolute inset-0 bg-vscode-button-background/10 rounded-lg flex items-center justify-center z-10 pointer-events-none">
@@ -764,366 +295,87 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 							</div>
 						)}
 
-						{/* Attachments */}
-						{(attachedFiles.length > 0 || codeSnippets.length > 0 || attachedImages.length > 0) && (
-							<div className="flex flex-wrap items-start gap-(--gap-1-5) px-(--gap-3) py-(--gap-1-5) m-(--gap-1-5)_(--gap-3)">
-								{/* Images first */}
-								{attachedImages.map(img => (
-									<div key={img.id} className="relative shrink-0 group/img">
-										<button
-											type="button"
-											onClick={() => setPreviewImage({ name: img.name, dataUrl: img.dataUrl })}
-											onMouseDown={e => {
-												if (e.button === 1) {
-													e.preventDefault();
-													removeImage(img.id);
-												}
-											}}
-											className="cursor-pointer bg-transparent border-none p-0 m-0 block"
-										>
-											<img
-												src={img.dataUrl}
-												alt={img.name}
-												className="w-10 h-(--header-height) object-cover rounded-sm border border-(--alpha-10) transition-all duration-150 hover:border-vscode-focusBorder hover:shadow-[0_0_0_1px_var(--vscode-focusBorder)]"
-											/>
-										</button>
-										<button
-											type="button"
-											onClick={e => {
-												e.stopPropagation();
-												removeImage(img.id);
-											}}
-											className="absolute top-0.5 right-0.5 bg-bg-overlay hover:bg-(--alpha-medium) rounded-[3px] w-4.5 h-4.5 flex items-center justify-center cursor-pointer text-vscode-foreground text-[11px] opacity-0 group-hover/img:opacity-100 transition-opacity duration-150"
-										>
-											×
-										</button>
-									</div>
-								))}
-								{/* Files */}
-								{attachedFiles.map(filePath => (
-									<PathChip
-										key={filePath}
-										path={filePath}
-										onRemove={() => removeFile(filePath)}
-										onClick={() => postMessage({ type: 'openFile', filePath })}
-										title={filePath}
-									/>
-								))}
-								{/* Code snippets */}
-								{codeSnippets.map(snippet => (
-									<PathChip
-										key={snippet.id}
-										path={snippet.filePath}
-										label={`${getShortFileName(snippet.filePath)} (${snippet.startLine}-${snippet.endLine})`}
-										iconName={snippet.filePath}
-										onRemove={() => removeCodeSnippet(snippet.id)}
-										onClick={() =>
-											postMessage({
-												type: 'openFile',
-												filePath: snippet.filePath,
-												startLine: snippet.startLine,
-												endLine: snippet.endLine,
-											})
-										}
-										title={`${snippet.filePath}:${snippet.startLine}-${snippet.endLine} (click to open)`}
-										backgroundColor="color-mix(in srgb, var(--vscode-focusBorder) 15%, transparent)"
-									/>
-								))}
-							</div>
+						{hasAttachments && (
+							<AttachmentsBar
+								images={attachedImages}
+								files={attachedFiles}
+								codeSnippets={codeSnippets}
+								onRemoveImage={removeImage}
+								onRemoveFile={removeFile}
+								onRemoveSnippet={removeCodeSnippet}
+								onPreviewImage={setPreviewImage}
+								onOpenFile={handleOpenFile}
+							/>
 						)}
 
-						{/* Text Input Area */}
-						{promptVersions !== null && (
+						{controller.promptVersions !== null && (
 							<div className="flex items-center gap-2 px-(--gap-3) py-(--gap-1) text-xs text-vscode-descriptionForeground border-b border-(--vscode-widget-border) bg-(--alpha-3)">
 								<span className="truncate flex-1 opacity-80">
-									{promptVersions.showingImproved ? 'Original' : 'Improved'}: {(() => {
-										const alt = promptVersions.showingImproved
-											? promptVersions.original
-											: promptVersions.improved;
+									{controller.promptVersions.showingImproved ? 'Original' : 'Improved'}: {(() => {
+										const alt = controller.promptVersions.showingImproved
+											? controller.promptVersions.original
+											: controller.promptVersions.improved;
 										return alt.length > 80 ? `${alt.slice(0, 80)}…` : alt;
 									})()}
 								</span>
 								<button
 									type="button"
 									className="shrink-0 px-1.5 py-0.5 rounded text-xs hover:bg-(--alpha-5) text-(--color-accent) cursor-pointer"
-									onClick={togglePromptVersion}
+									onClick={controller.togglePromptVersion}
 								>
-									{promptVersions.showingImproved ? 'Use original' : 'Use improved'}
+									{controller.promptVersions.showingImproved ? 'Use original' : 'Use improved'}
 								</button>
 								<button
 									type="button"
+									aria-label="Clear version"
 									className="shrink-0 px-1.5 py-0.5 rounded text-xs hover:bg-(--alpha-5) opacity-60 cursor-pointer"
-									onClick={clearPromptVersions}
+									onClick={controller.clearPromptVersions}
 								>
-									✕
+									&times;
 								</button>
 							</div>
 						)}
-						<div className="relative w-full min-w-0 grid place-items-stretch">
-							{/* Backdrop for highlighting */}
-							<div
-								ref={backdropRef}
-								className={cn(
-									'col-start-1 row-start-1',
-									'py-(--gap-1-5) px-(--gap-3) min-h-(--input-min-height) max-h-(--input-max-height) scrollbar-gutter-stable',
-									'whitespace-pre-wrap wrap-break-word overflow-hidden pointer-events-none',
-									// Match TextArea styles exactly
-									'box-border border-none outline-none font-(family-name:--font-family-base) text-(length:--font-size-base) leading-(--line-height-base) overflow-anywhere text-input-text',
-								)}
-								aria-hidden="true"
-							>
-								{(() => {
-									const elements: React.ReactNode[] = [];
-									let lastIndex = 0;
-									// Use deferredInputValue to match commandHighlights calculation
-									const textToRender = deferredInputValue;
 
-									for (const highlight of commandHighlights) {
-										// Text before command
-										if (highlight.start > lastIndex) {
-											elements.push(
-												<span key={`text-${lastIndex}`}>
-													{textToRender.substring(lastIndex, highlight.start)}
-												</span>,
-											);
-										}
-										// Highlighted command or subagent
-										const isSubagent = highlight.type === 'subagent';
-										elements.push(
-											<span
-												key={`cmd-${highlight.start}`}
-												className={cn(
-													'rounded-sm pl-(--gap-0-5) pr-(--gap-1-5) -ml-(--gap-0-5) -mr-(--gap-1-5)',
-													isSubagent ? 'text-blue-400' : 'text-warning',
-												)}
-												style={{
-													backgroundColor: isSubagent
-														? 'color-mix(in srgb, #60a5fa 15%, transparent)' // Blue-ish
-														: 'color-mix(in srgb, var(--vscode-editorGutter-modifiedBackground) 15%, transparent)',
-												}}
-											>
-												{highlight.content}
-											</span>,
-										);
-										lastIndex = highlight.end;
-									}
-									// Remaining text
-									if (lastIndex < textToRender.length) {
-										elements.push(
-											<span key={`text-${lastIndex}`}>{textToRender.substring(lastIndex)}</span>,
-										);
-									}
-									// Handle trailing newline for visual consistency
-									if (textToRender.endsWith('\n')) {
-										elements.push(<br key="trailing-br" />);
-									}
-									return elements;
-								})()}
-							</div>
+						<EditorCore
+							ref={editorRef}
+							value={controller.inputValue}
+							onChange={controller.setInputValue}
+							placeholderText={placeholder}
+							autoFocus={autoFocus}
+							extensions={cmExtensions}
+						/>
 
-							{/* Actual Textarea (Transparent) */}
-							<TextArea
-								ref={textareaRef}
-								placeholder={placeholder}
-								rows={1}
-								value={inputValue}
-								onChange={handleInputChange}
-								onKeyDown={handleKeyDown}
-								onPaste={handlePaste}
-								onScroll={handleScroll}
-								className={cn(
-									'col-start-1 row-start-1 z-10',
-									'py-(--gap-1-5) px-(--gap-3) min-h-(--input-min-height) max-h-(--input-max-height) scrollbar-gutter-stable',
-									// Make text fully transparent - use both for cross-browser support
-									'bg-transparent',
-									// Match backdrop styles
-									'font-(family-name:--font-family-base) text-(length:--font-size-base) leading-(--line-height-base) wrap-break-word overflow-anywhere',
-									// Ensure proper scrollbar when content exceeds max-height
-									'overflow-y-auto',
-									// Fix placeholder visibility against transparent text
-									'placeholder:text-(--vscode-input-placeholderForeground,var(--vscode-descriptionForeground))',
-									'placeholder:[-webkit-text-fill-color:var(--vscode-input-placeholderForeground,var(--vscode-descriptionForeground))]',
-								)}
-								style={{
-									color: 'transparent',
-									WebkitTextFillColor: 'transparent',
-									caretColor: 'var(--vscode-foreground)',
-								}}
-								spellCheck={false}
-							/>
-						</div>
-
-						{/* Bottom Toolbar */}
-						<div className="h-(--input-toolbar-height) flex items-center justify-between pl-(--gap-2) pr-0 box-border shrink-0">
-							{/* Left Toolbar - can shrink */}
-							<div className="flex items-center gap-(--gap-0-5) z-5 min-w-0 overflow-hidden">
-								<div className="relative shrink-0">
-									<Button
-										variant="ghost"
-										size="xs"
-										onClick={e => {
-											setAgentButtonAnchorElement(e.currentTarget as HTMLElement);
-											setShowAgentDropdown(!showAgentDropdown);
-										}}
-										className={cn(
-											'h-(--input-toolbar-height) rounded-md select-none text-sm font-(family-name:--vscode-font-family) shrink-0 flex items-center gap-2 px-(--gap-1-5) transition-all duration-200 border',
-											selectedAgent
-												? 'text-vscode-button-background bg-vscode-button-background/10 border-vscode-button-background/30'
-												: 'text-vscode-foreground opacity-70 hover:opacity-100 bg-transparent hover:bg-(--alpha-5) border-transparent',
-										)}
-									>
-										<AgentButtonIcon
-											agentId={selectedAgent}
-											size={14}
-											className={cn(
-												'transition-transform duration-200',
-												selectedAgent && 'scale-110',
-											)}
-										/>
-										<span>{getAgentLabel(selectedAgent)}</span>
-										<ChevronIcon expanded={showAgentDropdown} size={10} className="shrink-0" />
-									</Button>
-									{showAgentDropdown && (
-										<AgentDropdown
-											anchorElement={agentButtonAnchorElement}
-											onSelect={agent => {
-												setSelectedAgent(agent);
-												setShowAgentDropdown(false);
-											}}
-											onClose={() => setShowAgentDropdown(false)}
-										/>
-									)}
-								</div>
-
-								<div className="relative min-w-0">
-									<Button
-										variant="ghost"
-										size="xs"
-										onClick={e => {
-											setModelButtonAnchorElement(e.currentTarget as HTMLElement);
-											setShowModelDropdown(!showModelDropdown);
-										}}
-										className={cn(
-											'h-(--input-toolbar-height) rounded-md opacity-70 hover:opacity-100 hover:bg-(--alpha-5) text-sm font-(family-name:--vscode-font-family) min-w-0 max-w-full flex items-center gap-2 px-(--gap-1-5) transition-all duration-200 border border-transparent',
-											showModelDropdown && 'bg-(--alpha-5) opacity-100',
-										)}
-									>
-										<span className="truncate">{getModelDisplayName()}</span>
-										<ChevronIcon expanded={showModelDropdown} size={10} className="shrink-0" />
-									</Button>
-									{showModelDropdown && (
-										<ModelDropdown
-											anchorElement={modelButtonAnchorElement}
-											onClose={() => setShowModelDropdown(false)}
-										/>
-									)}
-								</div>
-							</div>
-
-							{/* Right Toolbar - fixed, doesn't shrink */}
-							<div className="flex items-center gap-0 pr-0 shrink-0">
-								<div className="relative">
-									<IconButton
-										icon={
-											isImproving ? (
-												<LoaderIcon className="animate-spin" size={14} />
-											) : (
-												<ImprovePromptIcon
-													size={14}
-													className="transition-transform duration-200 group-hover/improve:scale-110"
-												/>
-											)
-										}
-										onClick={handleImprovePrompt}
-										title={isImproving ? 'Cancel improvement' : 'Improve prompt'}
-										size={22}
-										disabled={!inputValue.trim() && !isImproving}
-										className={cn(
-											'group/improve',
-											isImproving
-												? 'opacity-100 text-(--color-accent)'
-												: 'text-vscode-foreground opacity-70 hover:opacity-100 hover:text-(--color-accent)',
-										)}
-									/>
-								</div>
-								<div className="relative">
-									<IconButton
-										icon={
-											<TerminalIcon
-												size={14}
-												strokeWidth={2.5}
-												className="transition-transform duration-200 group-hover/terminal:scale-110"
-											/>
-										}
-										onClick={e => {
-											setSlashButtonAnchorElement(e.currentTarget as HTMLElement);
-											setShowSlashCommands(!showSlashCommands);
-											setSlashFilter('');
-										}}
-										title="Slash commands (/)"
-										size={22}
-										className="group/terminal text-vscode-foreground opacity-70 hover:opacity-100"
-									/>
-									{showSlashCommands && (
-										<SlashCommandsDropdown
-											anchorElement={slashButtonAnchorElement || textareaRef.current}
-											anchorRect={
-												!slashButtonAnchorElement
-													? (slashCommandsAnchorRect ?? caretAnchorRect)
-													: undefined
-											}
-										/>
-									)}
-								</div>
-								<div className="relative">
-									<IconButton
-										icon={
-											<AtSignIcon
-												size={14}
-												strokeWidth={2.5}
-												className="transition-transform duration-200 group-hover/at:scale-110"
-											/>
-										}
-										onClick={e => {
-											setFileButtonAnchorElement(e.currentTarget as HTMLElement);
-											setShowFilePicker(!showFilePicker);
-											setFileFilter('');
-										}}
-										title="Reference files (@)"
-										size={22}
-										className="group/at text-vscode-foreground opacity-70 hover:opacity-100"
-									/>
-									{showFilePicker && (
-										<FilePickerDropdown
-											onSelectFile={handleFileSelect}
-											anchorElement={fileButtonAnchorElement || textareaRef.current}
-											anchorRect={!fileButtonAnchorElement ? filePickerAnchorRect : undefined}
-										/>
-									)}
-								</div>
-								<IconButton
-									icon={
-										<ImageIcon
-											size={14}
-											strokeWidth={2.5}
-											className="transition-transform duration-200 group-hover/image:scale-110"
-										/>
-									}
-									onClick={() => postMessage({ type: 'getImageData' })}
-									title="Attach image"
-									size={22}
-									className="group/image text-vscode-foreground opacity-70 hover:opacity-100"
-								/>
-							</div>
-						</div>
+						<InputToolbar
+							selectedAgent={controller.selectedAgent}
+							onAgentChange={controller.setSelectedAgent}
+							modelDisplayName={controller.modelDisplayName}
+							isImproving={controller.isImproving}
+							canImprove={!!controller.inputValue.trim()}
+							onImprovePrompt={controller.handleImprovePrompt}
+							showSlashCommands={showSlashCommands}
+							slashCommandsAnchorRect={dropdowns.slashCommandsAnchorRect}
+							slashButtonAnchorElement={dropdowns.slashButtonAnchorElement}
+							onSlashToggle={dropdowns.openSlashFromButton}
+							showFilePicker={showFilePicker}
+							filePickerAnchorRect={dropdowns.filePickerAnchorRect}
+							fileButtonAnchorElement={dropdowns.fileButtonAnchorElement}
+							onFileToggle={dropdowns.openFilePickerFromButton}
+							onFileSelect={handleFileSelect}
+							showModelDropdown={showModelDropdown}
+							modelButtonAnchorElement={modelBtnAnchor}
+							onModelToggle={anchor => {
+								setModelBtnAnchor(anchor);
+								setShowModelDropdown(!showModelDropdown);
+							}}
+							onModelClose={() => setShowModelDropdown(false)}
+						/>
 					</div>
 
-					{/* Send Button */}
 					<SendButton
-						isProcessing={isProcessing}
-						hasContent={!!(inputValue.trim() || attachedFiles.length > 0)}
-						onSend={handleSend}
-						onStop={handleStop}
+						isProcessing={controller.isProcessing}
+						hasContent={!!(controller.inputValue.trim() || attachedFiles.length > 0)}
+						onSend={controller.handleSend}
+						onStop={controller.handleStop}
 					/>
 				</div>
 

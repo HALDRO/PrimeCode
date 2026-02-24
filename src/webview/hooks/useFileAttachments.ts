@@ -140,7 +140,12 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 	const handleDragLeave = useCallback((e: React.DragEvent) => {
 		e.preventDefault();
 		e.stopPropagation();
-		setIsDragOver(false);
+		// Only reset isDragOver when the cursor actually leaves the container,
+		// not when it moves over a child element (classic dragleave bubbling bug).
+		const container = e.currentTarget as HTMLElement;
+		if (!container.contains(e.relatedTarget as Node)) {
+			setIsDragOver(false);
+		}
 	}, []);
 
 	const handleDrop = useCallback(
@@ -163,7 +168,7 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 						reader.onload = ev => {
 							const dataUrl = ev.target?.result as string;
 							if (dataUrl) {
-								const id = `img-${Date.now()}-${file.name}`;
+								const id = `img-${crypto.randomUUID()}`;
 								setAttachedImages(prev => [...prev, { id, name: file.name, dataUrl, file }]);
 							}
 						};
@@ -194,7 +199,7 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 					// Check for images passed as paths
 					if (IMAGE_EXT_RE.test(processedPath)) {
 						const name = processedPath.split(/[/\\]/).pop() || 'image';
-						const id = `img-${Date.now()}-${name}`;
+						const id = `img-${crypto.randomUUID()}`;
 						postMessage({ type: 'getImageData', path: processedPath, id, name });
 						continue;
 					}
@@ -237,7 +242,7 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 						reader.onload = ev => {
 							const dataUrl = ev.target?.result as string;
 							if (dataUrl) {
-								const id = `img-${Date.now()}-${file.name}`;
+								const id = `img-${crypto.randomUUID()}`;
 								setAttachedImages(prev => [...prev, { id, name: file.name, dataUrl, file }]);
 							}
 						};
@@ -268,7 +273,7 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 			if (message?.type === 'clipboardContext' && message.filePath) {
 				// Context found — add as code snippet badge.
 				// The text is already in the input (we didn't block paste).
-				const id = `${message.filePath}:${message.startLine}-${message.endLine}:${Date.now()}`;
+				const id = `${message.filePath}:${message.startLine}-${message.endLine}:${crypto.randomUUID()}`;
 				setCodeSnippets(prev => [
 					...prev,
 					{
@@ -288,7 +293,7 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 			}
 
 			if (message?.type === 'imageData' && message.dataUrl) {
-				const id = message.id || `img-${Date.now()}`;
+				const id = message.id || `img-${crypto.randomUUID()}`;
 				const name = message.name || 'image.png';
 				setAttachedImages(prev => [
 					...prev,

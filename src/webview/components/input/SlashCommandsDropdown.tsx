@@ -153,7 +153,7 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 			if (cmd.type === 'cli' || cmd.type === 'custom') {
 				// Execute CLI + custom commands through the chat pipeline (extension-side).
 				// OpenCode commands are detected by MessageHandler and routed to SDK session.command().
-				replaceCurrentCommand(`/${cmd.id}  `);
+				replaceCurrentCommand(`/${cmd.id} `);
 			} else if (cmd.type === 'subagent') {
 				// Subagent type - insert @agent-name
 				replaceCurrentCommand(`${cmd.prompt} `);

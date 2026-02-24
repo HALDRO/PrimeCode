@@ -719,3 +719,19 @@ div:hover > .user-copy-btn {
 	--color-accent-glow: var(--glow-accent);
 	--color-stop-hover: #ff6b6b;
 }
+
+/* ============================================
+   CM6 Chat Editor — Decoration Styles
+   ============================================ */
+.cm-slash-command {
+	color: var(--vscode-editorGutter-modifiedBackground);
+	background: color-mix(in srgb, var(--vscode-editorGutter-modifiedBackground) 15%, transparent);
+	border-radius: 2px;
+	padding: 0 var(--gap-1-5) 0 var(--gap-0-5);
+}
+.cm-subagent {
+	color: #60a5fa;
+	background: color-mix(in srgb, #60a5fa 15%, transparent);
+	border-radius: 2px;
+	padding: 0 var(--gap-1-5) 0 var(--gap-0-5);
+}

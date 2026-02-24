@@ -58,6 +58,7 @@ type OpenCodePart =
 			messageID?: string;
 			text?: string;
 			sessionID?: string;
+			synthetic?: boolean;
 	  }
 	| {
 			type: 'tool';
@@ -1823,7 +1824,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			const part = this.normalizePart(sdkPart);
 			if (part.type === 'compaction') {
 				hasCompaction = true;
-			} else if (part.type === 'text' && part.text) {
+			} else if (part.type === 'text' && part.text && !part.synthetic) {
 				textParts.push(part.text);
 			} else if (part.type === 'file') {
 				if (part.mime.startsWith('image/')) {
@@ -1895,6 +1896,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				messageID: raw.messageID,
 				text: raw.text,
 				sessionID: raw.sessionID,
+				synthetic: (raw as { synthetic?: boolean }).synthetic,
 			};
 		}
 		if (raw.type === 'reasoning') {

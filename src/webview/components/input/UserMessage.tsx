@@ -15,14 +15,15 @@ import {
 } from '../../store';
 import { useSettingsStore } from '../../store/settingsStore';
 import { useUIActions } from '../../store/uiStore';
-import { formatDuration, formatTime, formatTokens, getShortFileName } from '../../utils/format';
+import { formatDuration, formatTime, formatTokens } from '../../utils/format';
 import type { SectionStats } from '../../utils/groupSections';
 import { parseMessageSegments } from '../../utils/messageParser';
 
 import { useSessionMessage, useVSCode } from '../../utils/vscode';
 import { ClockIcon, TimerIcon, TokensIcon, Undo2Icon } from '../icons';
-import { ChatInput } from '../input/ChatInput';
-import { PathChip, type StatItem, StatsDisplay, Tooltip } from '../ui';
+import { type StatItem, StatsDisplay, Tooltip } from '../ui';
+import { AttachmentsBar } from './AttachmentsBar';
+import { ChatInput } from './ChatInput';
 
 interface UserMessageProps {
 	message: Message & { type: 'user' };
@@ -353,21 +354,22 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 		const chatActions = useChatActions();
 		const { setEditingMessageId } = chatActions;
 		const { selectedModel, opencodeProviders, proxyModels } = useSettingsStore();
-		const customCommands = useSettingsStore(state => state.commands.custom);
-		const cliCommands = useSettingsStore(state => state.commands.cli);
-		const subagents = useSettingsStore(state => state.subagents);
+		const customCommands = useSettingsStore(s => s.commands.custom);
+		const cliCommands = useSettingsStore(s => s.commands.cli);
+		const subagents = useSettingsStore(s => s.subagents);
 
-		// Build set of valid command names for highlighting (dynamic from server)
-		const validCommands = useMemo(() => {
-			return new Set([
-				...cliCommands.map(cmd => cmd.name.toLowerCase()),
-				...customCommands.map(cmd => cmd.name.toLowerCase()),
-			]);
-		}, [cliCommands, customCommands]);
-
-		const validSubagents = useMemo(() => {
-			return new Set(subagents.items.map(a => a.name.toLowerCase()));
-		}, [subagents.items]);
+		const validCommands = useMemo(
+			() =>
+				new Set([
+					...cliCommands.map(c => c.name.toLowerCase()),
+					...customCommands.map(c => c.name.toLowerCase()),
+				]),
+			[cliCommands, customCommands],
+		);
+		const validSubagents = useMemo(
+			() => new Set(subagents.items.map(a => a.name.toLowerCase())),
+			[subagents.items],
+		);
 
 		// Stats come from props (pre-computed in groupMessagesIntoSections)
 		const isLastUserMessage = stats.isLast;
@@ -468,7 +470,20 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 		const { showConfirmDialog } = useUIActions();
 
 		const doSendUpdate = useCallback(
-			(text: string, shouldRestore: boolean) => {
+			(
+				text: string,
+				shouldRestore: boolean,
+				currentAttachments?: {
+					files: string[];
+					codeSnippets: Array<{
+						filePath: string;
+						startLine: number;
+						endLine: number;
+						content: string;
+					}>;
+					images: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
+				},
+			) => {
 				if (shouldRestore && restoreCommit) {
 					// Frontend only sends commitId — backend resolves everything else
 					postMessage({
@@ -489,27 +504,30 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 				// Clear unrevert state - user is sending a new message, unrevert no longer makes sense
 				chatActions.setUnrevertAvailable(false);
 
-				// Build attachments from current edit state
+				// Use attachments from ChatInput (reflects user's edits: removed files, etc.)
+				// Falls back to original message attachments if not provided
+				const files = currentAttachments?.files ?? attachedFiles;
+				const snippets =
+					currentAttachments?.codeSnippets ??
+					attachedSnippets.map(s => ({
+						filePath: s.filePath,
+						startLine: s.startLine,
+						endLine: s.endLine,
+						content: s.content,
+					}));
+				const images =
+					currentAttachments?.images ??
+					attachedImages.map(img => ({
+						id: img.id,
+						name: img.name,
+						dataUrl: img.dataUrl,
+						path: img.path,
+					}));
+
 				const editAttachments = {
-					files: attachedFiles.length > 0 ? attachedFiles : undefined,
-					codeSnippets:
-						attachedSnippets.length > 0
-							? attachedSnippets.map(s => ({
-									filePath: s.filePath,
-									startLine: s.startLine,
-									endLine: s.endLine,
-									content: s.content,
-								}))
-							: undefined,
-					images:
-						attachedImages.length > 0
-							? attachedImages.map(img => ({
-									id: img.id,
-									name: img.name,
-									dataUrl: img.dataUrl,
-									path: img.path,
-								}))
-							: undefined,
+					files: files.length > 0 ? files : undefined,
+					codeSnippets: snippets.length > 0 ? snippets : undefined,
+					images: images.length > 0 ? images : undefined,
 				};
 				const hasAttachments =
 					editAttachments.files || editAttachments.codeSnippets || editAttachments.images;
@@ -537,7 +555,19 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 		);
 
 		const handleSendUpdate = useCallback(
-			(text: string) => {
+			(
+				text: string,
+				currentAttachments?: {
+					files: string[];
+					codeSnippets: Array<{
+						filePath: string;
+						startLine: number;
+						endLine: number;
+						content: string;
+					}>;
+					images: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
+				},
+			) => {
 				if (!text.trim()) {
 					return;
 				}
@@ -550,13 +580,13 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 							'Do you want to restore files to their state before this message? This will undo all file changes made after this checkpoint.',
 						confirmLabel: 'Restore & Send',
 						cancelLabel: 'Send Without Restore',
-						onConfirm: () => doSendUpdate(text, true),
-						onCancel: () => doSendUpdate(text, false),
+						onConfirm: () => doSendUpdate(text, true, currentAttachments),
+						onCancel: () => doSendUpdate(text, false, currentAttachments),
 					});
 				} else {
 					// Either no checkpoint, or user already restored (unrevertAvailable=true)
 					// In both cases, just send without restore
-					doSendUpdate(text, false);
+					doSendUpdate(text, false, currentAttachments);
 				}
 			},
 			[restoreCommit, unrevertAvailable, showConfirmDialog, doSendUpdate],
@@ -678,48 +708,26 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 							{(attachedFiles.length > 0 ||
 								attachedSnippets.length > 0 ||
 								attachedImages.length > 0) && (
-								<span className="inline-flex flex-wrap gap-(--gap-1-5) align-middle mr-1">
-									{/* Images */}
-									{attachedImages.map(img => (
-										<PathChip
-											key={img.id}
-											path={img.path || img.name}
-											label={img.name}
-											title={img.name}
-											backgroundColor="rgba(64, 165, 255, 0.15)"
-										/>
-									))}
-									{/* Files */}
-									{attachedFiles.map(filePath => (
-										<PathChip
-											key={filePath}
-											path={filePath}
-											onClick={() => {
-												postMessage({ type: 'openFile', filePath });
-											}}
-											title={filePath}
-										/>
-									))}
-									{/* Code snippets */}
-									{attachedSnippets.map(snippet => (
-										<PathChip
-											key={`${snippet.filePath}:${snippet.startLine}-${snippet.endLine}`}
-											path={snippet.filePath}
-											label={`${getShortFileName(snippet.filePath)} (${snippet.startLine}-${snippet.endLine})`}
-											iconName={snippet.filePath}
-											onClick={() => {
-												postMessage({
-													type: 'openFile',
-													filePath: snippet.filePath,
-													startLine: snippet.startLine,
-													endLine: snippet.endLine,
-												});
-											}}
-											title={`${snippet.filePath}:${snippet.startLine}-${snippet.endLine} (click to open)`}
-											backgroundColor="rgba(156, 120, 255, 0.15)"
-										/>
-									))}
-								</span>
+								<AttachmentsBar
+									images={attachedImages.map(img => ({
+										id: img.id,
+										name: img.name,
+										dataUrl: img.dataUrl,
+										path: img.path,
+									}))}
+									files={attachedFiles}
+									codeSnippets={attachedSnippets.map(s => ({
+										id: `${s.filePath}:${s.startLine}-${s.endLine}`,
+										filePath: s.filePath,
+										startLine: s.startLine,
+										endLine: s.endLine,
+										content: s.content,
+									}))}
+									onOpenFile={(path, startLine, endLine) => {
+										postMessage({ type: 'openFile', filePath: path, startLine, endLine });
+									}}
+									inline
+								/>
 							)}
 							<MessageTextWithCommands
 								text={messageText}
