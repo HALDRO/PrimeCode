@@ -186,8 +186,8 @@ const TodoHoverPopup = React.memo<{ todos: TodoItem[] }>(({ todos }) => {
 	const totalCount = todos.length;
 
 	return (
-		<div className="absolute bottom-[calc(100%+8px)] left-1/2 -translate-x-1/2 z-100 pointer-events-none">
-			<div className="bg-(--tool-bg-header) border border-(--tool-border-color) rounded-lg overflow-hidden min-w-(--popup-min-width) max-w-(--popup-max-width) pointer-events-auto">
+		<div className="absolute bottom-[calc(100%+8px)] left-0 z-100 pointer-events-none">
+			<div className="bg-(--tool-bg-header) border border-(--tool-border-color) rounded-lg overflow-hidden w-[75vw] pointer-events-auto">
 				{/* Header */}
 				<div className="flex items-center gap-1.5 h-(--tool-header-height) px-(--tool-header-padding) border-b border-(--border-subtle) bg-(--tool-bg-header)">
 					<TodoListIcon size={14} className="text-vscode-foreground opacity-80 shrink-0" />
@@ -199,11 +199,11 @@ const TodoHoverPopup = React.memo<{ todos: TodoItem[] }>(({ todos }) => {
 				<div className="px-(--tool-header-padding) py-1 bg-(--tool-bg-header)">
 					<div className="flex flex-col gap-(--gap-1)">
 						{todos.map(todo => (
-							<div key={todo.id || todo.content} className="flex items-center gap-(--gap-2-5)">
+							<div key={todo.id || todo.content} className="flex items-start gap-(--gap-2-5)">
 								<TodoStatusIcon status={todo.status} />
 								<span
 									className={cn(
-										'text-sm truncate',
+										'text-sm break-words',
 										todo.status === 'completed'
 											? 'text-vscode-foreground opacity-50'
 											: todo.status === 'cancelled'

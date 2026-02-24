@@ -245,18 +245,95 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 		[],
 	);
 
-	const handleAtBottomStateChange = useCallback((atBottom: boolean) => {
-		isAtBottomRef.current = atBottom;
-		setShowScrollToBottom(!atBottom);
-	}, []);
+	// Track whether the user has manually scrolled up during this processing run.
+	// Reset when processing starts so auto-scroll re-engages each new generation.
+	const userScrolledUpRef = useRef(false);
+	useEffect(() => {
+		if (isProcessing) {
+			userScrolledUpRef.current = false;
+		}
+	}, [isProcessing]);
+
+	const handleAtBottomStateChange = useCallback(
+		(atBottom: boolean) => {
+			isAtBottomRef.current = atBottom;
+			// If user scrolls away from bottom during processing, mark as manually scrolled up.
+			// If they scroll back to bottom, clear the flag so auto-scroll re-engages.
+			if (isProcessing) {
+				userScrolledUpRef.current = !atBottom;
+			}
+		},
+		[isProcessing],
+	);
+
+	// Show scroll-to-bottom button only after scrolling 200px+ from bottom.
+	// Uses a dedicated scroll listener instead of atBottomStateChange (which has a 40px threshold
+	// needed for followOutput) so the button doesn't flash on minor scroll jitter.
+	const SCROLL_BUTTON_THRESHOLD = 200;
+	const [scrollerEl, setScrollerEl] = useState<HTMLDivElement | null>(null);
+	useEffect(() => {
+		if (!scrollerEl) return;
+		let rafId: number | null = null;
+		const onScroll = () => {
+			if (rafId !== null) return;
+			rafId = requestAnimationFrame(() => {
+				rafId = null;
+				if (!scrollerEl) return;
+				const distance = scrollerEl.scrollHeight - scrollerEl.scrollTop - scrollerEl.clientHeight;
+				setShowScrollToBottom(distance > SCROLL_BUTTON_THRESHOLD);
+			});
+		};
+		scrollerEl.addEventListener('scroll', onScroll, { passive: true });
+		return () => {
+			scrollerEl.removeEventListener('scroll', onScroll);
+			if (rafId !== null) cancelAnimationFrame(rafId);
+		};
+	}, [scrollerEl]);
 
 	const handleFollowOutput = useCallback(
 		(_isAtBottom: boolean) => {
-			if (isProcessing) return 'auto' as const;
+			if (isProcessing && !userScrolledUpRef.current) return 'auto' as const;
 			return false as const;
 		},
 		[isProcessing],
 	);
+
+	// MutationObserver fallback: followOutput only fires when Virtuoso detects item
+	// count/size changes. When content streams inside fixed-height containers (ToolCard,
+	// SubtaskItem, SimpleToolGroup with maxHeight + overflowY), the outer Virtuoso item
+	// height doesn't change, so followOutput never fires and auto-scroll stops.
+	// This observer watches for ANY DOM mutation inside the scroller and scrolls to bottom
+	// when the user hasn't manually scrolled up.
+	useEffect(() => {
+		const el = scrollerRef.current;
+		if (!isProcessing || !el) return;
+
+		let rafId: number | null = null;
+		const onMutation = () => {
+			if (userScrolledUpRef.current) return;
+			if (rafId !== null) return; // already scheduled
+			rafId = requestAnimationFrame(() => {
+				rafId = null;
+				const scroller = scrollerRef.current;
+				if (!scroller || userScrolledUpRef.current) return;
+				// Only nudge if we're close to the bottom (within 150px) to avoid
+				// fighting with Virtuoso's own scroll management
+				const distanceFromBottom =
+					scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+				if (distanceFromBottom < 150) {
+					scroller.scrollTop = scroller.scrollHeight;
+				}
+			});
+		};
+
+		const observer = new MutationObserver(onMutation);
+		observer.observe(el, { childList: true, subtree: true, characterData: true });
+
+		return () => {
+			observer.disconnect();
+			if (rafId !== null) cancelAnimationFrame(rafId);
+		};
+	}, [isProcessing]);
 
 	const virtuosoContext = useMemo(
 		() => ({ isProcessing, totalSections: sections.length }),
@@ -282,9 +359,23 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 		[],
 	);
 
+	// Scroll to bottom on session switch. Uses a two-phase approach:
+	// Phase 1: mark that a switch happened.
+	// Phase 2: on next render with sections, scroll to bottom.
+	// Also handles the case where sectionCount hasn't changed (session already loaded).
 	useEffect(() => {
 		if (activeSessionId) {
 			sessionSwitchRef.current = true;
+			// Reset scroll-up flag so auto-scroll works on the new session
+			userScrolledUpRef.current = false;
+			// Immediate attempt — covers the case where sections are already loaded
+			// and sectionCount won't change (so the sectionCount effect below won't fire).
+			requestAnimationFrame(() => {
+				if (sessionSwitchRef.current && virtuosoRef.current) {
+					sessionSwitchRef.current = false;
+					virtuosoRef.current.scrollToIndex({ index: 'LAST', align: 'end', behavior: 'auto' });
+				}
+			});
 		}
 	}, [activeSessionId]);
 
@@ -320,8 +411,9 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 	}, [sectionCount]);
 
 	const handleScrollerRef = useCallback((el: HTMLElement | Window | null) => {
-		(scrollerRef as React.MutableRefObject<HTMLDivElement | null>).current =
-			el instanceof HTMLElement ? (el as HTMLDivElement) : null;
+		const div = el instanceof HTMLElement ? (el as HTMLDivElement) : null;
+		(scrollerRef as React.MutableRefObject<HTMLDivElement | null>).current = div;
+		setScrollerEl(div);
 	}, []);
 
 	const handleScrollToBottom = useCallback(() => {
@@ -359,11 +451,11 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 
 			{sections.length > 0 && <ScrollThumb scrollerRef={scrollerRef} />}
 
-			{showScrollToBottom && sections.length > 0 && (
+			{sections.length > 0 && (
 				<button
 					type="button"
 					onClick={handleScrollToBottom}
-					className="absolute bottom-2 left-1/2 z-10 flex items-center justify-center rounded-md cursor-pointer transition-opacity duration-200 border-none"
+					className="absolute bottom-2 left-1/2 z-10 flex items-center justify-center rounded-md cursor-pointer border-none transition-all duration-300 ease-out"
 					style={{
 						transform: 'translateX(-50%)',
 						width: 28,
@@ -371,6 +463,8 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 						backgroundColor: 'var(--vscode-editor-background)',
 						color: 'var(--vscode-foreground)',
 						boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
+						opacity: showScrollToBottom ? 1 : 0,
+						pointerEvents: showScrollToBottom ? 'auto' : 'none',
 					}}
 					title="Scroll to bottom"
 				>

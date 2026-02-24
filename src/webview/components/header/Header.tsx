@@ -28,7 +28,7 @@ interface TabInfo {
 export const Header: React.FC = React.memo(() => {
 	// Optimized selectors
 	const { showHistoryDropdown, setShowHistoryDropdown } = useHistoryDropdownState();
-	const { setActiveModal, setServerStatus } = useUIActions();
+	const { setActiveModal, setServerStatus, showConfirmDialog } = useUIActions();
 	const { postMessage } = useVSCode();
 	const { switchSession, closeSession } = useChatActions();
 
@@ -83,7 +83,7 @@ export const Header: React.FC = React.memo(() => {
 		[postMessage, switchSession],
 	);
 
-	const handleCloseSession = useCallback(
+	const doCloseSession = useCallback(
 		(sessionId: string) => {
 			const isClosingActive = sessionId === activeSessionId;
 			closeSession(sessionId);
@@ -105,6 +105,26 @@ export const Header: React.FC = React.memo(() => {
 			}
 		},
 		[activeSessionId, closeSession, postMessage, switchSession],
+	);
+
+	const handleCloseSession = useCallback(
+		(sessionId: string) => {
+			const sessionIsProcessing =
+				useChatStore.getState().sessionsById[sessionId]?.isProcessing ?? false;
+
+			if (sessionIsProcessing) {
+				showConfirmDialog({
+					title: 'Close active session?',
+					message: 'This session is still processing. Are you sure you want to close it?',
+					confirmLabel: 'Close',
+					onConfirm: () => doCloseSession(sessionId),
+				});
+				return;
+			}
+
+			doCloseSession(sessionId);
+		},
+		[doCloseSession, showConfirmDialog],
 	);
 
 	const handleCreateSession = useCallback(() => {

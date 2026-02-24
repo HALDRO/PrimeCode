@@ -126,13 +126,22 @@ export const useMessageTurnTokens = (messageId: string | undefined) =>
 		return getActiveSession(state)?.turnTokens[messageId];
 	});
 
-/** Whether the last message is an assistant message with streaming content */
+/** Whether the last message is an assistant message that is actively streaming */
 export const useIsLastMessageStreaming = () =>
 	useChatStore((state: ChatState) => {
 		const session = getActiveSession(state);
-		if (!session) return false;
-		const last = session.messages[session.messages.length - 1];
-		return last?.type === 'assistant' && !!last.content && last.content.length > 0;
+		if (!session || !session.isProcessing) return false;
+		const msgs = session.messages;
+		// Walk backwards to find the last assistant message (skip tool_result, access_request, etc.)
+		for (let i = msgs.length - 1; i >= 0; i--) {
+			const msg = msgs[i];
+			if (msg.type === 'assistant') {
+				return !!(msg as { isStreaming?: boolean }).isStreaming;
+			}
+			// Stop searching if we hit a user message — no assistant streaming in this turn
+			if (msg.type === 'user') return false;
+		}
+		return false;
 	});
 
 /** Context usage percentage, rounded to 1% to reduce rerender frequency */
