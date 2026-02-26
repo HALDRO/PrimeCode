@@ -1,19 +1,16 @@
 /**
  * @file useFileAttachments
  * @description Webview hook that manages message attachments: file references, images, and code snippets.
- *              Intercepts paste/drag-drop events, requests clipboard context from the extension,
- *              and exposes stable handlers/state for the chat input.
+ *              Intercepts paste/drag-drop events and exposes stable handlers/state for the chat input.
  *
- * Design principles (aligned with OpenCode CLI approach):
- * - Paste: only intercept when clipboard contains images. For text, always ask the extension
- *   for clipboard context (editor copy tracking) but NEVER block the default paste.
- *   If context is found, a code snippet badge is added *in addition* to the pasted text.
+ * Design principles:
+ * - Paste: only intercept when clipboard contains images. Text paste is never blocked.
  * - Drag-and-drop: support both workspace and external files/directories.
  *   Files from dataTransfer.files (external drops) are handled alongside text/URI paths.
  * - No heuristic "looks like code" detection — this caused false positives and errors.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useVSCode } from '../utils/vscode';
 
 interface CodeSnippet {
@@ -90,11 +87,6 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 		})),
 	);
 	const [isDragOver, setIsDragOver] = useState(false);
-
-	// Track the last pasted text so we can match it against clipboard context responses.
-	// Unlike the old approach, we do NOT block the default paste — text is always inserted
-	// normally, and if context is found we add a code snippet badge on top.
-	const lastPastedTextRef = useRef<string | null>(null);
 
 	// Handlers for managing attachments
 	const addFile = useCallback((filePath: string) => {
@@ -215,82 +207,47 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 	);
 
 	// ── Paste ────────────────────────────────────────────────────────────
-	// Key change: we NEVER block the default paste for text content.
-	// Instead, we let the browser insert the text normally, and in parallel
-	// ask the extension if the pasted text matches a recent editor copy.
-	// If it does, we add a code snippet badge. If not, nothing happens —
-	// the text is already in the input.
+	// Only intercept when clipboard contains images. Text paste is never blocked.
 
-	// Legacy compat: keep pendingPasteText in state so ChatInput can read it,
-	// but it will always be null now (paste is never blocked).
+	// Legacy compat: keep pendingPasteText so ChatInput can read it,
+	// but it will always be null (paste is never blocked).
 	const [pendingPasteText] = useState<string | null>(null);
 
-	const handlePaste = useCallback(
-		(e: React.ClipboardEvent) => {
-			const clipboardData = e.clipboardData;
-			if (!clipboardData) return;
+	const handlePaste = useCallback((e: React.ClipboardEvent) => {
+		const clipboardData = e.clipboardData;
+		if (!clipboardData) return;
 
-			// 1. Images — intercept and handle (browser can't insert images into textarea)
-			const items = clipboardData.items;
-			for (let i = 0; i < items.length; i++) {
-				const item = items[i];
-				if (item.type.startsWith('image/')) {
-					e.preventDefault();
-					const file = item.getAsFile();
-					if (file) {
-						const reader = new FileReader();
-						reader.onload = ev => {
-							const dataUrl = ev.target?.result as string;
-							if (dataUrl) {
-								const id = `img-${crypto.randomUUID()}`;
-								setAttachedImages(prev => [...prev, { id, name: file.name, dataUrl, file }]);
-							}
-						};
-						reader.readAsDataURL(file);
-					}
-					return;
+		// 1. Images — intercept and handle (browser can't insert images into textarea)
+		const items = clipboardData.items;
+		for (let i = 0; i < items.length; i++) {
+			const item = items[i];
+			if (item.type.startsWith('image/')) {
+				e.preventDefault();
+				const file = item.getAsFile();
+				if (file) {
+					const reader = new FileReader();
+					reader.onload = ev => {
+						const dataUrl = ev.target?.result as string;
+						if (dataUrl) {
+							const id = `img-${crypto.randomUUID()}`;
+							setAttachedImages(prev => [...prev, { id, name: file.name, dataUrl, file }]);
+						}
+					};
+					reader.readAsDataURL(file);
 				}
+				return;
 			}
+		}
 
-			// 2. Text — let the browser handle the paste normally (no preventDefault!).
-			//    In parallel, ask the extension if this text matches a recent editor copy.
-			//    If context is found, a code snippet badge will be added via the message listener.
-			const textPlain = clipboardData.getData('text/plain');
-			if (textPlain?.trim()) {
-				lastPastedTextRef.current = textPlain;
-				postMessage({ type: 'getClipboardContext', text: textPlain });
-			}
-		},
-		[postMessage],
-	);
+		// 2. Text — let the browser handle the paste normally (no preventDefault!).
+		//    Text is simply inserted into the input by the browser/CM6.
+	}, []);
 
 	// ── Extension message listener ───────────────────────────────────────
 
 	useEffect(() => {
 		const handleMessage = (event: MessageEvent) => {
 			const message = event.data;
-
-			if (message?.type === 'clipboardContext' && message.filePath) {
-				// Context found — add as code snippet badge.
-				// The text is already in the input (we didn't block paste).
-				const id = `${message.filePath}:${message.startLine}-${message.endLine}:${crypto.randomUUID()}`;
-				setCodeSnippets(prev => [
-					...prev,
-					{
-						id,
-						filePath: message.filePath,
-						startLine: message.startLine,
-						endLine: message.endLine,
-						content: message.content,
-					},
-				]);
-				lastPastedTextRef.current = null;
-			}
-
-			if (message?.type === 'clipboardContextNotFound') {
-				// No context — text is already in the input, nothing to do.
-				lastPastedTextRef.current = null;
-			}
 
 			if (message?.type === 'imageData' && message.dataUrl) {
 				const id = message.id || `img-${crypto.randomUUID()}`;
@@ -329,9 +286,7 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 		removeImage,
 		removeCodeSnippet,
 		clearAll,
-		clearPendingPaste: () => {
-			lastPastedTextRef.current = null;
-		},
+		clearPendingPaste: () => {},
 		handleDragOver,
 		handleDragLeave,
 		handleDrop,

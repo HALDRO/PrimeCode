@@ -358,7 +358,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		// File
 		r.register(
 			this.fileHandler,
-			['openFile', 'openFileDiff', 'openExternal', 'getImageData', 'getClipboardContext'],
+			['openFile', 'openFileDiff', 'openExternal', 'getImageData'],
 			'file',
 		);
 
@@ -727,7 +727,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					content: e.content || '',
 					isDelta: e.isDelta ?? false,
 					isStreaming: true,
-					...(isFirstChunk ? { startTime: String(Date.now()) } : {}),
+					...(isFirstChunk ? { startTime: Date.now() } : {}),
 					timestamp: new Date().toISOString(),
 				};
 

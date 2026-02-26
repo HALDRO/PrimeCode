@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import { ServiceRegistry } from './core/ServiceRegistry';
 import { ChatProvider } from './providers/ChatProvider';
-import { ClipboardContextService } from './services/ClipboardContextService';
 import { logger } from './utils/logger';
 
 export { logger } from './utils/logger';
@@ -62,10 +61,6 @@ export function activate(context: vscode.ExtensionContext) {
 		ctx: vscode.ExtensionContext,
 	): Promise<ChatProvider | undefined> {
 		try {
-			// Initialize clipboard context service for tracking copy events
-			const clipboardContextService = ClipboardContextService.getInstance();
-			ctx.subscriptions.push(clipboardContextService);
-
 			// Create main chat provider (unified session_event architecture)
 			logger.info('Creating ChatProvider (unified session_event)...');
 			logger.info('Using unified session_event architecture');

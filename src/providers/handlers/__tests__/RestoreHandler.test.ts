@@ -35,6 +35,12 @@ interface MockContext {
 	sessionState: {
 		activeSessionId: string | undefined;
 	};
+	extensionContext: {
+		workspaceState: {
+			get: ReturnType<typeof vi.fn>;
+			update: ReturnType<typeof vi.fn>;
+		};
+	};
 }
 
 function createMockContext(overrides: Partial<MockContext> = {}): MockContext & HandlerContext {
@@ -55,6 +61,12 @@ function createMockContext(overrides: Partial<MockContext> = {}): MockContext & 
 		sessionState: {
 			activeSessionId: 'session-1',
 			...overrides.sessionState,
+		},
+		extensionContext: {
+			workspaceState: {
+				get: vi.fn().mockReturnValue([]),
+				update: vi.fn().mockResolvedValue(undefined),
+			},
 		},
 	};
 	return ctx as unknown as MockContext & HandlerContext;

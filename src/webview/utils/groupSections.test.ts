@@ -404,13 +404,20 @@ describe('groupMessagesIntoSections', () => {
 			expect(result[0].stats.fileChanges).toBeNull();
 		});
 
-		it('should estimate tokenCount from assistant content length', () => {
-			const content = 'a'.repeat(400); // ~100 tokens at 4 chars/token
+		it('should use real turnTokens for tokenCount', () => {
 			const msgs = [
 				userMsg('u1'),
-				{ type: 'assistant', id: 'a1', timestamp: new Date().toISOString(), content } as Message,
+				{
+					type: 'assistant',
+					id: 'a1',
+					timestamp: new Date().toISOString(),
+					content: 'reply',
+				} as Message,
 			];
-			const result = groupMessagesIntoSections(msgs, [], null);
+			const turnTokens = {
+				u1: { input: 50, output: 50, total: 100, cacheRead: 0 },
+			};
+			const result = groupMessagesIntoSections(msgs, [], null, [], turnTokens);
 
 			expect(result[0].stats.tokenCount).toBe(100);
 		});

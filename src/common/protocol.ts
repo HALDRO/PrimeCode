@@ -575,18 +575,6 @@ export type ProxyModelsMessage = BaseExtensionMessage<'proxyModels', ProxyModels
 // =============================================================================
 
 export type ClipboardTextMessage = BaseExtensionMessage<'clipboardText', string>;
-export type ClipboardContextMessage = BaseExtensionMessage<'clipboardContext', never> & {
-	filePath: string;
-	startLine: number;
-	endLine: number;
-	content: string;
-};
-export type ClipboardContextNotFoundMessage = BaseExtensionMessage<
-	'clipboardContextNotFound',
-	never
-> & {
-	text?: string;
-};
 
 // =============================================================================
 // OpenCode Messages (global)
@@ -826,8 +814,6 @@ export type ExtensionMessage =
 	| ProxyModelsMessage
 	| ConfigChangedMessage
 	| ClipboardTextMessage
-	| ClipboardContextMessage
-	| ClipboardContextNotFoundMessage
 	| OpenCodeStatusMessage
 	| OpenCodeProvidersMessage
 	| OpenCodeModelSetMessage
@@ -1114,10 +1100,6 @@ export interface GetImageDataCommand {
 	name?: string;
 	path?: string;
 }
-export interface GetClipboardContextCommand {
-	type: 'getClipboardContext';
-	text: string;
-}
 export interface GetWorkspaceFilesCommand {
 	type: 'getWorkspaceFiles';
 	searchTerm: string;
@@ -1375,7 +1357,6 @@ export type WebviewCommand =
 	| OpenFileDiffCommand
 	| OpenExternalCommand
 	| GetImageDataCommand
-	| GetClipboardContextCommand
 	| GetWorkspaceFilesCommand
 	| SseSubscribeCommand
 	| SseCloseCommand

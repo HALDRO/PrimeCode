@@ -40,10 +40,11 @@ export const useElapsedTimer = (isActive: boolean, startTime?: string | number):
 			setElapsed(accumulatedRef.current + (Date.now() - segmentStartRef.current));
 			return () => clearInterval(id);
 		}
-		// Transitioning from active → inactive: accumulate elapsed time from this segment
+		// Transitioning from active → inactive: freeze the final elapsed value
 		if (wasActiveRef.current) {
 			accumulatedRef.current += Date.now() - segmentStartRef.current;
 			wasActiveRef.current = false;
+			setElapsed(accumulatedRef.current);
 		}
 		return undefined;
 	}, [isActive, startTime]);

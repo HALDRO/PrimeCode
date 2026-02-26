@@ -184,24 +184,34 @@ export const ThinkingMessage = React.memo<ThinkingMessageProps>(
 			wasStreamingRef.current = isStreaming;
 		}, [isStreaming]);
 
-		const displayDuration = isStreaming ? liveElapsed : durationMs;
+		// Use durationMs when available (final value from store), otherwise
+		// fall back to liveElapsed which keeps the frozen value after streaming stops.
+		// This prevents the timer from disappearing when durationMs is not yet computed.
+		const displayDuration = isStreaming ? liveElapsed : (durationMs ?? liveElapsed);
+
+		// Combine preview and timer into a single meta ReactNode so they share
+		// the same flex container and the timer doesn't push the preview out.
+		const combinedMeta = (
+			<span className="flex items-center gap-1 w-full min-w-0">
+				{preview && (
+					<span className="truncate text-sm text-vscode-descriptionForeground">{preview}</span>
+				)}
+				{displayDuration != null && displayDuration > 0 && (
+					<span className="ml-auto shrink-0 flex items-center gap-1 text-sm font-bold text-vscode-descriptionForeground">
+						<TimerIcon size={11} />
+						{formatDuration(displayDuration)}
+					</span>
+				)}
+			</span>
+		);
 
 		return (
 			<SimpleTool
 				icon={<BrainSideIcon size={17} className="text-vscode-descriptionForeground" />}
 				label="Thinking"
-				meta={preview}
+				meta={combinedMeta}
 				expanded={expanded}
 				onToggle={() => setExpanded(prev => !prev)}
-				rightContent={
-					displayDuration !== undefined &&
-					displayDuration > 0 && (
-						<span className="flex items-center gap-1 text-sm font-bold text-vscode-descriptionForeground">
-							<TimerIcon size={11} />
-							{formatDuration(displayDuration)}
-						</span>
-					)
-				}
 			>
 				{content && (
 					<Markdown

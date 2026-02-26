@@ -1194,282 +1194,353 @@ export class SessionHandler implements WebviewMessageHandler {
 		const subtaskMeta = new Map<string, { description: string; prompt: string; agent: string }>();
 
 		for (const event of history) {
-			if (event.type === 'message') {
-				this.postSessionMessage(
-					mapMessageEvent(event.data, { idPrefix: 'hist', normalizedEntry: event.normalizedEntry }),
-					sessionId,
-				);
-				continue;
-			}
-
-			if (event.type === 'normalized_log') {
-				const data = event.data;
-				if (data.role === 'user') {
-					const userMsg = mapUserEvent(data, { normalizedEntry: event.normalizedEntry });
-					this.postSessionMessage(userMsg, sessionId);
-
-					// Emit checkpoint so the restore button appears for replayed user messages
-					const replayCommitId = generateId('checkpoint');
-					this.context.registerCheckpoint?.(replayCommitId, {
-						sessionId,
-						messageId: userMsg.id,
-						associatedMessageId: userMsg.id,
-						isOpenCode: true,
-					});
-
-					this.context.bridge.session.restore(sessionId, {
-						action: 'add_commit',
-						commit: {
-							id: replayCommitId,
-							sha: replayCommitId,
-							message: 'Checkpoint before message',
-							timestamp: data.timestamp || new Date().toISOString(),
-							associatedMessageId: userMsg.id,
-						},
-					});
-				}
-				continue;
-			}
-
-			if (event.type === 'thinking') {
-				this.postSessionMessage(mapThinkingEvent(event.data, { idPrefix: 'hist' }), sessionId);
-				continue;
-			}
-
-			if (event.type === 'tool_use') {
-				const data = event.data;
-				const toolName = data.tool || 'unknown';
-				const input = (data.input as Record<string, unknown>) || {};
-				const toolUseId = data.toolUseId || `hist-tool-${Math.random()}`;
-				const filePathFromInput = extractFilePath(input);
-
-				// Question tool — render as resolved QuestionCard instead of generic tool card
-				if (toolName.toLowerCase() === 'question') {
-					const questions = Array.isArray(input.questions)
-						? (input.questions as import('../../common/schemas').QuestionInfo[])
-						: [];
+			switch (event.type) {
+				case 'message':
 					this.postSessionMessage(
-						{
-							id: `question-${toolUseId}`,
-							type: 'question',
-							requestId: toolUseId,
-							questions,
-							resolved: true,
-							timestamp: data.timestamp || new Date().toISOString(),
-						},
+						mapMessageEvent(event.data, {
+							idPrefix: 'hist',
+							normalizedEntry: event.normalizedEntry,
+						}),
 						sessionId,
 					);
-					continue;
-				}
-
-				if (options?.mode === 'parent' && toolName === 'task') {
-					const graph = this.context.sessionGraph;
-					const childSessionId = graph.getChildByTaskId(toolUseId);
-					const subtaskDuration = childSessionId
-						? options.childDurations?.get(childSessionId)
-						: undefined;
-					const childTokens = childSessionId
-						? options.childTokensMap?.get(childSessionId)
-						: undefined;
-					const agent = typeof input.subagent_type === 'string' ? input.subagent_type : 'subagent';
-					const prompt = typeof input.prompt === 'string' ? input.prompt : '';
-					const description = typeof input.description === 'string' ? input.description : 'Subtask';
-					subtaskMeta.set(toolUseId, { description, prompt, agent });
-
-					// Build transcript from child history instead of using contextId
-					const childHistory = childSessionId
-						? options.childHistories?.get(childSessionId)
-						: undefined;
-					const transcript = childHistory
-						? (this.buildTranscriptFromHistory(
-								childHistory,
-							) as unknown as import('../../common/schemas').ConversationMessage[])
-						: undefined;
-
-					this.postSessionMessage(
-						{
-							id: toolUseId,
-							type: 'subtask',
-							agent,
-							prompt,
-							description,
-							status: 'running',
-							transcript,
-							timestamp: data.timestamp || new Date().toISOString(),
-							startTime: data.timestamp || new Date().toISOString(),
-							...(subtaskDuration ? { durationMs: subtaskDuration } : {}),
-							...(childTokens ? { childTokens } : {}),
-						},
-						sessionId,
-					);
-					continue;
-				}
-
-				const toolUseMsg = mapToolUseEvent(data, {
-					idPrefix: 'hist',
-					normalizedEntry: event.normalizedEntry,
-				});
-				this.postSessionMessage(toolUseMsg, sessionId);
-
-				// Emit file change event for edit tools during replay
-				// so ChangedFilesPanel is restored after extension restart
-				if (filePathFromInput && this.isFileEditTool(toolName)) {
-					const oldContent =
-						typeof input.old_string === 'string'
-							? input.old_string
-							: typeof input.old_str === 'string'
-								? input.old_str
-								: typeof input.oldString === 'string'
-									? input.oldString
-									: '';
-					const newContent =
-						typeof input.new_string === 'string'
-							? input.new_string
-							: typeof input.new_str === 'string'
-								? input.new_str
-								: typeof input.newString === 'string'
-									? input.newString
-									: typeof input.content === 'string'
-										? input.content
-										: '';
-					const diffStats = computeDiffLineStats(String(oldContent), String(newContent));
-
-					this.context.bridge.session.fileChanged(sessionId, {
-						filePath: filePathFromInput,
-						fileName: filePathFromInput.split(/[/\\]/).pop() || filePathFromInput,
-						linesAdded: diffStats.added,
-						linesRemoved: diffStats.removed,
-						toolUseId,
-					});
-				}
-
-				continue;
-			}
-
-			if (event.type === 'tool_result') {
-				const data = event.data;
-				const toolName = data.tool || 'unknown';
-				const toolUseId = data.tool_use_id || `hist-tool-${Math.random()}`;
-
-				// Extract answers from question tool_result and merge into the existing QuestionCard
-				if (toolName.toLowerCase() === 'question') {
-					const content = data.content;
-					const inputData = (data.input as Record<string, unknown>) || {};
-					const questionsArr = Array.isArray(inputData.questions)
-						? (inputData.questions as Array<{
-								question: string;
-								options: Array<{ label: string }>;
-							}>)
-						: [];
-					let answers: string[][] | undefined;
-
-					// Try parsing content as structured answers (JSON)
-					if (typeof content === 'string') {
-						try {
-							const parsed = JSON.parse(content);
-							if (Array.isArray(parsed)) {
-								answers = parsed as string[][];
-							} else if (parsed && Array.isArray(parsed.answers)) {
-								answers = parsed.answers as string[][];
-							}
-						} catch {
-							// Not JSON — try parsing human-readable "question"="answer" pairs
-							// CLI format: User has answered your questions: "Q1"="A1", "Q2"="A2". You can now continue...
-							const pairRegex = /"([^"]+)"="([^"]+)"/g;
-							const pairs: Array<{ question: string; answer: string }> = [];
-							for (
-								let pairMatch = pairRegex.exec(content);
-								pairMatch !== null;
-								pairMatch = pairRegex.exec(content)
-							) {
-								pairs.push({ question: pairMatch[1], answer: pairMatch[2] });
-							}
-
-							if (pairs.length > 0 && questionsArr.length > 0) {
-								// Build answers array aligned with questions
-								answers = questionsArr.map(q => {
-									const pair = pairs.find(p => p.question === q.question);
-									if (!pair) return [];
-									// Split comma-separated values and return ALL parts
-									// (QuestionCard separates option labels from custom text itself)
-									return pair.answer
-										.split(', ')
-										.map(s => s.trim())
-										.filter(Boolean);
-								});
-							} else if (content.trim()) {
-								answers = [[content.trim()]];
-							}
-						}
-					} else if (Array.isArray(content)) {
-						answers = content as string[][];
-					} else if (content && typeof content === 'object') {
-						const obj = content as Record<string, unknown>;
-						if (Array.isArray(obj.answers)) {
-							answers = obj.answers as string[][];
-						}
-					}
-
-					// Post merge update with answers (mergeOrAddMessage will merge by ID)
-					if (answers && answers.length > 0) {
-						this.postSessionMessage(
-							{
-								id: `question-${toolUseId}`,
-								type: 'question' as const,
-								resolved: true,
-								answers,
-								timestamp: data.timestamp || new Date().toISOString(),
-							},
-							sessionId,
-						);
-					}
-					continue;
-				}
-
-				if (options?.mode === 'parent' && toolName === 'task') {
-					const graph = this.context.sessionGraph;
-					const childSessionId = graph.getChildByTaskId(toolUseId);
-					const subtaskDuration = childSessionId
-						? options.childDurations?.get(childSessionId)
-						: undefined;
-					const childTokens = childSessionId
-						? options.childTokensMap?.get(childSessionId)
-						: undefined;
-					const savedMeta = subtaskMeta.get(toolUseId);
-					this.postSessionMessage(
-						{
-							id: toolUseId,
-							type: 'subtask',
-							status: data.is_error ? 'error' : 'completed',
-							result: String(data.content || ''),
-							timestamp: data.timestamp || new Date().toISOString(),
-							...(subtaskDuration ? { durationMs: subtaskDuration } : {}),
-							...(childTokens ? { childTokens } : {}),
-							...(savedMeta ?? {}),
-						},
-						sessionId,
-					);
-					continue;
-				}
-
-				this.postSessionMessage(
-					mapToolResultEvent(data, { idPrefix: 'hist', normalizedEntry: event.normalizedEntry }),
-					sessionId,
-				);
-				continue;
-			}
-
-			// Replay per-turn token stats so the UI shows real token counts
-			if (event.type === 'turn_tokens') {
-				this.postTurnTokens(event.data, sessionId);
-				continue;
-			}
-
-			// Restore aggregated token stats from history
-			if (event.type === 'session_updated') {
-				this.handleSessionUpdatedEvent(event.data, sessionId);
+					break;
+				case 'normalized_log':
+					this.replayNormalizedLog(event.data, sessionId, event.normalizedEntry);
+					break;
+				case 'thinking':
+					this.postSessionMessage(mapThinkingEvent(event.data, { idPrefix: 'hist' }), sessionId);
+					break;
+				case 'tool_use':
+					this.replayToolUse(event, sessionId, subtaskMeta, options);
+					break;
+				case 'tool_result':
+					this.replayToolResult(event, sessionId, subtaskMeta, options);
+					break;
+				case 'turn_tokens':
+					this.postTurnTokens(event.data, sessionId);
+					break;
+				case 'session_updated':
+					this.handleSessionUpdatedEvent(event.data, sessionId);
+					break;
 			}
 		}
+	}
+
+	private replayNormalizedLog(
+		data: CLIEvent['data'],
+		sessionId: string,
+		normalizedEntry?: CLIEvent['normalizedEntry'],
+	): void {
+		if ((data as { role?: string }).role !== 'user') return;
+		const userMsg = mapUserEvent(data as Parameters<typeof mapUserEvent>[0], { normalizedEntry });
+		this.postSessionMessage(userMsg, sessionId);
+
+		const replayCommitId = generateId('checkpoint');
+		this.context.registerCheckpoint?.(replayCommitId, {
+			sessionId,
+			messageId: userMsg.id,
+			associatedMessageId: userMsg.id,
+			isOpenCode: true,
+		});
+
+		this.context.bridge.session.restore(sessionId, {
+			action: 'add_commit',
+			commit: {
+				id: replayCommitId,
+				sha: replayCommitId,
+				message: 'Checkpoint before message',
+				timestamp: (data as { timestamp?: string }).timestamp || new Date().toISOString(),
+				associatedMessageId: userMsg.id,
+			},
+		});
+	}
+
+	private replayToolUse(
+		event: CLIEvent,
+		sessionId: string,
+		subtaskMeta: Map<string, { description: string; prompt: string; agent: string }>,
+		options?: {
+			mode?: 'default' | 'parent';
+			parentSessionId?: string;
+			childDurations?: Map<string, number>;
+			childHistories?: Map<string, CLIEvent[]>;
+			childTokensMap?: Map<
+				string,
+				{ input: number; output: number; total: number; cacheRead: number }
+			>;
+		},
+	): void {
+		const data = event.data as {
+			tool?: string;
+			input?: unknown;
+			toolUseId?: string;
+			timestamp?: string;
+		};
+		const toolName = data.tool || 'unknown';
+		const input = (data.input as Record<string, unknown>) || {};
+		const toolUseId = data.toolUseId || `hist-tool-${Math.random()}`;
+		const filePathFromInput = extractFilePath(input);
+
+		if (toolName.toLowerCase() === 'question') {
+			this.replayToolUseQuestion(input, toolUseId, data.timestamp, sessionId);
+			return;
+		}
+
+		if (options?.mode === 'parent' && toolName === 'task') {
+			this.replayToolUseSubtask(input, toolUseId, data.timestamp, sessionId, subtaskMeta, options);
+			return;
+		}
+
+		const toolUseMsg = mapToolUseEvent(data as Parameters<typeof mapToolUseEvent>[0], {
+			idPrefix: 'hist',
+			normalizedEntry: event.normalizedEntry,
+		});
+		this.postSessionMessage(toolUseMsg, sessionId);
+
+		if (filePathFromInput && this.isFileEditTool(toolName)) {
+			this.emitFileChangeFromReplay(input, filePathFromInput, toolUseId, sessionId);
+		}
+	}
+
+	private replayToolUseQuestion(
+		input: Record<string, unknown>,
+		toolUseId: string,
+		timestamp: string | undefined,
+		sessionId: string,
+	): void {
+		const questions = Array.isArray(input.questions)
+			? (input.questions as import('../../common/schemas').QuestionInfo[])
+			: [];
+		this.postSessionMessage(
+			{
+				id: `question-${toolUseId}`,
+				type: 'question',
+				requestId: toolUseId,
+				questions,
+				resolved: true,
+				timestamp: timestamp || new Date().toISOString(),
+			},
+			sessionId,
+		);
+	}
+
+	private replayToolUseSubtask(
+		input: Record<string, unknown>,
+		toolUseId: string,
+		timestamp: string | undefined,
+		sessionId: string,
+		subtaskMeta: Map<string, { description: string; prompt: string; agent: string }>,
+		options: NonNullable<Parameters<SessionHandler['replayToolUse']>[3]>,
+	): void {
+		const graph = this.context.sessionGraph;
+		const childSessionId = graph.getChildByTaskId(toolUseId);
+		const subtaskDuration = childSessionId
+			? options.childDurations?.get(childSessionId)
+			: undefined;
+		const childTokens = childSessionId ? options.childTokensMap?.get(childSessionId) : undefined;
+		const agent = typeof input.subagent_type === 'string' ? input.subagent_type : 'subagent';
+		const prompt = typeof input.prompt === 'string' ? input.prompt : '';
+		const description = typeof input.description === 'string' ? input.description : 'Subtask';
+		subtaskMeta.set(toolUseId, { description, prompt, agent });
+
+		const childHistory = childSessionId ? options.childHistories?.get(childSessionId) : undefined;
+		const transcript = childHistory
+			? (this.buildTranscriptFromHistory(
+					childHistory,
+				) as unknown as import('../../common/schemas').ConversationMessage[])
+			: undefined;
+
+		this.postSessionMessage(
+			{
+				id: toolUseId,
+				type: 'subtask',
+				agent,
+				prompt,
+				description,
+				status: 'running',
+				transcript,
+				timestamp: timestamp || new Date().toISOString(),
+				startTime: timestamp || new Date().toISOString(),
+				...(subtaskDuration ? { durationMs: subtaskDuration } : {}),
+				...(childTokens ? { childTokens } : {}),
+			},
+			sessionId,
+		);
+	}
+
+	private emitFileChangeFromReplay(
+		input: Record<string, unknown>,
+		filePathFromInput: string,
+		toolUseId: string,
+		sessionId: string,
+	): void {
+		const oldContent =
+			typeof input.old_string === 'string'
+				? input.old_string
+				: typeof input.old_str === 'string'
+					? input.old_str
+					: typeof input.oldString === 'string'
+						? input.oldString
+						: '';
+		const newContent =
+			typeof input.new_string === 'string'
+				? input.new_string
+				: typeof input.new_str === 'string'
+					? input.new_str
+					: typeof input.newString === 'string'
+						? input.newString
+						: typeof input.content === 'string'
+							? input.content
+							: '';
+		const diffStats = computeDiffLineStats(String(oldContent), String(newContent));
+
+		this.context.bridge.session.fileChanged(sessionId, {
+			filePath: filePathFromInput,
+			fileName: filePathFromInput.split(/[/\\]/).pop() || filePathFromInput,
+			linesAdded: diffStats.added,
+			linesRemoved: diffStats.removed,
+			toolUseId,
+		});
+	}
+
+	private replayToolResult(
+		event: CLIEvent,
+		sessionId: string,
+		subtaskMeta: Map<string, { description: string; prompt: string; agent: string }>,
+		options?: Parameters<SessionHandler['replayToolUse']>[3],
+	): void {
+		const data = event.data as {
+			tool?: string;
+			tool_use_id?: string;
+			content?: unknown;
+			input?: unknown;
+			is_error?: boolean;
+			timestamp?: string;
+		};
+		const toolName = data.tool || 'unknown';
+		const toolUseId = data.tool_use_id || `hist-tool-${Math.random()}`;
+
+		if (toolName.toLowerCase() === 'question') {
+			this.replayToolResultQuestion(data, toolUseId, sessionId);
+			return;
+		}
+
+		if (options?.mode === 'parent' && toolName === 'task') {
+			this.replayToolResultSubtask(data, toolUseId, sessionId, subtaskMeta, options);
+			return;
+		}
+
+		this.postSessionMessage(
+			mapToolResultEvent(data as Parameters<typeof mapToolResultEvent>[0], {
+				idPrefix: 'hist',
+				normalizedEntry: event.normalizedEntry,
+			}),
+			sessionId,
+		);
+	}
+
+	private replayToolResultQuestion(
+		data: { content?: unknown; input?: unknown; timestamp?: string },
+		toolUseId: string,
+		sessionId: string,
+	): void {
+		const content = data.content;
+		const inputData = (data.input as Record<string, unknown>) || {};
+		const questionsArr = Array.isArray(inputData.questions)
+			? (inputData.questions as Array<{ question: string; options: Array<{ label: string }> }>)
+			: [];
+		const answers = this.parseQuestionAnswers(content, questionsArr);
+
+		if (answers && answers.length > 0) {
+			this.postSessionMessage(
+				{
+					id: `question-${toolUseId}`,
+					type: 'question' as const,
+					resolved: true,
+					answers,
+					timestamp: data.timestamp || new Date().toISOString(),
+				},
+				sessionId,
+			);
+		}
+	}
+
+	private parseQuestionAnswers(
+		content: unknown,
+		questionsArr: Array<{ question: string; options: Array<{ label: string }> }>,
+	): string[][] | undefined {
+		if (typeof content === 'string') {
+			return this.parseQuestionAnswersFromString(content, questionsArr);
+		}
+		if (Array.isArray(content)) {
+			return content as string[][];
+		}
+		if (content && typeof content === 'object') {
+			const obj = content as Record<string, unknown>;
+			if (Array.isArray(obj.answers)) {
+				return obj.answers as string[][];
+			}
+		}
+		return undefined;
+	}
+
+	private parseQuestionAnswersFromString(
+		content: string,
+		questionsArr: Array<{ question: string; options: Array<{ label: string }> }>,
+	): string[][] | undefined {
+		try {
+			const parsed = JSON.parse(content);
+			if (Array.isArray(parsed)) return parsed as string[][];
+			if (parsed && Array.isArray(parsed.answers)) return parsed.answers as string[][];
+		} catch {
+			const pairRegex = /"([^"]+)"="([^"]+)"/g;
+			const pairs: Array<{ question: string; answer: string }> = [];
+			for (let m = pairRegex.exec(content); m !== null; m = pairRegex.exec(content)) {
+				pairs.push({ question: m[1], answer: m[2] });
+			}
+
+			if (pairs.length > 0 && questionsArr.length > 0) {
+				return questionsArr.map(q => {
+					const pair = pairs.find(p => p.question === q.question);
+					if (!pair) return [];
+					return pair.answer
+						.split(', ')
+						.map(s => s.trim())
+						.filter(Boolean);
+				});
+			}
+			if (content.trim()) return [[content.trim()]];
+		}
+		return undefined;
+	}
+
+	private replayToolResultSubtask(
+		data: { content?: unknown; is_error?: boolean; timestamp?: string },
+		toolUseId: string,
+		sessionId: string,
+		subtaskMeta: Map<string, { description: string; prompt: string; agent: string }>,
+		options: NonNullable<Parameters<SessionHandler['replayToolUse']>[3]>,
+	): void {
+		const graph = this.context.sessionGraph;
+		const childSessionId = graph.getChildByTaskId(toolUseId);
+		const subtaskDuration = childSessionId
+			? options.childDurations?.get(childSessionId)
+			: undefined;
+		const childTokens = childSessionId ? options.childTokensMap?.get(childSessionId) : undefined;
+		const savedMeta = subtaskMeta.get(toolUseId);
+		this.postSessionMessage(
+			{
+				id: toolUseId,
+				type: 'subtask',
+				status: data.is_error ? 'error' : 'completed',
+				result: String(data.content || ''),
+				timestamp: data.timestamp || new Date().toISOString(),
+				...(subtaskDuration ? { durationMs: subtaskDuration } : {}),
+				...(childTokens ? { childTokens } : {}),
+				...(savedMeta ?? {}),
+			},
+			sessionId,
+		);
 	}
 
 	private async onDeleteConversation(msg: CommandOf<'deleteConversation'>): Promise<void> {

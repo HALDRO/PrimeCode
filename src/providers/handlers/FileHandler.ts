@@ -1,11 +1,8 @@
 import * as vscode from 'vscode';
 import type { CommandOf, WebviewCommand } from '../../common/protocol';
-import { ClipboardContextService } from '../../services/ClipboardContextService';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
 export class FileHandler implements WebviewMessageHandler {
-	private readonly clipboardContextService = ClipboardContextService.getInstance();
-
 	constructor(private context: HandlerContext) {}
 
 	async handleMessage(msg: WebviewCommand): Promise<void> {
@@ -21,9 +18,6 @@ export class FileHandler implements WebviewMessageHandler {
 				break;
 			case 'getImageData':
 				await this.onGetImageData(msg);
-				break;
-			case 'getClipboardContext':
-				await this.onGetClipboardContext(msg);
 				break;
 		}
 	}
@@ -211,19 +205,5 @@ export class FileHandler implements WebviewMessageHandler {
 			path: fileUri.fsPath,
 			dataUrl,
 		});
-	}
-
-	private async onGetClipboardContext(msg: CommandOf<'getClipboardContext'>): Promise<void> {
-		const { text } = msg;
-		if (!text) {
-			this.context.bridge.send({ type: 'clipboardContextNotFound', text: '' });
-			return;
-		}
-		const ctx = this.clipboardContextService.getContextForText(text);
-		if (!ctx) {
-			this.context.bridge.send({ type: 'clipboardContextNotFound', text });
-			return;
-		}
-		this.context.bridge.send({ type: 'clipboardContext', ...ctx });
 	}
 }
