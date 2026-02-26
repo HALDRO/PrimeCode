@@ -7,6 +7,7 @@ import { cn } from '../../lib/cn';
 import {
 	type CommitInfo,
 	type Message,
+	useActiveModelID,
 	useChatActions,
 	useEditingMessageId,
 	useIsProcessing,
@@ -353,7 +354,8 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 		const isProcessing = useIsProcessing();
 		const chatActions = useChatActions();
 		const { setEditingMessageId } = chatActions;
-		const { selectedModel, opencodeProviders, proxyModels } = useSettingsStore();
+		const activeModelID = useActiveModelID();
+		const { opencodeProviders, proxyModels } = useSettingsStore();
 		const customCommands = useSettingsStore(s => s.commands.custom);
 		const cliCommands = useSettingsStore(s => s.commands.cli);
 		const subagents = useSettingsStore(s => s.subagents);
@@ -742,7 +744,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 							tokenCount={tokenStats}
 							timestamp={message.timestamp}
 							processingTime={processingTime}
-							modelName={getModelDisplayName(message.model || selectedModel)}
+							modelName={getModelDisplayName(message.model || activeModelID || '')}
 						/>
 					</div>
 				</div>

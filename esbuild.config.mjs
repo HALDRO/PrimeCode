@@ -10,7 +10,6 @@ const extensionConfig = {
 	outfile: './dist/extension.js',
 	external: [
 		'vscode', // vscode is provided by VS Code runtime
-		'@anthropic-ai/claude-agent-sdk', // SDK uses import.meta.url which breaks when bundled to CJS
 	],
 	format: 'cjs',
 	platform: 'node',

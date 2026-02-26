@@ -17,6 +17,7 @@ import type {
 	ParsedSubagent,
 	PlatformInfo,
 	QuestionInfo,
+	SubagentCommandFields,
 	TotalStats,
 	WorkspaceFile,
 } from './schemas';
@@ -1200,12 +1201,7 @@ export interface OpenCommandFileCommand {
 	name: string;
 }
 
-export interface CreateSubagentCommand {
-	type: 'createSubagent';
-	name: string;
-	description: string;
-	content: string;
-}
+export type CreateSubagentCommand = SubagentCommandFields;
 export interface DeleteSubagentCommand {
 	type: 'deleteSubagent';
 	name: string;

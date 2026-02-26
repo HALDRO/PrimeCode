@@ -157,9 +157,11 @@ function useScrollThumb(
 function ThumbUI({
 	thumb,
 	thumbWidth,
+	scrollerRef,
 }: {
 	thumb: ReturnType<typeof useScrollThumb>;
 	thumbWidth: number;
+	scrollerRef: React.RefObject<HTMLDivElement | null>;
 }) {
 	if (!thumb.thumbState.show) return null;
 	const activeWidth = thumb.hovered || thumb.dragging ? thumbWidth + 2 : thumbWidth;
@@ -167,6 +169,10 @@ function ThumbUI({
 		<div
 			ref={thumb.trackRef}
 			onClick={thumb.onTrackClick}
+			onWheel={e => {
+				const el = scrollerRef.current;
+				if (el) el.scrollTop += e.deltaY;
+			}}
 			onMouseEnter={() => {
 				thumb.setHovered(true);
 				thumb.setVisible(true);
@@ -226,7 +232,7 @@ export const ScrollThumb: React.FC<ScrollThumbProps> = ({
 	autoHideDelay = 1200,
 }) => {
 	const thumb = useScrollThumb(scrollerRef, { autoHide, autoHideDelay, minThumbHeight });
-	return <ThumbUI thumb={thumb} thumbWidth={thumbWidth} />;
+	return <ThumbUI thumb={thumb} thumbWidth={thumbWidth} scrollerRef={scrollerRef} />;
 };
 
 // ── ScrollContainer (full wrapper with scroller + thumb) ───────────
@@ -283,7 +289,7 @@ export const ScrollContainer = React.forwardRef<HTMLDivElement, ScrollContainerP
 				>
 					{children}
 				</div>
-				<ThumbUI thumb={thumb} thumbWidth={thumbWidth} />
+				<ThumbUI thumb={thumb} thumbWidth={thumbWidth} scrollerRef={scrollerRef} />
 			</div>
 		);
 	},

@@ -418,12 +418,30 @@ export class SettingsHandler implements WebviewMessageHandler {
 					content: String(m.content ?? ''),
 					version: String(m.version ?? '0.1.0'),
 				};
-			case 'subagents':
+			case 'subagents': {
+				const toNum = (v: unknown) => (typeof v === 'number' ? v : undefined);
+				const toStr = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
+				const mode = m.mode as string | undefined;
 				return {
 					name,
 					description: String(m.description ?? ''),
 					prompt: String(m.content ?? ''),
+					model: toStr(m.model),
+					temperature: toNum(m.temperature),
+					topP: toNum(m.topP),
+					mode: mode === 'subagent' || mode === 'primary' || mode === 'all' ? mode : undefined,
+					color: toStr(m.color),
+					steps: toNum(m.steps),
+					tools:
+						typeof m.tools === 'object' && m.tools !== null
+							? (m.tools as Record<string, boolean>)
+							: undefined,
+					permission:
+						typeof m.permission === 'object' && m.permission !== null
+							? (m.permission as Record<string, unknown>)
+							: undefined,
 				};
+			}
 		}
 	}
 

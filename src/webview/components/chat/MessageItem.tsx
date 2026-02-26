@@ -153,25 +153,15 @@ const SubtaskItem = React.memo<{
 		setExpandState(prev => (prev === 'preview' ? 'expanded' : 'preview'));
 	};
 
-	// Meta info block (model, task description) — reused in result & expanded
-	const metaBlock =
-		childModelId || message.description ? (
-			<div className="text-sm text-vscode-descriptionForeground mb-2 flex flex-col gap-1">
-				{childModelId && (
-					<div className="flex items-center gap-2">
-						<BotIcon size={14} className="shrink-0" />
-						<span className="font-semibold text-vscode-foreground opacity-80">{childModelId}</span>
-					</div>
-				)}
-				{message.description && (
-					<div className="flex items-start gap-2">
-						<span className="shrink-0 opacity-60">Task</span>
-						<span className="text-vscode-descriptionForeground">·</span>
-						<span>{message.description}</span>
-					</div>
-				)}
+	// Meta info block (model) — reused in result & expanded
+	const metaBlock = childModelId ? (
+		<div className="text-sm text-vscode-descriptionForeground mb-2 flex flex-col gap-1">
+			<div className="flex items-center gap-2">
+				<BotIcon size={14} className="shrink-0" />
+				<span className="font-semibold text-vscode-foreground opacity-80">{childModelId}</span>
 			</div>
-		) : null;
+		</div>
+	) : null;
 
 	return (
 		<ToolCard
@@ -183,6 +173,11 @@ const SubtaskItem = React.memo<{
 					<span className="text-sm font-medium px-1.5 py-0.5 rounded-sm bg-vscode-badge-background text-vscode-badge-foreground whitespace-nowrap">
 						{agentLabel}
 					</span>
+					{message.description && (
+						<span className="text-sm text-vscode-descriptionForeground truncate min-w-0">
+							{message.description}
+						</span>
+					)}
 				</>
 			}
 			headerRight={
@@ -236,22 +231,27 @@ const SubtaskItem = React.memo<{
 					{message.command && (
 						<div className="text-xs font-mono opacity-50 truncate mb-2">$ {message.command}</div>
 					)}
-					{(isRunning || expandState === 'expanded') &&
-						groupedChildren.map((child, idx) => {
-							const key = Array.isArray(child)
-								? (child[0]?.id ?? `tool-group-${idx}`)
-								: (child.id ?? `message-${idx}`);
-							return (
-								<MessageItem
-									key={key}
-									item={child}
-									ctx={ctx}
-									collapseGroupedTools={
-										Array.isArray(child) || shouldCollapseGroupedItem(groupedChildren, idx)
-									}
-								/>
-							);
-						})}
+					{isRunning || expandState === 'expanded'
+						? groupedChildren.map((child, idx) => {
+								const key = Array.isArray(child)
+									? (child[0]?.id ?? `tool-group-${idx}`)
+									: (child.id ?? `message-${idx}`);
+								return (
+									<MessageItem
+										key={key}
+										item={child}
+										ctx={ctx}
+										collapseGroupedTools={
+											Array.isArray(child) || shouldCollapseGroupedItem(groupedChildren, idx)
+										}
+									/>
+								);
+							})
+						: groupedChildren.map((child, idx) => {
+								if (!Array.isArray(child)) return null;
+								const key = child[0]?.id ?? `tool-group-${idx}`;
+								return <MessageItem key={key} item={child} ctx={ctx} collapseGroupedTools={true} />;
+							})}
 					{pendingAccess && (
 						<AccessGate
 							requestId={pendingAccess.requestId}

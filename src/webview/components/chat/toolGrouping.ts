@@ -102,9 +102,7 @@ export const groupToolMessages = (
 		if (currentToolGroup.length === 0) return;
 
 		const toolUseCount = getToolUseCount(currentToolGroup);
-		const canGroup =
-			toolUseCount >= MIN_SIMPLE_TOOL_GROUP_SIZE &&
-			(reason === 'boundary' || (reason === 'final' && isStreaming));
+		const canGroup = toolUseCount >= MIN_SIMPLE_TOOL_GROUP_SIZE;
 
 		if (canGroup) {
 			if (reason === 'final' && isStreaming) {

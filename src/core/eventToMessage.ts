@@ -171,6 +171,7 @@ export function mapUserEvent(
 		content?: string;
 		timestamp?: string;
 		messageId?: string;
+		model?: string;
 		attachments?: UserMessageData['attachments'];
 	},
 	opts?: MapperOptions,
@@ -181,6 +182,7 @@ export function mapUserEvent(
 		content: data.content || '',
 		timestamp: resolveTimestamp(data.timestamp),
 		normalizedEntry: opts?.normalizedEntry,
+		...(data.model ? { model: data.model } : {}),
 		...(data.attachments ? { attachments: data.attachments } : {}),
 	};
 }

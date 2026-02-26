@@ -1,0 +1,48 @@
+# Source code
+src/**
+docs/**
+tests/**
+out/**
+
+# Config files
+tsconfig*.json
+vite.config*.ts
+esbuild.config.mjs
+eslint.config.*
+biome.json
+vitest.config.*
+opencode.json
+.gitignore
+.github/**
+AGENTS.md
+
+# Dev/IDE directories
+.vscode/**
+.agents/**
+.claude/**
+.cursor/**
+.claude-temp/**
+.opencode/**
+.vscode-test/**
+
+# Dev artifacts
+dev-dist/**
+backup/**
+coverage/**
+test-workspace/**
+node_modules/**
+
+# Package manager files
+bun.lockb
+package-lock.json
+pnpm-lock.yaml
+
+# Build artifacts (not needed in production)
+dist/*.map
+dist/icon.png
+dist/preview.png
+
+# Misc
+*.vsix
+_wgun/**
+scripts/**

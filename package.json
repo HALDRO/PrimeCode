@@ -4,10 +4,6 @@
 	"description": "OpenCode-first AI coding assistant for VS Code",
 	"version": "0.2.0",
 	"main": "./dist/extension.js",
-	"files": [
-		"dist",
-		"public"
-	],
 	"scripts": {
 		"vscode:prepublish": "npm run build",
 		"build": "npm run build:extension && npm run build:webview",
@@ -74,9 +70,6 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.3.10",
-		"@tailwindcss/cli": "^4.0.9",
-		"@tailwindcss/node": "^4.1.18",
-		"@tailwindcss/postcss": "^4.0.9",
 		"@tailwindcss/vite": "^4.1.18",
 		"@types/js-yaml": "^4.0.9",
 		"@types/mocha": "^10.0.10",
@@ -84,23 +77,16 @@
 		"@types/react": "^19.2.7",
 		"@types/react-dom": "^19.2.3",
 		"@types/vscode": "^1.105.0",
-		"@typescript-eslint/eslint-plugin": "^8.52.0",
-		"@typescript-eslint/parser": "^8.52.0",
 		"@vitejs/plugin-react": "^5.1.2",
 		"@vitest/coverage-v8": "^4.0.16",
 		"@vscode/test-cli": "^0.0.10",
 		"@vscode/test-electron": "^2.5.2",
 		"@vscode/vsce": "^3.5.0",
 		"@welldone-software/why-did-you-render": "^10.0.1",
-		"autoprefixer": "^10.4.20",
 		"babel-plugin-react-compiler": "^1.0.0",
 		"concurrently": "^9.2.1",
 		"esbuild": "^0.27.2",
-		"eslint": "^9.39.2",
-		"eslint-plugin-react-compiler": "^19.1.0-rc.2",
-		"eslint-plugin-tailwind-canonical-classes": "^1.1.0",
 		"knip": "^5.83.1",
-		"postcss": "^8.5.3",
 		"tailwindcss": "^4.1.18",
 		"typescript": "^5.8.3",
 		"vite": "^7.3.0",
@@ -120,16 +106,9 @@
 		"vscode": "^1.105.0"
 	},
 	"categories": [
-		"Other",
 		"AI",
 		"Chat",
-		"Machine Learning",
-		"Snippets",
-		"Programming Languages",
-		"Education",
-		"Testing",
-		"Formatters",
-		"Linters"
+		"Machine Learning"
 	],
 	"keywords": [
 		"primecode",

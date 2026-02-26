@@ -507,8 +507,13 @@ export type ParsedSkill = Static<typeof ParsedSkillSchema>;
 
 /**
  * ParsedSubagent — matches OpenCode Agent schema from config.ts.
- * Supports all OpenCode Agent fields: model, mode, permission, color, steps, temperature, disable, etc.
+ * Supports all OpenCode Agent fields: model, mode, permission, color, steps, temperature, tools, etc.
  */
+const PermissionLevel = Type.Union([
+	Type.Literal('ask'),
+	Type.Literal('allow'),
+	Type.Literal('deny'),
+]);
 export const ParsedSubagentSchema = Type.Object({
 	name: Type.String(),
 	prompt: Type.String(),
@@ -525,9 +530,40 @@ export const ParsedSubagentSchema = Type.Object({
 	hidden: Type.Optional(Type.Boolean()),
 	color: Type.Optional(Type.String()),
 	steps: Type.Optional(Type.Number()),
+	tools: Type.Optional(Type.Record(Type.String(), Type.Boolean())),
+	permission: Type.Optional(
+		Type.Object({
+			edit: Type.Optional(PermissionLevel),
+			bash: Type.Optional(
+				Type.Union([PermissionLevel, Type.Record(Type.String(), PermissionLevel)]),
+			),
+			webfetch: Type.Optional(PermissionLevel),
+			doom_loop: Type.Optional(PermissionLevel),
+			external_directory: Type.Optional(PermissionLevel),
+		}),
+	),
 	options: Type.Optional(Type.Record(Type.String(), Type.Any())),
 });
 export type ParsedSubagent = Static<typeof ParsedSubagentSchema>;
+
+/**
+ * Shared payload fields for CreateSubagent commands (used by both protocol.ts and webviewCommands.ts).
+ * Derived from ParsedSubagent to avoid duplicating the permission/tools shape in multiple files.
+ */
+export type SubagentCommandFields = {
+	type: 'createSubagent';
+	name: string;
+	description: string;
+	content: string;
+	model?: string;
+	temperature?: number;
+	topP?: number;
+	mode?: ParsedSubagent['mode'];
+	color?: string;
+	steps?: number;
+	tools?: ParsedSubagent['tools'];
+	permission?: ParsedSubagent['permission'];
+};
 
 // =============================================================================
 // Discovery Status

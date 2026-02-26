@@ -4,7 +4,7 @@
  *              and agent/model selection from the old ChatInput monolith.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { resolveModelDisplayName } from '../../common';
 import {
 	useChatActions,
@@ -17,6 +17,7 @@ import {
 	usePromptVersions,
 	useStoreInput,
 } from '../store';
+import { useSettingsStore } from '../store/settingsStore';
 import { useUIStore } from '../store/uiStore';
 import { useSessionMessage, useVSCode } from '../utils/vscode';
 
@@ -92,6 +93,16 @@ export function useChatInputController(
 	const isImproving = useIsImprovingPrompt();
 	const currentImproveRequestId = useImprovingPromptRequestId();
 	const promptVersions = usePromptVersions();
+
+	// Build a set of valid agent names for @mention parsing
+	const subagentItems = useSettingsStore(s => s.subagents.items);
+	const agentItems = useSettingsStore(s => s.agents.items);
+	const validAgentNames = useMemo(() => {
+		const names = new Set<string>();
+		for (const sa of subagentItems) names.add(sa.name.toLowerCase());
+		for (const a of agentItems) names.add(a.id.toLowerCase());
+		return names;
+	}, [subagentItems, agentItems]);
 
 	const isControlled = controlledValue !== undefined;
 	const inputValue = isControlled ? controlledValue : storeInput;
@@ -180,10 +191,26 @@ export function useChatInputController(
 			builtAttachments.files || builtAttachments.codeSnippets || builtAttachments.images;
 		const sessionModel = getSessionModel();
 
+		// Parse @agent from text as fallback when selectedAgent is not set via InputToolbar.
+		// Only match known subagent/CLI agent names to avoid false positives with @filenames.
+		let agent = selectedAgent;
+		if (!agent) {
+			const mentions = inputValue.match(/(?<=^|\s)@([a-zA-Z0-9_-]+)(?=\s|$)/g);
+			if (mentions) {
+				for (const mention of mentions) {
+					const name = mention.trim().slice(1); // remove @ prefix
+					if (validAgentNames.has(name.toLowerCase())) {
+						agent = name;
+						break;
+					}
+				}
+			}
+		}
+
 		postSessionMessage({
 			type: 'sendMessage',
 			text: inputValue.trim(),
-			agent: selectedAgent,
+			agent,
 			model: sessionModel,
 			attachments: hasAttachments ? builtAttachments : undefined,
 		});
@@ -204,6 +231,7 @@ export function useChatInputController(
 		setStoreInput,
 		clearPromptVersions,
 		getSessionModel,
+		validAgentNames.has,
 	]);
 
 	const handleStop = useCallback(

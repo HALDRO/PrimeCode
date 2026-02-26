@@ -13,7 +13,8 @@
 // Keys are lowercase canonical identifiers used everywhere internally.
 // ---------------------------------------------------------------------------
 
-const DISPLAY_NAMES: ReadonlyMap<string, string> = new Map([
+/** Canonical tool display names. Keys are lowercase IDs used everywhere internally. */
+export const DISPLAY_NAMES: ReadonlyMap<string, string> = new Map([
 	['read', 'Read'],
 	['write', 'Write'],
 	['edit', 'Edit'],

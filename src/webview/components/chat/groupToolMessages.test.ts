@@ -90,7 +90,7 @@ describe('groupToolMessages', () => {
 			expect((result[1] as Message).type).toBe('assistant');
 		});
 
-		it('should NOT group trailing tools (no boundary after them)', () => {
+		it('should group trailing tools even without boundary (e.g. subtask transcripts)', () => {
 			const msgs = [
 				toolUse('1'),
 				toolResult('1r', 'tu-1'),
@@ -100,9 +100,10 @@ describe('groupToolMessages', () => {
 				toolResult('3r', 'tu-3'),
 			];
 			const result = groupToolMessages(msgs, NO_MCP);
-			// All individual — trailing, no boundary
-			expect(result.every(r => !Array.isArray(r))).toBe(true);
-			expect(result).toHaveLength(6);
+			// Trailing tools are now grouped (fixes subtask transcript grouping)
+			expect(result).toHaveLength(1);
+			expect(Array.isArray(result[0])).toBe(true);
+			expect((result[0] as Message[]).length).toBe(6);
 		});
 
 		it('should not group non-groupable (heavy) tools', () => {
@@ -241,10 +242,11 @@ describe('groupToolMessages', () => {
 				toolResult('3r', 'tu-3'),
 			];
 			const result = groupToolMessages(msgs, NO_MCP);
-			// Assistant first (no prior group to absorb into), then trailing tools (not grouped)
+			// Assistant first (no prior group to absorb into), then trailing tools grouped
 			expect((result[0] as Message).type).toBe('assistant');
-			// Trailing tools are not grouped (no boundary after)
-			expect(result).toHaveLength(7);
+			expect(result).toHaveLength(2);
+			expect(Array.isArray(result[1])).toBe(true);
+			expect((result[1] as Message[]).length).toBe(6);
 		});
 
 		it('should not group MCP tools', () => {
@@ -301,7 +303,7 @@ describe('groupToolMessages', () => {
 			expect((result[0] as Message[]).length).toBe(6);
 		});
 
-		it('should NOT group trailing tools when isStreaming is false (default)', () => {
+		it('should group trailing tools even when isStreaming is false', () => {
 			const msgs = [
 				toolUse('1'),
 				toolResult('1r', 'tu-1'),
@@ -311,8 +313,10 @@ describe('groupToolMessages', () => {
 				toolResult('3r', 'tu-3'),
 			];
 			const result = groupToolMessages(msgs, NO_MCP, false);
-			expect(result.every(r => !Array.isArray(r))).toBe(true);
-			expect(result).toHaveLength(6);
+			// Trailing tools are grouped regardless of streaming state
+			expect(result).toHaveLength(1);
+			expect(Array.isArray(result[0])).toBe(true);
+			expect((result[0] as Message[]).length).toBe(6);
 		});
 
 		it('should NOT group trailing tools below threshold even when streaming', () => {

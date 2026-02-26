@@ -5,7 +5,7 @@
  * postMessageToVSCode). No more `msg.data` nesting — everything is flat.
  */
 
-import type { MCPServerConfig } from './schemas';
+import type { MCPServerConfig, SubagentCommandFields } from './schemas';
 
 // =============================================================================
 // Session Commands
@@ -184,12 +184,7 @@ export interface OpenCommandFileCommand {
 	name: string;
 }
 
-export interface CreateSubagentCommand {
-	type: 'createSubagent';
-	name: string;
-	description: string;
-	content: string;
-}
+export type CreateSubagentCommand = SubagentCommandFields;
 
 export interface DeleteSubagentCommand {
 	type: 'deleteSubagent';

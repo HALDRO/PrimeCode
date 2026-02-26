@@ -339,15 +339,22 @@ function handleStatusEvent(targetSession: ChatSession, payload: SessionEventPayl
 function handleStatsEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
 	const s = payload as SessionStatsPayload;
 	if (s.totalStats) Object.assign(targetSession.totalStats, s.totalStats);
-	if (s.modelID) targetSession.activeModelID = s.modelID;
+	if (s.modelID) {
+		targetSession.activeModelID = s.modelID;
+		// Stamp modelID on the last user message so it's preserved per-message
+		// and doesn't change when the user switches models later.
+		const lastUserMsg = targetSession.messages.findLast(m => m.type === 'user');
+		if (lastUserMsg && lastUserMsg.type === 'user' && !lastUserMsg.model) {
+			(lastUserMsg as { model?: string }).model = s.modelID;
+		}
+	}
 	if (s.providerID) targetSession.activeProviderID = s.providerID;
 }
 
 function handleTurnTokensEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
 	const t = payload as SessionTurnTokensPayload;
 	// Use explicit userMessageId from history replay, or fall back to last user message
-	const turnMsgId =
-		t.userMessageId || [...targetSession.messages].reverse().find(m => m.type === 'user')?.id;
+	const turnMsgId = t.userMessageId || targetSession.messages.findLast(m => m.type === 'user')?.id;
 
 	if (turnMsgId) {
 		const existing = targetSession.turnTokens[turnMsgId];

@@ -111,6 +111,47 @@ const CONFIGS: Record<ResourceType, ResourceConfig<ResourceItem>> = {
 				typeof attrs.name === 'string' && (attrs.name as string).trim()
 					? (attrs.name as string).trim()
 					: inferredName;
+			// Parse tools: Record<string, boolean>
+			let tools: Record<string, boolean> | undefined;
+			if (typeof attrs.tools === 'object' && attrs.tools !== null && !Array.isArray(attrs.tools)) {
+				tools = {} as Record<string, boolean>;
+				for (const [k, v] of Object.entries(attrs.tools as Record<string, unknown>)) {
+					if (typeof v === 'boolean') tools[k] = v;
+				}
+				if (Object.keys(tools).length === 0) tools = undefined;
+			}
+
+			// Parse permission object
+			let permission: ParsedSubagent['permission'];
+			if (typeof attrs.permission === 'object' && attrs.permission !== null) {
+				const p = attrs.permission as Record<string, unknown>;
+				const validLevel = (v: unknown) =>
+					v === 'ask' || v === 'allow' || v === 'deny'
+						? (v as 'ask' | 'allow' | 'deny')
+						: undefined;
+				const parseBash = (v: unknown) => {
+					if (typeof v === 'string') return validLevel(v);
+					if (typeof v === 'object' && v !== null) {
+						const rec: Record<string, 'ask' | 'allow' | 'deny'> = {};
+						for (const [bk, bv] of Object.entries(v as Record<string, unknown>)) {
+							const lv = validLevel(bv);
+							if (lv) rec[bk] = lv;
+						}
+						return Object.keys(rec).length > 0 ? rec : undefined;
+					}
+					return undefined;
+				};
+				permission = {
+					edit: validLevel(p.edit),
+					bash: parseBash(p.bash),
+					webfetch: validLevel(p.webfetch),
+					doom_loop: validLevel(p.doom_loop),
+					external_directory: validLevel(p.external_directory),
+				};
+				// Strip if all undefined
+				if (Object.values(permission).every(v => v === undefined)) permission = undefined;
+			}
+
 			return {
 				name,
 				prompt: body.trim(),
@@ -128,6 +169,8 @@ const CONFIGS: Record<ResourceType, ResourceConfig<ResourceItem>> = {
 				hidden: typeof attrs.hidden === 'boolean' ? attrs.hidden : undefined,
 				color: typeof attrs.color === 'string' ? attrs.color : undefined,
 				steps: typeof attrs.steps === 'number' ? attrs.steps : undefined,
+				tools,
+				permission,
 				options:
 					typeof attrs.options === 'object' && attrs.options !== null
 						? (attrs.options as Record<string, unknown>)
@@ -147,6 +190,8 @@ const CONFIGS: Record<ResourceType, ResourceConfig<ResourceItem>> = {
 				hidden: item.hidden,
 				color: item.color,
 				steps: item.steps,
+				tools: item.tools,
+				permission: item.permission,
 				options: item.options,
 			},
 			body: item.prompt ?? '',
@@ -167,6 +212,8 @@ const CONFIGS: Record<ResourceType, ResourceConfig<ResourceItem>> = {
 				...(sub.hidden !== undefined && { hidden: sub.hidden }),
 				...(sub.color && { color: sub.color }),
 				...(sub.steps !== undefined && { steps: sub.steps }),
+				...(sub.tools && Object.keys(sub.tools).length > 0 && { tools: sub.tools }),
+				...(sub.permission && { permission: sub.permission }),
 				...(sub.options && { options: sub.options }),
 			};
 			const yamlStr = yaml.dump(attrs, { lineWidth: -1 }).trim();
