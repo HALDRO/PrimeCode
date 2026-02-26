@@ -43,7 +43,8 @@
 				"recommended": true,
 				"noUnusedVariables": "error",
 				"noUnusedImports": "error",
-				"useExhaustiveDependencies": "warn"
+				"useExhaustiveDependencies": "warn",
+				"useHookAtTopLevel": "error"
 			},
 			"style": {
 				"recommended": true,

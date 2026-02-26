@@ -443,6 +443,36 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 			[toolResult?.metadata],
 		);
 
+		// --- All hooks must be called unconditionally, before any early returns ---
+		const meta = useMemo(() => {
+			if (actionType?.type === 'CommandRun') return actionType.command;
+			if (isBash) return (rawInput as { command?: string })?.command || '';
+			if (isWebSearch && actionType?.type === 'WebSearch') return actionType.query;
+			if (isWebSearch) return (rawInput as { query?: string })?.query || '';
+			if (isWebFetch && actionType?.type === 'WebFetch') return actionType.url;
+			if (isWebFetch) return (rawInput as { url?: string })?.url || '';
+			if (isMcp) return rawInput ? JSON.stringify(rawInput) : '';
+			return '';
+		}, [actionType, isBash, isWebSearch, isWebFetch, isMcp, rawInput]);
+
+		const fullText = content || message.streamingOutput || '';
+		const hasBody = fullText.trim().length > 0;
+		const lineCount = useMemo(
+			() => (hasBody ? fullText.split('\n').length : 0),
+			[hasBody, fullText],
+		);
+
+		const streamingViewportRef = useRef<HTMLElement | null>(null);
+		const handleOsInitialized = useCallback((instance: OverlayScrollbars) => {
+			streamingViewportRef.current = instance.elements().viewport;
+			scrollToBottom(instance);
+		}, []);
+		useEffect(() => {
+			if (!isRunning || !message.streamingOutput) return;
+			const el = streamingViewportRef.current;
+			if (el) el.scrollTop = el.scrollHeight;
+		}, [isRunning, message.streamingOutput]);
+
 		if (!toolName) return null;
 
 		// Inline Card: Default for everything except MCP, Bash, Diff tools, WebSearch, WebFetch, Summarize, and tools with Access Requests
@@ -523,38 +553,8 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		const mcpToolLabel = isMcp ? (mcpInfo?.tool ?? toolName) : '';
 		const displayLabel = isSummarize && isRunning ? `${label}...` : label;
 
-		// Meta extraction (memoized to avoid JSON.stringify on every render)
-		const meta = useMemo(() => {
-			if (actionType?.type === 'CommandRun') return actionType.command;
-			if (isBash) return (rawInput as { command?: string })?.command || '';
-			if (isWebSearch && actionType?.type === 'WebSearch') return actionType.query;
-			if (isWebSearch) return (rawInput as { query?: string })?.query || '';
-			if (isWebFetch && actionType?.type === 'WebFetch') return actionType.url;
-			if (isWebFetch) return (rawInput as { url?: string })?.url || '';
-			if (isMcp) return rawInput ? JSON.stringify(rawInput) : '';
-			return '';
-		}, [actionType, isBash, isWebSearch, isWebFetch, isMcp, rawInput]);
-
-		const fullText = content || message.streamingOutput || '';
-		const hasBody = fullText.trim().length > 0;
-		const lineCount = useMemo(
-			() => (hasBody ? fullText.split('\n').length : 0),
-			[hasBody, fullText],
-		);
 		const needsExpand = lineCount > 6;
 		const showAccessGate = accessRequest && !accessRequest.resolved && accessRequest.requestId;
-
-		// Auto-scroll streaming output to bottom
-		const streamingViewportRef = useRef<HTMLElement | null>(null);
-		const handleOsInitialized = useCallback((instance: OverlayScrollbars) => {
-			streamingViewportRef.current = instance.elements().viewport;
-			scrollToBottom(instance);
-		}, []);
-		useEffect(() => {
-			if (!isRunning || !message.streamingOutput) return;
-			const el = streamingViewportRef.current;
-			if (el) el.scrollTop = el.scrollHeight;
-		}, [isRunning, message.streamingOutput]);
 
 		return (
 			<ToolCard
