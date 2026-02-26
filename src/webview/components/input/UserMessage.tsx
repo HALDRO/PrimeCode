@@ -395,13 +395,16 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 				return formatDuration(stats.nextUserMessageTs - messageTimestamp);
 			}
 
-			if (stats.lastResponseTs) {
-				return formatDuration(stats.lastResponseTs - messageTimestamp);
-			}
-
-			// Live timer while processing
+			// Live timer while processing — must be checked BEFORE lastResponseTs
+			// because during child sessions there are already assistant messages
+			// (e.g. "I'll use the task tool...") which set lastResponseTs,
+			// but the session is still actively processing.
 			if (isProcessingLastMessage && liveElapsed > 0) {
 				return formatDuration(liveElapsed);
+			}
+
+			if (stats.lastResponseTs) {
+				return formatDuration(stats.lastResponseTs - messageTimestamp);
 			}
 
 			return null;

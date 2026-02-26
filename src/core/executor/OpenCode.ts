@@ -1718,16 +1718,15 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (name.toLowerCase() === 'question') return;
 
 		const current = this.toolCallStates.get(callID);
-		const isTask = name === 'task' || name === 'Task';
 		const inputObj = (state?.input ?? {}) as Record<string, unknown>;
 		const hasInputNow = Object.keys(inputObj).length > 0;
 
 		if (status === 'pending' || status === 'running') {
 			const isFirstSeen = !current;
-			const taskAwaitingInput = isTask && current && !current.hasInput && hasInputNow;
+			const awaitingInput = current && !current.hasInput && hasInputNow;
 
-			if (isFirstSeen || taskAwaitingInput) {
-				// First emission OR task tool re-emit with input that was missing before.
+			if (isFirstSeen || awaitingInput) {
+				// First emission OR re-emit when input arrives (was missing on initial pending).
 				this.emitToolUse(callID, name, state, status, sessionId);
 				this.toolCallStates.set(callID, { completed: false, hasInput: hasInputNow });
 			} else if (status === 'running' && current && !current.completed) {

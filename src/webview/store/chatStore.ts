@@ -378,7 +378,7 @@ function handleCompleteEvent(targetSession: ChatSession, payload: SessionEventPa
 		if ('partId' in m && m.partId === completePartId) {
 			if (m.type === 'thinking') {
 				m.isStreaming = false;
-				if (!m.durationMs && m.startTime && typeof m.startTime === 'number') {
+				if (m.startTime && typeof m.startTime === 'number') {
 					m.durationMs = Date.now() - m.startTime;
 				}
 			} else if (m.type === 'assistant') {

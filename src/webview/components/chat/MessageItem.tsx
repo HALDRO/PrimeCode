@@ -231,27 +231,24 @@ const SubtaskItem = React.memo<{
 					{message.command && (
 						<div className="text-xs font-mono opacity-50 truncate mb-2">$ {message.command}</div>
 					)}
-					{isRunning || expandState === 'expanded'
-						? groupedChildren.map((child, idx) => {
-								const key = Array.isArray(child)
-									? (child[0]?.id ?? `tool-group-${idx}`)
-									: (child.id ?? `message-${idx}`);
-								return (
-									<MessageItem
-										key={key}
-										item={child}
-										ctx={ctx}
-										collapseGroupedTools={
-											Array.isArray(child) || shouldCollapseGroupedItem(groupedChildren, idx)
-										}
-									/>
-								);
-							})
-						: groupedChildren.map((child, idx) => {
-								if (!Array.isArray(child)) return null;
-								const key = child[0]?.id ?? `tool-group-${idx}`;
-								return <MessageItem key={key} item={child} ctx={ctx} collapseGroupedTools={true} />;
-							})}
+					{groupedChildren.map((child, idx) => {
+						const key = Array.isArray(child)
+							? (child[0]?.id ?? `tool-group-${idx}`)
+							: (child.id ?? `message-${idx}`);
+						const forceCollapse = !isRunning && expandState !== 'expanded';
+						return (
+							<MessageItem
+								key={key}
+								item={child}
+								ctx={ctx}
+								collapseGroupedTools={
+									forceCollapse ||
+									Array.isArray(child) ||
+									shouldCollapseGroupedItem(groupedChildren, idx)
+								}
+							/>
+						);
+					})}
 					{pendingAccess && (
 						<AccessGate
 							requestId={pendingAccess.requestId}
@@ -395,6 +392,7 @@ const SimpleToolGroup = React.memo<{
 								content={(msg as Extract<Message, { type: 'thinking' }>).content || ''}
 								durationMs={(msg as Extract<Message, { type: 'thinking' }>).durationMs}
 								isStreaming={(msg as Extract<Message, { type: 'thinking' }>).isStreaming}
+								startTime={(msg as Extract<Message, { type: 'thinking' }>).startTime}
 							/>
 						);
 					}
@@ -469,6 +467,7 @@ export const MessageItem = React.memo<{
 						content={(item as Extract<Message, { type: 'thinking' }>).content || ''}
 						durationMs={(item as Extract<Message, { type: 'thinking' }>).durationMs}
 						isStreaming={(item as Extract<Message, { type: 'thinking' }>).isStreaming}
+						startTime={(item as Extract<Message, { type: 'thinking' }>).startTime}
 					/>
 				);
 			default:

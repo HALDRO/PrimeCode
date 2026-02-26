@@ -37,7 +37,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 	// Session / subtask tracking (delegated to SubtaskManager)
 	private readonly subtaskManager: SubtaskManager;
-	private readonly activeThinkingPartIds = new Map<string, string>();
+	private readonly activeThinkingPartIds = new Map<string, { partId: string; startTime: number }>();
 	private readonly activeAssistantPartIds = new Map<string, string>();
 
 	// Handlers
@@ -646,12 +646,15 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				const finishedPartId = this.activeAssistantPartIds.get(targetSessionId);
 				if (finishedPartId) {
 					if (isChildSession) {
-						// For child sessions, post a complete marker into the parent transcript
+						// For child sessions, mark the assistant message as done.
+						// Use isDelta so mergeOrAddMessage concatenates empty string
+						// (no-op) instead of overwriting real content via Object.assign.
 						this.routeToParentTranscript(targetSessionId, {
 							id: `complete-${finishedPartId}`,
 							type: 'assistant',
 							partId: finishedPartId,
 							content: '',
+							isDelta: true,
 							isStreaming: false,
 							timestamp: new Date().toISOString(),
 						});
@@ -696,29 +699,32 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				const e = event.data;
 				const partId = e.partId || `thinking-${now}`;
 
-				const prevThinkingPartId = this.activeThinkingPartIds.get(targetSessionId);
-				if (prevThinkingPartId && prevThinkingPartId !== partId) {
+				const prevThinking = this.activeThinkingPartIds.get(targetSessionId);
+				if (prevThinking && prevThinking.partId !== partId) {
 					if (isChildSession) {
+						const prevDuration = Date.now() - prevThinking.startTime;
 						this.routeToParentTranscript(targetSessionId, {
-							id: `thinking-${prevThinkingPartId}`,
+							id: `thinking-${prevThinking.partId}`,
 							type: 'thinking',
-							partId: prevThinkingPartId,
+							partId: prevThinking.partId,
 							isStreaming: false,
+							durationMs: prevDuration,
 							timestamp: new Date().toISOString(),
 						});
 					} else {
 						this.sessionHandler.postComplete(
-							prevThinkingPartId,
-							prevThinkingPartId,
+							prevThinking.partId,
+							prevThinking.partId,
 							targetSessionId,
 						);
 					}
 				}
-				this.activeThinkingPartIds.set(targetSessionId, partId);
+				const thinkingStartTime = Date.now();
+				this.activeThinkingPartIds.set(targetSessionId, { partId, startTime: thinkingStartTime });
 
 				const isThinkingId = partId.startsWith('thinking-') || partId.startsWith('thinking_');
 				const thinkingId = isThinkingId ? partId : `thinking-${partId}`;
-				const isFirstChunk = !prevThinkingPartId || prevThinkingPartId !== partId;
+				const isFirstChunk = !prevThinking || prevThinking.partId !== partId;
 
 				const thinkingData: import('../common').SessionMessageData = {
 					id: thinkingId,
@@ -1281,9 +1287,24 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 	/** Complete (close) the active thinking block for a session, if any. */
 	private completeActiveThinking(sessionId: string): void {
-		const thinkingPartId = this.activeThinkingPartIds.get(sessionId);
-		if (thinkingPartId) {
-			this.sessionHandler.postComplete(thinkingPartId, thinkingPartId, sessionId);
+		const activeThinking = this.activeThinkingPartIds.get(sessionId);
+		if (activeThinking) {
+			const { partId, startTime } = activeThinking;
+			if (this.sessionGraph.isChild(sessionId)) {
+				// handleCompleteEvent only iterates top-level messages and would
+				// never reach the child thinking message. Send an explicit update
+				// with durationMs so the transcript shows the final duration.
+				this.routeToParentTranscript(sessionId, {
+					id: `thinking-${partId}`,
+					type: 'thinking',
+					partId,
+					isStreaming: false,
+					durationMs: Date.now() - startTime,
+					timestamp: new Date().toISOString(),
+				});
+			} else {
+				this.sessionHandler.postComplete(partId, partId, sessionId);
+			}
 			this.activeThinkingPartIds.delete(sessionId);
 		}
 	}

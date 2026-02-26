@@ -14,10 +14,11 @@ import type {
 } from '../../../common/normalizedTypes';
 
 import { getMcpToolDisplayInfo, isMcpTool, isToolMatch } from '../../constants';
+import { useElapsedTimer } from '../../hooks/useElapsedTimer';
 import { cn } from '../../lib/cn';
 import { useAccessRequestByToolUseId, useMcpServers, useToolResultByToolId } from '../../store';
 import type { Message as WebviewMessage } from '../../store/chatStore';
-import { formatToolName } from '../../utils/format';
+import { formatDuration, formatToolName } from '../../utils/format';
 import { useVSCode } from '../../utils/vscode';
 import {
 	AlertCircleIcon,
@@ -26,6 +27,7 @@ import {
 	GlobeIcon,
 	McpIcon,
 	TerminalIcon,
+	TimerIcon,
 	WandIcon,
 } from '../icons';
 import { FileTypeIcon } from '../icons/FileTypeIcon';
@@ -434,6 +436,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		const isWebFetch = actionType?.type === 'WebFetch' || toolName.toLowerCase() === 'webfetch';
 
 		const isRunning = message.isRunning ?? !toolResult;
+		const liveElapsed = useElapsedTimer(isRunning, message.timestamp);
 		const [expanded, setExpanded] = useState(defaultExpanded ?? false);
 		const [diffExpanded, setDiffExpanded] = useState(defaultExpanded ?? false);
 
@@ -580,24 +583,32 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 					</>
 				}
 				headerRight={
-					meta ? (
-						<div
-							className={cn(
-								'opacity-0 transition-opacity duration-150 ease-out',
-								'group-hover:opacity-100',
-							)}
-						>
-							<IconButton
-								icon={<CopyIcon size={14} />}
-								onClick={e => {
-									e.stopPropagation();
-									navigator.clipboard.writeText(meta);
-								}}
-								title="Copy request"
-								size={20}
-							/>
-						</div>
-					) : undefined
+					<div className="flex items-center gap-2">
+						{isRunning && liveElapsed > 0 && (
+							<span className="flex items-center gap-1 text-xs text-vscode-descriptionForeground shrink-0">
+								<TimerIcon size={11} />
+								{formatDuration(liveElapsed)}
+							</span>
+						)}
+						{meta && (
+							<div
+								className={cn(
+									'opacity-0 transition-opacity duration-150 ease-out',
+									'group-hover:opacity-100',
+								)}
+							>
+								<IconButton
+									icon={<CopyIcon size={14} />}
+									onClick={e => {
+										e.stopPropagation();
+										navigator.clipboard.writeText(meta);
+									}}
+									title="Copy request"
+									size={20}
+								/>
+							</div>
+						)}
+					</div>
 				}
 				isCollapsible={(needsExpand && hasBody) || Boolean(showAccessGate)}
 				expanded={expanded}

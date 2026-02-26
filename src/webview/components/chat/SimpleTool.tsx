@@ -161,6 +161,7 @@ interface ThinkingMessageProps {
 	content: string;
 	durationMs?: number;
 	isStreaming?: boolean;
+	startTime?: string | number;
 	defaultExpanded?: boolean;
 }
 
@@ -169,11 +170,18 @@ import { useElapsedTimer } from '../../hooks/useElapsedTimer';
 export { useElapsedTimer };
 
 export const ThinkingMessage = React.memo<ThinkingMessageProps>(
-	({ content, durationMs, isStreaming, defaultExpanded }) => {
-		const preview = useMemo(() => content.split('\n')[0]?.trim(), [content]);
+	({ content, durationMs, isStreaming, startTime, defaultExpanded }) => {
+		const preview = useMemo(
+			() =>
+				content
+					.split('\n')
+					.find(line => line.trim().length > 0)
+					?.trim() ?? '',
+			[content],
+		);
 		const [expanded, setExpanded] = useState(defaultExpanded ?? isStreaming ?? false);
 		const wasStreamingRef = useRef(isStreaming);
-		const liveElapsed = useElapsedTimer(isStreaming ?? false);
+		const liveElapsed = useElapsedTimer(isStreaming ?? false, startTime);
 
 		useEffect(() => {
 			if (isStreaming) {
