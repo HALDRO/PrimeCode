@@ -8,7 +8,7 @@
  *              OPTIMIZED: Todo display extracted to separate component to isolate rerenders.
  */
 
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { isMcpTool } from '../../constants';
 import { cn } from '../../lib/cn';
 import { useChangedFilesState, useChatActions, useMcpServers, useTodoState } from '../../store';
@@ -180,14 +180,57 @@ const TodoStatusIcon: React.FC<{ status: TodoItem['status'] }> = ({ status }) =>
 	}
 };
 
-/** Todo hover popup - same design as in chat */
-const TodoHoverPopup = React.memo<{ todos: TodoItem[] }>(({ todos }) => {
+/** Todo hover popup - adaptive positioning to stay within viewport */
+const TodoHoverPopup = React.memo<{
+	todos: TodoItem[];
+	triggerRef: React.RefObject<HTMLDivElement | null>;
+}>(({ todos, triggerRef }) => {
+	const popupRef = useRef<HTMLDivElement>(null);
+	const [position, setPosition] = useState<{ left: number; maxWidth: number } | null>(null);
 	const completedCount = todos.filter(t => t.status === 'completed').length;
 	const totalCount = todos.length;
 
+	useLayoutEffect(() => {
+		const trigger = triggerRef.current;
+		const popup = popupRef.current;
+		if (!trigger || !popup) return;
+
+		const triggerRect = trigger.getBoundingClientRect();
+		const viewportWidth = window.innerWidth;
+		const padding = 8;
+
+		// Desired width: 75vw but capped to available space
+		const desiredWidth = viewportWidth * 0.75;
+		const maxAvailable = viewportWidth - padding * 2;
+		const finalWidth = Math.min(desiredWidth, maxAvailable);
+
+		// Center popup relative to trigger, then clamp to viewport
+		const triggerCenter = triggerRect.left + triggerRect.width / 2;
+		let left = triggerCenter - finalWidth / 2;
+
+		// Clamp: don't overflow left
+		if (left < padding) left = padding;
+		// Clamp: don't overflow right
+		if (left + finalWidth > viewportWidth - padding) {
+			left = viewportWidth - padding - finalWidth;
+		}
+
+		// Convert to position relative to trigger's left edge (since parent is relative)
+		const relativeLeft = left - triggerRect.left;
+
+		setPosition({ left: relativeLeft, maxWidth: finalWidth });
+	}, [triggerRef]);
+
 	return (
-		<div className="absolute bottom-[calc(100%+8px)] left-0 z-100 pointer-events-none">
-			<div className="bg-(--tool-bg-header) border border-(--tool-border-color) rounded-lg overflow-hidden w-[75vw] pointer-events-auto">
+		<div
+			ref={popupRef}
+			className="absolute bottom-[calc(100%+8px)] z-100 pointer-events-none"
+			style={{
+				left: position ? `${position.left}px` : 0,
+				width: position ? `${position.maxWidth}px` : '75vw',
+			}}
+		>
+			<div className="bg-(--tool-bg-header) border border-(--tool-border-color) rounded-lg overflow-hidden w-full pointer-events-auto">
 				{/* Header */}
 				<div className="flex items-center gap-1.5 h-(--tool-header-height) px-(--tool-header-padding) border-b border-(--border-subtle) bg-(--tool-bg-header)">
 					<TodoListIcon size={14} className="text-vscode-foreground opacity-80 shrink-0" />
@@ -199,11 +242,11 @@ const TodoHoverPopup = React.memo<{ todos: TodoItem[] }>(({ todos }) => {
 				<div className="px-(--tool-header-padding) py-1 bg-(--tool-bg-header)">
 					<div className="flex flex-col gap-(--gap-1)">
 						{todos.map(todo => (
-							<div key={todo.id || todo.content} className="flex items-start gap-(--gap-2-5)">
+							<div key={todo.id || todo.content} className="flex items-start gap-1.5">
 								<TodoStatusIcon status={todo.status} />
 								<span
 									className={cn(
-										'text-sm break-words',
+										'text-sm break-words min-w-0 text-left',
 										todo.status === 'completed'
 											? 'text-vscode-foreground opacity-50'
 											: todo.status === 'cancelled'
@@ -230,6 +273,7 @@ TodoHoverPopup.displayName = 'TodoHoverPopup';
 const TodoSection: React.FC = React.memo(() => {
 	const currentTodos = useTodoState();
 	const [showTodoPopup, setShowTodoPopup] = useState(false);
+	const triggerRef = useRef<HTMLDivElement>(null);
 
 	if (!currentTodos || currentTodos.length === 0) {
 		return null;
@@ -237,6 +281,7 @@ const TodoSection: React.FC = React.memo(() => {
 
 	return (
 		<div
+			ref={triggerRef}
 			className="relative flex"
 			onMouseEnter={() => setShowTodoPopup(true)}
 			onMouseLeave={() => setShowTodoPopup(false)}
@@ -247,7 +292,7 @@ const TodoSection: React.FC = React.memo(() => {
 					{currentTodos.filter(t => t.status === 'completed').length}/{currentTodos.length}
 				</span>
 			</span>
-			{showTodoPopup && <TodoHoverPopup todos={currentTodos} />}
+			{showTodoPopup && <TodoHoverPopup todos={currentTodos} triggerRef={triggerRef} />}
 		</div>
 	);
 });

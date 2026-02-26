@@ -9,9 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  validate:
     runs-on: ubuntu-latest
-    
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -22,9 +21,39 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies
+        run: npm ci || (rm -rf node_modules package-lock.json && npm install)
+
+      - name: Verify version matches tag
         run: |
-          rm -rf node_modules package-lock.json
-          npm install
+          PKG_VERSION="v$(node -p "require('./package.json').version")"
+          TAG_VERSION="${{ github.ref_name }}"
+          echo "package.json version: $PKG_VERSION"
+          echo "Git tag: $TAG_VERSION"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Version mismatch! package.json=$PKG_VERSION, tag=$TAG_VERSION"
+            exit 1
+          fi
+
+      - name: Lint (Biome + TypeScript)
+        run: npm run lint:biome && npm run lint:tsc
+
+      - name: Run tests
+        run: npm test
+
+  release:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci || (rm -rf node_modules package-lock.json && npm install)
 
       - name: Build extension
         run: npm run build
