@@ -372,6 +372,8 @@ const SimpleToolGroup = React.memo<{
 			>
 				{renderItems.map(msg => {
 					if (msg.type === 'assistant') {
+						const assistantContent = (msg as { content: string }).content || '';
+						if (!assistantContent.trim()) return null;
 						return (
 							<div
 								key={msg.id}
@@ -379,7 +381,7 @@ const SimpleToolGroup = React.memo<{
 								style={{ color: 'var(--input-text-color)' }}
 							>
 								<Markdown
-									content={(msg as { content: string }).content || ''}
+									content={assistantContent}
 									isStreaming={(msg as { isStreaming?: boolean }).isStreaming}
 								/>
 							</div>
@@ -441,6 +443,8 @@ export const MessageItem = React.memo<{
 			case 'subtask':
 				return <SubtaskItem message={item} ctx={ctx} />;
 			case 'assistant': {
+				const assistantContent = (item as { content: string }).content || '';
+				if (!assistantContent.trim()) return null;
 				const assistantAgent = item.agent;
 				const agentBadge =
 					assistantAgent && assistantAgent !== 'build' ? (
@@ -455,7 +459,7 @@ export const MessageItem = React.memo<{
 					>
 						{agentBadge}
 						<Markdown
-							content={(item as { content: string }).content || ''}
+							content={assistantContent}
 							isStreaming={(item as { isStreaming?: boolean }).isStreaming}
 						/>
 					</div>
