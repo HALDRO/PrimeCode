@@ -25,18 +25,16 @@ jobs:
           rm -f package-lock.json
           npm install
 
-      - name: Inject version from tag
+      - name: Verify version matches tag
         run: |
+          PKG_VERSION="v$(node -p "require('./package.json').version")"
           TAG_VERSION="${{ github.ref_name }}"
-          VERSION="${TAG_VERSION#v}"
-          echo "Injecting version $VERSION from tag $TAG_VERSION into package.json"
-          node -e "
-            const fs = require('fs');
-            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.version = '$VERSION';
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, '\t') + '\n');
-          "
-          echo "package.json version is now: $(node -p "require('./package.json').version")"
+          echo "package.json version: $PKG_VERSION"
+          echo "Git tag: $TAG_VERSION"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Version mismatch! package.json=$PKG_VERSION, tag=$TAG_VERSION"
+            exit 1
+          fi
 
       - name: Lint (Biome + TypeScript)
         run: npm run lint:biome && npm run lint:tsc
@@ -60,18 +58,6 @@ jobs:
         run: |
           rm -f package-lock.json
           npm install
-
-      - name: Inject version from tag
-        run: |
-          TAG_VERSION="${{ github.ref_name }}"
-          VERSION="${TAG_VERSION#v}"
-          echo "Injecting version $VERSION into package.json"
-          node -e "
-            const fs = require('fs');
-            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.version = '$VERSION';
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, '\t') + '\n');
-          "
 
       - name: Build extension
         run: npm run build

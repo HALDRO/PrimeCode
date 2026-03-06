@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.2.0-blue.svg" alt="Version">
+
   <img src="https://img.shields.io/badge/status-beta-orange.svg" alt="Status">
   <img src="https://img.shields.io/badge/license-Apache--2.0-green.svg" alt="License">
   <img src="https://img.shields.io/badge/VS%20Code-1.105+-purple.svg" alt="VS Code">
@@ -76,7 +76,7 @@
 
 - **VS Code** 1.105+
 - **Windows + PowerShell** (primary scenario)
-- [OpenCode](https://github.com/opencode-ai/opencode) — `opencode` binary (extension won't work without it)
+- [OpenCode](https://github.com/anomalyco/opencode?tab=readme-ov-file#installation) — `opencode` (extension won't work without it)
 
 ### Installation
 

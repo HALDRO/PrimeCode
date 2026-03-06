@@ -1,6 +1,5 @@
-# PrimeCode - Release Script (tag-only)
-# Автоматизирует: проверка → тег → пуш → ожидание CI → откат при провале
-# Версия НЕ коммитится в package.json — CI инжектит её из тега при сборке.
+# PrimeCode - Release Script
+# Автоматизирует: проверка → bump версии → коммит → тег → пуш → ожидание CI → откат при провале
 #
 # Использование:
 #   .\scripts\release.ps1 patch    # 1.0.1 → 1.0.2
@@ -31,15 +30,9 @@ try {
         }
     }
 
-    # --- Читаем текущую версию из последнего тега ---
-    $lastTag = git describe --tags --abbrev=0 2>$null
-    if ($lastTag -and $lastTag -match '^v(\d+\.\d+\.\d+)$') {
-        $currentVersion = $Matches[1]
-    } else {
-        # Фоллбэк на package.json если тегов нет
-        $pkgJson = Get-Content "package.json" -Raw | ConvertFrom-Json
-        $currentVersion = $pkgJson.version
-    }
+    # --- Читаем текущую версию ---
+    $pkgJson = Get-Content "package.json" -Raw | ConvertFrom-Json
+    $currentVersion = $pkgJson.version
     $parts = $currentVersion.Split(".")
     $major = [int]$parts[0]
     $minor = [int]$parts[1]
@@ -53,7 +46,7 @@ try {
     if (-not $Version) {
         Write-Host ""
         Write-Host "  PrimeCode Release" -ForegroundColor Cyan
-        Write-Host "  Current version: $currentVersion (from tag)" -ForegroundColor DarkGray
+        Write-Host "  Current version: $currentVersion" -ForegroundColor DarkGray
         Write-Host ""
         Write-Host "  Choose release type:" -ForegroundColor White
         Write-Host ""
@@ -85,7 +78,7 @@ try {
     }
 
     # --- 1. Git status ---
-    Write-Host "[1/6] Checking git status..." -ForegroundColor Cyan
+    Write-Host "[1/8] Checking git status..." -ForegroundColor Cyan
     $gitStatus = git status --porcelain
     if ($gitStatus) {
         Write-Host "ERROR: Working tree is dirty. Commit or stash first." -ForegroundColor Red
@@ -97,7 +90,7 @@ try {
     Write-Host "  Branch: $branch" -ForegroundColor DarkGray
 
     # --- 2. Вычисляем версию ---
-    Write-Host "`n[2/6] Calculating version..." -ForegroundColor Cyan
+    Write-Host "`n[2/8] Calculating version..." -ForegroundColor Cyan
     switch ($Version) {
         "patch" { $newVersion = $patchVersion }
         "minor" { $newVersion = $minorVersion }
@@ -120,7 +113,7 @@ try {
     }
 
     # --- 3. Lint ---
-    Write-Host "`n[3/6] Running lint..." -ForegroundColor Cyan
+    Write-Host "`n[3/8] Running lint..." -ForegroundColor Cyan
     npm run lint:biome
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: Lint failed!" -ForegroundColor Red
@@ -133,42 +126,52 @@ try {
     }
 
     # --- 4. Tests ---
-    Write-Host "`n[4/6] Running tests..." -ForegroundColor Cyan
+    Write-Host "`n[4/8] Running tests..." -ForegroundColor Cyan
     npm test
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: Tests failed!" -ForegroundColor Red
         exit 1
     }
 
-    # --- 5. Подтверждение ---
+    # --- 5. Bump version ---
+    Write-Host "`n[5/8] Bumping version..." -ForegroundColor Cyan
+    $content = Get-Content "package.json" -Raw
+    $content = $content -replace "`"version`": `"$currentVersion`"", "`"version`": `"$newVersion`""
+    Set-Content "package.json" -Value $content -NoNewline
+
+    # --- 6. Подтверждение ---
     Write-Host ""
     Write-Host "  Ready to release v$newVersion" -ForegroundColor White
     Write-Host "  Branch: $branch" -ForegroundColor DarkGray
-    Write-Host "  This will: push branch, tag HEAD, push tag, and trigger CI" -ForegroundColor DarkGray
-    Write-Host "  No commit will be created — CI injects version from tag" -ForegroundColor DarkGray
+    Write-Host "  This will: commit, tag, push, and trigger CI" -ForegroundColor DarkGray
     Write-Host ""
     $confirm = Read-Host "  Proceed? (y/n)"
     if ($confirm -ne 'y' -and $confirm -ne 'Y') {
-        Write-Host "Aborted." -ForegroundColor Yellow
+        Write-Host "Aborted. Reverting package.json..." -ForegroundColor Yellow
+        git checkout package.json
         exit 0
     }
 
-    # --- 6. Push branch + tag ---
-    Write-Host "`n[5/6] Pushing branch and creating tag..." -ForegroundColor Cyan
+    # --- 7. Commit + tag + push ---
+    Write-Host "`n[6/8] Creating commit and tag..." -ForegroundColor Cyan
+    git add package.json
+    git commit -m "release: v$newVersion"
+    git tag "v$newVersion"
+
+    Write-Host "`n[7/8] Pushing..." -ForegroundColor Cyan
     git push origin $branch
-    git tag -a "v$newVersion" -m "Release v$newVersion"
     git push origin "v$newVersion"
 
-    # --- Ожидание CI ---
+    # --- 8. Ожидание CI ---
     if ($NoWait) {
         Write-Host "`n========================================" -ForegroundColor Green
-        Write-Host "  v$newVersion tag pushed! CI skipped (--NoWait)" -ForegroundColor Green
+        Write-Host "  v$newVersion pushed! CI skipped (--NoWait)" -ForegroundColor Green
         Write-Host "  Check: https://github.com/HALDRO/PrimeCode/actions" -ForegroundColor DarkGray
         Write-Host "========================================`n" -ForegroundColor Green
         exit 0
     }
 
-    Write-Host "`n[6/6] Waiting for CI..." -ForegroundColor Cyan
+    Write-Host "`n[8/8] Waiting for CI..." -ForegroundColor Cyan
     Write-Host "  Monitoring GitHub Actions (timeout: 10 min)" -ForegroundColor DarkGray
 
     $maxWait = 600  # 10 минут
@@ -226,16 +229,17 @@ try {
             } else {
                 Write-Host ""
                 Write-Host "  CI FAILED! ($conclusion)" -ForegroundColor Red
-                Write-Host "  Rolling back tag..." -ForegroundColor Yellow
+                Write-Host "  Rolling back..." -ForegroundColor Yellow
 
-                # Откат: только удаляем тег (коммитов не было)
+                # Откат: удаляем тег и релиз, ревертим коммит безопасно
                 gh release delete "v$newVersion" --yes 2>$null
                 git push origin --delete "v$newVersion" 2>$null
                 git tag -d "v$newVersion" 2>$null
+                git revert HEAD --no-edit
+                git push origin $branch
 
                 Write-Host ""
-                Write-Host "  Rolled back: tag v$newVersion deleted (local + remote)." -ForegroundColor Yellow
-                Write-Host "  No commits were affected." -ForegroundColor DarkGray
+                Write-Host "  Rolled back: tag deleted, release commit reverted." -ForegroundColor Yellow
                 Write-Host "  Check logs: gh run view $runId --log-failed" -ForegroundColor DarkGray
                 exit 1
             }

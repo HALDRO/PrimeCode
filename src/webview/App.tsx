@@ -224,7 +224,7 @@ const EmptyState: React.FC = () => {
 							<button
 								type="button"
 								onClick={() => vscode.postMessage({ type: 'openExternal', url: releaseUrl })}
-								className="text-vscode-textLink-foreground hover:underline cursor-pointer bg-transparent border-none p-0 font-inherit"
+								className="text-vscode-textLink-foreground hover:underline cursor-pointer bg-transparent border-none p-0 font-inherit pointer-events-auto"
 								style={{ fontSize: 'inherit' }}
 								title="Download latest release"
 							>
