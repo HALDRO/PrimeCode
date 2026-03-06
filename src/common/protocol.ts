@@ -793,6 +793,22 @@ export type SseErrorMessage = BaseExtensionMessage<'sseError', { id: string; err
 export type SseClosedMessage = BaseExtensionMessage<'sseClosed', { id: string }>;
 
 // =============================================================================
+// Extension Version Check
+// =============================================================================
+
+export type ExtensionVersionMessage = BaseExtensionMessage<
+	'extensionVersion',
+	{
+		current: string;
+		latest: string | null;
+		updateAvailable: boolean;
+		releaseUrl: string | null;
+		isChecking: boolean;
+		error?: string;
+	}
+>;
+
+// =============================================================================
 // Extension → Webview Union
 // =============================================================================
 
@@ -854,6 +870,7 @@ export type ExtensionMessage =
 	| SseEventMessage
 	| SseErrorMessage
 	| SseClosedMessage
+	| ExtensionVersionMessage
 	| QueueEventMessage;
 
 // #############################################################################
@@ -1071,6 +1088,9 @@ export interface GetAccessCommand {
 }
 export interface CheckCLIDiagnosticsCommand {
 	type: 'checkCLIDiagnostics';
+}
+export interface CheckExtensionVersionCommand {
+	type: 'checkExtensionVersion';
 }
 
 // =============================================================================
@@ -1387,7 +1407,8 @@ export type WebviewCommand =
 	| SyncAllCommand
 	| CancelQueuedMessageCommand
 	| ForceQueuedMessageCommand
-	| ReorderQueueCommand;
+	| ReorderQueueCommand
+	| CheckExtensionVersionCommand;
 
 // =============================================================================
 // Utility

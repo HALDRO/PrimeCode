@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Message } from '../../store/chatStore';
-import { groupToolMessages } from './toolGrouping';
+import { groupToolMessages, precomputeCollapseFlags } from './toolGrouping';
 
 // --- Helpers ---
 
@@ -54,6 +54,18 @@ const heavyTool = (id: string, toolName = 'bash'): Message =>
 		toolName,
 		toolUseId: `tu-${id}`,
 	}) as Message;
+
+const subtask = (id: string): Message =>
+	({
+		type: 'subtask',
+		id,
+		timestamp: new Date().toISOString(),
+		agent: 'subagent',
+		prompt: 'Analyze the codebase',
+		description: 'Find and analyze components',
+		status: 'running',
+		transcript: [],
+	}) as unknown as Message;
 
 const NO_MCP: string[] = [];
 
@@ -366,6 +378,26 @@ describe('groupToolMessages', () => {
 			expect(Array.isArray(result[0])).toBe(true); // first group
 			expect((result[1] as Message).id).toBe('h1'); // heavy tool
 			expect(Array.isArray(result[2])).toBe(true); // trailing group (streaming)
+		});
+	});
+
+	describe('collapse behavior', () => {
+		it('should collapse a grouped tools item when followed by subtask', () => {
+			const msgs = [
+				toolUse('1'),
+				toolResult('1r', 'tu-1'),
+				toolUse('2'),
+				toolResult('2r', 'tu-2'),
+				toolUse('3'),
+				toolResult('3r', 'tu-3'),
+				subtask('s1'),
+			];
+
+			const grouped = groupToolMessages(msgs, NO_MCP);
+			expect(Array.isArray(grouped[0])).toBe(true);
+
+			const flags = precomputeCollapseFlags(grouped);
+			expect(flags[0]).toBe(true);
 		});
 	});
 });

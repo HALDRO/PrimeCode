@@ -13,6 +13,8 @@ import type { ResourceType } from '../../services/ResourceService';
 import { logger } from '../../utils/logger';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
+const GITHUB_REPO = 'HALDRO/PrimeCode';
+
 // Resource type lookup — replaces ternary chain
 const RESOURCE_TYPE_MAP: Record<string, ResourceType> = {
 	openCommandFile: 'commands',
@@ -40,6 +42,8 @@ export class UtilityHandler implements WebviewMessageHandler {
 				return this.handleAcceptAllFiles(msg);
 			case 'getWorkspaceFiles':
 				return this.handleGetWorkspaceFiles(msg);
+			case 'checkExtensionVersion':
+				return this.handleCheckExtensionVersion();
 		}
 	}
 
@@ -167,5 +171,64 @@ export class UtilityHandler implements WebviewMessageHandler {
 			fsPath: path.join(wsPath, r.path),
 		}));
 		this.context.bridge.data('workspaceFiles', files);
+	}
+
+	// ─── Extension Version Check ────────────────────────────────────────
+
+	private async handleCheckExtensionVersion(): Promise<void> {
+		const currentVersion: string =
+			this.context.extensionContext.extension.packageJSON?.version ?? '0.0.0';
+
+		// Send "checking" state immediately
+		this.context.bridge.data('extensionVersion', {
+			current: currentVersion,
+			latest: null,
+			updateAvailable: false,
+			releaseUrl: null,
+			isChecking: true,
+		});
+
+		try {
+			const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
+				headers: { Accept: 'application/vnd.github.v3+json' },
+			});
+
+			if (!res.ok) {
+				throw new Error(`GitHub API ${res.status}: ${res.statusText}`);
+			}
+
+			const release = (await res.json()) as { tag_name: string; html_url: string };
+			const latestVersion = release.tag_name.replace(/^v/, '');
+			const updateAvailable = this.isNewerVersion(currentVersion, latestVersion);
+
+			this.context.bridge.data('extensionVersion', {
+				current: currentVersion,
+				latest: latestVersion,
+				updateAvailable,
+				releaseUrl: updateAvailable ? release.html_url : null,
+				isChecking: false,
+			});
+		} catch (error) {
+			logger.warn('[UtilityHandler] Version check failed:', error);
+			this.context.bridge.data('extensionVersion', {
+				current: currentVersion,
+				latest: null,
+				updateAvailable: false,
+				releaseUrl: null,
+				isChecking: false,
+				error: String(error),
+			});
+		}
+	}
+
+	/** Simple semver comparison: returns true if latest > current */
+	private isNewerVersion(current: string, latest: string): boolean {
+		const c = current.split('.').map(Number);
+		const l = latest.split('.').map(Number);
+		for (let i = 0; i < 3; i++) {
+			if ((l[i] ?? 0) > (c[i] ?? 0)) return true;
+			if ((l[i] ?? 0) < (c[i] ?? 0)) return false;
+		}
+		return false;
 	}
 }

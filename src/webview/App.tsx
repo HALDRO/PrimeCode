@@ -32,7 +32,9 @@ import {
 	useRevertedFromMessageId,
 	useTurnTokens,
 } from './store';
+import { useSettingsStore } from './store/settingsStore';
 import { groupMessagesIntoSections, type MessageSection } from './utils/groupSections';
+import { vscode } from './utils/vscode';
 
 /**
  * Structurally compare two sections — reuse the old ref if nothing meaningful changed.
@@ -190,17 +192,55 @@ const MessageSectionComponent = React.memo<MessageSectionProps>(
 );
 MessageSectionComponent.displayName = 'MessageSectionComponent';
 
-const EmptyState: React.FC = () => (
-	<div className="flex items-center justify-center flex-col h-full opacity-50">
-		<div style={{ fontSize: 'var(--spacing-4)', marginBottom: 'var(--spacing-2)' }}>🤖</div>
-		<div
-			className="text-vscode-descriptionForeground"
-			style={{ fontSize: 'var(--font-size-base)' }}
-		>
-			Start a conversation...
+const EmptyState: React.FC = () => {
+	const { current, latest, updateAvailable, releaseUrl, isChecking } = useSettingsStore(
+		s => s.extensionVersion,
+	);
+
+	return (
+		<div className="flex items-center justify-center flex-col h-full gap-3">
+			<div
+				className="font-semibold text-vscode-foreground"
+				style={{ fontSize: 'var(--font-size-lg, 16px)' }}
+			>
+				PrimeCode
+			</div>
+			<div
+				className="text-vscode-descriptionForeground"
+				style={{ fontSize: 'var(--font-size-base, 13px)' }}
+			>
+				What can I help you with?
+			</div>
+			<div
+				className="text-vscode-descriptionForeground mt-2"
+				style={{ fontSize: 'var(--font-size-sm, 11px)', opacity: 0.7 }}
+			>
+				{isChecking ? (
+					<span>Checking for updates...</span>
+				) : updateAvailable && latest ? (
+					<span>
+						v{current} —{' '}
+						{releaseUrl ? (
+							<button
+								type="button"
+								onClick={() => vscode.postMessage({ type: 'openExternal', url: releaseUrl })}
+								className="text-vscode-textLink-foreground hover:underline cursor-pointer bg-transparent border-none p-0 font-inherit"
+								style={{ fontSize: 'inherit' }}
+								title="Download latest release"
+							>
+								v{latest} available
+							</button>
+						) : (
+							<span>v{latest} available</span>
+						)}
+					</span>
+				) : current !== '0.0.0' ? (
+					<span>v{current}</span>
+				) : null}
+			</div>
 		</div>
-	</div>
-);
+	);
+};
 
 /**
  * ChatArea — isolated component that owns useMessages() and Virtuoso.

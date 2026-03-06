@@ -71,6 +71,16 @@ const handleLoadingMeta = (
 	}
 };
 
+// Extension version info
+export interface ExtensionVersionInfo {
+	current: string;
+	latest: string | null;
+	updateAvailable: boolean;
+	releaseUrl: string | null;
+	isChecking: boolean;
+	error?: string;
+}
+
 // CLI Diagnostics info
 export interface CLIDiagnostics {
 	installed: boolean;
@@ -318,6 +328,9 @@ export interface SettingsState {
 	// CLI Diagnostics
 	cliDiagnostics: CLIDiagnostics;
 
+	// Extension version
+	extensionVersion: ExtensionVersionInfo;
+
 	actions: SettingsActions;
 }
 
@@ -455,6 +468,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 		path: null,
 		error: null,
 		lastChecked: null,
+		isChecking: false,
+	},
+
+	extensionVersion: {
+		current: '0.0.0',
+		latest: null,
+		updateAvailable: false,
+		releaseUrl: null,
 		isChecking: false,
 	},
 
@@ -686,6 +707,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 				case 'cliDiagnostics':
 					if (message.data) {
 						actions.setCLIDiagnostics(message.data);
+					}
+					break;
+
+				case 'extensionVersion':
+					if (message.data) {
+						set({ extensionVersion: message.data as ExtensionVersionInfo });
 					}
 					break;
 

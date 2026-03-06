@@ -61,6 +61,7 @@ export function useExtensionMessages(): void {
 			// syncAll is triggered by the extension itself after OpenCode server starts
 			// (or deferred until the webview is ready), so we only need webviewDidLaunch here.
 			vscode.postMessage({ type: 'webviewDidLaunch' });
+			vscode.postMessage({ type: 'checkExtensionVersion' });
 		}
 
 		return () => window.removeEventListener('message', handleMessage);

@@ -163,6 +163,10 @@ const shouldTriggerCollapse = (msg: Message): boolean => {
 		return true;
 	}
 
+	if (msg.type === 'subtask') {
+		return true;
+	}
+
 	if (msg.type === 'tool_use') {
 		const toolName = msg.toolName || '';
 		if (isNonGroupableTool(toolName)) return true;

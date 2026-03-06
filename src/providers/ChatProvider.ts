@@ -379,7 +379,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			'orchestration',
 		);
 
-		// Utility (proxy fetch, resource files, git stage, workspace files)
+		// Utility (proxy fetch, resource files, git stage, workspace files, version check)
 		r.register(
 			this.utilityHandler,
 			[
@@ -391,6 +391,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				'acceptFile',
 				'acceptAllFiles',
 				'getWorkspaceFiles',
+				'checkExtensionVersion',
 			],
 			'utility',
 		);

@@ -220,6 +220,7 @@ export const ThinkingMessage = React.memo<ThinkingMessageProps>(
 				meta={combinedMeta}
 				expanded={expanded}
 				onToggle={() => setExpanded(prev => !prev)}
+				className="mb-(--message-gap)"
 			>
 				{content && (
 					<Markdown
