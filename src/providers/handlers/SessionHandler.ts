@@ -134,15 +134,6 @@ export class SessionHandler implements WebviewMessageHandler {
 			return;
 		}
 
-		// Only log non-streaming message types to avoid per-token spam
-		if (message.type !== 'thinking' && message.type !== 'assistant') {
-			logger.debug('[SessionHandler] postSessionMessage', {
-				messageType: message.type,
-				messageId: message.id,
-				targetSessionId: targetId,
-			});
-		}
-
 		this.context.bridge.session.message(targetId, message);
 	}
 
@@ -398,9 +389,15 @@ export class SessionHandler implements WebviewMessageHandler {
 			.sort((a, b) => (a.created || 0) - (b.created || 0));
 		const childSessionIds = childSessions.map(s => s.id);
 
-		// Extract task toolUseIds from parent history to build graph links
+		// Extract task toolUseId → childSessionId links from parent history.
+		// We use explicit metadata from tool_result events instead of positional matching,
+		// because failed task calls (no child session created) would shift the mapping
+		// and cause successful calls to lose their child sessions.
 		const parentHistory = await this.context.cli.getHistory(sessionId, config);
+		const childSessionIdSet = new Set(childSessionIds);
 		const taskToolUseIds: string[] = [];
+		const explicitLinks = new Map<string, string>(); // toolUseId → childSessionId
+
 		for (const ev of parentHistory) {
 			if (ev.type === 'tool_use') {
 				const d = ev.data as { tool?: string; toolUseId?: string };
@@ -408,10 +405,41 @@ export class SessionHandler implements WebviewMessageHandler {
 					taskToolUseIds.push(d.toolUseId);
 				}
 			}
+			// Extract explicit childSessionId from task tool_result metadata
+			if (ev.type === 'tool_result') {
+				const d = ev.data as {
+					tool?: string;
+					tool_use_id?: string;
+					metadata?: { sessionId?: string };
+					content?: string;
+				};
+				if (d.tool === 'task' && d.tool_use_id) {
+					// Primary: metadata.sessionId (set by CLI task tool)
+					const metaSessionId = d.metadata?.sessionId;
+					if (metaSessionId && childSessionIdSet.has(metaSessionId)) {
+						explicitLinks.set(d.tool_use_id, metaSessionId);
+					} else if (typeof d.content === 'string') {
+						// Fallback: parse "task_id: ses_..." from result content
+						const match = d.content.match(/task_id:\s*(ses_\S+)/);
+						if (match?.[1] && childSessionIdSet.has(match[1])) {
+							explicitLinks.set(d.tool_use_id, match[1]);
+						}
+					}
+				}
+			}
 		}
 
-		// Register all parent↔child links in the graph
-		graph.registerChildrenFromHistory(sessionId, taskToolUseIds, childSessionIds);
+		// Register explicit links first (from metadata)
+		for (const [toolUseId, childId] of explicitLinks) {
+			graph.registerChild(childId, sessionId, toolUseId);
+		}
+		// Fallback: positional matching for any remaining unlinked children
+		const linkedChildren = new Set(explicitLinks.values());
+		const unlinkedToolIds = taskToolUseIds.filter(id => !explicitLinks.has(id));
+		const unlinkedChildren = childSessionIds.filter(id => !linkedChildren.has(id));
+		if (unlinkedToolIds.length > 0 && unlinkedChildren.length > 0) {
+			graph.registerChildrenFromHistory(sessionId, unlinkedToolIds, unlinkedChildren);
+		}
 
 		// Pre-load ALL child histories in parallel (instead of sequential loop).
 		// Child events are aggregated into parent subtask transcripts (no separate buckets).
@@ -421,6 +449,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			string,
 			{ input: number; output: number; total: number; cacheRead: number }
 		>();
+		const childModelIdMap = new Map<string, string>();
 
 		if (childSessions.length > 0) {
 			const childResults = await Promise.all(
@@ -469,6 +498,17 @@ export class SessionHandler implements WebviewMessageHandler {
 							cacheRead: totalCacheRead,
 						});
 					}
+
+					// Extract modelID from child session_updated events
+					for (const ev of history) {
+						if (ev.type === 'session_updated') {
+							const rec = ev.data as Record<string, unknown> | undefined;
+							const mid = rec && typeof rec.modelID === 'string' ? rec.modelID : undefined;
+							if (mid) {
+								childModelIdMap.set(id, mid);
+							}
+						}
+					}
 				}
 			}
 		}
@@ -501,6 +541,9 @@ export class SessionHandler implements WebviewMessageHandler {
 							timestamp: new Date().toISOString(),
 							...(duration ? { durationMs: duration } : {}),
 							...(childTokens ? { childTokens } : {}),
+							...(childModelIdMap.get(child.id)
+								? { childModelId: childModelIdMap.get(child.id) }
+								: {}),
 						},
 						sessionId,
 					);
@@ -518,6 +561,7 @@ export class SessionHandler implements WebviewMessageHandler {
 					childDurations,
 					childHistories,
 					childTokensMap,
+					childModelIdMap,
 				});
 			}
 		} finally {
@@ -1059,6 +1103,7 @@ export class SessionHandler implements WebviewMessageHandler {
 					type: 'user' as const,
 					content: text,
 					model: config.model,
+					...(config.agent ? { agent: config.agent } : {}),
 					timestamp: new Date().toISOString(),
 					normalizedEntry: this.logNormalizer.normalizeMessage(text, 'user'),
 					...(hasAttachments ? { attachments } : {}),
@@ -1208,6 +1253,7 @@ export class SessionHandler implements WebviewMessageHandler {
 				string,
 				{ input: number; output: number; total: number; cacheRead: number }
 			>;
+			childModelIdMap?: Map<string, string>;
 		},
 	): void {
 		// Track subtask metadata from tool_use so tool_result can carry it forward
@@ -1288,6 +1334,7 @@ export class SessionHandler implements WebviewMessageHandler {
 				string,
 				{ input: number; output: number; total: number; cacheRead: number }
 			>;
+			childModelIdMap?: Map<string, string>;
 		},
 	): void {
 		const data = event.data as {
@@ -1358,6 +1405,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			? options.childDurations?.get(childSessionId)
 			: undefined;
 		const childTokens = childSessionId ? options.childTokensMap?.get(childSessionId) : undefined;
+		const childModelId = childSessionId ? options.childModelIdMap?.get(childSessionId) : undefined;
 		const agent = typeof input.subagent_type === 'string' ? input.subagent_type : 'subagent';
 		const prompt = typeof input.prompt === 'string' ? input.prompt : '';
 		const description = typeof input.description === 'string' ? input.description : 'Subtask';
@@ -1383,6 +1431,7 @@ export class SessionHandler implements WebviewMessageHandler {
 				startTime: timestamp || new Date().toISOString(),
 				...(subtaskDuration ? { durationMs: subtaskDuration } : {}),
 				...(childTokens ? { childTokens } : {}),
+				...(childModelId ? { childModelId } : {}),
 			},
 			sessionId,
 		);
@@ -1547,6 +1596,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			? options.childDurations?.get(childSessionId)
 			: undefined;
 		const childTokens = childSessionId ? options.childTokensMap?.get(childSessionId) : undefined;
+		const childModelId = childSessionId ? options.childModelIdMap?.get(childSessionId) : undefined;
 		const savedMeta = subtaskMeta.get(toolUseId);
 		this.postSessionMessage(
 			{
@@ -1557,6 +1607,7 @@ export class SessionHandler implements WebviewMessageHandler {
 				timestamp: data.timestamp || new Date().toISOString(),
 				...(subtaskDuration ? { durationMs: subtaskDuration } : {}),
 				...(childTokens ? { childTokens } : {}),
+				...(childModelId ? { childModelId } : {}),
 				...(savedMeta ?? {}),
 			},
 			sessionId,
@@ -1901,7 +1952,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		this.context.extensionContext.globalState.update(SessionHandler.OPEN_TABS_KEY, filtered);
 		this.context.extensionContext.globalState.update(SessionHandler.ACTIVE_TAB_KEY, active);
 
-		logger.debug('[SessionHandler] Persisted open tabs', {
+		logger.trace('[SessionHandler] Persisted open tabs', {
 			count: filtered.length,
 			active,
 		});

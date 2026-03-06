@@ -224,6 +224,7 @@ export const ConversationMessageSchema = Type.Union([
 		type: Type.Literal('user'),
 		content: Type.String(),
 		model: Type.Optional(Type.String()),
+		agent: Type.Optional(Type.String()),
 		attachments: Type.Optional(MessageAttachmentsSchema),
 	}),
 	Type.Object({

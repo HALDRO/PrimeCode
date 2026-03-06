@@ -74,7 +74,7 @@ export class OutboundBridge {
 		}
 		const msgType = (msg as { type?: string })?.type;
 		if (msgType !== 'session_event') {
-			logger.debug('[OutboundBridge] send', { type: msgType });
+			logger.trace('[OutboundBridge] send', { type: msgType });
 		}
 		this._view.postMessage(msg);
 	}

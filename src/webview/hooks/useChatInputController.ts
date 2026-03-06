@@ -4,7 +4,7 @@
  *              and agent/model selection from the old ChatInput monolith.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { resolveModelDisplayName } from '../../common';
 import {
 	useChatActions,
@@ -69,6 +69,7 @@ export interface ChatInputController {
 	selectedAgent: string | undefined;
 	setSelectedAgent: (a: string | undefined) => void;
 	modelDisplayName: string;
+	getSessionAgent: () => string | undefined;
 	getSessionModel: () => string | undefined;
 }
 
@@ -89,7 +90,15 @@ export function useChatInputController(
 		clearDraftState,
 	} = useChatActions();
 	const isProcessing = useIsProcessing();
-	const { selectedModel, proxyModels, opencodeProviders, getSessionModel } = useModelSelection();
+	const {
+		selectedModel,
+		proxyModels,
+		opencodeProviders,
+		getSessionModel,
+		setSessionModel,
+		getSessionAgent,
+		setSessionAgent,
+	} = useModelSelection();
 	const isImproving = useIsImprovingPrompt();
 	const currentImproveRequestId = useImprovingPromptRequestId();
 	const promptVersions = usePromptVersions();
@@ -118,8 +127,13 @@ export function useChatInputController(
 		[isControlled, controlledOnChange, setStoreInput],
 	);
 
-	// Agent selection
-	const [selectedAgent, setSelectedAgent] = useState<string | undefined>(undefined);
+	const selectedAgent = getSessionAgent();
+	const setSelectedAgent = useCallback(
+		(a: string | undefined) => {
+			setSessionAgent(a);
+		},
+		[setSessionAgent],
+	);
 
 	// Restore draft state from cancelled queued messages
 	const draftAttachments = useDraftAttachments();
@@ -134,7 +148,7 @@ export function useChatInputController(
 			setSelectedAgent(draftAgent);
 		}
 		clearDraftState();
-	}, [draftAttachments, draftAgent, attachments, clearDraftState]);
+	}, [draftAttachments, draftAgent, attachments, clearDraftState, setSelectedAgent]);
 
 	// Send message
 	const handleSend = useCallback(() => {
@@ -189,7 +203,17 @@ export function useChatInputController(
 
 		const hasAttachments =
 			builtAttachments.files || builtAttachments.codeSnippets || builtAttachments.images;
-		const sessionModel = getSessionModel();
+		// Send the effective model (what the user sees in the dropdown), not just
+		// the per-session override.  When getSessionModel() is undefined the UI
+		// displays selectedModel, so we must send the same value to avoid the
+		// extension falling back to a potentially-stale globalState default.
+		const sessionModel = getSessionModel() ?? selectedModel;
+
+		// Lock in the effective model per-session on first send so that model
+		// changes in other tabs don't retroactively affect this session's display.
+		if (!getSessionModel() && sessionModel && sessionModel !== 'default') {
+			setSessionModel(sessionModel);
+		}
 
 		// Parse @agent from text as fallback when selectedAgent is not set via InputToolbar.
 		// Only match known subagent/CLI agent names to avoid false positives with @filenames.
@@ -219,7 +243,6 @@ export function useChatInputController(
 		setStoreInput('');
 		attachments.clearAll();
 		clearPromptVersions();
-		setSelectedAgent(undefined);
 	}, [
 		inputValue,
 		attachments,
@@ -231,6 +254,8 @@ export function useChatInputController(
 		setStoreInput,
 		clearPromptVersions,
 		getSessionModel,
+		setSessionModel,
+		selectedModel,
 		validAgentNames.has,
 	]);
 
@@ -293,6 +318,7 @@ export function useChatInputController(
 		selectedAgent,
 		setSelectedAgent,
 		modelDisplayName,
+		getSessionAgent,
 		getSessionModel,
 	};
 }

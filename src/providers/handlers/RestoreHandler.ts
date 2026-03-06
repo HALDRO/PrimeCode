@@ -67,7 +67,7 @@ export class RestoreHandler implements WebviewMessageHandler {
 	/** Register a checkpoint so the frontend can later restore it by commitId alone. */
 	registerCheckpoint(commitId: string, record: CheckpointRecord): void {
 		this.checkpoints.set(commitId, record);
-		logger.debug('[RestoreHandler] Registered checkpoint', { commitId, ...record });
+		logger.trace('[RestoreHandler] Registered checkpoint', { commitId, ...record });
 	}
 
 	/** Clean up revert state when a session is deleted. Prevents stale entries in workspaceState. */

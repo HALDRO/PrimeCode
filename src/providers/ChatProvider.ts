@@ -39,6 +39,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private readonly subtaskManager: SubtaskManager;
 	private readonly activeThinkingPartIds = new Map<string, { partId: string; startTime: number }>();
 	private readonly activeAssistantPartIds = new Map<string, string>();
+	/** Per-session tool call counter — reset on 'finished' for turn summary log. */
+	private readonly turnToolCounts = new Map<string, number>();
 
 	// Handlers
 	private sessionHandler: SessionHandler;
@@ -406,7 +408,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		}
 		// Prevent duplicate syncAll during startup (opencode-start vs webview-syncAll race)
 		if (this.hasSynced) {
-			logger.info('[ChatProvider] syncAll skipped: already synced', { source });
+			logger.debug('[ChatProvider] syncAll skipped: already synced', { source });
 			return;
 		}
 		this.hasSynced = true;
@@ -533,9 +535,17 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 	private handleCliEvent(event: CLIEvent): void {
 		const now = Date.now();
-		// Skip verbose per-token logging for high-frequency delta events
-		if (event.type !== 'thinking' && event.type !== 'message') {
-			logger.debug(`[ChatProvider] handleCliEvent: ${event.type}`, event.data);
+		// Only trace high-volume events; skip normalized_log entirely
+		if (event.type === 'normalized_log') {
+			// no-op: normalized_log is handled silently
+		} else if (event.type !== 'thinking' && event.type !== 'message') {
+			const e = event.data as Record<string, unknown> | undefined;
+			logger.trace(`[ChatProvider] handleCliEvent: ${event.type}`, {
+				sessionId: event.sessionId,
+				id: e?.id ?? e?.tool_use_id,
+				name: e?.name,
+				state: e?.state,
+			});
 		}
 
 		if (event.type === 'session_updated') {
@@ -625,6 +635,13 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		// but we have pending subtask tool IDs, this is the first event from a new child session.
 		if (!isChildSession && this.subtaskManager.tryLinkChildSession(targetSessionId)) {
 			isChildSession = true;
+			const routing = this.subtaskManager.resolveRouting(targetSessionId);
+			if (routing) {
+				// The parent can still have an active thinking block when the first child
+				// event arrives before the parent emits its next lifecycle event.
+				// Close it immediately so the block collapses and its timer freezes.
+				this.completeActiveThinking(routing.parentSessionId);
+			}
 		}
 
 		switch (event.type) {
@@ -664,6 +681,15 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					}
 					this.activeAssistantPartIds.delete(targetSessionId);
 				}
+
+				// Turn finished summary — compact lifecycle log
+				const toolCount = this.turnToolCounts.get(targetSessionId) ?? 0;
+				logger.info('[ChatProvider] Turn finished', {
+					sessionId: targetSessionId,
+					toolCount,
+					isChild: isChildSession,
+				});
+				this.turnToolCounts.delete(targetSessionId);
 				break;
 			}
 
@@ -748,6 +774,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 			case 'tool_use': {
 				this.completeActiveThinking(targetSessionId);
+				this.turnToolCounts.set(
+					targetSessionId,
+					(this.turnToolCounts.get(targetSessionId) ?? 0) + 1,
+				);
 				this.handleToolUse(event, targetSessionId, isChildSession);
 				break;
 			}
@@ -1206,6 +1236,14 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			this.sessionHandler.postSessionMessage(resultData, targetSessionId);
 			this.sessionHandler.postComplete(toolUseId, toolUseId, targetSessionId);
 		}
+
+		// Compact tool lifecycle summary — one line per completed tool
+		logger.debug('[ChatProvider] Tool completed', {
+			sessionId: targetSessionId,
+			toolUseId,
+			toolName,
+			isError: Boolean(e.is_error),
+		});
 	}
 
 	private handleSettingsChange(): void {
@@ -1231,22 +1269,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			return;
 		}
 
-		const msgType = (msg as { type?: string })?.type;
-
-		// Extra diagnostics for conversation list
-		if (msgType === 'conversationList') {
-			const data = (msg as { data?: unknown })?.data;
-			logger.info('[ChatProvider] postMessage conversationList', {
-				isArray: Array.isArray(data),
-				count: Array.isArray(data) ? data.length : 'N/A',
-			});
-		} else if (msgType !== 'session_event') {
-			logger.debug('[ChatProvider] postMessage', {
-				type: msgType,
-				targetId: (msg as { targetId?: string })?.targetId,
-			});
-		}
-
+		// Logging is handled by OutboundBridge.send() — no need to duplicate here.
 		this.view.webview.postMessage(msg);
 	}
 

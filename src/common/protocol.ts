@@ -89,6 +89,8 @@ export interface UserMessageData extends SessionMessageBase {
 	type: 'user';
 	content: string;
 	model?: string;
+	/** The agent requested for this user turn (e.g. 'plan', 'build'). */
+	agent?: string;
 	attachments?: {
 		files?: string[];
 		codeSnippets?: Array<{

@@ -59,6 +59,8 @@ type MessageInput = Partial<ConversationMessage> & {
 
 export interface ChatSession {
 	id: string;
+	/** Per-session primary agent override. Undefined means "build". */
+	agent?: string;
 	/** Per-session model override. Undefined means "use workspace default". */
 	model?: string;
 	/** Model ID reported by the backend for the current/last request. */
@@ -186,6 +188,8 @@ export interface ChatActions {
 	deleteMessagesAfterMessageId: (sessionId: string, messageId: string) => void;
 
 	// Per-session model selection
+	setSessionAgent: (agent: string | undefined, sessionId?: string) => void;
+	getSessionAgent: (sessionId?: string) => string | undefined;
 	setSessionModel: (model: string | undefined, sessionId?: string) => void;
 	getSessionModel: (sessionId?: string) => string | undefined;
 }
@@ -317,6 +321,15 @@ function handleMessageEvent(targetSession: ChatSession, payload: SessionEventPay
 
 	mergeOrAddMessage(targetSession.messages, message);
 
+	// Sync session agent from incoming user messages (e.g. CLI plan_exit injects
+	// a synthetic user message with agent: "build" to switch modes).
+	// This mirrors official OpenCode behavior: local.agent.set(msg.agent).
+	if (message.type === 'user' && 'agent' in message && (message as { agent?: string }).agent) {
+		const incomingAgent = (message as { agent?: string }).agent;
+		// "build" is the default — store as undefined to match AgentDropdown convention
+		targetSession.agent = incomingAgent === 'build' ? undefined : incomingAgent;
+	}
+
 	// Clear retry info on success
 	if (message.type === 'assistant') {
 		targetSession.retryInfo = null;
@@ -378,8 +391,12 @@ function handleCompleteEvent(targetSession: ChatSession, payload: SessionEventPa
 		if ('partId' in m && m.partId === completePartId) {
 			if (m.type === 'thinking') {
 				m.isStreaming = false;
-				if (m.startTime && typeof m.startTime === 'number') {
-					m.durationMs = Date.now() - m.startTime;
+				if (m.startTime) {
+					const startTime =
+						typeof m.startTime === 'number' ? m.startTime : new Date(m.startTime).getTime();
+					if (Number.isFinite(startTime) && startTime > 0) {
+						m.durationMs = Date.now() - startTime;
+					}
 				}
 			} else if (m.type === 'assistant') {
 				m.isStreaming = false;
@@ -556,6 +573,7 @@ function handleSubtaskTranscriptEvent(
 
 const createEmptySession = (id: string): ChatSession => ({
 	id,
+	agent: undefined,
 	model: undefined,
 	messages: [],
 	input: '',
@@ -1065,6 +1083,10 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 		setSessionMessages: (sessionId, messages) =>
 			mutateSession(set, sessionId, s => {
 				s.messages = messages;
+				const lastUserWithAgent = [...messages]
+					.reverse()
+					.find((m): m is Message & { type: 'user'; agent?: string } => m.type === 'user');
+				s.agent = lastUserWithAgent?.agent;
 			}),
 
 		deleteMessagesAfterMessageId: (sessionId, messageId) =>
@@ -1072,6 +1094,15 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 				const idx = s.messages.findIndex(m => m.id === messageId);
 				if (idx !== -1) s.messages = s.messages.slice(0, idx + 1);
 			}),
+
+		setSessionAgent: (agent, sessionId) => get().actions.updateSession({ agent }, sessionId),
+
+		getSessionAgent: (sessionId): string | undefined => {
+			const state = get();
+			const sid = resolveTargetSessionId(state, sessionId);
+			if (!sid) return undefined;
+			return state.sessionsById[sid]?.agent;
+		},
 
 		setSessionModel: (model, sessionId) => get().actions.updateSession({ model }, sessionId),
 

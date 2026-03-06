@@ -375,6 +375,8 @@ export const useModelSelection = () => {
 			enabledOpenCodeModels: state.enabledOpenCodeModels,
 			disabledProviders: state.disabledProviders,
 			setSelectedModel: state.actions.setSelectedModel,
+			getSessionAgent: chatActions.getSessionAgent,
+			setSessionAgent: chatActions.setSessionAgent,
 			getSessionModel: chatActions.getSessionModel,
 			setSessionModel: chatActions.setSessionModel,
 		})),

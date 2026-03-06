@@ -297,12 +297,28 @@ export class LogNormalizer extends EventEmitter {
 	}
 
 	/**
+	 * Check whether a file path belongs to the given workspace root.
+	 * Relative paths (no drive letter / no leading slash) are assumed workspace-local.
+	 */
+	private static isInsideWorkspace(filePath: string, workspaceRoot?: string): boolean {
+		if (!workspaceRoot) return true;
+		const normalize = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+		const root = normalize(workspaceRoot);
+		const file = normalize(filePath);
+		// Relative paths are workspace-local by convention
+		if (!/^[a-z]:|^\//i.test(filePath)) return true;
+		return file.startsWith(`${root}/`) || file === root;
+	}
+
+	/**
 	 * Extract LSP diagnostics from tool_result metadata and return them
 	 * in a normalized format. OpenCode sends diagnostics as
 	 * `metadata.diagnostics: Record<string, Diagnostic[]>` on edit/write/apply_patch results.
+	 * When `workspaceRoot` is provided, diagnostics from files outside the workspace are filtered out.
 	 */
 	public static extractDiagnostics(
 		metadata: Record<string, unknown> | undefined,
+		workspaceRoot?: string,
 	): LspDiagnosticsByFile | undefined {
 		if (!metadata) return undefined;
 		const raw = metadata.diagnostics;
@@ -310,6 +326,8 @@ export class LogNormalizer extends EventEmitter {
 		const result: LspDiagnosticsByFile = {};
 		for (const [filePath, diags] of Object.entries(raw as Record<string, unknown>)) {
 			if (!Array.isArray(diags)) continue;
+			// Skip diagnostics from files outside the current workspace
+			if (!LogNormalizer.isInsideWorkspace(filePath, workspaceRoot)) continue;
 			result[filePath] = diags.filter(
 				d => d && typeof d === 'object' && 'message' in d && 'range' in d,
 			);

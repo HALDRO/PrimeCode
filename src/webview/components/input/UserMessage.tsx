@@ -64,72 +64,7 @@ interface MessageAttachments {
 }
 
 /**
- * Parse message content to extract attached files, code snippets, and remaining text.
- * Used as fallback for legacy messages without structured attachments.
- * Supports two formats:
- * 1. Simple file references: @path/to/file.ts
- * 2. Code snippets with line ranges: @path/to/file.ts (1-10)\n```\ncode\n```
- */
-function parseMessageContent(content: string): {
-	files: string[];
-	codeSnippets: CodeSnippetAttachment[];
-	text: string;
-} {
-	const files: string[] = [];
-	const codeSnippets: CodeSnippetAttachment[] = [];
-	let text = content;
-
-	// First, extract code snippets with line ranges and code blocks
-	// Pattern: @filepath (startLine-endLine)\n```\ncode\n```
-	const snippetPattern =
-		/@([A-Za-z]:[^\s@(]+|\/[^\s@(]+|[^\s@(]+\.[a-zA-Z0-9]+)\s*\((\d+)-(\d+)\)\n```\n([\s\S]*?)\n```/g;
-
-	let snippetMatch: RegExpExecArray | null;
-	// biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec pattern
-	while ((snippetMatch = snippetPattern.exec(content)) !== null) {
-		codeSnippets.push({
-			filePath: snippetMatch[1],
-			startLine: Number.parseInt(snippetMatch[2], 10),
-			endLine: Number.parseInt(snippetMatch[3], 10),
-			content: snippetMatch[4],
-		});
-	}
-
-	// Remove code snippets from text
-	if (codeSnippets.length > 0) {
-		text = text.replace(snippetPattern, '').trim();
-	}
-
-	// Then extract simple file references (without line ranges)
-	// Match @path patterns that are NOT followed by (line-line)
-	const filePattern = /@([A-Za-z]:[^\s@(]+|\/[^\s@(]+|[^\s@(]+\.[a-zA-Z0-9]+)(?!\s*\(\d+-\d+\))/g;
-
-	let fileMatch: RegExpExecArray | null;
-	// biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec pattern
-	while ((fileMatch = filePattern.exec(text)) !== null) {
-		const filePath = fileMatch[1];
-		// Only add if it looks like a file path (has extension or is absolute path)
-		if (filePath.includes('.') || filePath.startsWith('/') || /^[A-Za-z]:/.test(filePath)) {
-			files.push(filePath);
-		}
-	}
-
-	// Remove file references from text
-	if (files.length > 0) {
-		text = text.replace(filePattern, '').trim();
-	}
-
-	// Clean up multiple spaces/newlines
-	text = text
-		.replace(/^\n+/, '')
-		.replace(/\n{2,}/g, '\n\n')
-		.trim();
-
-	return { files, codeSnippets, text };
-}
-
-/**
- * Extract attachments from message - uses structured data if available, falls back to parsing
+ * Extract attachments from message. Only structured attachments are rendered as pinned resources.
  */
 function getMessageAttachments(message: Message & { type: 'user' }): {
 	files: string[];
@@ -149,13 +84,11 @@ function getMessageAttachments(message: Message & { type: 'user' }): {
 		};
 	}
 
-	// Fallback to parsing for messages without structured attachments
-	const parsed = parseMessageContent(message.content);
 	return {
-		files: parsed.files,
-		codeSnippets: parsed.codeSnippets,
+		files: [],
+		codeSnippets: [],
 		images: [],
-		text: parsed.text,
+		text: message.content,
 	};
 }
 

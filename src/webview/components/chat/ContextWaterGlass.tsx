@@ -16,6 +16,7 @@ interface ContextWaterGlassProps {
 export const ContextWaterGlass: React.FC<ContextWaterGlassProps> = ({ isVisible = true }) => {
 	// Rounded to 1% in the selector to avoid rerenders on every token
 	const percentage = useContextPercentage();
+	const waterOffset = Math.max(0, 100 - percentage);
 
 	// Pre-compute water colors - using static strings to avoid build issues
 	const waterColorFull =
@@ -59,12 +60,7 @@ export const ContextWaterGlass: React.FC<ContextWaterGlassProps> = ({ isVisible 
 					</filter>
 				</defs>
 
-				<g
-					style={{
-						transform: `translateY(${100 - percentage}%)`,
-						transition: 'transform 1.2s cubic-bezier(0.4, 0, 0.2, 1)',
-					}}
-				>
+				<g transform={`translate(0 ${waterOffset})`}>
 					{/* Back Rolling Wave */}
 					<g filter="url(#waveBlur)">
 						<path

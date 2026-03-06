@@ -177,6 +177,27 @@ interface ToolCardMessageProps {
  * Extract diagnostics from tool result metadata.
  * OpenCode sends `metadata.diagnostics: Record<string, Diagnostic[]>` on edit/write/apply_patch.
  */
+/**
+ * Normalize a file path for prefix comparison: lowercase, forward slashes, no trailing slash.
+ */
+function normalizePath(p: string): string {
+	return p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
+/**
+ * Check whether `filePath` belongs to the current workspace.
+ * Relative paths (no drive letter / no leading slash) are assumed to be workspace-local.
+ */
+function isInsideWorkspace(filePath: string): boolean {
+	const wsRoot = (window as unknown as { workspaceRoot?: string }).workspaceRoot;
+	if (!wsRoot) return true; // no workspace info — don't filter
+	const normalizedRoot = normalizePath(wsRoot);
+	const normalizedFile = normalizePath(filePath);
+	// Relative paths are workspace-local by convention
+	if (!/^[a-z]:|^\//i.test(filePath)) return true;
+	return normalizedFile.startsWith(`${normalizedRoot}/`) || normalizedFile === normalizedRoot;
+}
+
 function extractDiagnosticsFromMeta(
 	metadata: Record<string, unknown> | undefined,
 ): LspDiagnosticsByFile | undefined {
@@ -186,6 +207,8 @@ function extractDiagnosticsFromMeta(
 	const result: LspDiagnosticsByFile = {};
 	for (const [filePath, diags] of Object.entries(raw as Record<string, unknown>)) {
 		if (!Array.isArray(diags)) continue;
+		// Skip diagnostics from files outside the current workspace
+		if (!isInsideWorkspace(filePath)) continue;
 		const valid = diags.filter(
 			(d): d is LspDiagnostic => d && typeof d === 'object' && 'message' in d && 'range' in d,
 		);

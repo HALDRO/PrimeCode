@@ -1,13 +1,12 @@
 import * as vscode from 'vscode';
 
-let outputChannel: vscode.OutputChannel | undefined;
+let outputChannel: vscode.LogOutputChannel | undefined;
 
 /**
- * Serialize a value for logging, handling Error objects specially
+ * Serialize a value for logging, handling Error objects specially.
  */
 function serializeArg(arg: unknown): string {
 	if (arg instanceof Error) {
-		// Error objects don't serialize well with JSON.stringify
 		const errorObj: Record<string, unknown> = {
 			name: arg.name,
 			message: arg.message,
@@ -15,7 +14,6 @@ function serializeArg(arg: unknown): string {
 		if (arg.stack) {
 			errorObj.stack = arg.stack;
 		}
-		// Include any additional properties (like 'code', 'cause', etc.)
 		for (const key of Object.getOwnPropertyNames(arg)) {
 			if (!(key in errorObj)) {
 				errorObj[key] = (arg as unknown as Record<string, unknown>)[key];
@@ -31,7 +29,7 @@ function serializeArg(arg: unknown): string {
 }
 
 /**
- * Format arguments for logging
+ * Format arguments for logging.
  */
 function formatArgs(args: unknown[]): string {
 	if (args.length === 0) return '';
@@ -39,35 +37,41 @@ function formatArgs(args: unknown[]): string {
 	return args.map(serializeArg).join(' ');
 }
 
+/**
+ * Structured logger backed by VS Code LogOutputChannel.
+ *
+ * Log level is controlled natively by VS Code:
+ *   "Developer: Set Log Level…" → choose level for "PrimeCode"
+ *
+ * Levels (from most to least verbose): Trace → Debug → Info → Warning → Error
+ */
 export const logger = {
 	initialize: (name: string) => {
-		outputChannel = vscode.window.createOutputChannel(name);
+		outputChannel = vscode.window.createOutputChannel(name, { log: true });
 	},
 	get channel() {
 		return outputChannel;
 	},
 	info: (message: string, ...args: unknown[]) => {
 		const formatted = args.length > 0 ? `${message} ${formatArgs(args)}` : message;
-		outputChannel?.appendLine(`[INFO] ${new Date().toISOString()} - ${formatted}`);
-		console.log(`${message}`, ...args);
+		outputChannel?.info(formatted);
 	},
 	error: (message: string, ...args: unknown[]) => {
 		const formatted = args.length > 0 ? `${message} ${formatArgs(args)}` : message;
-		outputChannel?.appendLine(`[ERROR] ${new Date().toISOString()} - ${formatted}`);
-		console.error(`${message}`, ...args);
+		outputChannel?.error(formatted);
 	},
 	warn: (message: string, ...args: unknown[]) => {
 		const formatted = args.length > 0 ? `${message} ${formatArgs(args)}` : message;
-		outputChannel?.appendLine(`[WARN] ${new Date().toISOString()} - ${formatted}`);
-		console.warn(`${message}`, ...args);
+		outputChannel?.warn(formatted);
 	},
 	debug: (message: string, ...args: unknown[]) => {
-		// Skip debug logs in production to reduce noise
-		if (process.env.NODE_ENV === 'production') {
-			return;
-		}
 		const formatted = args.length > 0 ? `${message} ${formatArgs(args)}` : message;
-		outputChannel?.appendLine(`[DEBUG] ${new Date().toISOString()} - ${formatted}`);
+		outputChannel?.debug(formatted);
+	},
+	/** Very verbose tracing — only visible when log level is set to Trace. */
+	trace: (message: string, ...args: unknown[]) => {
+		const formatted = args.length > 0 ? `${message} ${formatArgs(args)}` : message;
+		outputChannel?.trace(formatted);
 	},
 	show: (preserveFocus?: boolean) => {
 		outputChannel?.show(preserveFocus);
