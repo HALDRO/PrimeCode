@@ -40,7 +40,7 @@ pnpm-lock.yaml
 # Build artifacts (not needed in production)
 dist/*.map
 dist/icon.png
-dist/preview.png
+dist/preview.gif
 
 # Misc
 *.vsix

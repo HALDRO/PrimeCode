@@ -9,7 +9,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 
-const WORKSPACE = 'c:\\Users\\Comp\\Desktop\\PC2\\PrimeCode';
+const WORKSPACE = process.cwd();
 const DEBUG_DIR = path.join(WORKSPACE, 'docs', 'debug');
 
 function ask(q: string): Promise<string> {

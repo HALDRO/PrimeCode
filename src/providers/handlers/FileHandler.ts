@@ -137,7 +137,7 @@ export class FileHandler implements WebviewMessageHandler {
 			return;
 		}
 
-		await vscode.commands.executeCommand('primecode.openFileDiff', absolutePath);
+		await vscode.commands.executeCommand('primecode.openFileDiff', absolutePath, msg.line);
 	}
 
 	private async onOpenExternal(msg: CommandOf<'openExternal'>): Promise<void> {

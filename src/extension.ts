@@ -78,15 +78,50 @@ export function activate(context: vscode.ExtensionContext) {
 			// Command to open file diff from chat participant
 			const openFileDiffDisposable = vscode.commands.registerCommand(
 				'primecode.openFileDiff',
-				async (filePath: string) => {
+				async (filePath: string, line?: number) => {
 					try {
 						logger.info('openFileDiff command executed:', filePath);
-						const uri = vscode.Uri.file(filePath);
-						const gitExtension = vscode.extensions.getExtension('vscode.git');
-						if (gitExtension?.isActive) {
-							await vscode.commands.executeCommand('git.openChange', uri);
-						} else {
-							await vscode.commands.executeCommand('vscode.open', uri);
+						const fileUri = vscode.Uri.file(filePath);
+						const fileName = filePath.split(/[\\/]/).pop() ?? 'file';
+
+						// Try git: URI for HEAD version. For new files (untracked/not in HEAD),
+						// this will fail — just open the file directly.
+						let opened = false;
+						try {
+							const headUri = fileUri.with({
+								scheme: 'git',
+								query: JSON.stringify({ path: fileUri.fsPath, ref: 'HEAD' }),
+							});
+							await vscode.workspace.openTextDocument(headUri);
+							await vscode.commands.executeCommand(
+								'vscode.diff',
+								headUri,
+								fileUri,
+								`${fileName} (HEAD ↔ Working Tree)`,
+							);
+							opened = true;
+						} catch {
+							// New file — just open it
+							await vscode.commands.executeCommand('vscode.open', fileUri);
+							opened = true;
+						}
+						if (!opened) {
+							await vscode.commands.executeCommand('vscode.open', fileUri);
+						}
+
+						// Scroll to the first changed line if provided
+						if (line !== undefined) {
+							setTimeout(() => {
+								const editor = vscode.window.activeTextEditor;
+								if (editor) {
+									const pos = new vscode.Position(Math.max(0, line - 1), 0);
+									editor.selection = new vscode.Selection(pos, pos);
+									editor.revealRange(
+										new vscode.Range(pos, pos),
+										vscode.TextEditorRevealType.InCenter,
+									);
+								}
+							}, 300);
 						}
 					} catch (error) {
 						logger.error('Error opening diff:', error);

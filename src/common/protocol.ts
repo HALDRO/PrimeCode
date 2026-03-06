@@ -1089,6 +1089,7 @@ export interface OpenFileDiffCommand {
 	filePath: string;
 	oldContent?: string;
 	newContent?: string;
+	line?: number;
 }
 export interface OpenExternalCommand {
 	type: 'openExternal';

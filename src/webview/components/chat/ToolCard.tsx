@@ -292,7 +292,7 @@ const FileEditCard: React.FC<FileEditCardProps> = ({
 		[actionType, toolResult?.metadata, accessRequest, filePath],
 	);
 
-	const { lines, effectiveFilePath, name, hasDeleteChange, stats } = resolved;
+	const { lines, effectiveFilePath, name, hasDeleteChange, stats, firstChangedLine } = resolved;
 	const hasContent = lines.length > 0 || hasDeleteChange;
 
 	if (!hasContent) return null;
@@ -337,8 +337,7 @@ const FileEditCard: React.FC<FileEditCardProps> = ({
 								postMessage({
 									type: 'openFileDiff',
 									filePath: effectiveFilePath,
-									oldContent: '',
-									newContent: '',
+									line: firstChangedLine,
 								});
 						}}
 						title="Open in diff editor"

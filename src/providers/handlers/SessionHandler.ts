@@ -623,6 +623,26 @@ export class SessionHandler implements WebviewMessageHandler {
 		if (!sessionId) return;
 		logger.info('[SessionHandler] Closing session', { sessionId });
 
+		// Abort the session (and its children) if currently active in OpenCode,
+		// so it doesn't keep running in the background consuming resources.
+		const sessionsToAbort = new Set<string>([sessionId]);
+		for (const childId of this.context.sessionGraph.getChildren(sessionId)) {
+			sessionsToAbort.add(childId);
+		}
+
+		const cli = this.context.cli;
+		if (cli.abortSession) {
+			await Promise.allSettled(
+				[...sessionsToAbort].map(sid =>
+					cli
+						.abortSession?.(sid)
+						.catch(e =>
+							logger.warn(`[SessionHandler] Failed to abort session on close: ${sid}`, e),
+						),
+				),
+			);
+		}
+
 		this.context.sessionState.startedSessions.delete(sessionId);
 		this.replayedSessions.delete(sessionId);
 		this.clearSessionStats(sessionId);

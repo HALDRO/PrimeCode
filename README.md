@@ -23,7 +23,7 @@
 </p>
 
 <p align="center">
-  <img src="public/preview.png" alt="PrimeCode Preview" width="700">
+  <img src="public/preview.gif" alt="PrimeCode Preview" width="700">
 </p>
 
 ---

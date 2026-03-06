@@ -37,6 +37,16 @@ interface DisplayLine extends DiffLine {
 }
 
 // ---------------------------------------------------------------------------
+// Extract first changed line from @@ hunk header
+// ---------------------------------------------------------------------------
+
+/** Extract the new-file line number from the first @@ hunk header (e.g. `@@ -10,5 +12,7 @@` → 12). */
+export function extractFirstChangedLine(diffText: string): number | undefined {
+	const match = diffText.match(/@@ -\d+(?:,\d+)? \+(\d+)/);
+	return match ? Number(match[1]) : undefined;
+}
+
+// ---------------------------------------------------------------------------
 // O(N) unified diff parser
 // ---------------------------------------------------------------------------
 
@@ -172,6 +182,7 @@ export type ResolvedDiffData = {
 	name: string;
 	hasDeleteChange: boolean;
 	stats: { added: number; removed: number };
+	firstChangedLine: number | undefined;
 };
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
@@ -283,12 +294,26 @@ export function resolveDiffData(params: {
 	if (!effectiveFilePath && metaPath) effectiveFilePath = metaPath;
 	if (!effectiveFilePath && params.fallbackFilePath) effectiveFilePath = params.fallbackFilePath;
 
+	// Extract first changed line from any available unified diff source
+	const anyDiffText =
+		unifiedDiff ||
+		(actionRec?.type === 'FileEdit'
+			? (() => {
+					const c = Array.isArray(actionRec.changes) ? asRecord(actionRec.changes[0]) : undefined;
+					return c?.type === 'Edit' && typeof c.unifiedDiff === 'string'
+						? (c.unifiedDiff as string)
+						: undefined;
+				})()
+			: undefined);
+	const firstChangedLine = anyDiffText ? extractFirstChangedLine(anyDiffText) : undefined;
+
 	return {
 		lines,
 		effectiveFilePath,
 		name: effectiveFilePath ? getShortFileName(effectiveFilePath) : 'unknown',
 		hasDeleteChange,
 		stats: computeStats(lines),
+		firstChangedLine,
 	};
 }
 
