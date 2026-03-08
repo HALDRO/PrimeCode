@@ -27,6 +27,8 @@ import { logger } from '../utils/logger';
 // =============================================================================
 
 export class OutboundBridge {
+	private static readonly MAX_QUEUE_SIZE = 5000;
+
 	private _view: IView | null = null;
 	private _queue: unknown[] = [];
 	/**
@@ -65,6 +67,13 @@ export class OutboundBridge {
 			}
 		}
 		if (!this._view) {
+			if (this._queue.length >= OutboundBridge.MAX_QUEUE_SIZE) {
+				logger.warn(
+					`[OutboundBridge] Queue full (${OutboundBridge.MAX_QUEUE_SIZE}), dropping oldest message`,
+					{ droppedType: (this._queue[0] as { type?: string })?.type },
+				);
+				this._queue.shift();
+			}
 			logger.debug('[OutboundBridge] view not ready, queuing message', {
 				type: (msg as { type?: string })?.type,
 				queueSize: this._queue.length,

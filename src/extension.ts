@@ -23,9 +23,10 @@ export function activate(context: vscode.ExtensionContext) {
 	serviceRegistry = new ServiceRegistry(context);
 	context.subscriptions.push(serviceRegistry);
 
-	// Track provider for lazy initialization
+	// Track provider for lazy initialization — shared promise prevents double-init race
 	let provider: ChatProvider | undefined;
 	let providerError: Error | undefined;
+	let providerPromise: Promise<ChatProvider | undefined> | undefined;
 
 	// Register command FIRST to ensure it's always available
 	const disposable = vscode.commands.registerCommand(
@@ -34,8 +35,11 @@ export function activate(context: vscode.ExtensionContext) {
 			logger.info('openChat command executed');
 			try {
 				if (!provider && !providerError) {
-					// Lazy initialize provider on first command execution
-					provider = await initializeProvider(context);
+					// Reuse in-flight promise to prevent concurrent initialization
+					if (!providerPromise) {
+						providerPromise = initializeProvider(context);
+					}
+					provider = await providerPromise;
 				}
 				if (provider) {
 					// Reveal sidebar chat view
@@ -64,16 +68,6 @@ export function activate(context: vscode.ExtensionContext) {
 			// Create main chat provider (unified session_event architecture)
 			logger.info('Creating ChatProvider (unified session_event)...');
 			logger.info('Using unified session_event architecture');
-
-			const loadConversationDisposable = vscode.commands.registerCommand(
-				'primecode.loadConversation',
-				(filename: string) => {
-					logger.info('loadConversation command executed:', filename);
-					vscode.window.showWarningMessage(
-						'Conversation history is not available in the unified session_event architecture yet.',
-					);
-				},
-			);
 
 			// Command to open file diff from chat participant
 			const openFileDiffDisposable = vscode.commands.registerCommand(
@@ -190,7 +184,6 @@ export function activate(context: vscode.ExtensionContext) {
 			logger.info('WebviewViewProvider registered');
 
 			ctx.subscriptions.push(
-				loadConversationDisposable,
 				openFileDiffDisposable,
 				addSelectionDisposable,
 				webviewProviderDisposable,
@@ -207,7 +200,9 @@ export function activate(context: vscode.ExtensionContext) {
 	}
 
 	// Try to initialize provider eagerly but don't block activation
-	initializeProvider(context)
+	// Reuse shared promise so openChat command awaits the same initialization
+	providerPromise = initializeProvider(context);
+	providerPromise
 		.then(p => {
 			provider = p;
 			if (p) {
@@ -228,9 +223,6 @@ export function activate(context: vscode.ExtensionContext) {
 			logger.error('Async provider initialization failed:', error);
 			providerError = error instanceof Error ? error : new Error(String(error));
 		});
-
-	// Show output channel to make it visible
-	logger.show(true);
 }
 
 export async function deactivate(): Promise<void> {

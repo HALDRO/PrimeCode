@@ -147,11 +147,6 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 					<span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap leading-[1.2]">
 						{item.label}
 					</span>
-					{item.data.capabilities?.reasoning && (
-						<span className="flex shrink-0 items-center gap-(--gap-1) opacity-70 text-vscode-descriptionForeground">
-							<BrainSideIcon size={14} />
-						</span>
-					)}
 					{item.meta && (
 						<span className="shrink-0 text-xs text-(--alpha-40) leading-[1.2]">{item.meta}</span>
 					)}
@@ -175,7 +170,15 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 				result.push({
 					id: modelId,
 					label: model.name,
-					icon: (
+					icon: model.reasoning ? (
+						<BrainSideIcon
+							size={14}
+							style={{
+								color: isActive ? 'var(--color-accent)' : 'var(--vscode-descriptionForeground)',
+								opacity: isActive ? 1 : 0.7,
+							}}
+						/>
+					) : (
 						<ZapIcon
 							size={14}
 							style={{
@@ -200,10 +203,19 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 			// For OpenCode, proxy models use 'oai' provider prefix (saved to opencode.json)
 			const modelId = `${OPENAI_COMPATIBLE_PROVIDER_ID}/${model.id}`;
 			const isActive = effectiveActiveModel === modelId;
+			const hasReasoning = model.capabilities?.reasoning === true;
 			result.push({
 				id: modelId,
 				label: model.name || model.id,
-				icon: (
+				icon: hasReasoning ? (
+					<BrainSideIcon
+						size={14}
+						style={{
+							color: isActive ? 'var(--color-accent)' : 'var(--vscode-descriptionForeground)',
+							opacity: isActive ? 1 : 0.7,
+						}}
+					/>
+				) : (
 					<ZapIcon
 						size={14}
 						style={{

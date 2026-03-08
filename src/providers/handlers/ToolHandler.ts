@@ -1,5 +1,4 @@
-import * as fs from 'node:fs';
-import * as path from 'node:path';
+import * as vscode from 'vscode';
 import {
 	DEFAULT_POLICIES,
 	migrateLegacyPolicies,
@@ -184,15 +183,15 @@ export class ToolHandler implements WebviewMessageHandler {
 			return;
 		}
 
-		const configPath = path.join(workspaceRoot, 'opencode.json');
+		const configUri = vscode.Uri.file(`${workspaceRoot}/opencode.json`);
 		const serverPermission = policiesToServerFormat(this.policies);
 
 		try {
 			// Read existing opencode.json (or start fresh)
 			let existing: Record<string, unknown> = {};
 			try {
-				const content = await fs.promises.readFile(configPath, 'utf-8');
-				existing = JSON.parse(content) as Record<string, unknown>;
+				const raw = await vscode.workspace.fs.readFile(configUri);
+				existing = JSON.parse(Buffer.from(raw).toString('utf-8')) as Record<string, unknown>;
 			} catch {
 				// File doesn't exist or is invalid — start with schema
 				existing = { $schema: 'https://opencode.ai/config.json' };
@@ -201,7 +200,8 @@ export class ToolHandler implements WebviewMessageHandler {
 			// Merge permission field
 			existing.permission = serverPermission;
 
-			await fs.promises.writeFile(configPath, `${JSON.stringify(existing, null, 2)}\n`, 'utf-8');
+			const content = Buffer.from(`${JSON.stringify(existing, null, 2)}\n`, 'utf-8');
+			await vscode.workspace.fs.writeFile(configUri, content);
 			logger.info('[ToolHandler] Policies written to opencode.json', serverPermission);
 		} catch (e) {
 			logger.warn('[ToolHandler] Failed to write opencode.json:', e);

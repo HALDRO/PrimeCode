@@ -72,10 +72,10 @@ export const formatRelativeTime = (dateInput: string | number | Date): string =>
  */
 export const formatNumber = (num: number): string => {
 	if (num >= 1_000_000) {
-		return `${(num / 1_000_000).toFixed(1)}M`;
+		return `${Math.round(num / 1_000_000)}M`;
 	}
 	if (num >= 1_000) {
-		return `${(num / 1_000).toFixed(1)}K`;
+		return `${Math.round(num / 1_000)}K`;
 	}
 	return num.toString();
 };

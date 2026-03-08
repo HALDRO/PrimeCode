@@ -209,6 +209,13 @@ export const ProviderManager: React.FC = () => {
 			: [...enabledProxyModels, modelId];
 		setEnabledProxyModels(newEnabled);
 		postMessage({ type: 'updateSettings', settings: { 'proxy.enabledModels': newEnabled } });
+		// Sync only enabled models to opencode.json
+		postMessage({
+			type: 'syncProxyModels',
+			baseUrl: proxyBaseUrl,
+			apiKey: proxyApiKey,
+			enabledModelIds: newEnabled,
+		});
 	};
 
 	const handleToggleProviderEnabled = (providerId: string) => {

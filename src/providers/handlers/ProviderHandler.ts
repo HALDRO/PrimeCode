@@ -2,12 +2,14 @@ import * as vscode from 'vscode';
 import { normalizeProxyBaseUrl, type OpenCodeProviderData } from '../../common';
 import { OPENAI_COMPATIBLE_PROVIDER_ID } from '../../common/constants';
 import type { CommandOf, WebviewCommand } from '../../common/protocol';
+import type { EnrichedProxyModel } from '../../services/OpenCodeClientService';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
 export class ProviderHandler implements WebviewMessageHandler {
 	constructor(private context: HandlerContext) {}
 
 	private static readonly LEGACY_SELECTED_MODEL_KEY = 'primecode.selectedModel';
+	private static readonly PROXY_MODELS_CACHE_KEY = 'primecode.proxyModels.cache';
 
 	private getSelectedModelKey(): string {
 		return 'primecode.selectedModel.opencode';
@@ -59,6 +61,9 @@ export class ProviderHandler implements WebviewMessageHandler {
 				break;
 			case 'loadProxyModels':
 				await this.onLoadProxyModels(msg);
+				break;
+			case 'syncProxyModels':
+				await this.onSyncProxyModels(msg);
 				break;
 		}
 	}
@@ -257,18 +262,31 @@ export class ProviderHandler implements WebviewMessageHandler {
 			return;
 		}
 
-		// Live fetch (no caching)
+		// Immediately send cached models so the UI is populated before fetch completes.
+		const cached = this.context.extensionContext.globalState.get<EnrichedProxyModel[]>(
+			ProviderHandler.PROXY_MODELS_CACHE_KEY,
+		);
+		if (cached?.length) {
+			this.context.bridge.data('proxyModels', {
+				enabled: true,
+				models: cached,
+				baseUrl,
+			});
+		}
 
 		let url: URL;
 		try {
 			url = new URL(`${baseUrl}/models`);
 		} catch {
-			this.context.bridge.data('proxyModels', {
-				enabled: false,
-				models: [],
-				baseUrl,
-				error: 'Invalid proxy baseUrl',
-			});
+			// Invalid URL — only send error if we had no cache
+			if (!cached?.length) {
+				this.context.bridge.data('proxyModels', {
+					enabled: false,
+					models: [],
+					baseUrl,
+					error: 'Invalid proxy baseUrl',
+				});
+			}
 			return;
 		}
 
@@ -284,12 +302,15 @@ export class ProviderHandler implements WebviewMessageHandler {
 			if (!response.ok) {
 				const bodyText = await response.text().catch(() => '');
 				const detail = bodyText ? `: ${bodyText.slice(0, 400)}` : '';
-				this.context.bridge.data('proxyModels', {
-					enabled: false,
-					models: [],
-					baseUrl,
-					error: `Proxy models request failed (${response.status})${detail}`,
-				});
+				// Only overwrite UI with error if we had no cache
+				if (!cached?.length) {
+					this.context.bridge.data('proxyModels', {
+						enabled: false,
+						models: [],
+						baseUrl,
+						error: `Proxy models request failed (${response.status})${detail}`,
+					});
+				}
 				return;
 			}
 
@@ -302,68 +323,186 @@ export class ProviderHandler implements WebviewMessageHandler {
 					? ((json as { data: unknown[] }).data as unknown[])
 					: [];
 
-			const models = items
+			// Parse models with extended metadata from /v1/models response.
+			const rawModels = items
 				.filter(
-					(item): item is { id: unknown } =>
+					(item): item is Record<string, unknown> =>
 						item != null && typeof item === 'object' && 'id' in item,
 				)
 				.map(item => {
-					const id = String((item as { id?: unknown }).id ?? '');
-					return { id, name: id };
+					const id = String(item.id ?? '');
+					return {
+						id,
+						name: id,
+						contextLength: toPositiveInt(
+							item.context_length ??
+								item.context_window ??
+								item.max_context_length ??
+								item.max_model_len,
+						),
+						maxCompletionTokens: toPositiveInt(
+							item.max_completion_tokens ?? item.max_output_tokens ?? item.max_tokens,
+						),
+					};
 				})
 				.filter(m => m.id.length > 0);
 
-			if (models.length === 0) {
+			if (rawModels.length === 0) {
+				if (!cached?.length) {
+					this.context.bridge.data('proxyModels', {
+						enabled: false,
+						models: [],
+						baseUrl,
+						error: 'No models returned by proxy',
+					});
+				}
+				return;
+			}
+
+			const enriched = await this.enrichWithModelsDev(rawModels);
+
+			// Persist to cache for next startup
+			void this.context.extensionContext.globalState.update(
+				ProviderHandler.PROXY_MODELS_CACHE_KEY,
+				enriched,
+			);
+
+			this.context.bridge.data('proxyModels', {
+				enabled: true,
+				models: enriched,
+				baseUrl,
+			});
+		} catch (error) {
+			// Fetch failed — if we already sent cached models, don't overwrite with error.
+			if (!cached?.length) {
+				const errMsg = error instanceof Error ? error.message : String(error);
 				this.context.bridge.data('proxyModels', {
 					enabled: false,
 					models: [],
 					baseUrl,
-					error: 'No models returned by proxy',
+					error: `Proxy models fetch failed: ${errMsg}`,
 				});
-				return;
 			}
-
-			this.context.bridge.data('proxyModels', {
-				enabled: true,
-				models,
-				baseUrl,
-			});
-
-			// Sync oai provider config to project-level opencode.json
-			// so the OpenCode server picks up the proxy models.
-			try {
-				const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-				if (workspaceRoot) {
-					await this.context.services.openCodeClient.syncProxyProviderToProjectConfig(
-						workspaceRoot,
-						OPENAI_COMPATIBLE_PROVIDER_ID,
-						baseUrl,
-						apiKey,
-						models,
-					);
-
-					// OpenCode caches config as a lazy singleton — it won't re-read
-					// opencode.json until the instance is disposed. Trigger dispose so
-					// the next request bootstraps fresh state with updated providers.
-					const sdkClient = this.context.cli.getSdkClient();
-					if (sdkClient) {
-						await sdkClient.instance.dispose().catch((err: unknown) => {
-							console.warn('[ProviderHandler] instance.dispose() after config sync failed:', err);
-						});
-					}
-				}
-			} catch (syncErr) {
-				// Non-fatal — proxy models are loaded in UI, config sync is best-effort
-				console.warn('[ProviderHandler] Failed to sync proxy provider to opencode.json:', syncErr);
-			}
-		} catch (error) {
-			const msg = error instanceof Error ? error.message : String(error);
-			this.context.bridge.data('proxyModels', {
-				enabled: false,
-				models: [],
-				baseUrl,
-				error: `Proxy models fetch failed: ${msg}`,
-			});
 		}
 	}
+
+	/**
+	 * Sync only user-enabled proxy models to opencode.json.
+	 * Triggered when the user toggles models in the ProviderManager UI.
+	 */
+	private async onSyncProxyModels(msg: CommandOf<'syncProxyModels'>): Promise<void> {
+		const { baseUrl, apiKey, enabledModelIds } = msg;
+		if (!baseUrl?.trim() || !enabledModelIds?.length) return;
+
+		try {
+			const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+			if (!workspaceRoot) return;
+
+			// Build enriched models from the cached proxy models (preserves /v1/models metadata),
+			// falling back to models.dev for any missing fields.
+			const cached = this.context.extensionContext.globalState.get<EnrichedProxyModel[]>(
+				ProviderHandler.PROXY_MODELS_CACHE_KEY,
+			);
+			const cachedById = new Map((cached ?? []).map(m => [m.id, m]));
+
+			const enrichedModels: EnrichedProxyModel[] = enabledModelIds.map(id => {
+				const fromCache = cachedById.get(id);
+				return fromCache ? { ...fromCache } : { id, name: id };
+			});
+
+			// Enrich any models still missing metadata via models.dev
+			const idsNeedingEnrichment = enrichedModels
+				.filter(m => !m.contextLength && !m.capabilities)
+				.map(m => m.id);
+			if (idsNeedingEnrichment.length > 0) {
+				const modelsDevLookup =
+					await this.context.services.modelsDev.lookupModels(idsNeedingEnrichment);
+				for (const model of enrichedModels) {
+					const devInfo = modelsDevLookup.get(model.id);
+					if (devInfo) {
+						if (!model.contextLength && devInfo.context) model.contextLength = devInfo.context;
+						if (!model.maxCompletionTokens && devInfo.output)
+							model.maxCompletionTokens = devInfo.output;
+						if (!model.capabilities) {
+							model.capabilities = {
+								reasoning: devInfo.reasoning,
+								vision: devInfo.modalities?.input?.includes('image'),
+								tools: devInfo.tool_call,
+							};
+						}
+					}
+				}
+			}
+
+			await this.context.services.openCodeClient.syncProxyProviderToProjectConfig(
+				workspaceRoot,
+				OPENAI_COMPATIBLE_PROVIDER_ID,
+				baseUrl,
+				apiKey,
+				enrichedModels,
+			);
+
+			// Trigger OpenCode config reload
+			const sdkClient = this.context.cli.getSdkClient();
+			if (sdkClient) {
+				await sdkClient.instance.dispose().catch((err: unknown) => {
+					console.warn('[ProviderHandler] instance.dispose() after sync failed:', err);
+				});
+			}
+		} catch (syncErr) {
+			console.warn('[ProviderHandler] Failed to sync proxy models to opencode.json:', syncErr);
+		}
+	}
+
+	/**
+	 * Enrich proxy models with metadata from models.dev.
+	 * For each model missing contextLength, look it up in the centralized database.
+	 */
+	private async enrichWithModelsDev(
+		models: Array<{
+			id: string;
+			name: string;
+			contextLength?: number;
+			maxCompletionTokens?: number;
+		}>,
+	): Promise<EnrichedProxyModel[]> {
+		const idsToLookup = models.map(m => m.id);
+		const devData = await this.context.services.modelsDev.lookupModels(idsToLookup);
+
+		return models.map(m => {
+			const dev = devData.get(m.id);
+			const enriched: EnrichedProxyModel = {
+				// Always preserve original id and name from the proxy — never
+				// replace them with models.dev values, as the proxy may use
+				// custom prefixes/suffixes that must be sent back verbatim.
+				id: m.id,
+				name: m.name,
+				contextLength: m.contextLength ?? dev?.context,
+				maxCompletionTokens: m.maxCompletionTokens ?? dev?.output,
+			};
+			if (dev) {
+				enriched.capabilities = {
+					reasoning: dev.reasoning,
+					vision: dev.modalities?.input?.includes('image'),
+					tools: dev.tool_call,
+				};
+			} else {
+				// No models.dev data — assume broadest defaults so the UI
+				// doesn't hide capabilities that likely exist.
+				enriched.capabilities = {
+					reasoning: true,
+					vision: true,
+					tools: true,
+				};
+			}
+			return enriched;
+		});
+	}
+}
+
+/** Safely coerce a value to a positive integer, or undefined. */
+function toPositiveInt(val: unknown): number | undefined {
+	if (val == null) return undefined;
+	const n = typeof val === 'number' ? val : Number(val);
+	return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined;
 }

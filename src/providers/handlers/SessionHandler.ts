@@ -9,7 +9,12 @@ import type {
 import { generateId, parseModelId } from '../../common';
 import { IMPROVE_PROMPT_DEFAULT_TEMPLATE } from '../../common/promptImprover';
 import type { CommandOf, QueuedMessageData, WebviewCommand } from '../../common/protocol';
-import { computeDiffLineStats, isFileEditTool } from '../../common/toolRegistry';
+import {
+	computeDiffLineStats,
+	extractPatchFilePaths,
+	isFileEditTool,
+	resolveToolName,
+} from '../../common/toolRegistry';
 import {
 	buildTranscript,
 	extractFilePath,
@@ -52,6 +57,9 @@ export class SessionHandler implements WebviewMessageHandler {
 
 	/** Sessions whose history has already been replayed into the webview. */
 	private replayedSessions = new Set<string>();
+
+	/** Deferred flag: webviewDidLaunch arrived before the server was ready. */
+	private pendingWebviewLaunch = false;
 
 	// Improve Prompt State
 	private improvePromptController: AbortController | null = null;
@@ -289,14 +297,43 @@ export class SessionHandler implements WebviewMessageHandler {
 	// =============================================================================
 
 	private async onWebviewDidLaunch(): Promise<void> {
+		// If the server isn't ready yet, defer restoration until onServerReady() is called.
+		const serverInfo = this.context.cli.getOpenCodeServerInfo();
+		if (!serverInfo?.baseUrl) {
+			logger.info('[SessionHandler] Server not ready yet, deferring webviewDidLaunch');
+			this.pendingWebviewLaunch = true;
+			return;
+		}
+
+		await this.restoreOrCreateSession();
+	}
+
+	/**
+	 * Called by ChatProvider after the OpenCode server has started successfully.
+	 * If webviewDidLaunch was deferred (server wasn't ready), run restoration now.
+	 */
+	public async onServerReady(): Promise<void> {
+		if (!this.pendingWebviewLaunch) return;
+		this.pendingWebviewLaunch = false;
+		logger.info('[SessionHandler] Server is now ready, running deferred session restoration');
+		await this.restoreOrCreateSession();
+	}
+
+	/**
+	 * Core restoration logic: restore persisted tabs or auto-create a session
+	 * for first-time users so they can start typing immediately.
+	 */
+	private async restoreOrCreateSession(): Promise<void> {
 		// Restore all previously open tabs from globalState, then replay their history.
 		try {
 			const config = this.buildBaseConfig();
 			const allSessions = await this.context.cli.listSessions(config);
 			const validSessionIds = new Set(allSessions.filter(s => !s.parentID).map(s => s.id));
 
+			// First-time user: no sessions exist — auto-create one so they can type immediately.
 			if (validSessionIds.size === 0) {
-				logger.info('[SessionHandler] No sessions found in CLI, staying in EmptyState');
+				logger.info('[SessionHandler] No sessions found, auto-creating first session');
+				await this.onCreateSession();
 				return;
 			}
 
@@ -1366,6 +1403,18 @@ export class SessionHandler implements WebviewMessageHandler {
 
 		if (filePathFromInput && this.isFileEditTool(toolName)) {
 			this.emitFileChangeFromReplay(input, filePathFromInput, toolUseId, sessionId);
+		} else if (!filePathFromInput && resolveToolName(toolName) === 'apply_patch') {
+			// apply_patch has no single filePath — extract paths from the patch content
+			const patchPaths = extractPatchFilePaths(input);
+			for (const patchPath of patchPaths) {
+				this.context.bridge.session.fileChanged(sessionId, {
+					filePath: patchPath,
+					fileName: patchPath.split(/[/\\]/).pop() || patchPath,
+					linesAdded: 0,
+					linesRemoved: 0,
+					toolUseId,
+				});
+			}
 		}
 	}
 

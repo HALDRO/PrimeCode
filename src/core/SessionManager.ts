@@ -24,7 +24,9 @@ export class SessionState implements ISessionState {
 		return max;
 	}
 	public set stopGuardUntil(_v: number) {
-		// no-op — use activateStopGuard(duration, sessionId) instead
+		throw new Error(
+			'stopGuardUntil setter is deprecated. Use activateStopGuard(duration, sessionId) instead.',
+		);
 	}
 
 	/**

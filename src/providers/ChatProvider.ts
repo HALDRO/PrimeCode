@@ -1,7 +1,13 @@
 import * as vscode from 'vscode';
 import { PERMISSION_CATEGORIES, type PermissionCategory } from '../common/permissions';
 import type { WebviewCommand } from '../common/protocol';
-import { computeDiffLineStats, isFileEditTool, isTaskTool } from '../common/toolRegistry';
+import {
+	computeDiffLineStats,
+	extractPatchFilePaths,
+	isFileEditTool,
+	isTaskTool,
+	resolveToolName,
+} from '../common/toolRegistry';
 import { OpenCodeExecutor } from '../core/executor/OpenCode';
 import type { CLIEvent } from '../core/executor/types';
 import type { ServiceRegistry } from '../core/ServiceRegistry';
@@ -247,6 +253,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 			// Hydrate all UI-visible state after server connection (providers, proxy models, MCP, etc.)
 			await this.syncAllOrDefer('opencode-start');
+
+			// If webviewDidLaunch arrived before the server was ready, run deferred session restoration now.
+			await this.sessionHandler.onServerReady();
 		} catch (error) {
 			logger.warn('[ChatProvider] Failed to start OpenCode:', error);
 			this.sessionHandler.postSessionMessage({
@@ -337,6 +346,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				'setOpenCodeModel',
 				'selectModel',
 				'loadProxyModels',
+				'syncProxyModels',
 			],
 			'provider',
 		);
@@ -491,9 +501,14 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.sendInitialState();
 		this.bridge.data('accessData', []);
 
-		// If OpenCode started before the webview mounted, run the deferred sync now.
-		if (this.pendingSyncAll) {
-			void this.syncAllOrDefer('deferred-after-view-ready');
+		// Sync when webview is (re-)created, but ONLY if the server is actually ready.
+		// If the server hasn't started yet, doStartOpenCode will call syncAllOrDefer
+		// once it's up — and at that point this.view will exist, so it will proceed.
+		const serverReady = !!this.cli.getOpenCodeServerInfo()?.baseUrl;
+		if (this.pendingSyncAll || serverReady) {
+			void this.syncAllOrDefer(
+				this.pendingSyncAll ? 'deferred-after-view-ready' : 'webview-recreated',
+			);
 		}
 	}
 
@@ -1147,7 +1162,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 		// Non-task tool result
 		const toolInputRaw = e.input;
-		let emittedFileChange = false;
 		if (toolInputRaw && typeof toolInputRaw === 'object') {
 			const toolInput = toolInputRaw as Record<string, unknown>;
 			const filePath = typeof toolInput.filePath === 'string' ? toolInput.filePath : undefined;
@@ -1171,38 +1185,47 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				this.sessionHandler.postSessionMessage(toolUseData, targetSessionId);
 			}
 
-			if (filePath && !emittedFileChange) {
-				if (isFileEditTool(toolName)) {
-					const oldContent =
-						typeof toolInput.old_string === 'string'
-							? toolInput.old_string
-							: typeof toolInput.old_str === 'string'
-								? toolInput.old_str
-								: typeof toolInput.oldString === 'string'
-									? toolInput.oldString
+			if (filePath && isFileEditTool(toolName)) {
+				const oldContent =
+					typeof toolInput.old_string === 'string'
+						? toolInput.old_string
+						: typeof toolInput.old_str === 'string'
+							? toolInput.old_str
+							: typeof toolInput.oldString === 'string'
+								? toolInput.oldString
+								: '';
+
+				const newContent =
+					typeof toolInput.new_string === 'string'
+						? toolInput.new_string
+						: typeof toolInput.new_str === 'string'
+							? toolInput.new_str
+							: typeof toolInput.newString === 'string'
+								? toolInput.newString
+								: typeof toolInput.content === 'string'
+									? toolInput.content
 									: '';
 
-					const newContent =
-						typeof toolInput.new_string === 'string'
-							? toolInput.new_string
-							: typeof toolInput.new_str === 'string'
-								? toolInput.new_str
-								: typeof toolInput.newString === 'string'
-									? toolInput.newString
-									: typeof toolInput.content === 'string'
-										? toolInput.content
-										: '';
+				const diffStats = computeDiffLineStats(oldContent, newContent);
 
-					const diffStats = computeDiffLineStats(oldContent, newContent);
-
+				this.bridge.session.fileChanged(targetSessionId, {
+					filePath,
+					fileName: filePath.split(/[/\\]/).pop() || filePath,
+					linesAdded: diffStats.added,
+					linesRemoved: diffStats.removed,
+					toolUseId,
+				});
+			} else if (!filePath && resolveToolName(toolName) === 'apply_patch') {
+				// apply_patch has no single filePath — extract paths from the patch content
+				const patchPaths = extractPatchFilePaths(toolInput);
+				for (const patchPath of patchPaths) {
 					this.bridge.session.fileChanged(targetSessionId, {
-						filePath,
-						fileName: filePath.split(/[/\\]/).pop() || filePath,
-						linesAdded: diffStats.added,
-						linesRemoved: diffStats.removed,
+						filePath: patchPath,
+						fileName: patchPath.split(/[/\\]/).pop() || patchPath,
+						linesAdded: 0,
+						linesRemoved: 0,
 						toolUseId,
 					});
-					emittedFileChange = true;
 				}
 			}
 		}

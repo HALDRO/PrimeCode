@@ -564,9 +564,17 @@ export interface ModelCapabilities {
 	tools?: boolean;
 }
 
+export interface ProxyModelData {
+	id: string;
+	name: string;
+	contextLength?: number;
+	maxCompletionTokens?: number;
+	capabilities?: ModelCapabilities;
+}
+
 export interface ProxyModelsData {
 	enabled: boolean;
-	models: { id: string; name: string; capabilities?: ModelCapabilities }[];
+	models: ProxyModelData[];
 	baseUrl?: string;
 	error?: string;
 }
@@ -1046,6 +1054,12 @@ export interface LoadProxyModelsCommand {
 	baseUrl: string;
 	apiKey: string;
 }
+export interface SyncProxyModelsCommand {
+	type: 'syncProxyModels';
+	baseUrl: string;
+	apiKey: string;
+	enabledModelIds: string[];
+}
 
 // =============================================================================
 // Tool / Access Commands
@@ -1368,6 +1382,7 @@ export type WebviewCommand =
 	| SetOpenCodeModelCommand
 	| SelectModelCommand
 	| LoadProxyModelsCommand
+	| SyncProxyModelsCommand
 	| AccessResponseCommand
 	| QuestionResponseCommand
 	| QuestionRejectCommand

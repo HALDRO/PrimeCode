@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { McpConfigService } from '../services/McpConfigService';
 import { McpConfigWatcherService } from '../services/McpConfigWatcherService';
+import { ModelsDevService } from '../services/ModelsDevService';
 import { McpManagementService } from '../services/mcp/McpManagementService';
 import { OpenCodeClientService } from '../services/OpenCodeClientService';
 import { ResourceService } from '../services/ResourceService';
@@ -14,6 +15,7 @@ export class ServiceRegistry implements vscode.Disposable {
 	public readonly mcpConfigWatcher: McpConfigWatcherService;
 	public readonly mcpManagement: McpManagementService;
 	public readonly openCodeClient: OpenCodeClientService;
+	public readonly modelsDev: ModelsDevService;
 	public rules: RulesService | null = null; // RulesService depends on workspace root
 
 	private disposables: vscode.Disposable[] = [];
@@ -26,6 +28,7 @@ export class ServiceRegistry implements vscode.Disposable {
 		this.mcpConfigWatcher = new McpConfigWatcherService(this.mcpConfig);
 
 		this.openCodeClient = new OpenCodeClientService();
+		this.modelsDev = new ModelsDevService();
 
 		this.mcpManagement = new McpManagementService(
 			context,
@@ -61,6 +64,10 @@ export class ServiceRegistry implements vscode.Disposable {
 		this._onMcpMessage.dispose();
 		for (const d of this.disposables) {
 			d.dispose();
+		}
+		// Dispose services that may hold connections or timers
+		if ('dispose' in this.mcpManagement && typeof this.mcpManagement.dispose === 'function') {
+			this.mcpManagement.dispose();
 		}
 	}
 }

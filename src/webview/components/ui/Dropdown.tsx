@@ -576,30 +576,36 @@ export function DropdownMenu<T>({
 				</div>
 			)}
 
-			<ScrollContainer className="flex-1 py-(--gap-1) px-(--gap-3)" autoHide="never">
-				{loading ? (
-					<div className="p-(--gap-4) text-center text-sm text-(--alpha-50)">Loading...</div>
-				) : filteredItems.length === 0 ? (
-					<div className="p-(--gap-4) text-center text-sm text-(--alpha-50)">{emptyMessage}</div>
-				) : filteredSections ? (
-					filteredSections.map((section, sectionIdx) => (
-						<div key={section.title || sectionIdx}>
-							{section.title && (
-								<div className="flex items-center justify-between px-(--dropdown-padding-x) pt-(--gap-1) pb-(--gap-0-5) text-xs font-medium text-(--alpha-40)">
-									<span>{section.title}</span>
-									{section.action}
-								</div>
-							)}
-							{section.items.map(item => {
-								const idx = globalIndex++;
-								return renderMenuItem(item, idx);
-							})}
-						</div>
-					))
-				) : (
-					filteredItems.map((item, idx) => renderMenuItem(item, idx))
-				)}
-			</ScrollContainer>
+			<div
+				onMouseLeave={() => {
+					setHoveredIndex(null);
+				}}
+			>
+				<ScrollContainer className="flex-1 py-(--gap-1) px-(--gap-3)" autoHide="never">
+					{loading ? (
+						<div className="p-(--gap-4) text-center text-sm text-(--alpha-50)">Loading...</div>
+					) : filteredItems.length === 0 ? (
+						<div className="p-(--gap-4) text-center text-sm text-(--alpha-50)">{emptyMessage}</div>
+					) : filteredSections ? (
+						filteredSections.map((section, sectionIdx) => (
+							<div key={section.title || sectionIdx}>
+								{section.title && (
+									<div className="flex items-center justify-between px-(--dropdown-padding-x) pt-(--gap-1) pb-(--gap-0-5) text-xs font-medium text-(--alpha-40)">
+										<span>{section.title}</span>
+										{section.action}
+									</div>
+								)}
+								{section.items.map(item => {
+									const idx = globalIndex++;
+									return renderMenuItem(item, idx);
+								})}
+							</div>
+						))
+					) : (
+						filteredItems.map((item, idx) => renderMenuItem(item, idx))
+					)}
+				</ScrollContainer>
+			</div>
 
 			{footer && <div className="border-t border-(--alpha-10)">{footer}</div>}
 

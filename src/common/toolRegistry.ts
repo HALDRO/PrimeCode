@@ -177,6 +177,32 @@ export function computeDiffLineStats(
 	};
 }
 
+/**
+ * Extract file paths from an `apply_patch` tool input.
+ * Parses `*** filepath` headers from the patch string, or falls back to
+ * structured `files[]` array if present.
+ * Returns an empty array for non-patch inputs.
+ */
+export function extractPatchFilePaths(input: Record<string, unknown>): string[] {
+	const patch = typeof input.patch === 'string' ? input.patch : '';
+	if (patch) {
+		const paths: string[] = [];
+		for (const match of patch.matchAll(/^\*{3}\s+(.+?)(?:\s|$)/gm)) {
+			const p = match[1].trim();
+			if (p && p !== '/dev/null') paths.push(p);
+		}
+		if (paths.length > 0) return paths;
+	}
+	// Fallback: structured files array
+	const files = input.files;
+	if (Array.isArray(files)) {
+		return files
+			.map(f => (f as Record<string, unknown>).path)
+			.filter((p): p is string => typeof p === 'string' && p.length > 0);
+	}
+	return [];
+}
+
 /** Check if a tool should NOT be grouped in the message list. */
 export function isNonGroupableTool(toolName: string): boolean {
 	if (toolName === 'Summarize Conversation') return true;

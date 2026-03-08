@@ -52,6 +52,15 @@ const DEFAULT_PROXY_MODEL_CAPABILITIES: Omit<OpenCodeModelConfig, 'name'> = {
 	tool_call: true,
 };
 
+/** Enriched proxy model with metadata from /v1/models response and/or models.dev */
+export interface EnrichedProxyModel {
+	id: string;
+	name: string;
+	contextLength?: number;
+	maxCompletionTokens?: number;
+	capabilities?: { reasoning?: boolean; vision?: boolean; tools?: boolean };
+}
+
 interface OpenCodeProviderModel {
 	id: string;
 	name: string;
@@ -138,16 +147,19 @@ export class OpenCodeClientService {
 	}
 
 	/**
-	 * Write the oai provider section (models, baseURL, apiKey) into the
-	 * project-level opencode.json so the OpenCode server picks it up on next
-	 * config reload.  Merges non-destructively with existing content.
+	 * Write ONLY the enabled proxy models into the project-level opencode.json
+	 * so the OpenCode server picks them up on next config reload.
+	 * Merges non-destructively with existing content.
+	 *
+	 * @param enabledModels - Only models the user explicitly enabled in the UI.
+	 *   Enriched with metadata from /v1/models response and models.dev lookup.
 	 */
 	async syncProxyProviderToProjectConfig(
 		workspaceRoot: string,
 		providerId: string,
 		baseUrl: string,
 		apiKey: string,
-		models: { id: string; name: string }[],
+		enabledModels: EnrichedProxyModel[],
 	): Promise<void> {
 		const configPath = vscode.Uri.file(`${workspaceRoot}/opencode.json`);
 
@@ -160,11 +172,31 @@ export class OpenCodeClientService {
 		}
 
 		const modelsRecord: Record<string, OpenCodeModelConfig> = {};
-		for (const m of models) {
-			modelsRecord[m.id] = {
+		for (const m of enabledModels) {
+			const config: OpenCodeModelConfig = {
 				name: m.name,
 				...DEFAULT_PROXY_MODEL_CAPABILITIES,
 			};
+			// Override with real metadata when available
+			if (m.contextLength || m.maxCompletionTokens) {
+				(config as OpenCodeModelConfig & { limit: Record<string, number> }).limit = {
+					...(m.contextLength ? { context: m.contextLength } : {}),
+					...(m.maxCompletionTokens ? { output: m.maxCompletionTokens } : {}),
+				};
+			}
+			if (m.capabilities?.reasoning !== undefined) {
+				config.reasoning = m.capabilities.reasoning;
+			}
+			if (m.capabilities?.vision !== undefined) {
+				config.modalities = {
+					input: m.capabilities.vision ? ['text', 'image'] : ['text'],
+					output: ['text'],
+				};
+			}
+			if (m.capabilities?.tools !== undefined) {
+				config.tool_call = m.capabilities.tools;
+			}
+			modelsRecord[m.id] = config;
 		}
 
 		const normalizedBaseUrl = normalizeProxyBaseUrl(baseUrl);

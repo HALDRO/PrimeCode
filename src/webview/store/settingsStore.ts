@@ -412,6 +412,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 	selectedModel: 'default',
 	proxyModels: [],
 	enabledProxyModels: [],
+
 	proxyTestStatus: {
 		isLoading: false,
 		success: null,

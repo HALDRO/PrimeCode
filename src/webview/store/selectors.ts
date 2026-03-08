@@ -398,30 +398,26 @@ export const useSettingsActions = () => useSettingsStore(state => state.actions)
 
 const DEFAULT_CONTEXT_WINDOW = 200000;
 
-const STANDARD_MODEL_CONTEXT: Record<string, number> = {
-	'claude-sonnet-4-5': 200000,
-	'claude-haiku-4-5': 200000,
-	'claude-opus-4-5': 200000,
-};
-
 export const useModelContextWindow = () =>
 	useSettingsStore((state: SettingsState) => {
 		const { selectedModel, opencodeProviders, proxyModels } = state;
 		const parsed = parseModelId(selectedModel);
 		if (parsed) {
+			// Check proxy models (oai provider)
 			if (parsed.providerId === 'proxy' || parsed.providerId === 'oai') {
 				const proxyModel = proxyModels.find(m => m.id === parsed.modelId);
 				if (proxyModel?.contextLength) return proxyModel.contextLength;
 			}
+			// Check OpenCode providers (includes models.dev metadata)
 			const provider = opencodeProviders.find(p => p.id === parsed.providerId);
 			if (provider) {
 				const model = provider.models.find(m => m.id === parsed.modelId);
 				if (model?.limit?.context) return model.limit.context;
 			}
 		}
+		// Fallback: check proxy models by raw ID
 		const proxyModel = proxyModels.find(m => m.id === selectedModel);
 		if (proxyModel?.contextLength) return proxyModel.contextLength;
-		if (STANDARD_MODEL_CONTEXT[selectedModel]) return STANDARD_MODEL_CONTEXT[selectedModel];
 		return DEFAULT_CONTEXT_WINDOW;
 	});
 

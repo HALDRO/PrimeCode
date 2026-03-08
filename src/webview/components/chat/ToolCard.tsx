@@ -212,8 +212,8 @@ function extractDiagnosticsFromMeta(
 		const valid = diags.filter(
 			(d): d is LspDiagnostic => d && typeof d === 'object' && 'message' in d && 'range' in d,
 		);
-		// Only show errors (severity === 1)
-		const errors = valid.filter(d => d.severity === 1);
+		// Only show errors (severity === 1) or diagnostics with no severity set
+		const errors = valid.filter(d => !d.severity || d.severity === 1);
 		if (errors.length > 0) result[filePath] = errors;
 	}
 	return Object.keys(result).length > 0 ? result : undefined;
