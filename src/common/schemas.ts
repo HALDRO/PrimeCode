@@ -51,9 +51,12 @@ export const McpServerSchema = Type.Object({
 });
 export type McpServer = Static<typeof McpServerSchema>;
 
-export const McpConfigSchema = Type.Object({
-	mcp: Type.Optional(Type.Record(Type.String(), McpServerSchema)),
-});
+export const McpConfigSchema = Type.Object(
+	{
+		mcp: Type.Optional(Type.Record(Type.String(), McpServerSchema)),
+	},
+	{ additionalProperties: true },
+);
 export type McpConfig = Static<typeof McpConfigSchema>;
 
 // =============================================================================

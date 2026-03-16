@@ -145,18 +145,20 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			this.services.resourceWatcher.onResourceChanged(async e => {
 				logger.info(`[ChatProvider] Resource changed: ${e.resourceType}, refreshing UI`);
 				try {
+					if (e.resourceType === 'rules') {
+						await this.settingsHandler.handleMessage({ type: 'getRules' });
+						return;
+					}
 					const items = await this.services.resources.getAll(e.resourceType);
 					const dataKeyMap = {
 						commands: 'commandsList',
 						skills: 'skillsList',
-						hooks: 'hooksList',
 						subagents: 'subagentsList',
 					} as const;
 					const key = dataKeyMap[e.resourceType];
 					const payloadKeyMap = {
 						commands: 'custom',
 						skills: 'skills',
-						hooks: 'hooks',
 						subagents: 'subagents',
 					} as const;
 					this.bridge.data(key, { [payloadKeyMap[e.resourceType]]: items, isLoading: false });
@@ -293,6 +295,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				'getConversationList',
 				'loadConversation',
 				'deleteConversation',
+				'clearAllConversations',
 				'renameConversation',
 			],
 			'session',
@@ -416,8 +419,18 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			this.pendingSyncAll = true;
 			return;
 		}
-		// Prevent duplicate syncAll during startup (opencode-start vs webview-syncAll race)
-		if (this.hasSynced) {
+		// If the server isn't ready yet, defer — provider/model fetches would return
+		// empty data, leaving the UI with only the hardcoded OpenAI Compatible entry.
+		const serverReady = !!this.cli.getOpenCodeServerInfo()?.baseUrl;
+		if (!serverReady) {
+			logger.info('[ChatProvider] syncAll deferred: server not ready', { source });
+			this.pendingSyncAll = true;
+			return;
+		}
+		// Prevent duplicate syncAll during startup (opencode-start vs webview-syncAll race).
+		// Explicit webview requests ('webview-syncAll') bypass the guard so the user
+		// can recover from partial failures without reloading the panel.
+		if (this.hasSynced && source !== 'webview-syncAll') {
 			logger.debug('[ChatProvider] syncAll skipped: already synced', { source });
 			return;
 		}
@@ -1271,7 +1284,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 	private handleSettingsChange(): void {
 		this.settings.refresh();
-		this.bridge.send({ type: 'configChanged' });
+		this.bridge.data('settingsData', this.settings.getAll());
 	}
 
 	private sendInitialState(): void {

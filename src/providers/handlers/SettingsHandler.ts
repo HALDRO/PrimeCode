@@ -334,6 +334,11 @@ export class SettingsHandler implements WebviewMessageHandler {
 			await this.onGetPlugins();
 		} catch (error) {
 			logger.error('[SettingsHandler] addPlugin failed:', error);
+			this.context.bridge.data('pluginsList', {
+				plugins: await this.context.services.mcpConfig.getPlugins().catch(() => []),
+				isLoading: false,
+				error: error instanceof Error ? error.message : String(error),
+			});
 		}
 	}
 
@@ -343,6 +348,11 @@ export class SettingsHandler implements WebviewMessageHandler {
 			await this.onGetPlugins();
 		} catch (error) {
 			logger.error('[SettingsHandler] removePlugin failed:', error);
+			this.context.bridge.data('pluginsList', {
+				plugins: await this.context.services.mcpConfig.getPlugins().catch(() => []),
+				isLoading: false,
+				error: error instanceof Error ? error.message : String(error),
+			});
 		}
 	}
 
@@ -382,6 +392,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 			await this.refreshResourceList(type);
 		} catch (error) {
 			logger.error(`[SettingsHandler] Failed to create ${type}:`, error);
+			await this.refreshResourceList(type);
 		}
 	}
 
@@ -398,6 +409,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 			await this.refreshResourceList(type);
 		} catch (error) {
 			logger.error(`[SettingsHandler] Failed to delete ${type}:`, error);
+			await this.refreshResourceList(type);
 		}
 	}
 
@@ -470,6 +482,10 @@ export class SettingsHandler implements WebviewMessageHandler {
 			await this.onGetRules();
 		} catch (error) {
 			logger.error('[SettingsHandler] toggleRule failed:', error);
+			this.context.bridge.data('ruleList', {
+				rules: await this.rulesService.getRules().catch(() => []),
+				error: error instanceof Error ? error.message : String(error),
+			});
 		}
 	}
 
@@ -482,6 +498,10 @@ export class SettingsHandler implements WebviewMessageHandler {
 			await this.onGetRules();
 		} catch (error) {
 			logger.error('[SettingsHandler] createRule failed:', error);
+			this.context.bridge.data('ruleList', {
+				rules: await this.rulesService.getRules().catch(() => []),
+				error: error instanceof Error ? error.message : String(error),
+			});
 		}
 	}
 
@@ -494,6 +514,10 @@ export class SettingsHandler implements WebviewMessageHandler {
 			await this.onGetRules();
 		} catch (error) {
 			logger.error('[SettingsHandler] deleteRule failed:', error);
+			this.context.bridge.data('ruleList', {
+				rules: await this.rulesService.getRules().catch(() => []),
+				error: error instanceof Error ? error.message : String(error),
+			});
 		}
 	}
 }

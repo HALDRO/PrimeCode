@@ -11,16 +11,30 @@ export class ProviderHandler implements WebviewMessageHandler {
 	private static readonly LEGACY_SELECTED_MODEL_KEY = 'primecode.selectedModel';
 	private static readonly PROXY_MODELS_CACHE_KEY = 'primecode.proxyModels.cache';
 
+	/** Monotonic counter to discard results from stale concurrent reloads. */
+	private _reloadGeneration = 0;
+
+	private getProxyModelsCacheKey(baseUrl: string): string {
+		return `${ProviderHandler.PROXY_MODELS_CACHE_KEY}:${baseUrl}`;
+	}
+
 	private getSelectedModelKey(): string {
 		return 'primecode.selectedModel.opencode';
 	}
 
 	private async readSelectedModel(): Promise<string | undefined> {
 		const key = this.getSelectedModelKey();
-		const fromNew = this.context.extensionContext.globalState.get<string>(key);
-		if (fromNew) return fromNew;
+		const fromWorkspace = this.context.extensionContext.workspaceState.get<string>(key);
+		if (fromWorkspace) return fromWorkspace;
 
-		// Backward-compat: attempt to migrate from the legacy key.
+		// Migration: copy from globalState → workspaceState (one-time per workspace)
+		const fromGlobal = this.context.extensionContext.globalState.get<string>(key);
+		if (fromGlobal) {
+			await this.context.extensionContext.workspaceState.update(key, fromGlobal);
+			return fromGlobal;
+		}
+
+		// Backward-compat: attempt to migrate from the legacy globalState key.
 		const legacy = this.context.extensionContext.globalState.get<string>(
 			ProviderHandler.LEGACY_SELECTED_MODEL_KEY,
 		);
@@ -29,7 +43,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 		// OpenCode models are composite IDs: "provider/model".
 		if (!legacy.includes('/')) return undefined;
 
-		await this.context.extensionContext.globalState.update(key, legacy);
+		await this.context.extensionContext.workspaceState.update(key, legacy);
 		return legacy;
 	}
 
@@ -69,12 +83,17 @@ export class ProviderHandler implements WebviewMessageHandler {
 	}
 
 	private async onReloadAllProviders(): Promise<void> {
-		await Promise.all([
+		const gen = ++this._reloadGeneration;
+		const results = await Promise.all([
 			this.onCheckOpenCodeStatus(),
 			this.onLoadAvailableProviders(),
 			this.onLoadOpenCodeProviders(),
 			this.restoreSelectedModel(),
 		]);
+		// If another reload was triggered while we were awaiting, discard these results
+		// by not sending any additional messages — the newer reload will handle it.
+		if (gen !== this._reloadGeneration) return;
+		void results; // results are sent inline by each sub-method
 	}
 
 	private async restoreSelectedModel(): Promise<void> {
@@ -224,7 +243,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 	private async onSetOpenCodeModel(msg: CommandOf<'setOpenCodeModel'>): Promise<void> {
 		const { model } = msg;
 		if (model) {
-			await this.context.extensionContext.globalState.update(this.getSelectedModelKey(), model);
+			await this.context.extensionContext.workspaceState.update(this.getSelectedModelKey(), model);
 			this.context.bridge.data('openCodeModelSet', { model });
 		}
 	}
@@ -232,7 +251,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 	private async onSelectModel(msg: CommandOf<'selectModel'>): Promise<void> {
 		const { model } = msg;
 		if (model) {
-			await this.context.extensionContext.globalState.update(this.getSelectedModelKey(), model);
+			await this.context.extensionContext.workspaceState.update(this.getSelectedModelKey(), model);
 			this.context.bridge.send({ type: 'modelSelected', model });
 		}
 	}
@@ -263,9 +282,8 @@ export class ProviderHandler implements WebviewMessageHandler {
 		}
 
 		// Immediately send cached models so the UI is populated before fetch completes.
-		const cached = this.context.extensionContext.globalState.get<EnrichedProxyModel[]>(
-			ProviderHandler.PROXY_MODELS_CACHE_KEY,
-		);
+		const cacheKey = this.getProxyModelsCacheKey(baseUrl);
+		const cached = this.context.extensionContext.globalState.get<EnrichedProxyModel[]>(cacheKey);
 		if (cached?.length) {
 			this.context.bridge.data('proxyModels', {
 				enabled: true,
@@ -278,15 +296,12 @@ export class ProviderHandler implements WebviewMessageHandler {
 		try {
 			url = new URL(`${baseUrl}/models`);
 		} catch {
-			// Invalid URL — only send error if we had no cache
-			if (!cached?.length) {
-				this.context.bridge.data('proxyModels', {
-					enabled: false,
-					models: [],
-					baseUrl,
-					error: 'Invalid proxy baseUrl',
-				});
-			}
+			this.context.bridge.data('proxyModels', {
+				enabled: Boolean(cached?.length),
+				models: cached ?? [],
+				baseUrl,
+				error: 'Invalid proxy baseUrl',
+			});
 			return;
 		}
 
@@ -302,15 +317,12 @@ export class ProviderHandler implements WebviewMessageHandler {
 			if (!response.ok) {
 				const bodyText = await response.text().catch(() => '');
 				const detail = bodyText ? `: ${bodyText.slice(0, 400)}` : '';
-				// Only overwrite UI with error if we had no cache
-				if (!cached?.length) {
-					this.context.bridge.data('proxyModels', {
-						enabled: false,
-						models: [],
-						baseUrl,
-						error: `Proxy models request failed (${response.status})${detail}`,
-					});
-				}
+				this.context.bridge.data('proxyModels', {
+					enabled: Boolean(cached?.length),
+					models: cached ?? [],
+					baseUrl,
+					error: `Proxy models request failed (${response.status})${detail}`,
+				});
 				return;
 			}
 
@@ -348,24 +360,19 @@ export class ProviderHandler implements WebviewMessageHandler {
 				.filter(m => m.id.length > 0);
 
 			if (rawModels.length === 0) {
-				if (!cached?.length) {
-					this.context.bridge.data('proxyModels', {
-						enabled: false,
-						models: [],
-						baseUrl,
-						error: 'No models returned by proxy',
-					});
-				}
+				this.context.bridge.data('proxyModels', {
+					enabled: Boolean(cached?.length),
+					models: cached ?? [],
+					baseUrl,
+					error: 'No models returned by proxy',
+				});
 				return;
 			}
 
 			const enriched = await this.enrichWithModelsDev(rawModels);
 
 			// Persist to cache for next startup
-			void this.context.extensionContext.globalState.update(
-				ProviderHandler.PROXY_MODELS_CACHE_KEY,
-				enriched,
-			);
+			void this.context.extensionContext.globalState.update(cacheKey, enriched);
 
 			this.context.bridge.data('proxyModels', {
 				enabled: true,
@@ -373,16 +380,13 @@ export class ProviderHandler implements WebviewMessageHandler {
 				baseUrl,
 			});
 		} catch (error) {
-			// Fetch failed — if we already sent cached models, don't overwrite with error.
-			if (!cached?.length) {
-				const errMsg = error instanceof Error ? error.message : String(error);
-				this.context.bridge.data('proxyModels', {
-					enabled: false,
-					models: [],
-					baseUrl,
-					error: `Proxy models fetch failed: ${errMsg}`,
-				});
-			}
+			const errMsg = error instanceof Error ? error.message : String(error);
+			this.context.bridge.data('proxyModels', {
+				enabled: Boolean(cached?.length),
+				models: cached ?? [],
+				baseUrl,
+				error: `Proxy models fetch failed: ${errMsg}`,
+			});
 		}
 	}
 
@@ -400,8 +404,9 @@ export class ProviderHandler implements WebviewMessageHandler {
 
 			// Build enriched models from the cached proxy models (preserves /v1/models metadata),
 			// falling back to models.dev for any missing fields.
+			const normalizedBaseUrl = normalizeProxyBaseUrl(baseUrl) || baseUrl;
 			const cached = this.context.extensionContext.globalState.get<EnrichedProxyModel[]>(
-				ProviderHandler.PROXY_MODELS_CACHE_KEY,
+				this.getProxyModelsCacheKey(normalizedBaseUrl),
 			);
 			const cachedById = new Map((cached ?? []).map(m => [m.id, m]));
 

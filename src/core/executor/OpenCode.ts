@@ -6,7 +6,6 @@
  */
 
 import type { ChildProcess } from 'node:child_process';
-import * as crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -159,6 +158,10 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 	/** All session IDs that are currently active (main + subagent children). */
 	private readonly activeSessions = new Set<string>();
+	/** Reverse index: sessionID → Set<messageID>. Enables per-session cleanup of message-keyed Maps. */
+	private readonly sessionMessages = new Map<string, Set<string>>();
+	/** Sessions explicitly deleted/closed — SSE events for these are skipped to save CPU. */
+	private readonly deletedSessions = new Set<string>();
 	/** Maps sessionID → pending compact tool_use ID, so SSE handler can emit matching tool_result. */
 	private readonly pendingCompactIds = new Map<string, string>();
 
@@ -201,9 +204,14 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	// Server Management
 	// =========================================================================
 
-	private getPortFilePath(workspaceRoot: string): string {
-		const hash = crypto.createHash('md5').update(workspaceRoot).digest('hex');
-		return path.join(os.tmpdir(), `primecode-opencode-port-${hash}.txt`);
+	/**
+	 * Returns a global (not per-workspace) port file path.
+	 * The OpenCode server is workspace-agnostic — it routes requests to the
+	 * correct project via the `x-opencode-directory` header, so a single
+	 * server process can serve all VS Code windows regardless of workspace.
+	 */
+	private getPortFilePath(): string {
+		return path.join(os.tmpdir(), 'primecode-opencode-port.txt');
 	}
 
 	async ensureServer(config: CLIConfig): Promise<void> {
@@ -238,7 +246,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	}
 
 	private async tryConnectToExistingServer(config: CLIConfig): Promise<boolean> {
-		const portFile = this.getPortFilePath(config.workspaceRoot);
+		const portFile = this.getPortFilePath();
 		try {
 			if (!fs.existsSync(portFile)) return false;
 
@@ -322,7 +330,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			this.serverUrl = opencode.server.url;
 			this.directory = workspaceRoot;
 
-			await this.savePortFile(workspaceRoot);
+			await this.savePortFile();
 			this.initSdkClient();
 			logger.info(`[OpenCode] Server started at ${this.serverUrl}`);
 			void this.preloadMetadata();
@@ -339,12 +347,12 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 	}
 
-	private async savePortFile(workspaceRoot: string): Promise<void> {
+	private async savePortFile(): Promise<void> {
 		if (!this.serverUrl) return;
 		try {
 			const port = new URL(this.serverUrl).port;
 			if (port) {
-				const portFile = this.getPortFilePath(workspaceRoot);
+				const portFile = this.getPortFilePath();
 				await fs.promises.writeFile(portFile, port);
 			}
 		} catch {}
@@ -1357,6 +1365,23 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 
 		const event = raw as SdkEvent;
+
+		// Skip all events for sessions that have been deleted/closed.
+		// The SSE stream is global, so stale events may arrive after cleanup.
+		const eventSessionId =
+			(
+				event as {
+					properties?: {
+						info?: { sessionID?: string };
+						part?: { sessionID?: string };
+						sessionID?: string;
+					};
+				}
+			).properties?.info?.sessionID ??
+			(event as { properties?: { part?: { sessionID?: string } } }).properties?.part?.sessionID ??
+			(event as { properties?: { sessionID?: string } }).properties?.sessionID;
+		if (eventSessionId && this.deletedSessions.has(eventSessionId)) return;
+
 		switch (event.type) {
 			case 'message.updated': {
 				const props = (event as EventMessageUpdated).properties;
@@ -1456,6 +1481,16 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 	private handleMessageUpdated(info: Message, sessionId?: string): void {
 		this.messageRoles.set(info.id, info.role);
+
+		// Track message→session mapping for per-session cleanup
+		if (sessionId) {
+			let msgs = this.sessionMessages.get(sessionId);
+			if (!msgs) {
+				msgs = new Set();
+				this.sessionMessages.set(sessionId, msgs);
+			}
+			msgs.add(info.id);
+		}
 
 		// Store agent/mode from assistant messages for later use in part events
 		if (isAssistantMessage(info)) {
@@ -2016,30 +2051,49 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		this.lastMessageTokens.clear();
 		this.turnAccum.clear();
 		this.activeSessions.clear();
+		this.sessionMessages.clear();
+		this.deletedSessions.clear();
 	}
 
 	/** Remove per-message metadata for a given session to prevent unbounded Map growth. */
 	private cleanupSessionMessages(sessionId: string): void {
-		// messageRoles/messageAgents/lastMessageTokens are keyed by messageID, not sessionID.
-		// We don't have a session→messages index, so we rely on activeSessions tracking.
-		// When a session is deleted, remove it from activeSessions so future SSE events
-		// for this session are ignored and no new entries accumulate.
 		this.activeSessions.delete(sessionId);
 		this.pendingCompactIds.delete(sessionId);
 		this.lastEmittedStatus.delete(sessionId);
+		// Mark as deleted so future SSE events for this session are skipped early.
+		this.deletedSessions.add(sessionId);
+
+		// Clean all message-keyed Maps using the session→messages index.
+		const messageIds = this.sessionMessages.get(sessionId);
+		if (messageIds) {
+			for (const msgId of messageIds) {
+				this.toolCallStates.delete(msgId);
+				this.messageRoles.delete(msgId);
+				this.messageAgents.delete(msgId);
+				this.lastMessageTokens.delete(msgId);
+				this.turnAccum.delete(msgId);
+			}
+			this.sessionMessages.delete(sessionId);
+		}
 	}
 
 	async dispose(): Promise<void> {
-		await this.abort();
+		await this.kill();
 		if (this.serverInstance) {
 			try {
 				this.serverInstance.close();
 			} catch {}
 			this.serverInstance = null;
 		}
+		// Clean up port file so other windows don't try to connect to a dead server.
+		try {
+			const portFile = this.getPortFilePath();
+			if (fs.existsSync(portFile)) {
+				await fs.promises.unlink(portFile);
+			}
+		} catch {}
 		this.serverUrl = null;
 		this.directory = null;
-		this.sessionId = null;
 		this.sdkClient = null;
 	}
 

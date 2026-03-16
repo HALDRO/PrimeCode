@@ -1,4 +1,3 @@
-import * as vscode from 'vscode';
 import {
 	DEFAULT_POLICIES,
 	migrateLegacyPolicies,
@@ -166,42 +165,13 @@ export class ToolHandler implements WebviewMessageHandler {
 	/**
 	 * Persist current permission policies into the project's `opencode.json`.
 	 *
-	 * OpenCode loads project config from `opencode.json` / `opencode.jsonc`
-	 * (via `findUp`), NOT from `config.json`. The old approach of using
-	 * `PATCH /config` wrote to `config.json` in the project root, which
-	 * OpenCode never reads back — making it effectively a no-op.
-	 *
-	 * This method writes directly to `opencode.json` so that:
-	 * 1. Permissions survive server restarts (read by `Config.state()`)
-	 * 2. No stale `config.json` is created in the project root
-	 * 3. The file matches the documented OpenCode config format
+	 * Uses McpConfigService.updateProjectField to ensure atomic writes and
+	 * proper event emission, avoiding race conditions with MCP config saves.
 	 */
 	private async syncPoliciesToServer(): Promise<void> {
-		const workspaceRoot = this.context.settings.getWorkspaceRoot?.();
-		if (!workspaceRoot) {
-			logger.warn('[ToolHandler] No workspace root — sync skipped');
-			return;
-		}
-
-		const configUri = vscode.Uri.file(`${workspaceRoot}/opencode.json`);
 		const serverPermission = policiesToServerFormat(this.policies);
-
 		try {
-			// Read existing opencode.json (or start fresh)
-			let existing: Record<string, unknown> = {};
-			try {
-				const raw = await vscode.workspace.fs.readFile(configUri);
-				existing = JSON.parse(Buffer.from(raw).toString('utf-8')) as Record<string, unknown>;
-			} catch {
-				// File doesn't exist or is invalid — start with schema
-				existing = { $schema: 'https://opencode.ai/config.json' };
-			}
-
-			// Merge permission field
-			existing.permission = serverPermission;
-
-			const content = Buffer.from(`${JSON.stringify(existing, null, 2)}\n`, 'utf-8');
-			await vscode.workspace.fs.writeFile(configUri, content);
+			await this.context.services.mcpConfig.updateProjectField('permission', serverPermission);
 			logger.info('[ToolHandler] Policies written to opencode.json', serverPermission);
 		} catch (e) {
 			logger.warn('[ToolHandler] Failed to write opencode.json:', e);

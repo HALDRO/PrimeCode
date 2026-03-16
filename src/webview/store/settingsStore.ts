@@ -45,6 +45,7 @@ export type {
 	PermissionPolicies,
 };
 
+import { vscode } from '../utils/vscode';
 import { handleSettingsData } from './settingsUtils';
 
 // Helper for loading meta logic
@@ -803,6 +804,25 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 					}
 					break;
 
+				case 'openCodeDisconnectResult':
+					if (message.data) {
+						const { success, error, providerId } = message.data as {
+							success?: boolean;
+							error?: string;
+							providerId?: string;
+						};
+						// Surface disconnect errors via the same auth state mechanism
+						if (!success && error && providerId) {
+							actions.setProviderAuthState({
+								providerId,
+								isLoading: false,
+								success: false,
+								error: `Disconnect failed: ${error}`,
+							});
+						}
+					}
+					break;
+
 				case 'removeOpenCodeProvider':
 					if (message.data) {
 						const { providerId, providerName } = message.data as {
@@ -869,6 +889,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 							projectPath: data.projectPath,
 						});
 					}
+					break;
+
+				case 'mcpConfigReloaded':
+					// External change to opencode.json detected — re-fetch MCP servers
+					vscode.postMessage({ type: 'loadMCPServers' });
 					break;
 
 				case 'mcpStatus':

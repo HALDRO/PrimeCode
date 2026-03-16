@@ -21,6 +21,19 @@ export class RulesService {
 	constructor(private _workspaceRoot: string) {}
 
 	/**
+	 * Guard against path traversal: ensure the resolved path stays inside the workspace root.
+	 * Throws if the path escapes the workspace boundary.
+	 */
+	private _assertInsideWorkspace(rulePath: string): string {
+		const resolved = path.resolve(this._workspaceRoot, rulePath);
+		const root = path.resolve(this._workspaceRoot);
+		if (!resolved.startsWith(root + path.sep) && resolved !== root) {
+			throw new Error(`Path traversal detected: ${rulePath}`);
+		}
+		return resolved;
+	}
+
+	/**
 	 * Get all rules from `.opencode/rules/` (active and disabled)
 	 */
 	public async getRules(): Promise<Rule[]> {
@@ -88,6 +101,8 @@ export class RulesService {
 	 * Toggle rule enabled/disabled and auto-sync
 	 */
 	public async toggleRule(rulePath: string, enabled: boolean): Promise<void> {
+		this._assertInsideWorkspace(rulePath);
+
 		const rulesDir = path.join(this._workspaceRoot, PATHS.OPENCODE_RULES_DIR);
 		const disabledDir = path.join(rulesDir, 'disabled');
 		const fullPath = path.join(this._workspaceRoot, rulePath);
@@ -110,8 +125,17 @@ export class RulesService {
 		const sourceUri = vscode.Uri.file(fullPath);
 		const targetUri = vscode.Uri.file(path.join(targetDir, fileName));
 
+		// Guard against overwriting an existing file with the same name
 		try {
-			await vscode.workspace.fs.rename(sourceUri, targetUri, { overwrite: true });
+			await vscode.workspace.fs.stat(targetUri);
+			throw new Error(`Rule "${fileName}" already exists in the target directory`);
+		} catch (e) {
+			// stat throws when file doesn't exist — that's the expected case
+			if (e instanceof Error && e.message.includes('already exists')) throw e;
+		}
+
+		try {
+			await vscode.workspace.fs.rename(sourceUri, targetUri);
 		} catch (error) {
 			logger.error(`[RulesService] Failed to toggle rule ${rulePath}:`, error);
 			throw error;
@@ -122,11 +146,14 @@ export class RulesService {
 	 * Delete rule and auto-sync
 	 */
 	public async deleteRule(rulePath: string): Promise<void> {
+		this._assertInsideWorkspace(rulePath);
+
 		const fileUri = vscode.Uri.file(path.join(this._workspaceRoot, rulePath));
 		try {
 			await vscode.workspace.fs.delete(fileUri);
 		} catch (error) {
 			logger.error(`[RulesService] Failed to delete rule ${rulePath}:`, error);
+			throw error;
 		}
 	}
 

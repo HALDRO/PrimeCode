@@ -86,6 +86,12 @@ export function configToMcpServer(config: import('../common').MCPServerConfig): 
 		};
 	}
 
+	// Override-only entry (just { enabled: boolean }) — used to toggle servers
+	// defined elsewhere in the config chain without rewriting their full config.
+	if (config.enabled !== undefined && !config.command && !config.url) {
+		return { enabled: config.enabled };
+	}
+
 	return null;
 }
 
@@ -272,22 +278,63 @@ export class McpConfigService {
 		config ??= { mcp: {} };
 		const mcp = config.mcp ?? {};
 		mcp[name] = server;
-		await this.saveProjectConfig({ mcp });
+		await this.saveProjectConfig({ ...config, mcp });
 	}
 
 	/**
 	 * Delete a server from project config.
-	 * Refuses to operate on a corrupted config to prevent data loss.
+	 * Falls back to raw JSON read when schema validation fails,
+	 * same as saveServer, to avoid silent no-ops.
 	 */
 	public async deleteServer(name: string): Promise<void> {
-		const config = await this.loadProjectConfig();
+		let config = await this.loadProjectConfig();
+
+		if (!config) {
+			const configPath = this.getProjectMcpConfigPath();
+			if (configPath) {
+				const raw = await this._readJsonFile<McpConfig>(configPath);
+				if (raw) {
+					logger.warn(
+						'[McpConfigService] Config failed schema validation, using raw JSON to preserve data',
+					);
+					config = raw;
+				}
+			}
+		}
+
 		if (!config?.mcp) {
 			logger.warn('[McpConfigService] Cannot delete server: config is missing or corrupted');
 			return;
 		}
 
 		delete config.mcp[name];
-		await this.saveProjectConfig(config);
+		await this.saveProjectConfig({ ...config, mcp: config.mcp });
+	}
+
+	/**
+	 * Update a top-level field in opencode.json (e.g. `permission`, `plugin`).
+	 * Uses the same atomic-write + raw-read-fallback pattern as saveServer/deleteServer
+	 * so all writers go through a single code path.
+	 */
+	public async updateProjectField(key: string, value: unknown): Promise<void> {
+		const configPath = this.getProjectMcpConfigPath();
+		if (!configPath) {
+			logger.warn('[McpConfigService] No workspace root, cannot update project field');
+			return;
+		}
+
+		let existing: Record<string, unknown> = {};
+		try {
+			const raw = await this._readJsonFile<Record<string, unknown>>(configPath);
+			if (raw) existing = raw;
+		} catch {
+			// File doesn't exist — start fresh
+		}
+
+		existing[key] = value;
+		await this._writeJsonFile(configPath, existing);
+		this._onConfigChanged.fire(existing as McpConfig);
+		logger.info(`[McpConfigService] Updated project field: ${key}`);
 	}
 
 	/**
@@ -339,23 +386,9 @@ export class McpConfigService {
 	 * Add a plugin to opencode.json
 	 */
 	public async addPlugin(plugin: string): Promise<void> {
-		const configPath = this.getProjectMcpConfigPath();
-		if (!configPath) {
-			logger.warn('[McpConfigService] No workspace root, cannot add plugin');
-			return;
-		}
-
-		let config = await this._readJsonFile<Record<string, unknown>>(configPath);
-		if (!config) config = {};
-
-		const plugins = Array.isArray(config.plugin)
-			? (config.plugin as string[]).filter((p): p is string => typeof p === 'string')
-			: [];
-
-		if (!plugins.includes(plugin)) {
-			plugins.push(plugin);
-			config.plugin = plugins;
-			await this._writeJsonFile(configPath, config);
+		const existing = await this.getPlugins();
+		if (!existing.includes(plugin)) {
+			await this.updateProjectField('plugin', [...existing, plugin]);
 			logger.info(`[McpConfigService] Added plugin: ${plugin}`);
 		}
 	}
@@ -364,21 +397,11 @@ export class McpConfigService {
 	 * Remove a plugin from opencode.json
 	 */
 	public async removePlugin(plugin: string): Promise<void> {
-		const configPath = this.getProjectMcpConfigPath();
-		if (!configPath) {
-			logger.warn('[McpConfigService] No workspace root, cannot remove plugin');
-			return;
-		}
-
-		const config = await this._readJsonFile<Record<string, unknown>>(configPath);
-		if (!config) return;
-
-		const plugins = Array.isArray(config.plugin)
-			? (config.plugin as string[]).filter((p): p is string => typeof p === 'string')
-			: [];
-
-		config.plugin = plugins.filter(p => p !== plugin);
-		await this._writeJsonFile(configPath, config);
+		const existing = await this.getPlugins();
+		await this.updateProjectField(
+			'plugin',
+			existing.filter(p => p !== plugin),
+		);
 		logger.info(`[McpConfigService] Removed plugin: ${plugin}`);
 	}
 }

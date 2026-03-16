@@ -36,6 +36,12 @@ export class ServiceRegistry implements vscode.Disposable {
 			this.mcpConfig,
 		);
 
+		// Connect UI-save suppression: when McpManagement writes config,
+		// notify the watcher so it doesn't trigger a redundant reload.
+		this.mcpManagement.setOnConfigSaved(() => {
+			this.mcpConfigWatcher.notifyUiSave();
+		});
+
 		// Initialize workspace-scoped services if workspace is already open
 		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 		if (workspaceRoot) {

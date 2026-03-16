@@ -119,6 +119,9 @@ export class SessionHandler implements WebviewMessageHandler {
 			case 'deleteConversation':
 				await this.onDeleteConversation(msg);
 				break;
+			case 'clearAllConversations':
+				await this.onClearAllConversations();
+				break;
 			case 'renameConversation':
 				await this.onRenameConversation(msg);
 				break;
@@ -397,6 +400,13 @@ export class SessionHandler implements WebviewMessageHandler {
 			}
 		} catch (error) {
 			logger.error('[SessionHandler] Failed to restore sessions from CLI:', error);
+			// Fallback: auto-create a session so the user can start typing immediately
+			// even if CLI listing/restoration failed (e.g. server just started).
+			try {
+				await this.onCreateSession();
+			} catch (createError) {
+				logger.error('[SessionHandler] Fallback session creation also failed:', createError);
+			}
 		}
 	}
 
@@ -728,6 +738,8 @@ export class SessionHandler implements WebviewMessageHandler {
 		this.replayedSessions.delete(sessionId);
 		this.clearSessionStats(sessionId);
 		this.clearPendingMessage(sessionId);
+		// Clean up session graph entries to prevent unbounded Map growth
+		this.context.sessionGraph.clearParent(sessionId);
 
 		// If closing active session, clear backend reference
 		if (this.context.sessionState.activeSessionId === sessionId) {
@@ -1254,6 +1266,17 @@ export class SessionHandler implements WebviewMessageHandler {
 		// For OpenCode, filename IS the sessionId
 		const sessionId = filename;
 
+		// Guard: if this session is already open as a tab, just switch to it
+		// instead of creating a duplicate tab and replaying history again.
+		if (this.context.sessionState.startedSessions.has(sessionId)) {
+			logger.info('[SessionHandler] Session already open, switching to it', { sessionId });
+			this.context.sessionState.activeSessionId = sessionId;
+			const isBusy = this.context.cli.isSessionActive?.(sessionId) ?? false;
+			this.postLifecycle('switched', sessionId, { isProcessing: isBusy });
+			this.persistOpenTabs(sessionId);
+			return;
+		}
+
 		logger.info('[SessionHandler] Loading conversation', { sessionId });
 
 		// Set active session and mark as started so follow-up messages reuse it
@@ -1695,6 +1718,43 @@ export class SessionHandler implements WebviewMessageHandler {
 		await this.onGetConversationList();
 	}
 
+	private async onClearAllConversations(): Promise<void> {
+		logger.info('[SessionHandler] Clearing all conversations');
+
+		try {
+			const config = this.buildBaseConfig();
+			const sessions = await this.context.cli.listSessions(config);
+			const topLevelSessions = sessions.filter(s => !s.parentID);
+
+			for (const session of topLevelSessions) {
+				try {
+					const success = await this.context.cli.deleteSession(session.id, config);
+					if (!success) continue;
+
+					this.context.sessionState.startedSessions.delete(session.id);
+					this.clearSessionStats(session.id);
+					this.clearPendingMessage(session.id);
+					this.context.cleanupSessionRestore?.(session.id);
+					if (this.context.sessionState.activeSessionId === session.id) {
+						this.context.sessionState.activeSessionId = undefined;
+					}
+					this.postLifecycle('closed', session.id);
+				} catch (error) {
+					logger.error('[SessionHandler] Failed to delete conversation during clearAll:', {
+						sessionId: session.id,
+						error,
+					});
+				}
+			}
+
+			this.context.bridge.send({ type: 'allConversationsCleared' });
+		} catch (error) {
+			logger.error('[SessionHandler] Failed to clear all conversations:', error);
+		}
+
+		await this.onGetConversationList();
+	}
+
 	private async onRenameConversation(msg: CommandOf<'renameConversation'>): Promise<void> {
 		const { filename: sessionId, newTitle } = msg;
 		if (!sessionId || !newTitle) return;
@@ -1917,7 +1977,7 @@ export class SessionHandler implements WebviewMessageHandler {
 	private buildSendConfig(uiModel?: string): CLIConfig {
 		const { provider, workspaceRoot } = this.buildBaseConfig();
 
-		const savedModel = this.context.extensionContext.globalState.get<string>(
+		const savedModel = this.context.extensionContext.workspaceState.get<string>(
 			this.getSelectedModelKey(),
 		);
 		const model = uiModel ?? savedModel;

@@ -38,7 +38,7 @@ const PATH_SEGMENT_TO_TYPE: [segment: string, type: ResourceType][] = [
 // =============================================================================
 
 export interface ResourceChangeEvent {
-	resourceType: ResourceType;
+	resourceType: ResourceType | 'rules';
 	timestamp: number;
 }
 
@@ -48,7 +48,7 @@ export interface ResourceChangeEvent {
 
 export class ResourceWatcherService implements vscode.Disposable {
 	private _disposables: vscode.Disposable[] = [];
-	private _debounceTimers = new Map<ResourceType, ReturnType<typeof setTimeout>>();
+	private _debounceTimers = new Map<ResourceType | 'rules', ReturnType<typeof setTimeout>>();
 	private _started = false;
 
 	private readonly _onResourceChanged = new vscode.EventEmitter<ResourceChangeEvent>();
@@ -117,10 +117,17 @@ export class ResourceWatcherService implements vscode.Disposable {
 				return;
 			}
 		}
-		// Ignore events outside known resource directories (e.g. .opencode/rules/)
+		if (
+			fsPath.includes(`/${PATHS.OPENCODE_RULES_DIR}/`) ||
+			fsPath.endsWith(`/${PATHS.OPENCODE_RULES_DIR}`)
+		) {
+			this._scheduleReload('rules');
+			return;
+		}
+		// Ignore events outside known resource directories
 	}
 
-	private _scheduleReload(type: ResourceType): void {
+	private _scheduleReload(type: ResourceType | 'rules'): void {
 		const existing = this._debounceTimers.get(type);
 		if (existing) clearTimeout(existing);
 

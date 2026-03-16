@@ -91,6 +91,10 @@ export interface ChatSession {
 	draftAttachments?: { files?: string[]; images?: unknown[]; codeSnippets?: unknown[] };
 	/** Draft agent restored from a cancelled queued message (e.g. 'plan', 'build'). */
 	draftAgent?: string;
+	/** Session-scoped tool names advertised by the backend. */
+	availableTools?: string[];
+	/** Session-scoped MCP server names advertised by the backend. */
+	availableMcpServers?: string[];
 }
 
 export interface ChatState {
@@ -591,6 +595,8 @@ const createEmptySession = (id: string): ChatSession => ({
 	totalStats: { ...DEFAULT_TOTAL_STATS },
 	turnTokens: {},
 	queuedMessages: [],
+	availableTools: [],
+	availableMcpServers: [],
 });
 
 function resolveTargetSessionId(state: ChatState, sessionId?: string): string | undefined {
@@ -841,6 +847,12 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 						case 'subtask_transcript':
 							handleSubtaskTranscriptEvent(targetSession, payload);
 							break;
+						case 'session_info': {
+							const info = payload as { data?: { tools?: string[]; mcpServers?: string[] } };
+							targetSession.availableTools = info.data?.tools ?? [];
+							targetSession.availableMcpServers = info.data?.mcpServers ?? [];
+							break;
+						}
 					}
 				}),
 			);
