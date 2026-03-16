@@ -38,11 +38,11 @@ export type CommandItem = import('../constants').CommandItem;
 export type {
 	Access,
 	CLIProviderType,
+	DiscoveryStatus,
 	MCPServersMap,
 	OpenCodeProviderData,
-	PlatformInfo,
-	DiscoveryStatus,
 	PermissionPolicies,
+	PlatformInfo,
 };
 
 import { vscode } from '../utils/vscode';

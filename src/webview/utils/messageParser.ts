@@ -12,6 +12,8 @@ interface MessageHighlight {
 }
 
 interface TextSegment {
+	start: number;
+	end: number;
 	content: string;
 	type: 'text' | 'command' | 'subagent';
 }
@@ -78,6 +80,8 @@ export function parseMessageSegments(
 		// Add text before the highlight
 		if (highlight.start > lastIndex) {
 			segments.push({
+				start: lastIndex,
+				end: highlight.start,
 				content: text.substring(lastIndex, highlight.start),
 				type: 'text',
 			});
@@ -85,6 +89,8 @@ export function parseMessageSegments(
 
 		// Add the highlight itself
 		segments.push({
+			start: highlight.start,
+			end: highlight.end,
 			content: highlight.content,
 			type: highlight.type,
 		});
@@ -95,6 +101,8 @@ export function parseMessageSegments(
 	// Add remaining text
 	if (lastIndex < text.length) {
 		segments.push({
+			start: lastIndex,
+			end: text.length,
 			content: text.substring(lastIndex),
 			type: 'text',
 		});

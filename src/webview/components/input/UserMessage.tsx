@@ -236,11 +236,12 @@ const MessageTextWithCommands: React.FC<{
 
 	return (
 		<>
-			{segments.map((segment, index) => {
+			{segments.map(segment => {
+				const segmentKey = `${segment.type}-${segment.start}-${segment.end}`;
 				if (segment.type === 'command') {
 					return (
 						<span
-							key={`${index}-${segment.content}`}
+							key={segmentKey}
 							className="text-warning rounded-sm pl-(--gap-0-5) pr-(--gap-1-5) -ml-(--gap-0-5) -mr-(--gap-1-5)"
 							style={{
 								backgroundColor:
@@ -254,7 +255,7 @@ const MessageTextWithCommands: React.FC<{
 				if (segment.type === 'subagent') {
 					return (
 						<span
-							key={`${index}-${segment.content}`}
+							key={segmentKey}
 							className="text-blue-400 rounded-sm pl-(--gap-0-5) pr-(--gap-1-5) -ml-(--gap-0-5) -mr-(--gap-1-5)"
 							style={{
 								backgroundColor: 'color-mix(in srgb, #60a5fa 15%, transparent)',
@@ -264,10 +265,7 @@ const MessageTextWithCommands: React.FC<{
 						</span>
 					);
 				}
-				return (
-					// biome-ignore lint/suspicious/noArrayIndexKey: Order is static and safe here
-					<span key={`${index}-text`}>{segment.content}</span>
-				);
+				return <span key={segmentKey}>{segment.content}</span>;
 			})}
 		</>
 	);

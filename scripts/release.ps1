@@ -231,15 +231,15 @@ try {
                 Write-Host "  CI FAILED! ($conclusion)" -ForegroundColor Red
                 Write-Host "  Rolling back..." -ForegroundColor Yellow
 
-                # Откат: удаляем тег и релиз, ревертим коммит безопасно
+                # Откат: удаляем тег и релиз, убираем коммит из истории
                 gh release delete "v$newVersion" --yes 2>$null
                 git push origin --delete "v$newVersion" 2>$null
                 git tag -d "v$newVersion" 2>$null
-                git revert HEAD --no-edit
-                git push origin $branch
+                git reset --hard HEAD~1
+                git push --force-with-lease origin $branch
 
                 Write-Host ""
-                Write-Host "  Rolled back: tag deleted, release commit reverted." -ForegroundColor Yellow
+                Write-Host "  Rolled back: tag deleted, release commit removed from history." -ForegroundColor Yellow
                 Write-Host "  Check logs: gh run view $runId --log-failed" -ForegroundColor DarkGray
                 exit 1
             }

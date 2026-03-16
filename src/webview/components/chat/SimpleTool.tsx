@@ -166,6 +166,7 @@ interface ThinkingMessageProps {
 }
 
 import { useElapsedTimer } from '../../hooks/useElapsedTimer';
+
 // Re-export from shared hook for backward compatibility
 export { useElapsedTimer };
 

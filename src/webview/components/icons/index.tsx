@@ -65,6 +65,22 @@ export const ImageIcon = memoIcon(Image);
 export const BotIcon = memoIcon(Bot);
 export const ChevronDownIcon = memoIcon(ChevronDown);
 
+// Custom SVG icons
+export {
+	AcceptIcon,
+	AgentsIcon,
+	BrainSideIcon,
+	ChevronIcon,
+	ImprovePromptIcon,
+	PlanIcon,
+	RejectIcon,
+	SmallCloseIcon,
+	TodoCheckIcon,
+	TodoListIcon,
+	TodoPendingIcon,
+	TodoProgressIcon,
+} from './CustomIcons';
+export { FileTypeIcon } from './FileTypeIcon';
 // Remaining icons — direct re-exports (less hot paths)
 export {
 	AlertCircle as AlertCircleIcon,
@@ -101,19 +117,3 @@ export {
 	Wand2 as WandIcon,
 	Zap as ZapIcon,
 };
-// Custom SVG icons
-export {
-	AcceptIcon,
-	AgentsIcon,
-	BrainSideIcon,
-	ChevronIcon,
-	ImprovePromptIcon,
-	PlanIcon,
-	RejectIcon,
-	SmallCloseIcon,
-	TodoCheckIcon,
-	TodoListIcon,
-	TodoPendingIcon,
-	TodoProgressIcon,
-} from './CustomIcons';
-export { FileTypeIcon } from './FileTypeIcon';

@@ -33,6 +33,7 @@ export interface DiffLine {
 }
 
 interface DisplayLine extends DiffLine {
+	id: string;
 	hiddenBefore?: number;
 }
 
@@ -141,7 +142,10 @@ function collapseUnchanged(lines: DiffLine[], ctx = CONTEXT_LINES): DisplayLine[
 	let prevEnd = -1;
 	for (const r of ranges) {
 		for (let i = r.start; i <= r.end; i++) {
-			const dl: DisplayLine = { ...lines[i] };
+			const dl: DisplayLine = {
+				...lines[i],
+				id: `${lines[i].type}-${i}-${lines[i].content.length}`,
+			};
 			if (i === r.start && prevEnd >= 0 && r.start > prevEnd + 1) {
 				dl.hiddenBefore = r.start - prevEnd - 1;
 			}
@@ -383,8 +387,8 @@ export const SimpleDiff: React.FC<SimpleDiffProps> = ({
 					)}
 				/>
 
-				{displayLines.map((line: DisplayLine, idx: number) => (
-					<Fragment key={`${idx}-${line.type}-${line.content.length}`}>
+				{displayLines.map((line: DisplayLine) => (
+					<Fragment key={line.id}>
 						{line.hiddenBefore != null && line.hiddenBefore > 0 && (
 							<div className="flex items-center h-(--line-height-diff) px-2 text-xs text-vscode-descriptionForeground select-none bg-(--tool-bg-header)">
 								<span className="opacity-70">— {line.hiddenBefore} hidden lines —</span>
