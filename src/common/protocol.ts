@@ -57,7 +57,8 @@ export type SessionEventType =
 	| 'auth'
 	| 'terminal'
 	| 'turn_tokens'
-	| 'subtask_transcript';
+	| 'subtask_transcript'
+	| 'file_diff';
 
 export type SessionStatus = 'idle' | 'busy' | 'error' | 'retrying';
 
@@ -327,6 +328,16 @@ export interface SessionFilePayload {
 	toolUseId?: string;
 }
 
+export interface SessionFileDiffPayload {
+	eventType: 'file_diff';
+	diffs: Array<{
+		file: string;
+		additions: number;
+		deletions: number;
+		status?: 'added' | 'deleted' | 'modified';
+	}>;
+}
+
 export interface SessionAccessPayload {
 	eventType: 'access';
 	action: 'response';
@@ -415,7 +426,8 @@ export type SessionEventPayload =
 	| SessionAuthPayload
 	| SessionTerminalPayload
 	| SessionTurnTokensPayload
-	| SubtaskTranscriptPayload;
+	| SubtaskTranscriptPayload
+	| SessionFileDiffPayload;
 
 export interface SessionEventMessage {
 	type: 'session_event';

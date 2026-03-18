@@ -830,6 +830,12 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				break;
 			}
 
+			case 'session_diff': {
+				const diffData = event.data;
+				this.bridge.session.fileDiffUpdated(targetSessionId, diffData.diff);
+				break;
+			}
+
 			case 'error': {
 				// Suppress abort errors when the user explicitly stopped the session.
 				// The backend emits a session.error ("The operation was aborted") after
@@ -1229,16 +1235,38 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					toolUseId,
 				});
 			} else if (!filePath && resolveToolName(toolName) === 'apply_patch') {
-				// apply_patch has no single filePath — extract paths from the patch content
-				const patchPaths = extractPatchFilePaths(toolInput);
-				for (const patchPath of patchPaths) {
-					this.bridge.session.fileChanged(targetSessionId, {
-						filePath: patchPath,
-						fileName: patchPath.split(/[/\\]/).pop() || patchPath,
-						linesAdded: 0,
-						linesRemoved: 0,
-						toolUseId,
-					});
+				// apply_patch has no single filePath — prefer metadata.files (accurate stats),
+				// fall back to path extraction from the patch text.
+				const meta = e.metadata as Record<string, unknown> | undefined;
+				const metaFiles = meta?.files;
+				if (Array.isArray(metaFiles) && metaFiles.length > 0) {
+					for (const mf of metaFiles as Record<string, unknown>[]) {
+						const fp =
+							typeof mf.filePath === 'string'
+								? mf.filePath
+								: typeof mf.relativePath === 'string'
+									? mf.relativePath
+									: '';
+						if (!fp) continue;
+						this.bridge.session.fileChanged(targetSessionId, {
+							filePath: fp,
+							fileName: fp.split(/[/\\]/).pop() || fp,
+							linesAdded: typeof mf.additions === 'number' ? mf.additions : 0,
+							linesRemoved: typeof mf.deletions === 'number' ? mf.deletions : 0,
+							toolUseId,
+						});
+					}
+				} else {
+					const patchPaths = extractPatchFilePaths(toolInput);
+					for (const patchPath of patchPaths) {
+						this.bridge.session.fileChanged(targetSessionId, {
+							filePath: patchPath,
+							fileName: patchPath.split(/[/\\]/).pop() || patchPath,
+							linesAdded: 0,
+							linesRemoved: 0,
+							toolUseId,
+						});
+					}
 				}
 			}
 		}

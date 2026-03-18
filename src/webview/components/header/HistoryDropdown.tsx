@@ -6,7 +6,11 @@
 
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { type ConversationIndexEntry, useHistoryDropdownState } from '../../store';
+import {
+	type ConversationIndexEntry,
+	useActiveSessionId,
+	useHistoryDropdownState,
+} from '../../store';
 import { useUIActions } from '../../store/uiStore';
 import { formatRelativeTime } from '../../utils/format';
 import { useVSCode } from '../../utils/vscode';
@@ -66,6 +70,7 @@ const groupByDate = (
 export const HistoryDropdown: React.FC = () => {
 	const { postMessage } = useVSCode();
 	const { conversationList, setShowHistoryDropdown } = useHistoryDropdownState();
+	const activeSessionId = useActiveSessionId();
 	const { showConfirmDialog } = useUIActions();
 	const [isLoading, setIsLoading] = useState(true);
 	const [editingId, setEditingId] = useState<string | null>(null);
@@ -77,16 +82,25 @@ export const HistoryDropdown: React.FC = () => {
 		setShowHistoryDropdown(false);
 	}, [setShowHistoryDropdown]);
 
+	// Always re-fetch the conversation list when the dropdown mounts (opens).
+	// Show loading spinner only when the list is empty; otherwise show stale data
+	// while the fresh list loads in the background.
 	useEffect(() => {
 		if (conversationList.length === 0) {
 			setIsLoading(true);
-			postMessage({ type: 'getConversationList' });
-			const timeout = setTimeout(() => setIsLoading(false), 2000);
-			return () => clearTimeout(timeout);
 		}
-		setIsLoading(false);
-		return undefined;
-	}, [postMessage, conversationList.length]);
+		postMessage({ type: 'getConversationList' });
+		const timeout = setTimeout(() => setIsLoading(false), 2000);
+		return () => clearTimeout(timeout);
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
+	}, [conversationList.length, postMessage]);
+
+	// Clear loading as soon as the conversation list is populated
+	useEffect(() => {
+		if (conversationList.length > 0) {
+			setIsLoading(false);
+		}
+	}, [conversationList.length]);
 
 	useEffect(() => {
 		if (editingId && inputRef.current) {
@@ -191,6 +205,7 @@ export const HistoryDropdown: React.FC = () => {
 	) => {
 		const isEditing = editingId === item.id;
 		const isHovered = hoveredId === item.id;
+		const isActive = item.id === activeSessionId;
 
 		return (
 			<div
@@ -201,7 +216,7 @@ export const HistoryDropdown: React.FC = () => {
 					setHoveredId(item.id);
 				}}
 				onMouseLeave={() => setHoveredId(null)}
-				className={`flex items-center p-(--gap-2) pl-(--gap-4) gap-(--gap-3) min-h-(--h-md) text-md relative rounded-md transition-colors hover:bg-(--alpha-8) ${isEditing ? 'cursor-default' : 'cursor-pointer'} ${selected || isHovered ? 'bg-vscode-list-hoverBackground' : 'bg-transparent'}`}
+				className={`flex items-center p-(--gap-2) pl-(--gap-4) gap-(--gap-3) min-h-(--h-md) text-md relative rounded-md transition-colors hover:bg-(--alpha-8) ${isEditing ? 'cursor-default' : 'cursor-pointer'} ${selected || isHovered ? 'bg-vscode-list-hoverBackground' : isActive ? 'bg-(--alpha-5)' : 'bg-transparent'}`}
 			>
 				{isEditing ? (
 					<input
@@ -215,8 +230,13 @@ export const HistoryDropdown: React.FC = () => {
 					/>
 				) : (
 					<>
+						{isActive && (
+							<span className="w-1.5 h-1.5 rounded-full bg-vscode-focusBorder shrink-0" />
+						)}
 						<span className="opacity-50 flex shrink-0">{item.icon}</span>
-						<span className="overflow-hidden text-ellipsis whitespace-nowrap text-vscode-foreground">
+						<span
+							className={`overflow-hidden text-ellipsis whitespace-nowrap ${isActive ? 'text-vscode-focusBorder' : 'text-vscode-foreground'}`}
+						>
 							{item.label}
 						</span>
 

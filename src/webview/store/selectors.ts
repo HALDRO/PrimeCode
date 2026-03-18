@@ -24,6 +24,7 @@ import { type UIState, useUIStore } from './uiStore';
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_COMMITS: CommitInfo[] = [];
 const EMPTY_CHANGED_FILES: ChangedFile[] = [];
+const EMPTY_CUMULATIVE_DIFFS: ChatSession['cumulativeDiffs'] = [];
 const EMPTY_NOTIFICATIONS: TransientNotification[] = [];
 
 function getActiveSession(state: ChatState): ChatSession | undefined {
@@ -182,6 +183,7 @@ export const useChangedFilesState = () =>
 	useChatStore(
 		useShallow((state: ChatState) => ({
 			changedFiles: getActiveSession(state)?.changedFiles ?? EMPTY_CHANGED_FILES,
+			cumulativeDiffs: getActiveSession(state)?.cumulativeDiffs ?? EMPTY_CUMULATIVE_DIFFS,
 		})),
 	);
 

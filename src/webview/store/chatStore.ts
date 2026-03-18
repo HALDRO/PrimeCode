@@ -77,6 +77,13 @@ export interface ChatSession {
 	isLoading: boolean;
 	lastActive: number;
 	changedFiles: ChangedFile[];
+	/** Cumulative diffs from CLI session.diff — original→current per file. */
+	cumulativeDiffs: Array<{
+		file: string;
+		additions: number;
+		deletions: number;
+		status?: 'added' | 'deleted' | 'modified';
+	}>;
 	restoreCommits: CommitInfo[];
 	unrevertAvailable: boolean;
 	revertedFromMessageId: string | null;
@@ -484,14 +491,16 @@ function handleFileEvent(targetSession: ChatSession, payload: SessionEventPayloa
 			timestamp: Date.now(),
 		};
 
-		// Deduplicate by toolUseId (not filePath) so multiple edits to the
-		// same file are preserved as separate entries.  The panel groups and
-		// aggregates them by filePath for display.  This is critical for
-		// history replay: each replayed tool_use must produce its own entry,
-		// otherwise only the last edit per file survives a restart.
+		// Deduplicate by toolUseId + filePath so multiple edits to the
+		// same file are preserved as separate entries, while tools like
+		// apply_patch that touch multiple files with one toolUseId keep
+		// all their entries.  The panel groups and aggregates them by
+		// filePath for display.
 		const toolId = f.toolUseId || '';
 		const existingIdx = toolId
-			? targetSession.changedFiles.findIndex(file => file.toolUseId === toolId)
+			? targetSession.changedFiles.findIndex(
+					file => file.toolUseId === toolId && file.filePath === f.filePath,
+				)
 			: -1;
 		if (existingIdx !== -1) {
 			targetSession.changedFiles[existingIdx] = newFile;
@@ -504,7 +513,13 @@ function handleFileEvent(targetSession: ChatSession, payload: SessionEventPayloa
 		);
 	} else if (f.action === 'all_undone') {
 		targetSession.changedFiles = [];
+		targetSession.cumulativeDiffs = [];
 	}
+}
+
+function handleFileDiffEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
+	const fd = payload as import('../../common/protocol').SessionFileDiffPayload;
+	targetSession.cumulativeDiffs = fd.diffs || [];
 }
 
 function handleAccessEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
@@ -589,6 +604,7 @@ const createEmptySession = (id: string): ChatSession => ({
 	isLoading: false,
 	lastActive: Date.now(),
 	changedFiles: [],
+	cumulativeDiffs: [],
 	restoreCommits: [],
 	unrevertAvailable: false,
 	revertedFromMessageId: null,
@@ -829,6 +845,9 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 						case 'file':
 							handleFileEvent(targetSession, payload);
 							break;
+						case 'file_diff':
+							handleFileDiffEvent(targetSession, payload);
+							break;
 						case 'access':
 							handleAccessEvent(targetSession, payload);
 							break;
@@ -1025,11 +1044,13 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 		removeChangedFile: (filePath, sessionId) =>
 			mutateSession(set, sessionId ?? get().activeSessionId, s => {
 				s.changedFiles = s.changedFiles.filter(f => f.filePath !== filePath);
+				s.cumulativeDiffs = s.cumulativeDiffs.filter(d => d.file !== filePath);
 			}),
 
 		clearChangedFiles: sessionId =>
 			mutateSession(set, sessionId ?? get().activeSessionId, s => {
 				s.changedFiles = [];
+				s.cumulativeDiffs = [];
 			}),
 
 		addRestoreCommit: (commit, sessionId) =>

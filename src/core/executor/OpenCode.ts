@@ -186,6 +186,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 	// Keep track of the server process wrapper to close it properly if needed
 	private serverInstance: { close(): void } | null = null;
+	/** True if THIS process spawned the server (vs. connecting to one started by another window). */
+	private isServerOwner = false;
 
 	constructor() {
 		super();
@@ -245,6 +247,10 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		await this.spawnServer(config.workspaceRoot, config);
 	}
 
+	/**
+	 * Try to connect to an already-running OpenCode server via the port file.
+	 * Uses the official `/global/health` endpoint to verify the server is alive.
+	 */
 	private async tryConnectToExistingServer(config: CLIConfig): Promise<boolean> {
 		const portFile = this.getPortFilePath();
 		try {
@@ -254,30 +260,45 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			const port = parseInt(content.trim(), 10);
 			if (Number.isNaN(port) || port <= 0) return false;
 
-			const portUrl = `http://127.0.0.1:${port}`;
-
-			// Quick health check
-			const controller = new AbortController();
-			const timeout = setTimeout(() => controller.abort(), 2000);
-			try {
-				await fetch(portUrl, { method: 'HEAD', signal: controller.signal });
-				clearTimeout(timeout);
-
-				logger.info(`[OpenCode] Discovered existing server on port ${port}`);
-				this.serverUrl = portUrl;
+			const baseUrl = `http://127.0.0.1:${port}`;
+			if (await this.isOpenCodeServer(baseUrl)) {
+				logger.info(`[OpenCode] Connected to existing server on port ${port}`);
+				this.serverUrl = baseUrl;
 				this.directory = config.workspaceRoot;
 				this.initSdkClient();
 				void this.preloadMetadata();
 				return true;
-			} catch (_e) {
-				clearTimeout(timeout);
-				logger.info(`[OpenCode] Stale port file (port ${port}). Starting new server.`);
-				try {
-					await fs.promises.unlink(portFile);
-				} catch {}
-				return false;
 			}
-		} catch (_error) {
+
+			// Server not responding — stale port file, clean up
+			logger.info(`[OpenCode] Stale port file (port ${port}), removing`);
+			try {
+				await fs.promises.unlink(portFile);
+			} catch {}
+		} catch {}
+
+		return false;
+	}
+
+	/**
+	 * Check if a real OpenCode server is running at the given URL.
+	 * Uses the official `GET /global/health` endpoint which returns
+	 * `{ healthy: true, version: string }`.
+	 */
+	private async isOpenCodeServer(baseUrl: string): Promise<boolean> {
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), 3000);
+		try {
+			const res = await fetch(`${baseUrl}/global/health`, {
+				method: 'GET',
+				signal: controller.signal,
+			});
+			clearTimeout(timeout);
+			if (!res.ok) return false;
+			const data = (await res.json()) as { healthy?: boolean };
+			return data.healthy === true;
+		} catch {
+			clearTimeout(timeout);
 			return false;
 		}
 	}
@@ -329,6 +350,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			this.serverInstance = { close: () => opencode.server.close() };
 			this.serverUrl = opencode.server.url;
 			this.directory = workspaceRoot;
+			this.isServerOwner = true;
 
 			await this.savePortFile();
 			this.initSdkClient();
@@ -1424,6 +1446,31 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				});
 				break;
 			}
+			case 'session.diff': {
+				const props = (
+					envelope as {
+						type: string;
+						properties: {
+							sessionID: string;
+							diff: Array<{ file: string; additions: number; deletions: number; status?: string }>;
+						};
+					}
+				).properties;
+				this.emit('event', {
+					type: 'session_diff' as const,
+					data: {
+						sessionID: props.sessionID,
+						diff: (props.diff || []).map(d => ({
+							file: d.file,
+							additions: d.additions || 0,
+							deletions: d.deletions || 0,
+							status: d.status as 'added' | 'deleted' | 'modified' | undefined,
+						})),
+					},
+					sessionId: props.sessionID,
+				});
+				break;
+			}
 			case 'session.compacted': {
 				// Compaction completed — emit tool_result to complete the running tool card
 				const props = (envelope as { type: string; properties: { sessionID: string } }).properties;
@@ -2085,13 +2132,18 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			} catch {}
 			this.serverInstance = null;
 		}
-		// Clean up port file so other windows don't try to connect to a dead server.
-		try {
-			const portFile = this.getPortFilePath();
-			if (fs.existsSync(portFile)) {
-				await fs.promises.unlink(portFile);
-			}
-		} catch {}
+		// Only clean up port file if THIS process spawned the server.
+		// If we connected to another process's server, leave the port file alone.
+		if (this.isServerOwner) {
+			try {
+				const portFile = this.getPortFilePath();
+				if (fs.existsSync(portFile)) {
+					await fs.promises.unlink(portFile);
+				}
+			} catch {}
+			this.isServerOwner = false;
+		}
+
 		this.serverUrl = null;
 		this.directory = null;
 		this.sdkClient = null;

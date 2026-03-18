@@ -373,8 +373,8 @@ const StandaloneStatsPanel: React.FC = React.memo(() => (
 StandaloneStatsPanel.displayName = 'StandaloneStatsPanel';
 
 export const ChangedFilesPanel: React.FC = React.memo(() => {
-	const { changedFiles } = useChangedFilesState();
-	const hasFiles = changedFiles.length > 0;
+	const { changedFiles, cumulativeDiffs } = useChangedFilesState();
+	const hasFiles = changedFiles.length > 0 || cumulativeDiffs.length > 0;
 
 	// When no changed files — always show SessionStatsDisplay
 	if (!hasFiles) {
@@ -388,8 +388,8 @@ ChangedFilesPanel.displayName = 'ChangedFilesPanel';
 
 const ChangedFilesPanelContent: React.FC = React.memo(() => {
 	const { postMessage } = useVSCode();
-	const { changedFiles } = useChangedFilesState();
-	const hasFiles = changedFiles.length > 0;
+	const { changedFiles, cumulativeDiffs } = useChangedFilesState();
+	const hasFiles = changedFiles.length > 0 || cumulativeDiffs.length > 0;
 	const { clearChangedFiles, removeChangedFile } = useChatActions();
 	const { showConfirmDialog } = useUIActions();
 	const mcpServers = useMcpServers();
@@ -397,34 +397,63 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 	const [expanded, setExpanded] = useState(false);
 	const [showCopyDropdown, setShowCopyDropdown] = useState(false);
 
-	const { totalAdded, totalRemoved } = useMemo(
-		() => ({
+	// Build a lookup map from cumulative diffs (original→current) when available
+	const cumulativeMap = useMemo(() => {
+		const map = new Map<string, { additions: number; deletions: number }>();
+		for (const d of cumulativeDiffs) {
+			map.set(d.file, { additions: d.additions, deletions: d.deletions });
+		}
+		return map;
+	}, [cumulativeDiffs]);
+
+	const hasCumulative = cumulativeMap.size > 0;
+
+	// Use cumulative stats for header totals when available, fall back to per-edit sum
+	const { totalAdded, totalRemoved } = useMemo(() => {
+		if (hasCumulative) {
+			let added = 0;
+			let removed = 0;
+			for (const d of cumulativeDiffs) {
+				added += d.additions;
+				removed += d.deletions;
+			}
+			return { totalAdded: added, totalRemoved: removed };
+		}
+		return {
 			totalAdded: changedFiles.reduce((sum, f) => sum + f.linesAdded, 0),
 			totalRemoved: changedFiles.reduce((sum, f) => sum + f.linesRemoved, 0),
-		}),
-		[changedFiles],
-	);
+		};
+	}, [changedFiles, cumulativeDiffs, hasCumulative]);
 
-	// Group changedFiles by filePath for display (aggregate stats per file)
+	// Group changedFiles by filePath for display, using cumulative stats when available
 	const groupedFiles = useMemo(() => {
 		const fileMap = new Map<string, ChangedFile>();
 		for (const file of changedFiles) {
 			const existing = fileMap.get(file.filePath);
 			if (existing) {
-				// Aggregate stats for same file
 				fileMap.set(file.filePath, {
 					...existing,
 					linesAdded: existing.linesAdded + file.linesAdded,
 					linesRemoved: existing.linesRemoved + file.linesRemoved,
 					timestamp: Math.max(existing.timestamp, file.timestamp),
-					toolUseId: file.toolUseId, // Keep latest toolUseId
+					toolUseId: file.toolUseId,
 				});
 			} else {
 				fileMap.set(file.filePath, { ...file });
 			}
 		}
+		// Override per-file stats with cumulative diffs when available
+		if (hasCumulative) {
+			for (const [filePath, entry] of fileMap) {
+				const cumulative = cumulativeMap.get(filePath);
+				if (cumulative) {
+					entry.linesAdded = cumulative.additions;
+					entry.linesRemoved = cumulative.deletions;
+				}
+			}
+		}
 		return Array.from(fileMap.values());
-	}, [changedFiles]);
+	}, [changedFiles, cumulativeMap, hasCumulative]);
 
 	// Count unique files for display
 	const uniqueFileCount = groupedFiles.length;

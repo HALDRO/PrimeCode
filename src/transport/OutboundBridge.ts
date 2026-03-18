@@ -261,6 +261,26 @@ export class OutboundBridge {
 			} satisfies SessionEventMessage);
 		},
 
+		/** Post cumulative file diff stats from CLI session.diff event. */
+		fileDiffUpdated: (
+			sessionId: string,
+			diffs: Array<{
+				file: string;
+				additions: number;
+				deletions: number;
+				status?: 'added' | 'deleted' | 'modified';
+			}>,
+		): void => {
+			this.send({
+				type: 'session_event',
+				targetId: sessionId,
+				eventType: 'file_diff',
+				payload: { eventType: 'file_diff', diffs },
+				timestamp: Date.now(),
+				sessionId,
+			} satisfies SessionEventMessage);
+		},
+
 		/** Post an access response event. */
 		accessResponse: (
 			sessionId: string,

@@ -70,11 +70,17 @@ export const groupMessagesIntoSections = (
 	let pastRevertPoint = false;
 
 	// PERFORMANCE: Create a lookup map for changed files by toolUseId once per render cycle
-	// This prevents nested O(N^2) loops inside computeSectionStats
-	const changedFilesMap = new Map<string, ChangedFile>();
+	// This prevents nested O(N^2) loops inside computeSectionStats.
+	// Uses an array per key because apply_patch can touch multiple files with one toolUseId.
+	const changedFilesMap = new Map<string, ChangedFile[]>();
 	if (changedFiles.length > 0) {
 		for (const file of changedFiles) {
-			changedFilesMap.set(file.toolUseId, file);
+			const existing = changedFilesMap.get(file.toolUseId);
+			if (existing) {
+				existing.push(file);
+			} else {
+				changedFilesMap.set(file.toolUseId, [file]);
+			}
 		}
 	}
 
@@ -149,7 +155,7 @@ export const groupMessagesIntoSections = (
 function computeSectionStats(
 	section: MessageSection,
 	rawResponses: Message[],
-	changedFilesMap: Map<string, ChangedFile>,
+	changedFilesMap: Map<string, ChangedFile[]>,
 	isLast: boolean,
 	turnTokens: Record<
 		string,
@@ -179,22 +185,26 @@ function computeSectionStats(
 		for (const msg of rawResponses) {
 			// Check direct tool usage
 			if (msg.type === 'tool_use' && 'toolUseId' in msg) {
-				const file = changedFilesMap.get(msg.toolUseId);
-				if (file) {
-					added += file.linesAdded;
-					removed += file.linesRemoved;
-					filesSet.add(file.filePath);
+				const files = changedFilesMap.get(msg.toolUseId);
+				if (files) {
+					for (const file of files) {
+						added += file.linesAdded;
+						removed += file.linesRemoved;
+						filesSet.add(file.filePath);
+					}
 				}
 			}
 			// Check subtask transcript children
 			if (msg.type === 'subtask' && msg.transcript) {
 				for (const child of msg.transcript) {
 					if (child.type === 'tool_use' && 'toolUseId' in child) {
-						const file = changedFilesMap.get((child as { toolUseId: string }).toolUseId);
-						if (file) {
-							added += file.linesAdded;
-							removed += file.linesRemoved;
-							filesSet.add(file.filePath);
+						const files = changedFilesMap.get((child as { toolUseId: string }).toolUseId);
+						if (files) {
+							for (const file of files) {
+								added += file.linesAdded;
+								removed += file.linesRemoved;
+								filesSet.add(file.filePath);
+							}
 						}
 					}
 				}

@@ -138,6 +138,18 @@ export interface TurnTokensEventData {
 	userMessageId?: string;
 }
 
+export interface SessionDiffFileDiff {
+	file: string;
+	additions: number;
+	deletions: number;
+	status?: 'added' | 'deleted' | 'modified';
+}
+
+export interface SessionDiffEventData {
+	sessionID: string;
+	diff: SessionDiffFileDiff[];
+}
+
 export interface NormalizedLogEventData {
 	role?: string;
 	content?: string;
@@ -170,7 +182,8 @@ export type CLIEvent =
 	| (CLIEventBase & { type: 'question'; data: QuestionEventData })
 	| (CLIEventBase & { type: 'session_updated'; data: SessionUpdatedEventData })
 	| (CLIEventBase & { type: 'turn_tokens'; data: TurnTokensEventData })
-	| (CLIEventBase & { type: 'normalized_log'; data: NormalizedLogEventData });
+	| (CLIEventBase & { type: 'normalized_log'; data: NormalizedLogEventData })
+	| (CLIEventBase & { type: 'session_diff'; data: SessionDiffEventData });
 
 export interface CLIExecutor extends EventEmitter {
 	ensureServer(config: CLIConfig): Promise<void>;
