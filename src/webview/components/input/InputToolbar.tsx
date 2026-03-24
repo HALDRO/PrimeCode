@@ -4,8 +4,9 @@
  */
 
 import type React from 'react';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { cn } from '../../lib/cn';
+import { useSettingsStore } from '../../store';
 import { useVSCode } from '../../utils/vscode';
 import {
 	AtSignIcon,
@@ -20,6 +21,9 @@ import { AgentButtonIcon, AgentDropdown, getAgentLabel } from './AgentDropdown';
 import { FilePickerDropdown } from './FilePickerDropdown';
 import { ModelDropdown } from './ModelDropdown';
 import { SlashCommandsDropdown } from './SlashCommandsDropdown';
+
+/** IDs of built-in agents that are toggled via the main button click. */
+const BUILTIN_TOGGLE_IDS = new Set(['build', 'plan']);
 
 interface InputToolbarProps {
 	// Agent
@@ -76,19 +80,36 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({
 		null,
 	);
 
+	// Check if there are custom (non-builtin) agents that need a dropdown
+	const agents = useSettingsStore(state => state.agents);
+	const hasCustomAgents = useMemo(
+		() =>
+			agents.items.some(
+				a =>
+					!a.hidden &&
+					(a.mode === 'primary' || a.mode === undefined) &&
+					!BUILTIN_TOGGLE_IDS.has(a.id),
+			),
+		[agents.items],
+	);
+
+	/** Toggle between build and plan on click. */
+	const handleAgentToggle = () => {
+		// undefined (build) → 'plan', 'plan' → undefined (build)
+		onAgentChange(selectedAgent === 'plan' ? undefined : 'plan');
+	};
+
 	return (
 		<div className="h-(--input-toolbar-height) flex items-center justify-between pl-(--gap-2) pr-0 box-border shrink-0">
 			{/* Left Toolbar */}
 			<div className="flex items-center gap-(--gap-0-5) z-5 min-w-0 overflow-hidden">
-				{/* Agent button */}
-				<div className="relative shrink-0">
+				{/* Agent button: click toggles build↔plan, chevron opens dropdown only if custom agents exist */}
+				<div className="relative shrink-0 flex items-center">
 					<Button
 						variant="ghost"
 						size="xs"
-						onClick={e => {
-							setAgentButtonAnchorElement(e.currentTarget as HTMLElement);
-							setShowAgentDropdown(!showAgentDropdown);
-						}}
+						onClick={handleAgentToggle}
+						title={selectedAgent === 'plan' ? 'Switch to Build mode' : 'Switch to Plan mode'}
 						className={cn(
 							'h-(--input-toolbar-height) rounded-md select-none text-sm font-(family-name:--vscode-font-family) shrink-0 flex items-center gap-2 px-(--gap-1-5) transition-all duration-200 border',
 							selectedAgent
@@ -102,9 +123,21 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({
 							className={cn('transition-transform duration-200', selectedAgent && 'scale-110')}
 						/>
 						<span>{getAgentLabel(selectedAgent)}</span>
-						<ChevronIcon expanded={showAgentDropdown} size={10} className="shrink-0" />
 					</Button>
-					{showAgentDropdown && (
+					{/* Chevron for dropdown — only shown when custom agents exist */}
+					{hasCustomAgents && (
+						<IconButton
+							icon={<ChevronIcon expanded={showAgentDropdown} size={10} />}
+							onClick={e => {
+								setAgentButtonAnchorElement(e.currentTarget as HTMLElement);
+								setShowAgentDropdown(!showAgentDropdown);
+							}}
+							title="More agents"
+							size={18}
+							className="text-vscode-foreground opacity-50 hover:opacity-100 -ml-1"
+						/>
+					)}
+					{showAgentDropdown && hasCustomAgents && (
 						<AgentDropdown
 							anchorElement={agentButtonAnchorElement}
 							onSelect={agent => {
@@ -130,7 +163,6 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({
 						)}
 					>
 						<span className="truncate">{modelDisplayName}</span>
-						<ChevronIcon expanded={showModelDropdown} size={10} className="shrink-0" />
 					</Button>
 					{showModelDropdown && (
 						<ModelDropdown anchorElement={modelButtonAnchorElement} onClose={onModelClose} />
@@ -211,6 +243,8 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({
 							anchorRect={
 								!fileButtonAnchorElement ? (filePickerAnchorRect ?? undefined) : undefined
 							}
+							showSearch
+							searchAutoFocus
 						/>
 					)}
 				</div>

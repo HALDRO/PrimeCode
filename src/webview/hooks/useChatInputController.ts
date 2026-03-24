@@ -15,6 +15,7 @@ import {
 	useIsProcessing,
 	useModelSelection,
 	usePromptVersions,
+	useSessionAgent,
 	useStoreInput,
 } from '../store';
 import { useSettingsStore } from '../store/settingsStore';
@@ -127,7 +128,9 @@ export function useChatInputController(
 		[isControlled, controlledOnChange, setStoreInput],
 	);
 
-	const selectedAgent = getSessionAgent();
+	// Use reactive selector so the button re-renders immediately when agent changes.
+	// getSessionAgent() is an imperative getter that doesn't subscribe to store updates.
+	const selectedAgent = useSessionAgent();
 	const setSelectedAgent = useCallback(
 		(a: string | undefined) => {
 			setSessionAgent(a);

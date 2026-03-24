@@ -258,7 +258,7 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 	const mcpServers = useMcpServers();
 	const isProcessing = useIsProcessing();
 	const revertedFromMessageId = useRevertedFromMessageId();
-	const { changedFiles } = useChangedFilesState();
+	const { changedFiles, cumulativeDiffs } = useChangedFilesState();
 	const turnTokens = useTurnTokens();
 
 	const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
@@ -273,9 +273,18 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 			changedFiles,
 			turnTokens,
 			isProcessing,
+			cumulativeDiffs,
 		);
 		return stabilizeSections(raw, prevSectionsRef);
-	}, [messages, mcpServerNames, revertedFromMessageId, changedFiles, turnTokens, isProcessing]);
+	}, [
+		messages,
+		mcpServerNames,
+		revertedFromMessageId,
+		changedFiles,
+		turnTokens,
+		isProcessing,
+		cumulativeDiffs,
+	]);
 
 	const virtuosoComponents = useMemo(
 		() => ({

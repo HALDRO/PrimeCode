@@ -408,23 +408,6 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 
 	const hasCumulative = cumulativeMap.size > 0;
 
-	// Use cumulative stats for header totals when available, fall back to per-edit sum
-	const { totalAdded, totalRemoved } = useMemo(() => {
-		if (hasCumulative) {
-			let added = 0;
-			let removed = 0;
-			for (const d of cumulativeDiffs) {
-				added += d.additions;
-				removed += d.deletions;
-			}
-			return { totalAdded: added, totalRemoved: removed };
-		}
-		return {
-			totalAdded: changedFiles.reduce((sum, f) => sum + f.linesAdded, 0),
-			totalRemoved: changedFiles.reduce((sum, f) => sum + f.linesRemoved, 0),
-		};
-	}, [changedFiles, cumulativeDiffs, hasCumulative]);
-
 	// Group changedFiles by filePath for display, using cumulative stats when available
 	const groupedFiles = useMemo(() => {
 		const fileMap = new Map<string, ChangedFile>();
@@ -454,6 +437,19 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 		}
 		return Array.from(fileMap.values());
 	}, [changedFiles, cumulativeMap, hasCumulative]);
+
+	// Header totals: always derived from groupedFiles so they match the per-file rows exactly.
+	// Previously this was computed separately from cumulativeDiffs, which could include files
+	// not present in changedFiles — causing header vs per-file row discrepancies.
+	const { totalAdded, totalRemoved } = useMemo(() => {
+		let added = 0;
+		let removed = 0;
+		for (const f of groupedFiles) {
+			added += f.linesAdded;
+			removed += f.linesRemoved;
+		}
+		return { totalAdded: added, totalRemoved: removed };
+	}, [groupedFiles]);
 
 	// Count unique files for display
 	const uniqueFileCount = groupedFiles.length;

@@ -60,6 +60,12 @@ export const groupMessagesIntoSections = (
 		{ input: number; output: number; total: number; cacheRead: number; durationMs?: number }
 	> = {},
 	isProcessing = false,
+	cumulativeDiffs: Array<{
+		file: string;
+		additions: number;
+		deletions: number;
+		status?: string;
+	}> = [],
 ): MessageSection[] => {
 	const visibleMsgs = msgs.filter(m => !('hidden' in m && m.hidden));
 	// Collect sections with their raw (ungrouped) responses
@@ -68,6 +74,14 @@ export const groupMessagesIntoSections = (
 	let currentResponses: Message[] = [];
 	let sectionIndex = 0;
 	let pastRevertPoint = false;
+
+	// Build cumulative diffs lookup (file → {additions, deletions}) for per-file override.
+	// When available, these represent the real git diff (original→current) and are more
+	// accurate than per-edit old_string/new_string sums.
+	const cumulativeMap = new Map<string, { additions: number; deletions: number }>();
+	for (const d of cumulativeDiffs) {
+		cumulativeMap.set(d.file, { additions: d.additions, deletions: d.deletions });
+	}
 
 	// PERFORMANCE: Create a lookup map for changed files by toolUseId once per render cycle
 	// This prevents nested O(N^2) loops inside computeSectionStats.
@@ -92,6 +106,7 @@ export const groupMessagesIntoSections = (
 					currentSection,
 					currentResponses,
 					changedFilesMap,
+					cumulativeMap,
 					false,
 					turnTokens,
 				);
@@ -121,6 +136,7 @@ export const groupMessagesIntoSections = (
 			currentSection,
 			currentResponses,
 			changedFilesMap,
+			cumulativeMap,
 			true,
 			turnTokens,
 		);
@@ -156,6 +172,7 @@ function computeSectionStats(
 	section: MessageSection,
 	rawResponses: Message[],
 	changedFilesMap: Map<string, ChangedFile[]>,
+	cumulativeMap: Map<string, { additions: number; deletions: number }>,
 	isLast: boolean,
 	turnTokens: Record<
 		string,
@@ -173,40 +190,52 @@ function computeSectionStats(
 		}
 	}
 
-	// File changes: iterate tool_use messages and look up in the Map (O(1) per lookup)
+	// File changes: iterate tool_use messages and look up in the Map (O(1) per lookup).
+	// When cumulativeDiffs are available, use them for per-file stats so that
+	// the numbers match ChangedFilesPanel (git diff original→current).
 	let fileChanges: SectionStats['fileChanges'] = null;
+	const hasCumulative = cumulativeMap.size > 0;
 
-	// PERFORMANCE: Only iterate once, looking up in the Map instead of nested array scan
 	if (changedFilesMap.size > 0) {
 		let added = 0;
 		let removed = 0;
 		const filesSet = new Set<string>();
 
-		for (const msg of rawResponses) {
-			// Check direct tool usage
-			if (msg.type === 'tool_use' && 'toolUseId' in msg) {
-				const files = changedFilesMap.get(msg.toolUseId);
-				if (files) {
-					for (const file of files) {
-						added += file.linesAdded;
-						removed += file.linesRemoved;
-						filesSet.add(file.filePath);
-					}
+		// Collect all file paths touched by tool_use messages in this turn
+		const collectFiles = (toolUseId: string) => {
+			const files = changedFilesMap.get(toolUseId);
+			if (!files) return;
+			for (const file of files) {
+				filesSet.add(file.filePath);
+				if (!hasCumulative) {
+					// No cumulative diffs — use per-edit stats
+					added += file.linesAdded;
+					removed += file.linesRemoved;
 				}
 			}
-			// Check subtask transcript children
+		};
+
+		for (const msg of rawResponses) {
+			if (msg.type === 'tool_use' && 'toolUseId' in msg) {
+				collectFiles(msg.toolUseId);
+			}
 			if (msg.type === 'subtask' && msg.transcript) {
 				for (const child of msg.transcript) {
 					if (child.type === 'tool_use' && 'toolUseId' in child) {
-						const files = changedFilesMap.get((child as { toolUseId: string }).toolUseId);
-						if (files) {
-							for (const file of files) {
-								added += file.linesAdded;
-								removed += file.linesRemoved;
-								filesSet.add(file.filePath);
-							}
-						}
+						collectFiles((child as { toolUseId: string }).toolUseId);
 					}
+				}
+			}
+		}
+
+		// When cumulative diffs are available, use them for accurate per-file stats.
+		// This matches how ChangedFilesPanel computes its totals.
+		if (hasCumulative && filesSet.size > 0) {
+			for (const filePath of filesSet) {
+				const cumulative = cumulativeMap.get(filePath);
+				if (cumulative) {
+					added += cumulative.additions;
+					removed += cumulative.deletions;
 				}
 			}
 		}

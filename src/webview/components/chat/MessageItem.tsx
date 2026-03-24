@@ -323,8 +323,18 @@ const SimpleToolGroup = React.memo<{
 		[messages],
 	);
 
-	const [expanded, setExpanded] = useState(!shouldCollapse);
+	const [expanded, setExpanded] = useState(isLive);
+	const wasLiveRef = useRef(isLive);
 	const prevShouldCollapseRef = useRef(shouldCollapse);
+
+	useEffect(() => {
+		if (isLive && !wasLiveRef.current) {
+			setExpanded(true);
+		} else if (!isLive && wasLiveRef.current) {
+			setExpanded(false);
+		}
+		wasLiveRef.current = isLive;
+	}, [isLive]);
 
 	useEffect(() => {
 		if (shouldCollapse && !prevShouldCollapseRef.current && !isLive) {

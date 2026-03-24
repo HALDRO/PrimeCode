@@ -450,3 +450,7 @@ export const useDraftAttachments = () =>
 /** Draft agent restored from a cancelled queued message */
 export const useDraftAgent = () =>
 	useChatStore((state: ChatState) => getActiveSession(state)?.draftAgent);
+
+/** Reactive selector for the active session's agent (build = undefined, plan = 'plan', etc.) */
+export const useSessionAgent = () =>
+	useChatStore((state: ChatState) => getActiveSession(state)?.agent);

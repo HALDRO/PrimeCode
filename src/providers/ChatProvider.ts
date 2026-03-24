@@ -72,9 +72,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.settings = new Settings();
 		this.sessionState = new SessionState();
 		this.cli = new OpenCodeExecutor();
-		this.subtaskManager = new SubtaskManager(this.sessionGraph, this.sessionState, {
-			onTimeout: toolUseId => this.onSubtaskTimeout(toolUseId),
-		});
+		this.subtaskManager = new SubtaskManager(this.sessionGraph, this.sessionState);
 
 		// Initialize Handlers — single shared context
 		// RestoreHandler is created first so registerCheckpoint can be wired into the context
@@ -116,6 +114,15 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 		// Forward CLI events to webview
 		this.cli.on('event', event => this.handleCliEvent(event));
+
+		// Handle server reconnection — re-sync all UI state
+		this.cli.on('event', event => {
+			if (event.type === 'server_reconnected') {
+				logger.info('[ChatProvider] Server reconnected, re-syncing UI...');
+				this.hasSynced = false;
+				void this.syncAllOrDefer('server-reconnected');
+			}
+		});
 
 		// Watch settings changes
 		this.disposables.push(
@@ -253,6 +260,12 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			await this.cli.start(config);
 			logger.info('[ChatProvider] OpenCode server started successfully');
 
+			// Auto-sync proxy config to opencode.json for this workspace
+			await this.ensureProjectConfigSync(workspaceRoot);
+
+			// Start background health monitor for auto-reconnect
+			this.cli.startHealthMonitor();
+
 			// Hydrate all UI-visible state after server connection (providers, proxy models, MCP, etc.)
 			await this.syncAllOrDefer('opencode-start');
 
@@ -267,6 +280,52 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					'Failed to start OpenCode server. Models/providers may be unavailable until it is running. See extension logs for details.',
 				timestamp: new Date().toISOString(),
 			});
+		}
+	}
+
+	/**
+	 * Sync proxy provider config from VS Code settings into the project-level
+	 * opencode.json. Runs on every extension activation so that new workspaces
+	 * automatically inherit the user's proxy configuration.
+	 */
+	private async ensureProjectConfigSync(workspaceRoot: string): Promise<void> {
+		try {
+			const proxyBaseUrl = (this.settings.get<string>('proxy.baseUrl') || '').trim();
+			const proxyApiKey = (this.settings.get<string>('proxy.apiKey') || '').trim();
+			const enabledModelIds = this.settings.get<string[]>('proxy.enabledModels') || [];
+
+			if (!proxyBaseUrl || enabledModelIds.length === 0) return;
+
+			const synced = await this.services.openCodeClient.ensureProjectConfig(
+				workspaceRoot,
+				{ proxyBaseUrl, proxyApiKey, enabledModelIds },
+				async (ids: string[]) => {
+					// Try to enrich from models.dev for better metadata
+					const devData = await this.services.modelsDev.lookupModels(ids);
+					return ids.map(id => {
+						const dev = devData.get(id);
+						return {
+							id,
+							name: id,
+							contextLength: dev?.context,
+							maxCompletionTokens: dev?.output,
+							capabilities: dev
+								? {
+										reasoning: dev.reasoning,
+										vision: dev.modalities?.input?.includes('image'),
+										tools: dev.tool_call,
+									}
+								: undefined,
+						};
+					});
+				},
+			);
+
+			if (synced) {
+				logger.info('[ChatProvider] Auto-synced proxy config to opencode.json');
+			}
+		} catch (error) {
+			logger.warn('[ChatProvider] Failed to auto-sync proxy config:', error);
 		}
 	}
 
@@ -584,10 +643,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				this.subtaskManager.tryLinkChildSession(updatedSessionId);
 			}
 
-			// Also reset inactivity timer for known child sessions on session_updated
 			if (updatedSessionId && this.sessionGraph.isChild(updatedSessionId)) {
-				this.subtaskManager.resetTimerByChild(updatedSessionId);
-
 				const record = event.data as Record<string, unknown> | undefined;
 
 				// Propagate cumulative totalStats from child session_updated onto the parent subtask card
@@ -653,11 +709,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 		// Determine if this event belongs to a known child session
 		let isChildSession = this.sessionGraph.isChild(targetSessionId);
-
-		// Reset subtask inactivity timer on any event from a known child session
-		if (isChildSession) {
-			this.subtaskManager.resetTimerByChild(targetSessionId);
-		}
 
 		// Deferred child→parent linking: if this event's session is unknown to the graph
 		// but we have pending subtask tool IDs, this is the first event from a new child session.
@@ -1132,15 +1183,15 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				/<task_metadata>\s*session_id:\s*(.*?)\s*<\/task_metadata>/s,
 			);
 			const extractedChildSessionId = sessionIdMatch ? sessionIdMatch[1].trim() : undefined;
+			const storedParent = this.subtaskManager.getParentSession(toolUseId);
 
-			// Clean up pending tracking and inactivity timer for this tool
+			// Clean up tracking for this tool after capturing the stored parent mapping.
 			this.subtaskManager.completeSubtask(toolUseId);
 
 			const graphChildId = this.sessionGraph.getChildByTaskId(toolUseId);
 			// Determine child session ID: use event.sessionId or extracted ID, but only if
 			// it's not a known top-level session (tab). Previously compared against activeSessionId,
 			// which breaks after tab switch — activeSessionId becomes a third unrelated session.
-			const storedParent = this.subtaskManager.getParentSession(toolUseId);
 			const fallbackChildId =
 				event.sessionId &&
 				!this.sessionState.startedSessions.has(event.sessionId) &&
@@ -1394,85 +1445,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				this.sessionHandler.postComplete(partId, partId, sessionId);
 			}
 			this.activeThinkingPartIds.delete(sessionId);
-		}
-	}
-
-	// ─── Subtask Timeout Handler ─────────────────────────────────────────────
-
-	/** Fired when a subtask has been inactive for too long (callback from SubtaskManager). */
-	private onSubtaskTimeout(toolUseId: string): void {
-		const routing = this.subtaskManager.resolveRouting(
-			// Find child session ID from the graph by task tool call ID
-			this.sessionGraph.getChildByTaskId(toolUseId) ?? '',
-		);
-		const parentSessionId =
-			routing?.parentSessionId ?? this.subtaskManager.getParentSession(toolUseId);
-		const childSessionId = this.sessionGraph.getChildByTaskId(toolUseId);
-
-		logger.warn('[ChatProvider] Subtask inactivity timeout', {
-			toolUseId,
-			parentSessionId,
-			childSessionId,
-		});
-
-		// Clean up all subtask state
-		this.subtaskManager.completeSubtask(toolUseId);
-
-		// Synthesize an error subtask result so the parent continues
-		if (parentSessionId) {
-			// Abort the child session on the backend so it doesn't hang forever
-			if (childSessionId && this.cli.abortSession) {
-				void this.cli
-					.abortSession(childSessionId)
-					.catch(error =>
-						logger.warn('[ChatProvider] Failed to abort timed-out child session:', error),
-					);
-			}
-
-			const now = Date.now();
-			const errorContent = 'Subtask timed out — no activity for 30 seconds';
-
-			// 1. Update the subtask card to show error state
-			this.sessionHandler.postSessionMessage(
-				{
-					id: toolUseId,
-					type: 'subtask',
-					partId: toolUseId,
-					toolUseId,
-					toolName: 'task',
-					status: 'error',
-					content: errorContent,
-					isError: true,
-					isRunning: false,
-					timestamp: new Date().toISOString(),
-				},
-				parentSessionId,
-			);
-
-			// 2. Synthesize a tool_result so the webview marks this tool as completed.
-			this.sessionHandler.postSessionMessage(
-				{
-					id: `${toolUseId}-result-${now}`,
-					type: 'tool_result',
-					partId: toolUseId,
-					toolUseId,
-					toolName: 'task',
-					content: errorContent,
-					isError: true,
-					timestamp: new Date().toISOString(),
-				},
-				parentSessionId,
-			);
-
-			this.sessionHandler.postComplete(toolUseId, toolUseId, parentSessionId);
-
-			// 3. If no more subtasks are pending/running, transition parent to idle.
-			if (!this.subtaskManager.hasActiveSubtasks()) {
-				logger.debug('[ChatProvider] All subtasks resolved after timeout, sending idle', {
-					parentSessionId,
-				});
-				this.sessionHandler.postStatus(parentSessionId, 'idle', 'Ready');
-			}
 		}
 	}
 

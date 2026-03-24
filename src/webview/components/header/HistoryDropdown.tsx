@@ -243,7 +243,7 @@ export const HistoryDropdown: React.FC = () => {
 						{item.meta && <span className="text-xs text-(--alpha-40) shrink-0">{item.meta}</span>}
 
 						{isHovered && (
-							<div className="absolute right-(--gap-2) top-1/2 -translate-y-1/2 flex gap-(--gap-1) bg-(--header-item-hover) h-full items-center pl-(--gap-2) z-1">
+							<div className="absolute right-(--gap-2) top-0 bottom-0 flex gap-(--gap-1) items-center pl-(--gap-4) pr-(--gap-1) z-1 bg-gradient-to-l from-vscode-list-hoverBackground from-70% to-transparent rounded-r-md">
 								<IconButton
 									icon={<PencilIcon size={12} />}
 									onClick={e => {

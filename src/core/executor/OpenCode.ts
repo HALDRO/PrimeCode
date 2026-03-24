@@ -154,6 +154,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	private readonly messageRoles = new Map<string, 'user' | 'assistant'>();
 	/** Maps messageID → agent name (e.g. 'plan', 'build') from assistant messages. */
 	private readonly messageAgents = new Map<string, string>();
+	/** Message IDs that already emitted a 'finished' event — prevents duplicate emissions when SDK re-sends message.updated with the same completed timestamp. */
+	private readonly finishedMessageIds = new Set<string>();
 	private lastEmittedStatus = new Map<string, string>();
 
 	/** All session IDs that are currently active (main + subagent children). */
@@ -189,6 +191,18 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	/** True if THIS process spawned the server (vs. connecting to one started by another window). */
 	private isServerOwner = false;
 
+	// ── Health Monitor ──────────────────────────────────────────────────────
+	private healthInterval: ReturnType<typeof setInterval> | null = null;
+	/** How often to ping the server (ms). */
+	private static readonly HEALTH_INTERVAL_MS = 15_000;
+	/** How many consecutive health failures before triggering reconnect. */
+	private static readonly HEALTH_FAIL_THRESHOLD = 2;
+	private healthFailCount = 0;
+	/** True while a reconnect attempt is in progress — prevents overlapping reconnects. */
+	private reconnecting = false;
+	/** Stashed config from the last successful ensureServer — needed for reconnect. */
+	private lastConfig: CLIConfig | null = null;
+
 	constructor() {
 		super();
 		this.logNormalizer.on('entry', entry => {
@@ -217,7 +231,10 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	}
 
 	async ensureServer(config: CLIConfig): Promise<void> {
-		if (this.serverUrl) return;
+		if (this.serverUrl) {
+			this.lastConfig = config;
+			return;
+		}
 
 		// Coalesce concurrent callers — only the first one actually starts the server.
 		if (this.ensureServerPromise) {
@@ -228,6 +245,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		this.ensureServerPromise = this.doEnsureServer(config);
 		try {
 			await this.ensureServerPromise;
+			this.lastConfig = config;
 		} finally {
 			this.ensureServerPromise = null;
 		}
@@ -458,6 +476,129 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		this._providersCache.clear();
 		this._agentsCache.clear();
 		this._mcpCache.clear();
+	}
+
+	// =========================================================================
+	// Health Monitor & Auto-Reconnect
+	// =========================================================================
+
+	/**
+	 * Start a background health monitor that periodically pings the server.
+	 * If the server becomes unreachable, it attempts to reconnect automatically
+	 * and restarts the SSE event stream. Emits 'event' with type
+	 * 'server_reconnected' on successful reconnect so ChatProvider can re-sync UI.
+	 */
+	startHealthMonitor(): void {
+		this.stopHealthMonitor();
+		this.healthFailCount = 0;
+
+		this.healthInterval = setInterval(() => {
+			void this.healthCheck();
+		}, OpenCodeExecutor.HEALTH_INTERVAL_MS);
+
+		logger.info('[OpenCode] Health monitor started');
+	}
+
+	stopHealthMonitor(): void {
+		if (this.healthInterval) {
+			clearInterval(this.healthInterval);
+			this.healthInterval = null;
+		}
+	}
+
+	private async healthCheck(): Promise<void> {
+		if (!this.serverUrl || this.reconnecting) return;
+
+		const healthy = await this.isOpenCodeServer(this.serverUrl);
+		if (healthy) {
+			if (this.healthFailCount > 0) {
+				logger.info('[OpenCode] Health check recovered after failures', {
+					previousFails: this.healthFailCount,
+				});
+			}
+			this.healthFailCount = 0;
+
+			// Restart SSE stream if it died (e.g. transient network blip)
+			if (!this.eventStreamRunning && this.directory) {
+				logger.info('[OpenCode] SSE stream not running, restarting...');
+				this.startEventStream(this.serverUrl, this.directory);
+			}
+			return;
+		}
+
+		this.healthFailCount++;
+		logger.warn('[OpenCode] Health check failed', {
+			failCount: this.healthFailCount,
+			threshold: OpenCodeExecutor.HEALTH_FAIL_THRESHOLD,
+		});
+
+		if (this.healthFailCount >= OpenCodeExecutor.HEALTH_FAIL_THRESHOLD) {
+			await this.attemptReconnect();
+		}
+	}
+
+	private async attemptReconnect(): Promise<void> {
+		if (this.reconnecting || !this.lastConfig) return;
+		this.reconnecting = true;
+
+		logger.info('[OpenCode] Server unreachable — attempting reconnect...');
+		this.emit('event', {
+			type: 'error',
+			data: { message: 'OpenCode server connection lost. Reconnecting...' },
+		});
+
+		// Stop SSE stream before resetting state
+		try {
+			this.eventAbort?.abort();
+		} catch {}
+		this.eventStreamRunning = false;
+		this.eventAbort = null;
+
+		this.resetServerState();
+
+		const config = this.lastConfig;
+		const maxAttempts = 5;
+		const baseDelay = 2000;
+
+		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+			try {
+				logger.info(`[OpenCode] Reconnect attempt ${attempt}/${maxAttempts}...`);
+				await this.ensureServer(config);
+
+				if (this.serverUrl) {
+					// Restart SSE stream
+					this.startEventStream(this.serverUrl, config.workspaceRoot);
+					this.healthFailCount = 0;
+					this.reconnecting = false;
+
+					logger.info('[OpenCode] Reconnected successfully');
+					this.emit('event', {
+						type: 'server_reconnected' as const,
+						data: { attempt },
+					});
+					return;
+				}
+			} catch (error) {
+				logger.warn(`[OpenCode] Reconnect attempt ${attempt} failed:`, error);
+			}
+
+			// Exponential backoff: 2s, 4s, 8s, 16s, 32s
+			if (attempt < maxAttempts) {
+				const delay = baseDelay * 2 ** (attempt - 1);
+				await new Promise(resolve => setTimeout(resolve, delay));
+			}
+		}
+
+		this.reconnecting = false;
+		logger.error('[OpenCode] All reconnect attempts failed');
+		this.stopHealthMonitor();
+		this.emit('event', {
+			type: 'error',
+			data: {
+				message:
+					'Failed to reconnect to OpenCode server after multiple attempts. Please restart the extension.',
+			},
+		});
 	}
 
 	/** Returns the SDK client or throws if not initialized. */
@@ -1364,6 +1505,24 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			} finally {
 				this.eventStreamRunning = false;
 				this.eventAbort = null;
+
+				// Auto-restart SSE if the stream died but the server is still supposed to be up.
+				// The health monitor will handle full server death — this covers transient SSE drops.
+				// Skip if a reconnect is already in progress to avoid piling up SSE attempts
+				// against a dead server while attemptReconnect() handles the full recovery.
+				if (!signal.aborted && this.serverUrl && this.directory && !this.reconnecting) {
+					logger.info('[OpenCode] SSE stream ended unexpectedly, scheduling restart...');
+					setTimeout(() => {
+						if (
+							this.serverUrl &&
+							this.directory &&
+							!this.eventStreamRunning &&
+							!this.reconnecting
+						) {
+							this.startEventStream(this.serverUrl, this.directory);
+						}
+					}, 2000);
+				}
 			}
 		})();
 	}
@@ -1631,7 +1790,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 					});
 				}
 
-				if (hasCompleted) {
+				if (hasCompleted && !this.finishedMessageIds.has(info.id)) {
+					this.finishedMessageIds.add(info.id);
 					this.emit('event', {
 						type: 'finished',
 						data: { reason: 'message_completed' },
@@ -2087,6 +2247,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 	async kill(): Promise<void> {
 		await this.abort();
+		this.stopHealthMonitor();
 		this.sessionId = null;
 		this.eventStreamRunning = false;
 		this.eventAbort = null;
@@ -2100,6 +2261,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		this.activeSessions.clear();
 		this.sessionMessages.clear();
 		this.deletedSessions.clear();
+		this.finishedMessageIds.clear();
 	}
 
 	/** Remove per-message metadata for a given session to prevent unbounded Map growth. */
@@ -2119,6 +2281,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				this.messageAgents.delete(msgId);
 				this.lastMessageTokens.delete(msgId);
 				this.turnAccum.delete(msgId);
+				this.finishedMessageIds.delete(msgId);
 			}
 			this.sessionMessages.delete(sessionId);
 		}

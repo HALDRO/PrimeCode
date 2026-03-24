@@ -147,13 +147,65 @@ export class OpenCodeClientService {
 	}
 
 	/**
-	 * Write ONLY the enabled proxy models into the project-level opencode.json
-	 * so the OpenCode server picks them up on next config reload.
-	 * Merges non-destructively with existing content.
+	 * Ensure the project-level opencode.json exists and reflects the current
+	 * VS Code proxy settings. Called automatically on extension activation so
+	 * that a fresh workspace inherits the user's global proxy configuration
+	 * without requiring a manual toggle in the UI.
 	 *
-	 * @param enabledModels - Only models the user explicitly enabled in the UI.
-	 *   Enriched with metadata from /v1/models response and models.dev lookup.
+	 * Does nothing when proxy is not configured (no baseUrl or no enabled models).
+	 * Non-destructively merges — existing opencode.json keys are preserved.
 	 */
+	async ensureProjectConfig(
+		workspaceRoot: string,
+		settings: {
+			proxyBaseUrl: string;
+			proxyApiKey: string;
+			enabledModelIds: string[];
+		},
+		enrichModels?: (ids: string[]) => Promise<EnrichedProxyModel[]>,
+	): Promise<boolean> {
+		const { proxyBaseUrl, proxyApiKey, enabledModelIds } = settings;
+
+		// Nothing to sync — proxy not configured
+		if (!proxyBaseUrl.trim() || enabledModelIds.length === 0) return false;
+
+		const configPath = vscode.Uri.file(`${workspaceRoot}/opencode.json`);
+
+		// Check if config already has the proxy provider with matching models
+		try {
+			const raw = await vscode.workspace.fs.readFile(configPath);
+			const existing = JSON.parse(Buffer.from(raw).toString('utf-8')) as OpenCodeJsonConfig;
+			const providerSection = existing.provider?.['openai-compatible'];
+			if (providerSection?.models) {
+				const existingIds = new Set(Object.keys(providerSection.models));
+				const allPresent = enabledModelIds.every(id => existingIds.has(id));
+				if (allPresent && existingIds.size === enabledModelIds.length) {
+					// Config is already in sync — skip write
+					return false;
+				}
+			}
+		} catch {
+			// File doesn't exist or is invalid — will create/overwrite
+		}
+
+		// Build enriched models — use callback if provided, otherwise minimal stubs
+		let models: EnrichedProxyModel[];
+		if (enrichModels) {
+			models = await enrichModels(enabledModelIds);
+		} else {
+			models = enabledModelIds.map(id => ({ id, name: id }));
+		}
+
+		await this.syncProxyProviderToProjectConfig(
+			workspaceRoot,
+			'openai-compatible',
+			proxyBaseUrl,
+			proxyApiKey,
+			models,
+		);
+		return true;
+	}
+
 	async syncProxyProviderToProjectConfig(
 		workspaceRoot: string,
 		providerId: string,

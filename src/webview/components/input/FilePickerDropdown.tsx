@@ -92,6 +92,8 @@ export const FilePickerDropdown: React.FC<FilePickerDropdownProps> = ({
 			position="top"
 			minWidth={280}
 			maxWidth={340}
+			maxHeight={360}
+			maxHeightVh={40}
 			anchorElement={anchorElement}
 			anchorRect={anchorRect}
 		/>

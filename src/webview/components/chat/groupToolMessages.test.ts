@@ -399,5 +399,22 @@ describe('groupToolMessages', () => {
 			const flags = precomputeCollapseFlags(grouped);
 			expect(flags[0]).toBe(true);
 		});
+
+		it('should collapse a trailing grouped tools item after streaming completes', () => {
+			const msgs = [
+				toolUse('1'),
+				toolResult('1r', 'tu-1'),
+				toolUse('2'),
+				toolResult('2r', 'tu-2'),
+				toolUse('3'),
+				toolResult('3r', 'tu-3'),
+			];
+
+			const grouped = groupToolMessages(msgs, NO_MCP, false);
+			expect(Array.isArray(grouped[0])).toBe(true);
+
+			const flags = precomputeCollapseFlags(grouped);
+			expect(flags[0]).toBe(false);
+		});
 	});
 });

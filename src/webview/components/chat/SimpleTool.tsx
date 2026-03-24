@@ -21,6 +21,7 @@ import {
 	TodoPendingIcon,
 	TodoProgressIcon,
 	WandIcon,
+	ZapIcon,
 } from '../icons';
 import { Badge, PathChip } from '../ui';
 
@@ -361,6 +362,7 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 			isRead,
 			isSearch,
 			isTaskResult,
+			isSkill,
 			readOffset,
 			readLimit,
 		} = useMemo(() => {
@@ -376,6 +378,7 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 			const isRead = action?.type === 'FileRead' || toolLower.includes('read');
 			const isTodo = action?.type === 'TodoManagement' || toolLower === 'todowrite';
 			const isTaskResult = action?.type === 'TaskResult';
+			const isSkill = toolLower === 'skill';
 			const isSearch =
 				action?.type === 'Search' ||
 				action?.type === 'WebSearch' ||
@@ -431,7 +434,10 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 					meta = (args?.path as string) || (rawInput as { path?: string })?.path || '';
 				}
 			} else {
-				if (isLs) {
+				if (isSkill) {
+					const skillName = (rawInput as { name?: string })?.name;
+					label = skillName ? `Skill: ${skillName}` : 'Skill';
+				} else if (isLs) {
 					label = 'Listed';
 					meta = (rawInput as { path?: string })?.path || '';
 				} else if (isRead) {
@@ -472,6 +478,7 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 				isRead,
 				isSearch,
 				isTaskResult,
+				isSkill,
 				readOffset,
 				readLimit,
 			};
@@ -574,13 +581,14 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 
 		const ToolIcon = useMemo(() => {
 			if (toolName === 'thinking') return BrainSideIcon;
+			if (isSkill) return ZapIcon;
 			if (isTaskResult) return CheckCircleIcon;
 			if (isTodoWrite) return TodoListIcon;
 			if (isRead) return FileTextIcon;
 			if (isListDir) return FolderOpenIcon;
 			if (isSearch) return SearchIcon;
 			return WandIcon;
-		}, [toolName, isTodoWrite, isRead, isListDir, isTaskResult, isSearch]);
+		}, [toolName, isSkill, isTodoWrite, isRead, isListDir, isTaskResult, isSearch]);
 
 		return (
 			<SimpleTool

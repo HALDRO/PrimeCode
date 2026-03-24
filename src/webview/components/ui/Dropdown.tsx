@@ -577,11 +577,12 @@ export function DropdownMenu<T>({
 			)}
 
 			<div
+				className="flex-1 min-h-0 overflow-hidden flex flex-col"
 				onMouseLeave={() => {
 					setHoveredIndex(null);
 				}}
 			>
-				<ScrollContainer className="flex-1 py-(--gap-1) px-(--gap-3)" autoHide="never">
+				<ScrollContainer className="py-(--gap-1) px-(--gap-3)" autoHide="never">
 					{loading ? (
 						<div className="p-(--gap-4) text-center text-sm text-(--alpha-50)">Loading...</div>
 					) : filteredItems.length === 0 ? (

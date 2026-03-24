@@ -101,6 +101,10 @@ export interface FinishedEventData {
 	reason: string;
 }
 
+export interface ServerReconnectedEventData {
+	attempt: number;
+}
+
 export interface PermissionEventData {
 	id?: string;
 	requestId?: string;
@@ -178,6 +182,7 @@ export type CLIEvent =
 	| (CLIEventBase & { type: 'tool_streaming'; data: ToolStreamingEventData })
 	| (CLIEventBase & { type: 'error'; data: ErrorEventData })
 	| (CLIEventBase & { type: 'finished'; data: FinishedEventData })
+	| (CLIEventBase & { type: 'server_reconnected'; data: ServerReconnectedEventData })
 	| (CLIEventBase & { type: 'permission'; data: PermissionEventData })
 	| (CLIEventBase & { type: 'question'; data: QuestionEventData })
 	| (CLIEventBase & { type: 'session_updated'; data: SessionUpdatedEventData })
@@ -219,7 +224,7 @@ export interface CLIExecutor extends EventEmitter {
 	createEmptySession(config: CLIConfig): Promise<string>;
 	kill(): Promise<void>;
 	abort(): Promise<void>;
-	/** Abort a single session by ID (used for timed-out subtasks). */
+	/** Abort a single session by ID. */
 	abortSession?(sessionId: string): Promise<void>;
 	parseStream(chunk: Buffer): CLIEvent[];
 	getSessionId(): string | null;

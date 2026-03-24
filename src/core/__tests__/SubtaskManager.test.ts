@@ -2,29 +2,22 @@
  * @file SubtaskManager tests
  * @description Tests for the subtask lifecycle logic extracted from ChatProvider:
  * - Deferred child session linking
- * - Inactivity timer management
  * - Token accumulation
  * - Parent transcript routing resolution
+ *
+ * NOTE: No inactivity timeout tests — timeout mechanism was removed to match
+ * official OpenCode behavior (child sessions run until completion or explicit abort).
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { SessionGraph, SessionState } from '../SessionManager';
 import { SubtaskManager } from '../SubtaskManager';
-
-// Use fake timers for timeout tests
-beforeEach(() => {
-	vi.useFakeTimers();
-});
-afterEach(() => {
-	vi.useRealTimers();
-});
 
 const createManager = () => {
 	const graph = new SessionGraph();
 	const sessionState = new SessionState();
-	const onTimeout = vi.fn();
-	const manager = new SubtaskManager(graph, sessionState, { onTimeout });
-	return { manager, graph, sessionState, onTimeout };
+	const manager = new SubtaskManager(graph, sessionState);
+	return { manager, graph, sessionState };
 };
 
 describe('SubtaskManager', () => {
@@ -41,18 +34,6 @@ describe('SubtaskManager', () => {
 			manager.registerSubtask('tool-1', 'parent-session-1');
 
 			expect(manager.getParentSession('tool-1')).toBe('parent-session-1');
-		});
-
-		it('should start an inactivity timer', () => {
-			const { manager, onTimeout } = createManager();
-			manager.registerSubtask('tool-1', 'parent-session-1');
-
-			// Timer should not fire immediately
-			expect(onTimeout).not.toHaveBeenCalled();
-
-			// Advance past timeout
-			vi.advanceTimersByTime(30_001);
-			expect(onTimeout).toHaveBeenCalledWith('tool-1');
 		});
 	});
 
@@ -100,49 +81,6 @@ describe('SubtaskManager', () => {
 
 			manager.tryLinkChildSession('child-session-1');
 			expect(manager.isPending('tool-1')).toBe(false);
-		});
-
-		it('should reset the inactivity timer after linking', () => {
-			const { manager, onTimeout } = createManager();
-			manager.registerSubtask('tool-1', 'parent-session-1');
-
-			// Advance 20s, then link
-			vi.advanceTimersByTime(20_000);
-			manager.tryLinkChildSession('child-session-1');
-
-			// Advance another 20s — should NOT timeout (timer was reset)
-			vi.advanceTimersByTime(20_000);
-			expect(onTimeout).not.toHaveBeenCalled();
-
-			// Advance to full 30s after reset — should timeout
-			vi.advanceTimersByTime(10_001);
-			expect(onTimeout).toHaveBeenCalledWith('tool-1');
-		});
-	});
-
-	describe('resetTimerByChild', () => {
-		it('should reset timer on child activity', () => {
-			const { manager, onTimeout } = createManager();
-			manager.registerSubtask('tool-1', 'parent-session-1');
-			manager.tryLinkChildSession('child-session-1');
-
-			// Advance 25s, then reset
-			vi.advanceTimersByTime(25_000);
-			manager.resetTimerByChild('child-session-1');
-
-			// Advance another 25s — should NOT timeout
-			vi.advanceTimersByTime(25_000);
-			expect(onTimeout).not.toHaveBeenCalled();
-
-			// Advance to full 30s after reset
-			vi.advanceTimersByTime(5_001);
-			expect(onTimeout).toHaveBeenCalledWith('tool-1');
-		});
-
-		it('should be a no-op for unknown child sessions', () => {
-			const { manager } = createManager();
-			// Should not throw
-			manager.resetTimerByChild('unknown-child');
 		});
 	});
 
@@ -231,17 +169,12 @@ describe('SubtaskManager', () => {
 	});
 
 	describe('completeSubtask', () => {
-		it('should clear timer and pending state', () => {
-			const { manager, onTimeout } = createManager();
+		it('should clear pending state', () => {
+			const { manager } = createManager();
 			manager.registerSubtask('tool-1', 'parent-session-1');
 
 			manager.completeSubtask('tool-1');
 
-			// Timer should be cleared
-			vi.advanceTimersByTime(60_000);
-			expect(onTimeout).not.toHaveBeenCalled();
-
-			// Pending state should be cleared
 			expect(manager.isPending('tool-1')).toBe(false);
 		});
 
@@ -277,16 +210,14 @@ describe('SubtaskManager', () => {
 	});
 
 	describe('clearAll', () => {
-		it('should clear all timers and state', () => {
-			const { manager, onTimeout } = createManager();
+		it('should clear all state', () => {
+			const { manager } = createManager();
 			manager.registerSubtask('tool-1', 'parent-session-1');
 			manager.registerSubtask('tool-2', 'parent-session-1');
 			manager.tryLinkChildSession('child-1');
 
 			manager.clearAll();
 
-			vi.advanceTimersByTime(60_000);
-			expect(onTimeout).not.toHaveBeenCalled();
 			expect(manager.isPending('tool-1')).toBe(false);
 			expect(manager.isPending('tool-2')).toBe(false);
 			expect(manager.getToolUseId('child-1')).toBeUndefined();
@@ -294,7 +225,7 @@ describe('SubtaskManager', () => {
 	});
 
 	describe('hasActiveSubtasks', () => {
-		it('should return true when there are pending or timed subtasks', () => {
+		it('should return true when there are pending subtasks', () => {
 			const { manager } = createManager();
 			expect(manager.hasActiveSubtasks()).toBe(false);
 
