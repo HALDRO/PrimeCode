@@ -216,7 +216,11 @@ export class SettingsHandler implements WebviewMessageHandler {
 			const dedupedCli = cliCommands.filter(c => !customNames.has(c.name));
 			this.context.bridge.data('commandsList', {
 				custom: commands,
-				cli: dedupedCli,
+				cli: dedupedCli.map(c => ({
+					name: c.name,
+					description: c.description,
+					source: c.source,
+				})),
 				isLoading: false,
 			});
 		} catch (error) {
@@ -234,10 +238,12 @@ export class SettingsHandler implements WebviewMessageHandler {
 	 * that are handled locally but not registered on the server.
 	 * Returns empty array if server is not available.
 	 */
-	private async fetchCliCommands(): Promise<Array<{ name: string; description?: string }>> {
+	private async fetchCliCommands(): Promise<
+		Array<{ name: string; description?: string; source?: string }>
+	> {
 		// Commands handled internally by PrimeCode (not registered on the server)
-		const internalCommands: Array<{ name: string; description?: string }> = [
-			{ name: 'compact', description: 'Summarize and compact session context' },
+		const internalCommands: Array<{ name: string; description?: string; source?: string }> = [
+			{ name: 'compact', description: 'Summarize and compact session context', source: 'command' },
 		];
 
 		try {
@@ -245,10 +251,19 @@ export class SettingsHandler implements WebviewMessageHandler {
 			const serverInfo = this.context.cli.getOpenCodeServerInfo();
 			if (!client || !serverInfo?.directory) return internalCommands;
 			const { data } = await client.command.list({ query: { directory: serverInfo.directory } });
-			const serverCommands = (data ?? []) as Array<{ name: string; description?: string }>;
+			const serverCommands = (data ?? []) as Array<{
+				name: string;
+				description?: string;
+				source?: string;
+			}>;
+			// Filter out skills — they are fetched separately via GET /skill and shown
+			// in the skills settings panel. The OpenCode CLI /command endpoint includes
+			// skills with source: "skill" by design, but we don't want them in the
+			// slash command dropdown (they'd appear as duplicate "CLI" entries).
+			const filteredCommands = serverCommands.filter(c => c.source !== 'skill');
 			// Merge: internal first, then server (skip duplicates)
 			const names = new Set(internalCommands.map(c => c.name));
-			return [...internalCommands, ...serverCommands.filter(c => !names.has(c.name))];
+			return [...internalCommands, ...filteredCommands.filter(c => !names.has(c.name))];
 		} catch (error) {
 			logger.warn('[SettingsHandler] Failed to fetch CLI commands:', error);
 			return internalCommands;
@@ -258,7 +273,27 @@ export class SettingsHandler implements WebviewMessageHandler {
 	private async onGetSkills(): Promise<void> {
 		this.context.bridge.data('skillsList', { skills: [], isLoading: true });
 		try {
-			const skills = await this.context.services.resources.getAll('skills');
+			// Primary: fetch from CLI server (GET /skill) — includes all discovery phases
+			const serverInfo = this.context.cli.getOpenCodeServerInfo();
+			const cliSkills =
+				serverInfo?.directory && this.context.cli.listSkills
+					? await this.context.cli.listSkills(serverInfo.directory)
+					: null;
+
+			if (cliSkills && cliSkills.length > 0) {
+				// Map CLI skill format to ParsedSkill-compatible shape
+				const skills = cliSkills.map(s => ({
+					name: s.name,
+					description: s.description ?? '',
+					content: s.content ?? '',
+					path: s.location ?? '',
+				}));
+				this.context.bridge.data('skillsList', { skills, isLoading: false });
+				return;
+			}
+
+			// Fallback: read local skill directories directly (.opencode + external interop dirs)
+			const skills = await this.context.services.resources.getAllSkillsIncludingExternal();
 			this.context.bridge.data('skillsList', { skills, isLoading: false });
 		} catch (error) {
 			this.context.bridge.data('skillsList', {

@@ -374,6 +374,8 @@ export const ConversationMessageSchema = Type.Union([
 		requestId: Type.String(),
 		questions: Type.Array(QuestionInfoSchema),
 		tool: Type.Optional(QuestionToolRefSchema),
+		toolUseId: Type.Optional(Type.String()),
+		childSessionId: Type.Optional(Type.String()),
 		resolved: Type.Optional(Type.Boolean()),
 		answers: Type.Optional(Type.Array(Type.Array(Type.String()))),
 	}),
@@ -388,6 +390,8 @@ export const SubtaskMessageSchema = Type.Object({
 	agent: Type.String(),
 	prompt: Type.String(),
 	description: Type.String(),
+	parentSessionId: Type.Optional(Type.String()),
+	childSessionId: Type.Optional(Type.String()),
 	command: Type.Optional(Type.String()),
 	status: Type.Union([
 		Type.Literal('running'),
@@ -411,6 +415,13 @@ export const SubtaskMessageSchema = Type.Object({
 		}),
 	),
 	childModelId: Type.Optional(Type.String()),
+	retryInfo: Type.Optional(
+		Type.Object({
+			attempt: Type.Number(),
+			message: Type.String(),
+			nextRetryAt: Type.Optional(Type.String()),
+		}),
+	),
 });
 export type SubtaskMessage = Static<typeof SubtaskMessageSchema>;
 

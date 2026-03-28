@@ -253,6 +253,22 @@ export interface SyncAllCommand {
 }
 
 // =============================================================================
+// Connection Status Commands
+// =============================================================================
+
+export interface RestartOpenCodeCommand {
+	type: 'restartOpenCode';
+}
+
+export interface ReloadExtensionCommand {
+	type: 'reloadExtension';
+}
+
+export interface GetConnectionDetailsCommand {
+	type: 'getConnectionDetails';
+}
+
+// =============================================================================
 // Discriminated Union
 // =============================================================================
 
@@ -305,7 +321,11 @@ export type WebviewCommand =
 	// Conversation (additional)
 	| ClearAllConversationsCommand
 	// Orchestration
-	| SyncAllCommand;
+	| SyncAllCommand
+	// Connection Status
+	| RestartOpenCodeCommand
+	| ReloadExtensionCommand
+	| GetConnectionDetailsCommand;
 
 // =============================================================================
 // Utility: Extract a specific command by type

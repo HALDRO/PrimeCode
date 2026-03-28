@@ -61,6 +61,9 @@ export class SessionHandler implements WebviewMessageHandler {
 	/** Deferred flag: webviewDidLaunch arrived before the server was ready. */
 	private pendingWebviewLaunch = false;
 
+	/** Guard: prevents persistOpenTabs from overwriting good persisted state before restoration completes. */
+	private restorationComplete = false;
+
 	// Improve Prompt State
 	private improvePromptController: AbortController | null = null;
 	private improvePromptActiveRequestId: string | null = null;
@@ -342,6 +345,7 @@ export class SessionHandler implements WebviewMessageHandler {
 
 			// Read persisted tabs
 			const persisted = this.getPersistedTabs();
+			const hadPersistedTabs = persisted.openTabs.length > 0;
 			// Filter out tabs that no longer exist in CLI
 			const tabsToRestore = persisted.openTabs.filter(id => validSessionIds.has(id));
 			let activeTab =
@@ -349,8 +353,19 @@ export class SessionHandler implements WebviewMessageHandler {
 					? persisted.activeTab
 					: undefined;
 
-			// Fallback: if no persisted tabs, restore the most recent session
+			// If we had persisted tabs but none of them still exist, the saved state is stale.
+			// Do not resurrect an unrelated recent chat in that case - start fresh instead.
 			if (tabsToRestore.length === 0) {
+				if (hadPersistedTabs) {
+					logger.info('[SessionHandler] Persisted tabs are stale, clearing restore state', {
+						persistedOpenTabs: persisted.openTabs,
+					});
+					await this.writePersistedTabs([], undefined);
+					await this.onCreateSession();
+					return;
+				}
+
+				// Fallback only when there was no persisted tab state at all.
 				const topLevel = allSessions
 					.filter(s => !s.parentID)
 					.sort((a, b) => (b.lastModified || 0) - (a.lastModified || 0));
@@ -361,7 +376,15 @@ export class SessionHandler implements WebviewMessageHandler {
 			}
 
 			if (tabsToRestore.length === 0) return;
-			if (!activeTab) activeTab = tabsToRestore[tabsToRestore.length - 1];
+			if (!activeTab) {
+				activeTab = [...tabsToRestore].sort((a, b) => {
+					const aLastModified = allSessions.find(s => s.id === a)?.lastModified || 0;
+					const bLastModified = allSessions.find(s => s.id === b)?.lastModified || 0;
+					return bLastModified - aLastModified;
+				})[0];
+			}
+
+			await this.writePersistedTabs(tabsToRestore, activeTab);
 
 			logger.info('[SessionHandler] Restoring tabs from persistence', {
 				tabCount: tabsToRestore.length,
@@ -407,6 +430,9 @@ export class SessionHandler implements WebviewMessageHandler {
 			} catch (createError) {
 				logger.error('[SessionHandler] Fallback session creation also failed:', createError);
 			}
+		} finally {
+			this.restorationComplete = true;
+			logger.info('[SessionHandler] Restoration complete, persistOpenTabs now active');
 		}
 	}
 
@@ -442,16 +468,9 @@ export class SessionHandler implements WebviewMessageHandler {
 		// and cause successful calls to lose their child sessions.
 		const parentHistory = await this.context.cli.getHistory(sessionId, config);
 		const childSessionIdSet = new Set(childSessionIds);
-		const taskToolUseIds: string[] = [];
 		const explicitLinks = new Map<string, string>(); // toolUseId → childSessionId
 
 		for (const ev of parentHistory) {
-			if (ev.type === 'tool_use') {
-				const d = ev.data as { tool?: string; toolUseId?: string };
-				if (d.tool === 'task' && typeof d.toolUseId === 'string') {
-					taskToolUseIds.push(d.toolUseId);
-				}
-			}
 			// Extract explicit childSessionId from task tool_result metadata
 			if (ev.type === 'tool_result') {
 				const d = ev.data as {
@@ -465,12 +484,6 @@ export class SessionHandler implements WebviewMessageHandler {
 					const metaSessionId = d.metadata?.sessionId;
 					if (metaSessionId && childSessionIdSet.has(metaSessionId)) {
 						explicitLinks.set(d.tool_use_id, metaSessionId);
-					} else if (typeof d.content === 'string') {
-						// Fallback: parse "task_id: ses_..." from result content
-						const match = d.content.match(/task_id:\s*(ses_\S+)/);
-						if (match?.[1] && childSessionIdSet.has(match[1])) {
-							explicitLinks.set(d.tool_use_id, match[1]);
-						}
 					}
 				}
 			}
@@ -480,13 +493,9 @@ export class SessionHandler implements WebviewMessageHandler {
 		for (const [toolUseId, childId] of explicitLinks) {
 			graph.registerChild(childId, sessionId, toolUseId);
 		}
-		// Fallback: positional matching for any remaining unlinked children
-		const linkedChildren = new Set(explicitLinks.values());
-		const unlinkedToolIds = taskToolUseIds.filter(id => !explicitLinks.has(id));
-		const unlinkedChildren = childSessionIds.filter(id => !linkedChildren.has(id));
-		if (unlinkedToolIds.length > 0 && unlinkedChildren.length > 0) {
-			graph.registerChildrenFromHistory(sessionId, unlinkedToolIds, unlinkedChildren);
-		}
+		// Deliberately avoid positional fallback linking.
+		// OpenCode child sessions are first-class and should be linked only via
+		// explicit metadata/session relationships, not FIFO ordering.
 
 		// Pre-load ALL child histories in parallel (instead of sequential loop).
 		// Child events are aggregated into parent subtask transcripts (no separate buckets).
@@ -570,7 +579,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		this.context.bridge.startCollect();
 		try {
 			// Surface child sessions as subtask cards if parent history is compacted
-			if (taskToolUseIds.length === 0 && childSessions.length > 0) {
+			if (explicitLinks.size === 0 && childSessions.length > 0) {
 				for (const child of childSessions) {
 					const duration = childDurations.get(child.id);
 					const childTokens = childTokensMap.get(child.id);
@@ -666,7 +675,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			this.postLifecycle('switched', newSessionId, { isProcessing: false });
 			this.postStatus(newSessionId, 'idle', 'Ready');
 			this.initializeSessionStats(newSessionId);
-			this.persistOpenTabs(newSessionId);
+			await this.persistOpenTabs(newSessionId);
 		} catch (error) {
 			logger.error('[SessionHandler] Failed to create session:', error);
 			this.context.sessionState.activeSessionId = undefined;
@@ -688,7 +697,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		const isActive = this.context.cli.isSessionActive?.(sessionId) ?? false;
 		this.postLifecycle('switched', sessionId, { isProcessing: isActive });
 		this.initializeSessionStats(sessionId);
-		this.persistOpenTabs(sessionId);
+		await this.persistOpenTabs(sessionId);
 
 		// Lazy-load history for tabs that were restored but not yet replayed
 		if (!this.replayedSessions.has(sessionId)) {
@@ -740,6 +749,8 @@ export class SessionHandler implements WebviewMessageHandler {
 		this.clearPendingMessage(sessionId);
 		// Clean up session graph entries to prevent unbounded Map growth
 		this.context.sessionGraph.clearParent(sessionId);
+		// Clean up pending child message buffers
+		this.context.cleanupPendingChildMessages?.(sessionId);
 
 		// If closing active session, clear backend reference
 		if (this.context.sessionState.activeSessionId === sessionId) {
@@ -747,7 +758,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		}
 
 		this.postLifecycle('closed', sessionId);
-		this.persistOpenTabs(undefined, sessionId);
+		await this.persistOpenTabs(undefined, sessionId);
 	}
 
 	private async onSendMessage(msg: CommandOf<'sendMessage'>): Promise<void> {
@@ -1000,6 +1011,22 @@ export class SessionHandler implements WebviewMessageHandler {
 		// Also force idle on child sessions (subagents) of the target session only
 		for (const sid of sessionsToStop) {
 			if (sid !== targetId) {
+				const toolUseId = this.context.sessionGraph.getEntry(sid)?.taskToolCallId;
+				const parentSessionId = this.context.sessionGraph.getParent(sid);
+				if (toolUseId && parentSessionId) {
+					this.postSessionMessage(
+						{
+							id: toolUseId,
+							type: 'subtask',
+							status: 'cancelled',
+							childSessionId: sid,
+							parentSessionId,
+							timestamp: new Date().toISOString(),
+						},
+						parentSessionId,
+					);
+					this.postComplete(toolUseId, toolUseId, parentSessionId);
+				}
 				this.postStatus(sid, 'idle', 'Stopped');
 			}
 		}
@@ -1026,31 +1053,32 @@ export class SessionHandler implements WebviewMessageHandler {
 		if (agent) {
 			config.agent = agent;
 		}
-		let modelNotice: string | undefined;
-
 		if (config.provider === 'opencode' && typeof config.model === 'string' && config.model.trim()) {
 			const selectedModel = config.model.trim();
 			const parsed = parseModelId(selectedModel);
 			if (!parsed) {
-				// Drop the override to avoid silent invalid routing.
-				config.model = undefined;
-				modelNotice = `Invalid OpenCode model selection: "${selectedModel}". Expected "provider/model". Please reselect a model in Settings.`;
-			} else {
-				const sdkClient = this.context.cli.getSdkClient();
-				if (sdkClient) {
-					try {
-						const providers = (await this.context.services.openCodeClient.getConnectedProviders(
-							sdkClient,
-						)) as OpenCodeProviderData[];
-						const provider = providers.find(p => p.id === parsed.providerId);
-						const exists = provider?.models?.some(m => m.id === parsed.modelId) ?? false;
-						if (!exists) {
-							config.model = undefined;
-							modelNotice = `Selected model "${selectedModel}" is unavailable. Please reconnect provider or choose another model in Settings.`;
-						}
-					} catch {
-						// Do not block send if live model sync check fails; send path will report runtime errors.
+				this.postModelError(
+					`Invalid model selection: "${selectedModel}". Expected format "provider/model". Please choose another model.`,
+				);
+				return;
+			}
+
+			const sdkClient = this.context.cli.getSdkClient();
+			if (sdkClient) {
+				try {
+					const providers = (await this.context.services.openCodeClient.getConnectedProviders(
+						sdkClient,
+					)) as OpenCodeProviderData[];
+					const provider = providers.find(p => p.id === parsed.providerId);
+					const exists = provider?.models?.some(m => m.id === parsed.modelId) ?? false;
+					if (!exists) {
+						this.postModelError(
+							`Model "${selectedModel}" is unavailable. Please reconnect the provider or choose another model.`,
+						);
+						return;
 					}
+				} catch {
+					// Do not block send if live model sync check fails; send path will report runtime errors.
 				}
 			}
 		}
@@ -1093,18 +1121,6 @@ export class SessionHandler implements WebviewMessageHandler {
 				this.initializeSessionStats(newSessionId);
 
 				activeId = newSessionId;
-			}
-
-			if (modelNotice && activeId) {
-				this.postSessionMessage(
-					{
-						id: `system_notice-${Date.now()}`,
-						type: 'system_notice',
-						content: modelNotice,
-						timestamp: new Date().toISOString(),
-					},
-					activeId,
-				);
 			}
 
 			// Intercept internal slash commands that need special routing.
@@ -1235,24 +1251,20 @@ export class SessionHandler implements WebviewMessageHandler {
 		try {
 			const config = this.buildBaseConfig();
 			const sessions = await this.context.cli.listSessions(config);
-			return (
-				sessions
-					.filter(s => !s.parentID)
-					// Filter out empty sessions (no title means user never sent a message)
-					.filter(s => s.title && s.title.trim() !== '')
-					.map(s => ({
-						filename: s.id,
-						sessionId: s.id,
-						startTime: new Date(s.created || s.lastModified || 0).toISOString(),
-						endTime: new Date(s.lastModified || 0).toISOString(),
-						messageCount: 0,
-						totalCost: 0,
-						firstUserMessage: s.title || 'New Session',
-						lastUserMessage: '',
-						customTitle: s.title || undefined,
-					}))
-					.sort((a, b) => new Date(b.endTime).getTime() - new Date(a.endTime).getTime())
-			);
+			return sessions
+				.filter(s => !s.parentID && s.hasMessages !== false)
+				.map(s => ({
+					filename: s.id,
+					sessionId: s.id,
+					startTime: new Date(s.created || s.lastModified || 0).toISOString(),
+					endTime: new Date(s.lastModified || 0).toISOString(),
+					messageCount: 0,
+					totalCost: 0,
+					firstUserMessage: s.title || 'New Session',
+					lastUserMessage: '',
+					customTitle: s.title || undefined,
+				}))
+				.sort((a, b) => new Date(b.endTime).getTime() - new Date(a.endTime).getTime());
 		} catch (error) {
 			logger.warn('[SessionHandler] Failed to list CLI sessions:', error);
 			return [];
@@ -1273,7 +1285,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			this.context.sessionState.activeSessionId = sessionId;
 			const isBusy = this.context.cli.isSessionActive?.(sessionId) ?? false;
 			this.postLifecycle('switched', sessionId, { isProcessing: isBusy });
-			this.persistOpenTabs(sessionId);
+			await this.persistOpenTabs(sessionId);
 			return;
 		}
 
@@ -1286,7 +1298,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		// New conversations are never busy — they haven't been sent to yet
 		this.postLifecycle('switched', sessionId, { isProcessing: false });
 		this.initializeSessionStats(sessionId);
-		this.persistOpenTabs(sessionId);
+		await this.persistOpenTabs(sessionId);
 
 		try {
 			const config = this.buildBaseConfig();
@@ -1497,6 +1509,8 @@ export class SessionHandler implements WebviewMessageHandler {
 				agent,
 				prompt,
 				description,
+				...(options.parentSessionId ? { parentSessionId: options.parentSessionId } : {}),
+				...(childSessionId ? { childSessionId } : {}),
 				status: 'running',
 				transcript,
 				timestamp: timestamp || new Date().toISOString(),
@@ -1676,6 +1690,8 @@ export class SessionHandler implements WebviewMessageHandler {
 				type: 'subtask',
 				status: data.is_error ? 'error' : 'completed',
 				result: String(data.content || ''),
+				...(options.parentSessionId ? { parentSessionId: options.parentSessionId } : {}),
+				...(childSessionId ? { childSessionId } : {}),
 				timestamp: data.timestamp || new Date().toISOString(),
 				...(subtaskDuration ? { durationMs: subtaskDuration } : {}),
 				...(childTokens ? { childTokens } : {}),
@@ -1697,19 +1713,28 @@ export class SessionHandler implements WebviewMessageHandler {
 			const success = await this.context.cli.deleteSession(sessionId, config);
 
 			if (success) {
+				const wasActive = this.context.sessionState.activeSessionId === sessionId;
 				// Clean up local state if this was the active session
 				this.context.sessionState.startedSessions.delete(sessionId);
 				this.clearSessionStats(sessionId);
 				this.clearPendingMessage(sessionId);
+				this.replayedSessions.delete(sessionId);
+				this.context.sessionGraph.clearParent(sessionId);
 
 				// Clean up restore/revert state for deleted session
 				this.context.cleanupSessionRestore?.(sessionId);
+				// Clean up pending child message buffers
+				this.context.cleanupPendingChildMessages?.(sessionId);
 
-				if (this.context.sessionState.activeSessionId === sessionId) {
-					this.context.sessionState.activeSessionId = undefined;
-				}
+				const nextActiveSessionId = wasActive ? this.getLastStartedSessionId() : undefined;
+				this.context.sessionState.activeSessionId = nextActiveSessionId;
 
 				this.postLifecycle('closed', sessionId);
+				if (nextActiveSessionId) {
+					const isProcessing = this.context.cli.isSessionActive?.(nextActiveSessionId) ?? false;
+					this.postLifecycle('switched', nextActiveSessionId, { isProcessing });
+				}
+				await this.persistOpenTabs(nextActiveSessionId, sessionId);
 			}
 		} catch (error) {
 			logger.error('[SessionHandler] Failed to delete conversation:', error);
@@ -1734,7 +1759,10 @@ export class SessionHandler implements WebviewMessageHandler {
 					this.context.sessionState.startedSessions.delete(session.id);
 					this.clearSessionStats(session.id);
 					this.clearPendingMessage(session.id);
+					this.replayedSessions.delete(session.id);
+					this.context.sessionGraph.clearParent(session.id);
 					this.context.cleanupSessionRestore?.(session.id);
+					this.context.cleanupPendingChildMessages?.(session.id);
 					if (this.context.sessionState.activeSessionId === session.id) {
 						this.context.sessionState.activeSessionId = undefined;
 					}
@@ -1748,6 +1776,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			}
 
 			this.context.bridge.send({ type: 'allConversationsCleared' });
+			await this.writePersistedTabs([], undefined);
 		} catch (error) {
 			logger.error('[SessionHandler] Failed to clear all conversations:', error);
 		}
@@ -2048,23 +2077,45 @@ export class SessionHandler implements WebviewMessageHandler {
 	private static readonly OPEN_TABS_KEY = 'primecode.openTabs';
 	private static readonly ACTIVE_TAB_KEY = 'primecode.activeTab';
 
+	private async writePersistedTabs(
+		openTabs: string[],
+		activeTab: string | undefined,
+	): Promise<void> {
+		await Promise.all([
+			this.context.extensionContext.globalState.update(SessionHandler.OPEN_TABS_KEY, openTabs),
+			this.context.extensionContext.globalState.update(SessionHandler.ACTIVE_TAB_KEY, activeTab),
+		]);
+
+		logger.trace('[SessionHandler] Wrote persisted tabs', {
+			count: openTabs.length,
+			active: activeTab,
+		});
+	}
+
+	private getLastStartedSessionId(): string | undefined {
+		const started = [...this.context.sessionState.startedSessions];
+		return started[started.length - 1];
+	}
+
 	/**
 	 * Persist the current set of open tabs and active tab to globalState.
+	 * Skipped until initial restoration completes to avoid overwriting good
+	 * persisted state with an empty in-memory startedSessions set.
 	 * @param activeSessionId - the tab to mark active (defaults to current)
 	 * @param excludeSessionId - a tab to remove (used on close)
 	 */
-	private persistOpenTabs(activeSessionId?: string, excludeSessionId?: string): void {
+	private async persistOpenTabs(
+		activeSessionId?: string,
+		excludeSessionId?: string,
+	): Promise<void> {
+		if (!this.restorationComplete) {
+			logger.trace('[SessionHandler] Skipping persistOpenTabs — restoration not yet complete');
+			return;
+		}
 		const tabs = [...this.context.sessionState.startedSessions];
 		const filtered = excludeSessionId ? tabs.filter(id => id !== excludeSessionId) : tabs;
 		const active = activeSessionId || this.context.sessionState.activeSessionId;
-
-		this.context.extensionContext.globalState.update(SessionHandler.OPEN_TABS_KEY, filtered);
-		this.context.extensionContext.globalState.update(SessionHandler.ACTIVE_TAB_KEY, active);
-
-		logger.trace('[SessionHandler] Persisted open tabs', {
-			count: filtered.length,
-			active,
-		});
+		await this.writePersistedTabs(filtered, active);
 	}
 
 	private getPersistedTabs(): { openTabs: string[]; activeTab: string | undefined } {
@@ -2089,6 +2140,40 @@ export class SessionHandler implements WebviewMessageHandler {
 	/** Check if a tool name corresponds to a file-editing operation */
 	private isFileEditTool(toolName: string): boolean {
 		return isFileEditTool(toolName);
+	}
+
+	/**
+	 * Post a model error notification to the webview and abort the send.
+	 * Uses the active session if available, otherwise broadcasts without a session.
+	 */
+	private postModelError(content: string): void {
+		const sessionId = this.context.sessionState.activeSessionId;
+		if (sessionId) {
+			this.postSessionMessage(
+				{
+					id: `error-${Date.now()}`,
+					type: 'error',
+					content,
+					isError: true,
+					timestamp: new Date().toISOString(),
+				},
+				sessionId,
+			);
+		} else {
+			// No active session — push directly via bridge so the notification overlay still fires.
+			this.context.bridge.send({
+				type: 'session_event',
+				sessionId: '',
+				eventType: 'message',
+				message: {
+					id: `error-${Date.now()}`,
+					type: 'error',
+					content,
+					isError: true,
+					timestamp: new Date().toISOString(),
+				},
+			});
+		}
 	}
 
 	private postLifecycle(

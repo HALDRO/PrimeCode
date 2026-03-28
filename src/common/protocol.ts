@@ -189,11 +189,19 @@ export interface AccessRequestMessageData extends SessionMessageBase {
 	childSessionId?: string;
 }
 
+export interface SubtaskRetryInfo {
+	attempt: number;
+	message: string;
+	nextRetryAt?: string;
+}
+
 export interface SubtaskMessageData extends SessionMessageBase {
 	type: 'subtask';
 	agent: string;
 	prompt: string;
 	description: string;
+	parentSessionId?: string;
+	childSessionId?: string;
 	command?: string;
 	status: 'running' | 'completed' | 'error' | 'cancelled';
 	partId?: string;
@@ -218,6 +226,7 @@ export interface SubtaskMessageData extends SessionMessageBase {
 		durationMs?: number;
 	};
 	childModelId?: string;
+	retryInfo?: SubtaskRetryInfo;
 }
 
 export interface SystemNoticeMessageData extends SessionMessageBase {
@@ -230,6 +239,8 @@ export interface QuestionMessageData extends SessionMessageBase {
 	requestId: string;
 	questions: QuestionInfo[];
 	tool?: string | { messageID: string; callID: string };
+	toolUseId?: string;
+	childSessionId?: string;
 	resolved?: boolean;
 	answers?: QuestionAnswer[];
 }
@@ -808,7 +819,10 @@ export type EditorSelectionMessage = BaseExtensionMessage<
 	'editorSelection',
 	{ text: string; fileName?: string }
 >;
-export type ServerInfoMessage = BaseExtensionMessage<'serverInfo', { url: string }>;
+export type ServerInfoMessage = BaseExtensionMessage<
+	'serverInfo',
+	{ url: string; revision: number }
+>;
 
 export type SseEventMessage = BaseExtensionMessage<'sseEvent', { id: string; data: string }>;
 export type SseErrorMessage = BaseExtensionMessage<'sseError', { id: string; error: string }>;
@@ -828,6 +842,24 @@ export type ExtensionVersionMessage = BaseExtensionMessage<
 		isChecking: boolean;
 		error?: string;
 	}
+>;
+
+// =============================================================================
+// Connection Details
+// =============================================================================
+
+export interface ConnectionDetailsData {
+	serverUrl: string | null;
+	status: 'connected' | 'disconnected' | 'error';
+	isServerOwner: boolean;
+	uptime: number | null;
+	port: number | null;
+	healthy: boolean;
+}
+
+export type ConnectionDetailsMessage = BaseExtensionMessage<
+	'connectionDetails',
+	ConnectionDetailsData
 >;
 
 // =============================================================================
@@ -893,6 +925,7 @@ export type ExtensionMessage =
 	| SseErrorMessage
 	| SseClosedMessage
 	| ExtensionVersionMessage
+	| ConnectionDetailsMessage
 	| QueueEventMessage;
 
 // #############################################################################
@@ -1119,6 +1152,22 @@ export interface CheckCLIDiagnosticsCommand {
 }
 export interface CheckExtensionVersionCommand {
 	type: 'checkExtensionVersion';
+}
+
+// =============================================================================
+// Connection Status Commands
+// =============================================================================
+
+export interface RestartOpenCodeCommand {
+	type: 'restartOpenCode';
+}
+
+export interface ReloadExtensionCommand {
+	type: 'reloadExtension';
+}
+
+export interface GetConnectionDetailsCommand {
+	type: 'getConnectionDetails';
 }
 
 // =============================================================================
@@ -1437,7 +1486,10 @@ export type WebviewCommand =
 	| CancelQueuedMessageCommand
 	| ForceQueuedMessageCommand
 	| ReorderQueueCommand
-	| CheckExtensionVersionCommand;
+	| CheckExtensionVersionCommand
+	| RestartOpenCodeCommand
+	| ReloadExtensionCommand
+	| GetConnectionDetailsCommand;
 
 // =============================================================================
 // Utility

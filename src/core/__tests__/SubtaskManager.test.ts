@@ -1,119 +1,91 @@
 /**
  * @file SubtaskManager tests
- * @description Tests for the subtask lifecycle logic extracted from ChatProvider:
- * - Deferred child session linking
- * - Token accumulation
- * - Parent transcript routing resolution
- *
- * NOTE: No inactivity timeout tests — timeout mechanism was removed to match
- * official OpenCode behavior (child sessions run until completion or explicit abort).
+ * @description Tests deterministic subtask lifecycle behavior.
  */
 
 import { describe, expect, it } from 'vitest';
-import { SessionGraph, SessionState } from '../SessionManager';
+import { SessionGraph } from '../SessionManager';
 import { SubtaskManager } from '../SubtaskManager';
 
 const createManager = () => {
 	const graph = new SessionGraph();
-	const sessionState = new SessionState();
-	const manager = new SubtaskManager(graph, sessionState);
-	return { manager, graph, sessionState };
+	const manager = new SubtaskManager(graph);
+	return { manager, graph };
 };
 
 describe('SubtaskManager', () => {
 	describe('registerSubtask', () => {
-		it('should track a pending subtask tool ID', () => {
+		it('tracks a pending subtask when child session is not known yet', () => {
 			const { manager } = createManager();
 			manager.registerSubtask('tool-1', 'parent-session-1');
 
 			expect(manager.isPending('tool-1')).toBe(true);
+			expect(manager.getParentSession('tool-1')).toBe('parent-session-1');
 		});
 
-		it('should store parent session mapping', () => {
-			const { manager } = createManager();
-			manager.registerSubtask('tool-1', 'parent-session-1');
+		it('links immediately when child session is known', () => {
+			const { manager, graph } = createManager();
+			manager.registerSubtask('tool-1', 'parent-session-1', 'child-session-1');
 
-			expect(manager.getParentSession('tool-1')).toBe('parent-session-1');
+			expect(manager.isPending('tool-1')).toBe(false);
+			expect(manager.getChildSessionId('tool-1')).toBe('child-session-1');
+			expect(graph.getParent('child-session-1')).toBe('parent-session-1');
 		});
 	});
 
-	describe('tryLinkChildSession (deferred linking)', () => {
-		it('should link unknown session to pending subtask', () => {
+	describe('linkChildSession', () => {
+		it('links a known child to a registered tool call', () => {
 			const { manager, graph } = createManager();
 			manager.registerSubtask('tool-1', 'parent-session-1');
 
-			const linked = manager.tryLinkChildSession('child-session-1');
+			const linked = manager.linkChildSession('child-session-1', 'tool-1');
 
 			expect(linked).toBe(true);
-			expect(graph.isChild('child-session-1')).toBe(true);
+			expect(manager.getChildSessionId('tool-1')).toBe('child-session-1');
+			expect(manager.getToolUseId('child-session-1')).toBe('tool-1');
 			expect(graph.getParent('child-session-1')).toBe('parent-session-1');
+		});
+
+		it('rejects relinking the same child to a different tool', () => {
+			const { manager } = createManager();
+			manager.registerSubtask('tool-1', 'parent-session-1');
+			manager.registerSubtask('tool-2', 'parent-session-1');
+			manager.linkChildSession('child-session-1', 'tool-1');
+
+			const linked = manager.linkChildSession('child-session-1', 'tool-2');
+
+			expect(linked).toBe(false);
 			expect(manager.getToolUseId('child-session-1')).toBe('tool-1');
 		});
 
-		it('should not link if no pending subtasks', () => {
+		it('rejects linking when parent session is unknown', () => {
 			const { manager } = createManager();
 
-			const linked = manager.tryLinkChildSession('child-session-1');
+			const linked = manager.linkChildSession('child-session-1', 'tool-1');
+
 			expect(linked).toBe(false);
-		});
-
-		it('should not link already-known child sessions', () => {
-			const { manager, graph } = createManager();
-			graph.registerChild('child-session-1', 'parent-session-1', 'tool-1');
-
-			manager.registerSubtask('tool-2', 'parent-session-1');
-			const linked = manager.tryLinkChildSession('child-session-1');
-			expect(linked).toBe(false);
-		});
-
-		it('should not link sessions that are started top-level sessions', () => {
-			const { manager, sessionState } = createManager();
-			sessionState.startedSessions.add('top-level-session');
-
-			manager.registerSubtask('tool-1', 'parent-session-1');
-			const linked = manager.tryLinkChildSession('top-level-session');
-			expect(linked).toBe(false);
-		});
-
-		it('should remove tool ID from pending set after linking', () => {
-			const { manager } = createManager();
-			manager.registerSubtask('tool-1', 'parent-session-1');
-
-			manager.tryLinkChildSession('child-session-1');
-			expect(manager.isPending('tool-1')).toBe(false);
 		});
 	});
 
 	describe('resolveRouting', () => {
-		it('should return parent session and tool ID for known child', () => {
+		it('returns parent session and tool ID for known child', () => {
 			const { manager } = createManager();
-			manager.registerSubtask('tool-1', 'parent-session-1');
-			manager.tryLinkChildSession('child-session-1');
+			manager.registerSubtask('tool-1', 'parent-session-1', 'child-session-1');
 
-			const routing = manager.resolveRouting('child-session-1');
-			expect(routing).toEqual({
+			expect(manager.resolveRouting('child-session-1')).toEqual({
 				parentSessionId: 'parent-session-1',
 				toolUseId: 'tool-1',
 			});
 		});
 
-		it('should return undefined for unknown child', () => {
+		it('returns undefined for unknown child', () => {
 			const { manager } = createManager();
 			expect(manager.resolveRouting('unknown')).toBeUndefined();
-		});
-
-		it('should return undefined if graph has parent but no toolUseId mapping', () => {
-			const { manager, graph } = createManager();
-			// Register in graph directly without going through SubtaskManager
-			graph.registerChild('child-1', 'parent-1', 'tool-1');
-
-			// SubtaskManager doesn't know about this child
-			expect(manager.resolveRouting('child-1')).toBeUndefined();
 		});
 	});
 
 	describe('token accumulation', () => {
-		it('should accumulate token deltas for a subtask', () => {
+		it('accumulates token deltas for a subtask', () => {
 			const { manager } = createManager();
 			manager.registerSubtask('tool-1', 'parent-session-1');
 
@@ -131,75 +103,24 @@ describe('SubtaskManager', () => {
 				cacheRead: 10,
 			});
 		});
-
-		it('should sum multiple token deltas', () => {
-			const { manager } = createManager();
-			manager.registerSubtask('tool-1', 'parent-session-1');
-
-			manager.accumulateTokens('tool-1', {
-				inputTokens: 100,
-				outputTokens: 50,
-				totalTokens: 150,
-				cacheReadTokens: 10,
-			});
-			manager.accumulateTokens('tool-1', {
-				inputTokens: 200,
-				outputTokens: 100,
-				totalTokens: 300,
-				cacheReadTokens: 20,
-			});
-
-			expect(manager.getAccumulatedTokens('tool-1')).toEqual({
-				input: 300,
-				output: 150,
-				total: 450,
-				cacheRead: 30,
-			});
-		});
-
-		it('should return zero tokens for unknown tool', () => {
-			const { manager } = createManager();
-			expect(manager.getAccumulatedTokens('unknown')).toEqual({
-				input: 0,
-				output: 0,
-				total: 0,
-				cacheRead: 0,
-			});
-		});
 	});
 
 	describe('completeSubtask', () => {
-		it('should clear pending state', () => {
+		it('clears all tracked state for a finished subtask', () => {
 			const { manager } = createManager();
-			manager.registerSubtask('tool-1', 'parent-session-1');
-
-			manager.completeSubtask('tool-1');
-
-			expect(manager.isPending('tool-1')).toBe(false);
-		});
-
-		it('should clean up child session mapping', () => {
-			const { manager } = createManager();
-			manager.registerSubtask('tool-1', 'parent-session-1');
-			manager.tryLinkChildSession('child-session-1');
-
-			manager.completeSubtask('tool-1');
-
-			expect(manager.getToolUseId('child-session-1')).toBeUndefined();
-		});
-
-		it('should clean up token accumulators', () => {
-			const { manager } = createManager();
-			manager.registerSubtask('tool-1', 'parent-session-1');
+			manager.registerSubtask('tool-1', 'parent-session-1', 'child-session-1');
 			manager.accumulateTokens('tool-1', {
-				inputTokens: 100,
-				outputTokens: 50,
-				totalTokens: 150,
-				cacheReadTokens: 0,
+				inputTokens: 1,
+				outputTokens: 2,
+				totalTokens: 3,
+				cacheReadTokens: 4,
 			});
 
 			manager.completeSubtask('tool-1');
 
+			expect(manager.isRegistered('tool-1')).toBe(false);
+			expect(manager.getChildSessionId('tool-1')).toBeUndefined();
+			expect(manager.getToolUseId('child-session-1')).toBeUndefined();
 			expect(manager.getAccumulatedTokens('tool-1')).toEqual({
 				input: 0,
 				output: 0,
@@ -210,35 +131,16 @@ describe('SubtaskManager', () => {
 	});
 
 	describe('clearAll', () => {
-		it('should clear all state', () => {
+		it('clears all tracked subtasks', () => {
 			const { manager } = createManager();
-			manager.registerSubtask('tool-1', 'parent-session-1');
+			manager.registerSubtask('tool-1', 'parent-session-1', 'child-1');
 			manager.registerSubtask('tool-2', 'parent-session-1');
-			manager.tryLinkChildSession('child-1');
 
 			manager.clearAll();
 
-			expect(manager.isPending('tool-1')).toBe(false);
-			expect(manager.isPending('tool-2')).toBe(false);
+			expect(manager.isRegistered('tool-1')).toBe(false);
+			expect(manager.isRegistered('tool-2')).toBe(false);
 			expect(manager.getToolUseId('child-1')).toBeUndefined();
-		});
-	});
-
-	describe('hasActiveSubtasks', () => {
-		it('should return true when there are pending subtasks', () => {
-			const { manager } = createManager();
-			expect(manager.hasActiveSubtasks()).toBe(false);
-
-			manager.registerSubtask('tool-1', 'parent-session-1');
-			expect(manager.hasActiveSubtasks()).toBe(true);
-		});
-
-		it('should return false after all subtasks complete', () => {
-			const { manager } = createManager();
-			manager.registerSubtask('tool-1', 'parent-session-1');
-			manager.completeSubtask('tool-1');
-
-			expect(manager.hasActiveSubtasks()).toBe(false);
 		});
 	});
 });

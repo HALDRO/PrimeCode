@@ -137,21 +137,6 @@ export class SessionGraph {
 		return this.childToParent.get(childSessionId);
 	}
 
-	/**
-	 * Build the task→child map from CLI history data.
-	 * Used during replay to establish links from backend session list.
-	 */
-	registerChildrenFromHistory(
-		parentSessionId: string,
-		taskToolCallIds: string[],
-		childSessionIds: string[],
-	): void {
-		const len = Math.min(taskToolCallIds.length, childSessionIds.length);
-		for (let i = 0; i < len; i++) {
-			this.registerChild(childSessionIds[i], parentSessionId, taskToolCallIds[i]);
-		}
-	}
-
 	clearParent(parentSessionId: string): void {
 		const children = this.parentToChildren.get(parentSessionId);
 		if (children) {

@@ -31,6 +31,8 @@ export interface HandlerContext {
 	) => void;
 	/** Clean up restore/revert state when a session is deleted. */
 	cleanupSessionRestore?: (sessionId: string) => void;
+	/** Clean up pending child message buffers when a session is closed/deleted. */
+	cleanupPendingChildMessages?: (sessionId: string) => void;
 	/** Check if a session is currently in reverted state (persisted across restarts). */
 	isSessionReverted?: (sessionId: string) => boolean;
 }

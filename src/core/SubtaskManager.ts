@@ -11,7 +11,6 @@
  * run until the LLM finishes, errors out, or the parent is explicitly aborted.
  */
 
-import type { ISessionState } from './contracts';
 import type { SessionGraph } from './SessionManager';
 
 export interface TokenDelta {
@@ -37,51 +36,49 @@ export class SubtaskManager {
 	private readonly childToToolUseId = new Map<string, string>();
 	/** toolUseId → parentSessionId */
 	private readonly toolToParentSession = new Map<string, string>();
+	/** toolUseId → childSessionId */
+	private readonly toolToChildSession = new Map<string, string>();
 	/** Accumulated child token stats per toolUseId. */
 	private readonly tokenAccumulators = new Map<string, AccumulatedTokens>();
 
-	constructor(
-		private readonly graph: SessionGraph,
-		private readonly sessionState: ISessionState,
-	) {}
+	constructor(private readonly graph: SessionGraph) {}
 
 	// ─── Registration ────────────────────────────────────────────────────────
 
 	/**
 	 * Register a new subtask from a `task` tool_use event.
-	 * Child session ID is unknown at this point.
+	 * Child session ID may already be known from OpenCode task metadata.
 	 */
-	registerSubtask(toolUseId: string, parentSessionId: string): void {
-		this.pendingToolIds.add(toolUseId);
+	registerSubtask(toolUseId: string, parentSessionId: string, childSessionId?: string): void {
 		this.toolToParentSession.set(toolUseId, parentSessionId);
+
+		if (childSessionId) {
+			this.linkChildSession(childSessionId, toolUseId, parentSessionId);
+			return;
+		}
+
+		this.pendingToolIds.add(toolUseId);
 	}
 
-	// ─── Deferred Linking ────────────────────────────────────────────────────
-
 	/**
-	 * Attempt to link an unknown session as a child of a pending subtask.
-	 * Called when the first event arrives from a session not in the graph.
-	 * Returns true if linking succeeded.
+	 * Deterministically link a child session to a registered task tool call.
+	 * OpenCode CLI provides metadata.sessionId in the tool part's running update
+	 * (after ctx.metadata() in task.ts) and in the completed tool_result.
 	 */
-	tryLinkChildSession(sessionId: string): boolean {
-		if (
-			this.graph.isChild(sessionId) ||
-			this.sessionState.startedSessions.has(sessionId) ||
-			this.pendingToolIds.size === 0
-		) {
+	linkChildSession(childSessionId: string, toolUseId: string, parentSessionId?: string): boolean {
+		const resolvedParentSessionId = parentSessionId ?? this.toolToParentSession.get(toolUseId);
+		if (!resolvedParentSessionId) return false;
+
+		const existingToolUseId = this.childToToolUseId.get(childSessionId);
+		if (existingToolUseId && existingToolUseId !== toolUseId) {
 			return false;
 		}
 
-		const pendingToolId = this.pendingToolIds.values().next().value;
-		if (!pendingToolId) return false;
-
-		const parentSessionId = this.toolToParentSession.get(pendingToolId);
-		if (!parentSessionId) return false;
-
-		this.pendingToolIds.delete(pendingToolId);
-		this.graph.registerChild(sessionId, parentSessionId, pendingToolId);
-		this.childToToolUseId.set(sessionId, pendingToolId);
-
+		this.toolToParentSession.set(toolUseId, resolvedParentSessionId);
+		this.pendingToolIds.delete(toolUseId);
+		this.childToToolUseId.set(childSessionId, toolUseId);
+		this.toolToChildSession.set(toolUseId, childSessionId);
+		this.graph.registerChild(childSessionId, resolvedParentSessionId, toolUseId);
 		return true;
 	}
 
@@ -102,6 +99,19 @@ export class SubtaskManager {
 
 	getToolUseId(childSessionId: string): string | undefined {
 		return this.childToToolUseId.get(childSessionId);
+	}
+
+	getChildSessionId(toolUseId: string): string | undefined {
+		return this.toolToChildSession.get(toolUseId);
+	}
+
+	getOldestPendingToolUseId(parentSessionId: string): string | undefined {
+		for (const toolUseId of this.pendingToolIds) {
+			if (this.toolToParentSession.get(toolUseId) === parentSessionId) {
+				return toolUseId;
+			}
+		}
+		return undefined;
 	}
 
 	hasActiveSubtasks(): boolean {
@@ -147,6 +157,7 @@ export class SubtaskManager {
 		this.pendingToolIds.delete(toolUseId);
 		this.toolToParentSession.delete(toolUseId);
 		this.tokenAccumulators.delete(toolUseId);
+		this.toolToChildSession.delete(toolUseId);
 
 		// Remove child→toolUseId mapping
 		for (const [childId, tid] of this.childToToolUseId.entries()) {
@@ -161,6 +172,7 @@ export class SubtaskManager {
 		this.pendingToolIds.clear();
 		this.toolToParentSession.clear();
 		this.childToToolUseId.clear();
+		this.toolToChildSession.clear();
 		this.tokenAccumulators.clear();
 	}
 }
