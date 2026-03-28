@@ -4,27 +4,10 @@
  *              Run with: bun test tests/opencode-api.test.ts
  */
 
-import { describe, expect, it, beforeAll } from 'vitest';
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 const WORKSPACE_ROOT = 'c:\\Users\\Comp\\Desktop\\PrimeCode';
-
-// Find any available OpenCode port file
-function discoverPort(): number | null {
-	try {
-		const tempDir = os.tmpdir();
-		const files = fs.readdirSync(tempDir).filter(f => f.startsWith('primecode-opencode-port-'));
-		if (files.length > 0) {
-			const content = fs.readFileSync(path.join(tempDir, files[0]), 'utf-8');
-			return parseInt(content.trim(), 10) || null;
-		}
-	} catch {
-		return null;
-	}
-	return null;
-}
+const baseUrl = `http://127.0.0.1:${process.env.OPENCODE_PORT ?? '4096'}`;
 
 // Shared types matching OpenCode API
 type Session = {
@@ -41,12 +24,7 @@ type Message = {
 };
 
 describe('OpenCode API', () => {
-	let baseUrl: string;
-
 	beforeAll(() => {
-		const port = discoverPort();
-		if (!port) throw new Error('OpenCode server not running');
-		baseUrl = `http://127.0.0.1:${port}`;
 		console.log(`[Test] Server: ${baseUrl}`);
 	});
 
@@ -58,7 +36,9 @@ describe('OpenCode API', () => {
 
 	// Helper: fetch messages
 	const getMessages = async (sessionId: string): Promise<Message[]> => {
-		const resp = await fetch(`${baseUrl}/session/${sessionId}/message?directory=${encodeURIComponent(WORKSPACE_ROOT)}`);
+		const resp = await fetch(
+			`${baseUrl}/session/${sessionId}/message?directory=${encodeURIComponent(WORKSPACE_ROOT)}`,
+		);
 		return resp.ok ? resp.json() : [];
 	};
 
@@ -92,14 +72,17 @@ describe('OpenCode API', () => {
 		});
 
 		it('POST /session creates new session', async () => {
-			const resp = await fetch(`${baseUrl}/session?directory=${encodeURIComponent(WORKSPACE_ROOT)}`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({}),
-			});
+			const resp = await fetch(
+				`${baseUrl}/session?directory=${encodeURIComponent(WORKSPACE_ROOT)}`,
+				{
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({}),
+				},
+			);
 
 			expect(resp.ok).toBe(true);
-			const data = await resp.json() as { id: string };
+			const data = (await resp.json()) as { id: string };
 			expect(data.id).toMatch(/^ses_/);
 			console.log(`[Test] Created session: ${data.id}`);
 		});
@@ -111,20 +94,23 @@ describe('OpenCode API', () => {
 
 			const body = {
 				parts: [{ type: 'text', text: 'Hello' }],
-				model: { providerID: 'anthropic', modelID: 'claude-3-5-sonnet-latest' }
+				model: { providerID: 'anthropic', modelID: 'claude-3-5-sonnet-latest' },
 			};
 
-			const resp = await fetch(`${baseUrl}/session/${session.id}/message?directory=${encodeURIComponent(WORKSPACE_ROOT)}`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(body),
-			});
+			const resp = await fetch(
+				`${baseUrl}/session/${session.id}/message?directory=${encodeURIComponent(WORKSPACE_ROOT)}`,
+				{
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify(body),
+				},
+			);
 
 			if (!resp.ok) {
 				console.log('Message Error:', resp.status, await resp.text());
 			}
 			expect(resp.ok).toBe(true);
-			
+
 			// Check if response is JSON (even if null)
 			const contentType = resp.headers.get('content-type');
 			expect(contentType).toContain('application/json');
@@ -190,7 +176,9 @@ describe('OpenCode API', () => {
 
 	describe('System API (Commands, Agents, MCP)', () => {
 		it('GET /command returns commands list', async () => {
-			const resp = await fetch(`${baseUrl}/command?directory=${encodeURIComponent(WORKSPACE_ROOT)}`);
+			const resp = await fetch(
+				`${baseUrl}/command?directory=${encodeURIComponent(WORKSPACE_ROOT)}`,
+			);
 			if (resp.status === 404) {
 				console.warn('[Test] GET /command not supported (404)');
 				return;
@@ -217,7 +205,9 @@ describe('OpenCode API', () => {
 		});
 
 		it('GET /config/providers returns providers', async () => {
-			const resp = await fetch(`${baseUrl}/config/providers?directory=${encodeURIComponent(WORKSPACE_ROOT)}`);
+			const resp = await fetch(
+				`${baseUrl}/config/providers?directory=${encodeURIComponent(WORKSPACE_ROOT)}`,
+			);
 			if (resp.status === 404) {
 				console.warn('[Test] GET /config/providers not supported (404)');
 				return;
@@ -243,7 +233,9 @@ describe('OpenCode API', () => {
 
 	describe('Minimal Implementation', () => {
 		it('listSessions - minimal code', async () => {
-			const resp = await fetch(`${baseUrl}/session?directory=${encodeURIComponent(WORKSPACE_ROOT)}`);
+			const resp = await fetch(
+				`${baseUrl}/session?directory=${encodeURIComponent(WORKSPACE_ROOT)}`,
+			);
 			const sessions = (await resp.json()) as Session[];
 
 			const result = sessions
@@ -267,7 +259,9 @@ describe('OpenCode API', () => {
 
 			const events = messages.flatMap(msg => {
 				const role = msg.info?.role;
-				const timestamp = msg.time?.created ? new Date(msg.time.created).toISOString() : new Date().toISOString();
+				const timestamp = msg.time?.created
+					? new Date(msg.time.created).toISOString()
+					: new Date().toISOString();
 
 				return (msg.parts || [])
 					.filter(p => p.type === 'text' && p.text)
@@ -284,7 +278,9 @@ describe('OpenCode API', () => {
 
 	describe('Edge Cases', () => {
 		it('handles non-existent session', async () => {
-			const resp = await fetch(`${baseUrl}/session/ses_nonexistent/message?directory=${encodeURIComponent(WORKSPACE_ROOT)}`);
+			const resp = await fetch(
+				`${baseUrl}/session/ses_nonexistent/message?directory=${encodeURIComponent(WORKSPACE_ROOT)}`,
+			);
 			// Should return error or empty
 			expect([200, 404, 400, 500]).toContain(resp.status);
 		});

@@ -7,9 +7,7 @@
 
 import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
+
 import type {
 	EventMessagePartUpdated,
 	EventMessageUpdated,
@@ -19,10 +17,30 @@ import type {
 	Part,
 	Event as SdkEvent,
 	SessionStatus as SdkSessionStatus,
+	Session,
 	TextPart,
 	ToolPart,
 } from '@opencode-ai/sdk';
 import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk';
+
+/**
+ * SDK v2 event type for incremental text/reasoning deltas.
+ * The server emits `message.part.delta` for every streaming token (no DB write),
+ * separate from `message.part.updated` which carries full snapshots (with DB write).
+ * Our v1 SDK doesn't include this type, so we define it locally.
+ */
+interface EventMessagePartDelta {
+	type: 'message.part.delta';
+	properties: {
+		sessionID: string;
+		messageID: string;
+		partID: string;
+		/** The part field being appended to (e.g. "text") */
+		field: string;
+		/** The incremental text chunk */
+		delta: string;
+	};
+}
 
 import { Value } from '@sinclair/typebox/value';
 import { parseModelId } from '../../common';
@@ -184,6 +202,9 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	);
 	private readonly _providersCache = new TtlCache<unknown>(5 * 60 * 1000);
 	private readonly _agentsCache = new TtlCache<unknown>(5 * 60 * 1000);
+	private readonly _skillsCache = new TtlCache<
+		Array<{ name: string; description: string; location?: string; content?: string }>
+	>(5 * 60 * 1000);
 	private readonly _mcpCache = new TtlCache<unknown>(30 * 1000);
 
 	// Keep track of the server process wrapper to close it properly if needed
@@ -202,6 +223,10 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	private reconnecting = false;
 	/** Stashed config from the last successful ensureServer — needed for reconnect. */
 	private lastConfig: CLIConfig | null = null;
+	/** Timestamp when this window started the currently owned server instance. */
+	private serverStartedAt: number | null = null;
+	private static readonly LOCAL_SERVER_HOST = '127.0.0.1';
+	private static readonly LOCAL_SERVER_PORT = OpenCodeExecutor.resolveLocalServerPort();
 
 	constructor() {
 		super();
@@ -220,14 +245,14 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	// Server Management
 	// =========================================================================
 
-	/**
-	 * Returns a global (not per-workspace) port file path.
-	 * The OpenCode server is workspace-agnostic — it routes requests to the
-	 * correct project via the `x-opencode-directory` header, so a single
-	 * server process can serve all VS Code windows regardless of workspace.
-	 */
-	private getPortFilePath(): string {
-		return path.join(os.tmpdir(), 'primecode-opencode-port.txt');
+	private static resolveLocalServerPort(): number {
+		const value = process.env.OPENCODE_PORT;
+		const parsed = value ? Number.parseInt(value, 10) : Number.NaN;
+		return Number.isInteger(parsed) && parsed > 0 ? parsed : 4096;
+	}
+
+	private getLocalServerUrl(): string {
+		return `http://${OpenCodeExecutor.LOCAL_SERVER_HOST}:${OpenCodeExecutor.LOCAL_SERVER_PORT}`;
 	}
 
 	async ensureServer(config: CLIConfig): Promise<void> {
@@ -254,48 +279,36 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	private async doEnsureServer(config: CLIConfig): Promise<void> {
 		if (config.serverUrl) {
 			this.serverUrl = config.serverUrl;
+			this.isServerOwner = false;
+			this.serverStartedAt = null;
 			this.directory = config.workspaceRoot;
 			this.initSdkClient();
 			logger.info(`[OpenCode] Connected to existing server at ${this.serverUrl}`);
 			return;
 		}
 
-		if (await this.tryConnectToExistingServer(config)) return;
+		if (await this.tryConnectToLocalServer(config)) return;
 
 		await this.spawnServer(config.workspaceRoot, config);
 	}
 
 	/**
-	 * Try to connect to an already-running OpenCode server via the port file.
-	 * Uses the official `/global/health` endpoint to verify the server is alive.
+	 * Try to connect to the shared local OpenCode server.
+	 * This matches the official desktop approach more closely: a single loopback
+	 * URL is the rendezvous point, instead of persisting ad-hoc temp files.
 	 */
-	private async tryConnectToExistingServer(config: CLIConfig): Promise<boolean> {
-		const portFile = this.getPortFilePath();
-		try {
-			if (!fs.existsSync(portFile)) return false;
+	private async tryConnectToLocalServer(config: CLIConfig): Promise<boolean> {
+		const baseUrl = this.getLocalServerUrl();
+		if (!(await this.isOpenCodeServer(baseUrl))) return false;
 
-			const content = await fs.promises.readFile(portFile, 'utf-8');
-			const port = parseInt(content.trim(), 10);
-			if (Number.isNaN(port) || port <= 0) return false;
-
-			const baseUrl = `http://127.0.0.1:${port}`;
-			if (await this.isOpenCodeServer(baseUrl)) {
-				logger.info(`[OpenCode] Connected to existing server on port ${port}`);
-				this.serverUrl = baseUrl;
-				this.directory = config.workspaceRoot;
-				this.initSdkClient();
-				void this.preloadMetadata();
-				return true;
-			}
-
-			// Server not responding — stale port file, clean up
-			logger.info(`[OpenCode] Stale port file (port ${port}), removing`);
-			try {
-				await fs.promises.unlink(portFile);
-			} catch {}
-		} catch {}
-
-		return false;
+		logger.info(`[OpenCode] Connected to existing local server at ${baseUrl}`);
+		this.serverUrl = baseUrl;
+		this.isServerOwner = false;
+		this.serverStartedAt = null;
+		this.directory = config.workspaceRoot;
+		this.initSdkClient();
+		void this.preloadMetadata();
+		return true;
 	}
 
 	/**
@@ -321,6 +334,19 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 	}
 
+	/**
+	 * Spawn a new OpenCode server process via the SDK.
+	 *
+	 * We pass `port: 0` so the CLI uses its built-in fallback logic:
+	 *   tryServe(4096) ?? tryServe(0)
+	 * This means it first tries the canonical port 4096, and if that's
+	 * occupied (zombie, another instance, etc.) it picks a random free port.
+	 * The SDK parses the actual URL from stdout, so we always get the
+	 * correct address regardless of which port was chosen.
+	 *
+	 * This eliminates all EADDRINUSE issues without any platform-specific
+	 * hacks (netstat, taskkill, etc.).
+	 */
 	private async spawnServer(workspaceRoot: string, config: CLIConfig): Promise<void> {
 		if (this.serverUrl) return;
 
@@ -356,21 +382,14 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 			Object.assign(process.env, processEnv);
 
-			// Dynamically import SDK to avoid load-time issues
-			const { createOpencode } = await import('@opencode-ai/sdk');
-			const opencode = await createOpencode({
-				hostname: '127.0.0.1',
-				port: 0,
-				timeout: config.serverTimeoutMs ?? 15000,
-			});
+			const opencode = await this.createServerWithRetry(config.serverTimeoutMs ?? 15000);
 
-			// We only need the URL and close method
 			this.serverInstance = { close: () => opencode.server.close() };
 			this.serverUrl = opencode.server.url;
 			this.directory = workspaceRoot;
 			this.isServerOwner = true;
+			this.serverStartedAt = Date.now();
 
-			await this.savePortFile();
 			this.initSdkClient();
 			logger.info(`[OpenCode] Server started at ${this.serverUrl}`);
 			void this.preloadMetadata();
@@ -387,15 +406,34 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 	}
 
-	private async savePortFile(): Promise<void> {
-		if (!this.serverUrl) return;
+	/**
+	 * Try to create the server, with one retry on failure.
+	 *
+	 * Uses `port: 0` which tells the CLI to try 4096 first, then fall back
+	 * to an OS-assigned random port.  If the first attempt fails (e.g. the
+	 * binary wasn't ready, transient OS error), we wait briefly and retry once.
+	 */
+	private async createServerWithRetry(
+		timeout: number,
+	): Promise<{ server: { url: string; close: () => void }; client: unknown }> {
+		const { createOpencode } = await import('@opencode-ai/sdk');
+
+		const spawn = () =>
+			createOpencode({
+				hostname: OpenCodeExecutor.LOCAL_SERVER_HOST,
+				port: 0,
+				timeout,
+			});
+
 		try {
-			const port = new URL(this.serverUrl).port;
-			if (port) {
-				const portFile = this.getPortFilePath();
-				await fs.promises.writeFile(portFile, port);
-			}
-		} catch {}
+			return await spawn();
+		} catch (firstError) {
+			logger.warn('[OpenCode] First spawn attempt failed, retrying...', {
+				error: String(firstError),
+			});
+			await new Promise(resolve => setTimeout(resolve, 2000));
+			return await spawn();
+		}
 	}
 
 	private buildPermissionsEnv(
@@ -462,6 +500,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 	private resetServerState(): void {
 		logger.info('[OpenCode] Resetting server state for reconnection...');
+
 		if (this.serverInstance) {
 			try {
 				this.serverInstance.close();
@@ -471,10 +510,13 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		this.serverUrl = null;
 		this.directory = null;
 		this.sdkClient = null;
+		this.isServerOwner = false;
+		this.serverStartedAt = null;
 		this.lastEmittedStatus.clear();
 		this._commandsCache.clear();
 		this._providersCache.clear();
 		this._agentsCache.clear();
+		this._skillsCache.clear();
 		this._mcpCache.clear();
 	}
 
@@ -487,21 +529,31 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	 * If the server becomes unreachable, it attempts to reconnect automatically
 	 * and restarts the SSE event stream. Emits 'event' with type
 	 * 'server_reconnected' on successful reconnect so ChatProvider can re-sync UI.
+	 *
+	 * Uses recursive setTimeout instead of setInterval to prevent overlapping
+	 * health checks when fetch hangs longer than the interval period.
 	 */
 	startHealthMonitor(): void {
 		this.stopHealthMonitor();
 		this.healthFailCount = 0;
 
-		this.healthInterval = setInterval(() => {
-			void this.healthCheck();
-		}, OpenCodeExecutor.HEALTH_INTERVAL_MS);
+		const scheduleNext = () => {
+			this.healthInterval = setTimeout(async () => {
+				await this.healthCheck();
+				// Schedule next check only after current one completes
+				if (this.healthInterval !== null) {
+					scheduleNext();
+				}
+			}, OpenCodeExecutor.HEALTH_INTERVAL_MS);
+		};
+		scheduleNext();
 
 		logger.info('[OpenCode] Health monitor started');
 	}
 
 	stopHealthMonitor(): void {
 		if (this.healthInterval) {
-			clearInterval(this.healthInterval);
+			clearTimeout(this.healthInterval);
 			this.healthInterval = null;
 		}
 	}
@@ -724,10 +776,20 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	 * OpenCode stores LLM-generated titles on the session directly via ensureTitle(),
 	 * but if that hasn't run yet, we fall back to the first user message text.
 	 */
+	/**
+	 * Fetches the first user message's summary title for a session and reports
+	 * whether the session contains any messages at all.
+	 *
+	 * Returns `{ title, hasMessages }`:
+	 * - `hasMessages = false` only when the API returned an empty message list.
+	 * - `title` may be `undefined` even when messages exist (e.g. no text part).
+	 * - On API errors we assume messages exist (`hasMessages = true`) to avoid
+	 *   accidentally hiding sessions.
+	 */
 	private async getSessionDisplayTitle(
 		sessionId: string,
 		directory: string,
-	): Promise<string | undefined> {
+	): Promise<{ title: string | undefined; hasMessages: boolean }> {
 		try {
 			const client = this.requireSdk();
 			const { data: messages } = await client.session.messages({
@@ -735,14 +797,19 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				query: { directory, limit: 3 },
 			});
 
-			if (!Array.isArray(messages)) return undefined;
+			if (!Array.isArray(messages) || messages.length === 0) {
+				return { title: undefined, hasMessages: false };
+			}
 
 			const userMsg = messages.find((m: SessionMessageEntry) => m.info?.role === 'user');
-			if (!userMsg) return undefined;
+			if (!userMsg) {
+				// Messages exist but none are from the user — still not empty.
+				return { title: undefined, hasMessages: true };
+			}
 
 			const { info } = userMsg;
 			if (info.role === 'user' && info.summary?.title) {
-				return info.summary.title;
+				return { title: info.summary.title, hasMessages: true };
 			}
 
 			const textPart = userMsg.parts.find(
@@ -750,12 +817,15 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			);
 			if (textPart?.text) {
 				const cleaned = textPart.text.trim().split('\n')[0];
-				return cleaned.length > 80 ? `${cleaned.substring(0, 77)}...` : cleaned;
+				const title = cleaned.length > 80 ? `${cleaned.substring(0, 77)}...` : cleaned;
+				return { title, hasMessages: true };
 			}
 
-			return undefined;
+			// User message exists but has no extractable text (e.g. only attachments).
+			return { title: undefined, hasMessages: true };
 		} catch {
-			return undefined;
+			// On error, assume messages exist to avoid hiding valid sessions.
+			return { title: undefined, hasMessages: true };
 		}
 	}
 
@@ -766,32 +836,35 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			lastModified?: number;
 			created?: number;
 			parentID?: string;
+			/** true when the session has at least one user message. */
+			hasMessages?: boolean;
 		}>
 	> {
-		if (!this.serverUrl && config.workspaceRoot) {
+		if (!this.serverUrl) {
+			if (!config.workspaceRoot) return [];
 			try {
 				await this.ensureServer(config);
 			} catch (error) {
 				logger.warn('[OpenCode] listSessions: ensureServer failed', error);
 				return [];
 			}
-		}
-		if (!this.serverUrl) {
-			logger.warn('[OpenCode] listSessions: no serverUrl, returning empty');
-			return [];
+			if (!this.serverUrl) return [];
 		}
 
 		try {
 			const client = this.requireSdk();
-			const { data: raw } = await client.session.list({
-				query: { directory: config.workspaceRoot },
-			});
+			// Do NOT pass directory in query — it becomes an additional SQL WHERE
+			// exact-match filter that can hide sessions created with a slightly
+			// different path. The SDK client already sends directory via the
+			// x-opencode-directory header (set in createOpencodeClient), which the
+			// server middleware uses for project resolution. This matches the
+			// official OpenCode TUI behavior (session.list without directory filter).
+			const { data: raw } = await client.session.list({});
 
 			const sessions = Array.isArray(raw) ? raw : [];
 
 			logger.info('[OpenCode] listSessions: API returned', {
 				rawCount: sessions.length,
-				directory: config.workspaceRoot,
 			});
 
 			const resolved = await Promise.all(
@@ -800,15 +873,18 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 					let displayTitle: string | undefined;
 
 					// Only resolve display titles for top-level sessions (expensive operation)
+					let hasMessages = true;
 					if (!isChild) {
 						const rawTitle = s.title || '';
-						displayTitle = rawTitle;
 
 						if (!rawTitle || OpenCodeExecutor.isDefaultTitle(rawTitle)) {
-							const msgTitle = await this.getSessionDisplayTitle(s.id, config.workspaceRoot);
-							displayTitle = msgTitle || '';
+							// Try to get a meaningful title from the first user message.
+							const result = await this.getSessionDisplayTitle(s.id, config.workspaceRoot);
+							displayTitle = result.title || rawTitle || undefined;
+							hasMessages = result.hasMessages;
+						} else {
+							displayTitle = rawTitle;
 						}
-						displayTitle = displayTitle || undefined;
 					} else {
 						displayTitle = s.title || undefined;
 					}
@@ -819,6 +895,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 						lastModified: s.time?.updated || s.time?.created || Date.now(),
 						created: s.time?.created,
 						parentID: s.parentID,
+						hasMessages,
 					};
 				}),
 			);
@@ -831,14 +908,15 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	}
 
 	async getHistory(sessionId: string, config: CLIConfig): Promise<CLIEvent[]> {
-		if (!this.serverUrl && config.workspaceRoot) {
+		if (!this.serverUrl) {
+			if (!config.workspaceRoot) return [];
 			try {
 				await this.ensureServer(config);
 			} catch {
 				return [];
 			}
+			if (!this.serverUrl) return [];
 		}
-		if (!this.serverUrl) return [];
 
 		try {
 			const client = this.requireSdk();
@@ -1133,10 +1211,11 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (!this.directory) return;
 		logger.info('[OpenCode] Preloading metadata cache...');
 		await Promise.allSettled([
-			this.listCommands(this.directory).catch(() => {}),
-			this.listConfigProviders(this.directory).catch(() => {}),
-			this.listAgents(this.directory).catch(() => {}),
-			this.getMcpStatus(this.directory).catch(() => {}),
+			this.listCommands(this.directory),
+			this.listConfigProviders(this.directory),
+			this.listAgents(this.directory),
+			this.listSkills(this.directory),
+			this.getMcpStatus(this.directory),
 		]);
 		logger.info('[OpenCode] Metadata cache preloaded');
 	}
@@ -1288,6 +1367,34 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			const client = this.requireSdk();
 			const { data } = await client.app.agents({ query: { directory } });
 			return this._agentsCache.set(data);
+		} catch {
+			return [];
+		}
+	}
+
+	/**
+	 * Fetch skills from the OpenCode server via raw HTTP GET /skill.
+	 * The SDK does not expose an `app.skills` method, so we use direct fetch.
+	 */
+	public async listSkills(
+		directory: string,
+	): Promise<Array<{ name: string; description: string; location?: string; content?: string }>> {
+		const cached = this._skillsCache.get();
+		if (cached) return cached;
+		try {
+			if (!this.serverUrl) return [];
+			const url = `${this.serverUrl}/skill?directory=${encodeURIComponent(directory)}`;
+			const resp = await fetch(url, {
+				headers: { 'x-opencode-directory': directory },
+			});
+			if (!resp.ok) return [];
+			const data = (await resp.json()) as Array<{
+				name: string;
+				description: string;
+				location?: string;
+				content?: string;
+			}>;
+			return this._skillsCache.set(Array.isArray(data) ? data : []);
 		} catch {
 			return [];
 		}
@@ -1544,6 +1651,12 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			this.handlePermissionAsked(props, sessionId);
 			return;
 		}
+		if (envelope.type === 'message.part.delta') {
+			const props = (envelope as EventMessagePartDelta).properties;
+			if (props.sessionID && this.deletedSessions.has(props.sessionID)) return;
+			this.handlePartDelta(props);
+			return;
+		}
 
 		const event = raw as SdkEvent;
 
@@ -1564,6 +1677,20 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (eventSessionId && this.deletedSessions.has(eventSessionId)) return;
 
 		switch (event.type) {
+			case 'session.created': {
+				const props = (envelope as { type: string; properties: { info: Session } }).properties;
+				const info = props.info;
+				this.emit('event', {
+					type: 'session_created',
+					data: {
+						sessionID: info.id,
+						parentID: info.parentID ?? undefined,
+						title: info.title ?? undefined,
+					},
+					sessionId: info.id,
+				});
+				break;
+			}
 			case 'message.updated': {
 				const props = (event as EventMessageUpdated).properties;
 				const sessionId = props.info.sessionID;
@@ -1872,6 +1999,41 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		else if (part.type === 'tool') this.handleToolPart(part, sid);
 	}
 
+	/**
+	 * Handle `message.part.delta` SSE events — lightweight incremental text/reasoning
+	 * chunks emitted by the server for every streaming token (no DB write on server side).
+	 * This is the primary path for real-time streaming; `message.part.updated` only fires
+	 * at part boundaries (start/end) with full snapshots.
+	 */
+	private handlePartDelta(props: EventMessagePartDelta['properties']): void {
+		const { sessionID, messageID, field, delta } = props;
+		if (!delta) return;
+
+		// Skip deltas for user messages
+		if (messageID && this.messageRoles.get(messageID) === 'user') return;
+
+		const agent = messageID ? this.messageAgents.get(messageID) : undefined;
+
+		if (field === 'text') {
+			this.emit('event', {
+				type: 'message',
+				data: {
+					content: delta,
+					partId: messageID,
+					isDelta: true,
+					...(agent ? { agent } : {}),
+				},
+				sessionId: sessionID,
+			});
+		} else if (field === 'reasoning') {
+			this.emit('event', {
+				type: 'thinking',
+				data: { content: delta, partId: messageID, isDelta: true },
+				sessionId: sessionID,
+			});
+		}
+	}
+
 	private handleTextPart(part: OpenCodePart, sessionId?: string, delta?: string): void {
 		if (part.type !== 'text') return;
 		if (part.messageID && this.messageRoles.get(part.messageID) === 'user') return;
@@ -1972,9 +2134,18 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				this.emitToolUse(callID, name, state, status, sessionId);
 				this.toolCallStates.set(callID, { completed: false, hasInput: hasInputNow });
 			} else if (status === 'running' && current && !current.completed) {
-				// Intermediate update for a running tool — forward metadata (e.g. bash streaming output).
+				// Intermediate update for a running tool.
 				const meta = state?.metadata as Record<string, unknown> | undefined;
-				if (meta && Object.keys(meta).length > 0) {
+				const isTask = name === 'task' || name === 'Task';
+
+				// For task tools: when metadata.sessionId appears (OpenCode CLI calls
+				// ctx.metadata() after Session.create()), re-emit as tool_use so
+				// ChatProvider can extract the child session ID and link it.
+				if (isTask && meta && typeof meta.sessionId === 'string') {
+					this.emitToolUse(callID, name, state, status, sessionId);
+					this.toolCallStates.set(callID, { completed: false, hasInput: hasInputNow });
+				} else if (meta && Object.keys(meta).length > 0) {
+					// Non-task tools: forward metadata as streaming update (e.g. bash output).
 					this.emit('event', {
 						type: 'tool_streaming',
 						data: {
@@ -2295,17 +2466,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			} catch {}
 			this.serverInstance = null;
 		}
-		// Only clean up port file if THIS process spawned the server.
-		// If we connected to another process's server, leave the port file alone.
-		if (this.isServerOwner) {
-			try {
-				const portFile = this.getPortFilePath();
-				if (fs.existsSync(portFile)) {
-					await fs.promises.unlink(portFile);
-				}
-			} catch {}
-			this.isServerOwner = false;
-		}
+		this.isServerOwner = false;
 
 		this.serverUrl = null;
 		this.directory = null;
@@ -2366,6 +2527,21 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		return this.sdkClient;
 	}
 
+	/** Invalidate the skills cache so the next listSkills() call fetches fresh data. */
+	clearSkillsCache(): void {
+		this._skillsCache.clear();
+	}
+
+	/** Invalidate the commands cache so the next listCommands()/fetchCliCommands() call fetches fresh data. */
+	clearCommandsCache(): void {
+		this._commandsCache.clear();
+	}
+
+	/** Invalidate the agents cache so the next listAgents() call fetches fresh data. */
+	clearAgentsCache(): void {
+		this._agentsCache.clear();
+	}
+
 	// Aliases previously provided by CLIRunner facade
 	/** Alias for ensureServer — used by ChatProvider. */
 	async start(config: CLIConfig): Promise<void> {
@@ -2380,5 +2556,100 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	/** Returns the provider type. Always 'opencode'. */
 	getProvider(): 'opencode' {
 		return 'opencode';
+	}
+
+	// =========================================================================
+	// Connection Status & Restart
+	// =========================================================================
+
+	/**
+	 * Returns connection details for the status UI.
+	 */
+	getConnectionDetails(): {
+		serverUrl: string | null;
+		isServerOwner: boolean;
+		port: number | null;
+		uptime: number | null;
+	} {
+		let port: number | null = null;
+		if (this.serverUrl) {
+			try {
+				port = parseInt(new URL(this.serverUrl).port, 10) || null;
+			} catch {}
+		}
+		return {
+			serverUrl: this.serverUrl,
+			isServerOwner: this.isServerOwner,
+			port,
+			uptime:
+				this.isServerOwner && this.serverStartedAt
+					? Math.max(0, Date.now() - this.serverStartedAt)
+					: null,
+		};
+	}
+
+	/**
+	 * Fully restart the OpenCode server process.
+	 * Stops health monitor, kills the existing server, resets state,
+	 * then re-starts using the last known config.
+	 * Returns true on success, false if no config is available.
+	 */
+	async restartServer(): Promise<boolean> {
+		if (!this.lastConfig) {
+			logger.warn('[OpenCode] Cannot restart: no previous config available');
+			return false;
+		}
+
+		if (!this.isServerOwner) {
+			logger.warn('[OpenCode] Cannot restart shared server from a non-owner window');
+			this.emit('event', {
+				type: 'error',
+				data: {
+					message:
+						'Cannot restart OpenCode from this window because it is attached to a server started elsewhere. Restart from the owner window or reload the owning VS Code instance.',
+				},
+			});
+			return false;
+		}
+
+		logger.info('[OpenCode] Restarting server...');
+
+		// Stop monitoring and SSE
+		this.stopHealthMonitor();
+		try {
+			this.eventAbort?.abort();
+		} catch {}
+		this.eventStreamRunning = false;
+		this.eventAbort = null;
+
+		// Reset server state (kills process if owner)
+		this.resetServerState();
+
+		const config = this.lastConfig;
+
+		try {
+			await this.ensureServer(config);
+
+			if (this.serverUrl) {
+				this.startEventStream(this.serverUrl, config.workspaceRoot);
+				this.startHealthMonitor();
+				this.healthFailCount = 0;
+
+				logger.info('[OpenCode] Server restarted successfully');
+				this.emit('event', {
+					type: 'server_reconnected' as const,
+					data: { attempt: 0 },
+				});
+				return true;
+			}
+		} catch (error) {
+			logger.error('[OpenCode] Server restart failed:', error);
+			this.emit('event', {
+				type: 'error',
+				data: { message: `Failed to restart OpenCode server: ${String(error)}` },
+			});
+		}
+
+		return false;
 	}
 }

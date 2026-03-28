@@ -9,30 +9,14 @@
  *              Prerequisites: OpenCode server must be running (start PrimeCode extension first).
  */
 
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const WORKSPACE_ROOT = 'c:\\Users\\Comp\\Desktop\\PrimeCode';
+const BASE_URL = `http://127.0.0.1:${process.env.OPENCODE_PORT ?? '4096'}`;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function discoverPort(): number | null {
-	try {
-		const tempDir = os.tmpdir();
-		const files = fs.readdirSync(tempDir).filter(f => f.startsWith('primecode-opencode-port-'));
-		if (files.length > 0) {
-			const content = fs.readFileSync(path.join(tempDir, files[0]), 'utf-8');
-			return parseInt(content.trim(), 10) || null;
-		}
-	} catch {
-		return null;
-	}
-	return null;
-}
 
 function buildUrl(base: string, endpoint: string, directory: string): string {
 	const url = new URL(`${base}${endpoint}`);
@@ -147,14 +131,11 @@ function waitForSessionIdle(
 // ---------------------------------------------------------------------------
 
 describe('Improve Prompt — Integration', () => {
-	let baseUrl: string;
+	const baseUrl = BASE_URL;
 	const directory = WORKSPACE_ROOT;
 	const createdSessions: string[] = [];
 
 	beforeAll(() => {
-		const port = discoverPort();
-		if (!port) throw new Error('OpenCode server not running — start PrimeCode extension first');
-		baseUrl = `http://127.0.0.1:${port}`;
 		console.log(`[ImprovePrompt Test] Server: ${baseUrl}`);
 	});
 

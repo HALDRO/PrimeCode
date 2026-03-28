@@ -44,6 +44,12 @@ export class UtilityHandler implements WebviewMessageHandler {
 				return this.handleGetWorkspaceFiles(msg);
 			case 'checkExtensionVersion':
 				return this.handleCheckExtensionVersion();
+			case 'restartOpenCode':
+				return this.handleRestartOpenCode();
+			case 'reloadExtension':
+				return this.handleReloadExtension();
+			case 'getConnectionDetails':
+				return this.handleGetConnectionDetails();
 		}
 	}
 
@@ -120,7 +126,8 @@ export class UtilityHandler implements WebviewMessageHandler {
 		if (!root) return false;
 		const rootNorm = root.fsPath.replace(/\\/g, '/').toLowerCase();
 		const fileNorm = vscode.Uri.file(filePath).fsPath.replace(/\\/g, '/').toLowerCase();
-		return fileNorm.startsWith(rootNorm);
+		// Ensure trailing separator so "/project-evil" doesn't match "/project"
+		return fileNorm === rootNorm || fileNorm.startsWith(`${rootNorm}/`);
 	}
 
 	private async handleAcceptFile(msg: WebviewCommand): Promise<void> {
@@ -230,5 +237,55 @@ export class UtilityHandler implements WebviewMessageHandler {
 			if ((l[i] ?? 0) < (c[i] ?? 0)) return false;
 		}
 		return false;
+	}
+
+	// ─── Connection Status ─────────────────────────────────────────────
+
+	private async handleRestartOpenCode(): Promise<void> {
+		logger.info('[UtilityHandler] Restarting OpenCode server...');
+		const success = await this.context.cli.restartServer();
+		if (success) {
+			await this.handleGetConnectionDetails();
+		} else {
+			logger.error('[UtilityHandler] Failed to restart OpenCode server');
+		}
+	}
+
+	private handleReloadExtension(): void {
+		logger.info('[UtilityHandler] Reloading extension window...');
+		void vscode.commands.executeCommand('workbench.action.reloadWindow');
+	}
+
+	private async handleGetConnectionDetails(): Promise<void> {
+		const details = this.context.cli.getConnectionDetails();
+		const serverUrl = details.serverUrl;
+
+		let healthy = false;
+		if (serverUrl) {
+			try {
+				const controller = new AbortController();
+				const timeout = setTimeout(() => controller.abort(), 3000);
+				const res = await fetch(`${serverUrl}/global/health`, {
+					method: 'GET',
+					signal: controller.signal,
+				});
+				clearTimeout(timeout);
+				if (res.ok) {
+					const data = (await res.json()) as { healthy?: boolean };
+					healthy = data.healthy === true;
+				}
+			} catch {
+				healthy = false;
+			}
+		}
+
+		this.context.bridge.data('connectionDetails', {
+			serverUrl: details.serverUrl,
+			status: healthy ? 'connected' : details.serverUrl ? 'error' : 'disconnected',
+			isServerOwner: details.isServerOwner,
+			uptime: details.uptime,
+			port: details.port,
+			healthy,
+		});
 	}
 }

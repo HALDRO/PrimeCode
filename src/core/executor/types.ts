@@ -154,6 +154,12 @@ export interface SessionDiffEventData {
 	diff: SessionDiffFileDiff[];
 }
 
+export interface SessionCreatedEventData {
+	sessionID: string;
+	parentID?: string;
+	title?: string;
+}
+
 export interface NormalizedLogEventData {
 	role?: string;
 	content?: string;
@@ -186,6 +192,7 @@ export type CLIEvent =
 	| (CLIEventBase & { type: 'permission'; data: PermissionEventData })
 	| (CLIEventBase & { type: 'question'; data: QuestionEventData })
 	| (CLIEventBase & { type: 'session_updated'; data: SessionUpdatedEventData })
+	| (CLIEventBase & { type: 'session_created'; data: SessionCreatedEventData })
 	| (CLIEventBase & { type: 'turn_tokens'; data: TurnTokensEventData })
 	| (CLIEventBase & { type: 'normalized_log'; data: NormalizedLogEventData })
 	| (CLIEventBase & { type: 'session_diff'; data: SessionDiffEventData });
@@ -245,6 +252,27 @@ export interface CLIExecutor extends EventEmitter {
 	isSessionActive?(sessionId: string): boolean;
 	/** Returns the SDK client instance if available (OpenCode only). */
 	getSdkClient?(): import('@opencode-ai/sdk').OpencodeClient | null;
+	/** Fetch skills from the OpenCode server (GET /skill). */
+	listSkills?(
+		directory: string,
+	): Promise<Array<{ name: string; description: string; location?: string; content?: string }>>;
+	/** Fetch agents from the OpenCode server (GET /agent). */
+	listAgents?(directory: string): Promise<unknown>;
+	/** Returns connection details for the status UI. */
+	getConnectionDetails?(): {
+		serverUrl: string | null;
+		isServerOwner: boolean;
+		port: number | null;
+		uptime: number | null;
+	};
+	/** Restart the local OpenCode server, if this window owns it. */
+	restartServer?(): Promise<boolean>;
+	/** Invalidate the skills cache so the next listSkills() call fetches fresh data. */
+	clearSkillsCache?(): void;
+	/** Invalidate the commands cache so the next fetch fetches fresh data. */
+	clearCommandsCache?(): void;
+	/** Invalidate the agents cache so the next listAgents() call fetches fresh data. */
+	clearAgentsCache?(): void;
 	listSessions(config: CLIConfig): Promise<
 		Array<{
 			id: string;

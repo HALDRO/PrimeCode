@@ -107,11 +107,11 @@ export class Settings implements ISettings {
 			yoloMode: this.get('access.yoloMode') || this.get('yoloMode') || false,
 			'access.autoApprove': this.get('access.autoApprove') || false,
 			'access.yoloMode': this.get('access.yoloMode') || false,
-			mcpServers: this.get('mcpServers') || {},
+			mcpServers: this.get('mcpServers') ?? {},
 
-			'proxy.baseUrl': this.get('proxy.baseUrl') || 'http://localhost:11434',
-			'proxy.apiKey': this.get('proxy.apiKey') || '',
-			'proxy.enabledModels': this.get('proxy.enabledModels') || [],
+			'proxy.baseUrl': this.get('proxy.baseUrl') ?? 'http://localhost:11434',
+			'proxy.apiKey': this.get('proxy.apiKey') ?? '',
+			'proxy.enabledModels': this.get('proxy.enabledModels') ?? [],
 			'proxy.useSingleModel': this.get('proxy.useSingleModel'),
 			'proxy.haikuModel': this.get('proxy.haikuModel'),
 			'proxy.sonnetModel': this.get('proxy.sonnetModel'),
@@ -122,9 +122,9 @@ export class Settings implements ISettings {
 			'opencode.serverTimeout': this.get('opencode.serverTimeout'),
 			'opencode.serverUrl': this.get('opencode.serverUrl'),
 			'opencode.agent': this.get('opencode.agent'),
-			'opencode.enabledModels': this.get('opencode.enabledModels') || [],
+			'opencode.enabledModels': this.get('opencode.enabledModels') ?? [],
 
-			'providers.disabled': this.get('providers.disabled') || [],
+			'providers.disabled': this.get('providers.disabled') ?? [],
 
 			'promptImprove.model': this.get('promptImprove.model'),
 			'promptImprove.template': this.get('promptImprove.template'),

@@ -5,8 +5,18 @@ import type { HandlerContext, WebviewMessageHandler } from './types';
 /** Maximum time (ms) to wait for the initial SSE connection before giving up. */
 const SSE_CONNECT_TIMEOUT_MS = 15_000;
 
+/**
+ * Minimum interval (ms) between forwarding SSE data events to the webview.
+ * The webview only uses these events as a heartbeat (connected / disconnected),
+ * so there is no need to relay every single server-sent frame.
+ */
+const SSE_THROTTLE_MS = 5_000;
+
 export class SseHandler implements WebviewMessageHandler {
 	private connections = new Map<string, { close: () => void }>();
+
+	/** Per-subscription timestamp of the last forwarded sseEvent. */
+	private lastForwardedAt = new Map<string, number>();
 
 	constructor(private context: HandlerContext) {}
 
@@ -100,6 +110,14 @@ export class SseHandler implements WebviewMessageHandler {
 							const lines = msg.split('\n');
 							for (const line of lines) {
 								if (line.startsWith('data: ')) {
+									// Throttle: the webview only uses sseEvent as a
+									// heartbeat (connected/disconnected), so forwarding
+									// every frame is unnecessary and spams the bridge.
+									const now = Date.now();
+									const last = this.lastForwardedAt.get(id) ?? 0;
+									if (now - last < SSE_THROTTLE_MS) continue;
+									this.lastForwardedAt.set(id, now);
+
 									const data = line.slice(6);
 									this.context.bridge.data('sseEvent', { id, data });
 								}
@@ -111,6 +129,7 @@ export class SseHandler implements WebviewMessageHandler {
 						this.sendError(id, String((err as Error)?.message ?? err));
 					}
 					this.connections.delete(id);
+					this.lastForwardedAt.delete(id);
 				}
 			})
 			.catch(err => {
@@ -120,6 +139,7 @@ export class SseHandler implements WebviewMessageHandler {
 					this.sendError(id, String((err as Error)?.message ?? err));
 				}
 				this.connections.delete(id);
+				this.lastForwardedAt.delete(id);
 			});
 
 		this.connections.set(id, {
@@ -137,6 +157,7 @@ export class SseHandler implements WebviewMessageHandler {
 			conn.close();
 			this.connections.delete(id);
 		}
+		this.lastForwardedAt.delete(id);
 	}
 
 	private sendError(id: string, error: string) {

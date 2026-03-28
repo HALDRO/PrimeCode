@@ -241,6 +241,9 @@ export class ResourceService {
 
 	public async getAll(type: ResourceType): Promise<ResourceItem[]> {
 		if (!this._workspaceRoot) return [];
+		if (type === 'skills') {
+			return this.getAllSkillsIncludingExternal();
+		}
 		const cfg = CONFIGS[type];
 		const dir = this.dirUri(cfg.dir);
 		await this.ensureDir(dir);
@@ -253,6 +256,23 @@ export class ResourceService {
 		} catch {
 			return [];
 		}
+	}
+
+	public async getAllSkillsIncludingExternal(): Promise<ParsedSkill[]> {
+		if (!this._workspaceRoot) return [];
+
+		const [workspaceSkills, agentsSkills, claudeSkills] = await Promise.all([
+			this.getSkillsFromRelativeDir(PATHS.OPENCODE_SKILLS_DIR),
+			this.getSkillsFromRelativeDir(PATHS.EXTERNAL_AGENTS_SKILLS_DIR),
+			this.getSkillsFromRelativeDir(PATHS.EXTERNAL_CLAUDE_SKILLS_DIR),
+		]);
+
+		const merged = new Map<string, ParsedSkill>();
+		for (const skill of [...workspaceSkills, ...agentsSkills, ...claudeSkills]) {
+			merged.set(skill.path, skill);
+		}
+
+		return [...merged.values()].sort((a, b) => a.name.localeCompare(b.name));
 	}
 
 	public async save(
@@ -381,6 +401,39 @@ export class ResourceService {
 		const content = stringifyFrontmatter(attributes, body);
 		const uri = vscode.Uri.joinPath(subDir, 'SKILL.md');
 		await this.writeTextFile(uri, content);
+	}
+
+	private async getSkillsFromRelativeDir(relativeDir: string): Promise<ParsedSkill[]> {
+		const cfg = CONFIGS.skills as ResourceConfig<ParsedSkill>;
+		const dir = this.dirUri(relativeDir);
+
+		try {
+			await vscode.workspace.fs.stat(dir);
+		} catch {
+			return [];
+		}
+
+		const entries = await vscode.workspace.fs.readDirectory(dir);
+		const buildPath = (...s: string[]) => normalizeToPosixPath(path.join(relativeDir, ...s));
+
+		const results = await Promise.all(
+			entries
+				.filter(([, type]) => type === vscode.FileType.Directory)
+				.map(async ([name]) => {
+					const skillFileUri = vscode.Uri.joinPath(dir, name, 'SKILL.md');
+					if (!(await this.fileExists(skillFileUri))) return null;
+					return this._loadResource(
+						cfg as ResourceConfig<ResourceItem>,
+						skillFileUri,
+						name,
+						buildPath,
+					) as Promise<ParsedSkill | null>;
+				}),
+		);
+
+		return results
+			.filter((item): item is ParsedSkill => item !== null)
+			.sort((a, b) => a.name.localeCompare(b.name));
 	}
 
 	// =========================================================================
