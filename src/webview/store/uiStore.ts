@@ -34,7 +34,7 @@ export interface UIActions {
 	setActiveModal: (modal: ModalType) => void;
 	setWorkspaceFiles: (files: WorkspaceFile[]) => void;
 	setConversationList: (list: ConversationIndexEntry[]) => void;
-	setServerUrl: (url: string | null) => void;
+	setServerUrl: (url: string | null, revision?: number) => void;
 	setServerStatus: (status: 'connected' | 'disconnected' | 'error') => void;
 	setShowSlashCommands: (show: boolean) => void;
 	setSlashFilter: (filter: string) => void;
@@ -125,6 +125,18 @@ export interface UIState {
 
 	serverUrl: string | null;
 	serverStatus: 'connected' | 'disconnected' | 'error';
+	/** Incremented each time serverUrl is set — forces SSE reconnect even if URL is the same. */
+	serverUrlVersion: number;
+
+	/** Connection details from the extension (populated on demand). */
+	connectionDetails: {
+		serverUrl: string | null;
+		status: 'connected' | 'disconnected' | 'error';
+		isServerOwner: boolean;
+		uptime: number | null;
+		port: number | null;
+		healthy: boolean;
+	} | null;
 
 	showSlashCommands: boolean;
 	slashFilter: string;
@@ -149,6 +161,9 @@ export const useUIStore = create<UIState>((set, get) => ({
 
 	serverUrl: null,
 	serverStatus: 'disconnected',
+	serverUrlVersion: 0,
+
+	connectionDetails: null,
 
 	showSlashCommands: false,
 	slashFilter: '',
@@ -167,7 +182,17 @@ export const useUIStore = create<UIState>((set, get) => ({
 		setActiveModal: activeModal => set({ activeModal }),
 		setWorkspaceFiles: workspaceFiles => set({ workspaceFiles }),
 		setConversationList: conversationList => set({ conversationList }),
-		setServerUrl: serverUrl => set({ serverUrl }),
+		setServerUrl: (serverUrl, revision) =>
+			set(state => {
+				const nextUrl = serverUrl && serverUrl.trim().length > 0 ? serverUrl : null;
+				const nextRevision = typeof revision === 'number' ? revision : state.serverUrlVersion;
+				if (state.serverUrl === nextUrl && state.serverUrlVersion === nextRevision) return state;
+				return {
+					serverUrl: nextUrl,
+					serverUrlVersion: nextRevision,
+					connectionDetails: nextUrl === null ? null : state.connectionDetails,
+				};
+			}),
 		setServerStatus: serverStatus => set({ serverStatus }),
 		setShowSlashCommands: showSlashCommands => set({ showSlashCommands }),
 		setSlashFilter: slashFilter => set({ slashFilter }),
@@ -256,11 +281,13 @@ export const useUIStore = create<UIState>((set, get) => ({
 
 				case 'serverInfo':
 					if (message.data) {
-						const { url } = message.data as { url: string };
-						if (url) {
-							actions.setServerUrl(url);
-						}
+						const { url, revision } = message.data as { url: string; revision: number };
+						actions.setServerUrl(url, revision);
 					}
+					break;
+
+				case 'connectionDetails':
+					set({ connectionDetails: message.data as UIState['connectionDetails'] });
 					break;
 
 				case 'session_event': {
@@ -330,6 +357,9 @@ export const useUIStore = create<UIState>((set, get) => ({
 					}
 					break;
 				}
+
+				default:
+					break;
 			}
 		},
 	},

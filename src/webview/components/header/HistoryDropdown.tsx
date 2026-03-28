@@ -82,7 +82,8 @@ export const HistoryDropdown: React.FC = () => {
 		setShowHistoryDropdown(false);
 	}, [setShowHistoryDropdown]);
 
-	// Always re-fetch the conversation list when the dropdown mounts (opens).
+	// Re-fetch the conversation list when the dropdown mounts (opens) and whenever
+	// the list becomes empty (e.g. after clearing all conversations).
 	// Show loading spinner only when the list is empty; otherwise show stale data
 	// while the fresh list loads in the background.
 	useEffect(() => {
@@ -92,8 +93,7 @@ export const HistoryDropdown: React.FC = () => {
 		postMessage({ type: 'getConversationList' });
 		const timeout = setTimeout(() => setIsLoading(false), 2000);
 		return () => clearTimeout(timeout);
-		// eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
-	}, [conversationList.length, postMessage]);
+	}, [postMessage, conversationList.length]);
 
 	// Clear loading as soon as the conversation list is populated
 	useEffect(() => {

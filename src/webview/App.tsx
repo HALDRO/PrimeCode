@@ -118,7 +118,7 @@ function stabilizeSections(
  * since GenerationStatus rendering is controlled via a dedicated prop.
  * Using a stable reference prevents memo invalidation.
  */
-const STATIC_MESSAGE_ITEM_CTX = { totalSections: 0 };
+const buildMessageItemCtx = (sessionId: string) => ({ totalSections: 0, sessionId });
 
 interface ChatVirtuosoContext {
 	isProcessing: boolean;
@@ -128,6 +128,7 @@ interface ChatVirtuosoContext {
 interface MessageSectionProps {
 	section: MessageSection;
 	showGenerationStatus: boolean;
+	sessionId: string;
 }
 
 const HiddenNativeScroller = React.forwardRef<
@@ -145,11 +146,13 @@ const HiddenNativeScroller = React.forwardRef<
 HiddenNativeScroller.displayName = 'HiddenNativeScroller';
 
 const MessageSectionComponent = React.memo<MessageSectionProps>(
-	({ section, showGenerationStatus }) => {
+	({ section, showGenerationStatus, sessionId }) => {
 		const collapseFlags = useMemo(
 			() => precomputeCollapseFlags(section.responses),
 			[section.responses],
 		);
+
+		const messageItemCtx = useMemo(() => buildMessageItemCtx(sessionId), [sessionId]);
 
 		return (
 			<section className="relative pb-(--gap-4)">
@@ -176,7 +179,7 @@ const MessageSectionComponent = React.memo<MessageSectionProps>(
 							<MessageItem
 								key={key}
 								item={responseItem}
-								ctx={STATIC_MESSAGE_ITEM_CTX}
+								ctx={messageItemCtx}
 								collapseGroupedTools={collapseFlags[idx]}
 							/>
 						);
@@ -319,11 +322,29 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 	// Uses a dedicated scroll listener instead of atBottomStateChange (which has a 40px threshold
 	// needed for followOutput) so the button doesn't flash on minor scroll jitter.
 	const SCROLL_BUTTON_THRESHOLD = 200;
+	const MANUAL_UNSTICK_THRESHOLD = 8;
 	const [scrollerEl, setScrollerEl] = useState<HTMLDivElement | null>(null);
 	useEffect(() => {
 		if (!scrollerEl) return;
 		let rafId: number | null = null;
+		let lastScrollTop = scrollerEl.scrollTop;
 		const onScroll = () => {
+			const currentScrollTop = scrollerEl.scrollTop;
+			const distance = scrollerEl.scrollHeight - currentScrollTop - scrollerEl.clientHeight;
+
+			// Detach immediately when the user manually scrolls upward during streaming.
+			// Relying only on Virtuoso's atBottomStateChange can feel sticky because it uses
+			// a bottom threshold and may lag behind DOM mutations from streaming updates.
+			if (isProcessing) {
+				if (currentScrollTop < lastScrollTop && distance > MANUAL_UNSTICK_THRESHOLD) {
+					userScrolledUpRef.current = true;
+				} else if (distance <= MANUAL_UNSTICK_THRESHOLD) {
+					userScrolledUpRef.current = false;
+				}
+			}
+
+			lastScrollTop = currentScrollTop;
+
 			if (rafId !== null) return;
 			rafId = requestAnimationFrame(() => {
 				rafId = null;
@@ -332,12 +353,14 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 				setShowScrollToBottom(distance > SCROLL_BUTTON_THRESHOLD);
 			});
 		};
+
+		onScroll();
 		scrollerEl.addEventListener('scroll', onScroll, { passive: true });
 		return () => {
 			scrollerEl.removeEventListener('scroll', onScroll);
 			if (rafId !== null) cancelAnimationFrame(rafId);
 		};
-	}, [scrollerEl]);
+	}, [isProcessing, scrollerEl]);
 
 	const handleFollowOutput = useCallback(
 		(_isAtBottom: boolean) => {
@@ -351,14 +374,16 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 	// count/size changes. When content streams inside fixed-height containers (ToolCard,
 	// SubtaskItem, SimpleToolGroup with maxHeight + overflowY), the outer Virtuoso item
 	// height doesn't change, so followOutput never fires and auto-scroll stops.
-	// This observer watches for ANY DOM mutation inside the scroller and scrolls to bottom
-	// when the user hasn't manually scrolled up.
+	// NOTE: ResizeObserver on a scroll container does NOT fire when inner content grows
+	// (only when the container itself resizes). MutationObserver with childList+subtree
+	// (without characterData) catches structural DOM changes while rAF dedup prevents
+	// layout thrashing from per-token text updates.
 	useEffect(() => {
 		const el = scrollerRef.current;
 		if (!isProcessing || !el) return;
 
 		let rafId: number | null = null;
-		const onMutation = () => {
+		const nudgeScroll = () => {
 			if (userScrolledUpRef.current) return;
 			if (rafId !== null) return; // already scheduled
 			rafId = requestAnimationFrame(() => {
@@ -375,8 +400,10 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 			});
 		};
 
-		const observer = new MutationObserver(onMutation);
-		observer.observe(el, { childList: true, subtree: true, characterData: true });
+		const observer = new MutationObserver(nudgeScroll);
+		// childList+subtree catches new elements (messages, tool cards) without
+		// the per-token overhead of characterData. rAF dedup above prevents thrashing.
+		observer.observe(el, { childList: true, subtree: true });
 
 		return () => {
 			observer.disconnect();
@@ -402,10 +429,11 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 				<MessageSectionComponent
 					section={section}
 					showGenerationStatus={isLast && context.isProcessing}
+					sessionId={activeSessionId}
 				/>
 			);
 		},
-		[],
+		[activeSessionId],
 	);
 
 	// Scroll to bottom on session switch. Uses a two-phase approach:
@@ -466,6 +494,7 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 	}, []);
 
 	const handleScrollToBottom = useCallback(() => {
+		userScrolledUpRef.current = false;
 		virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end', behavior: 'smooth' });
 	}, []);
 

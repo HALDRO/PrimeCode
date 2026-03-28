@@ -400,6 +400,46 @@ describe('groupToolMessages', () => {
 			expect(flags[0]).toBe(true);
 		});
 
+		it('should not split group when non-groupable tool_result lands between groupable tool_use messages (streaming order)', () => {
+			// During live streaming, parallel tools from one CLI step arrive as:
+			// all tool_use first (pending/running), then tool_result (completed).
+			// A tool_result from a non-groupable tool (e.g. bash) can land between
+			// groupable tool_use messages — it must NOT split the group.
+			const msgs = [
+				heavyTool('bash1', 'bash'), // tool_use: bash (non-groupable)
+				toolUse('r1'), // tool_use: read (groupable)
+				toolUse('r2'),
+				toolUse('r3'),
+				toolUse('r4'),
+				toolResult('bash1-res', 'tu-bash1', 'bash'), // tool_result: bash — arrives late
+				toolResult('r1-res', 'tu-r1'),
+				toolResult('r2-res', 'tu-r2'),
+				toolResult('r3-res', 'tu-r3'),
+				toolResult('r4-res', 'tu-r4'),
+				// Next step: more groupable tools
+				toolUse('g1', 'grep'),
+				toolResult('g1-res', 'tu-g1', 'grep'),
+				toolUse('g2', 'grep'),
+				toolResult('g2-res', 'tu-g2', 'grep'),
+				toolUse('r5'),
+				toolResult('r5-res', 'tu-r5'),
+			];
+
+			const grouped = groupToolMessages(msgs, NO_MCP);
+
+			// bash tool_use is non-groupable → standalone
+			expect(grouped[0]).toBe(msgs[0]);
+
+			// All remaining tools (read x4 + bash tool_result + read results + grep x2 + read)
+			// should be in ONE group, not split into two
+			const groups = grouped.filter(item => Array.isArray(item));
+			expect(groups).toHaveLength(1);
+
+			// The single group should contain all 7 tool_use messages (4 read + 2 grep + 1 read)
+			const toolUseCount = (groups[0] as Message[]).filter(m => m.type === 'tool_use').length;
+			expect(toolUseCount).toBe(7);
+		});
+
 		it('should collapse a trailing grouped tools item after streaming completes', () => {
 			const msgs = [
 				toolUse('1'),

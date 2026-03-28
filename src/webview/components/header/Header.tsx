@@ -5,7 +5,16 @@
  * creates a real session and responds with lifecycle events — no client-side draft IDs.
  */
 
-import React, { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+	startTransition,
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from 'react';
+import { createPortal } from 'react-dom';
 import { useShallow } from 'zustand/react/shallow';
 import { cn } from '../../lib/cn';
 import { useChatActions, useChatStore, useHistoryDropdownState, useUIActions } from '../../store';
@@ -25,6 +34,178 @@ interface TabInfo {
 	id: string;
 }
 
+/** Connection status dropdown menu with actions — rendered via portal to escape stacking context. */
+const ConnectionStatusMenu: React.FC<{
+	serverStatus: 'connected' | 'disconnected' | 'error';
+	connectionDetails: {
+		serverUrl: string | null;
+		status: 'connected' | 'disconnected' | 'error';
+		isServerOwner: boolean;
+		uptime: number | null;
+		port: number | null;
+		healthy: boolean;
+	} | null;
+	restartDisabled: boolean;
+	onClose: () => void;
+	anchorRef: React.RefObject<HTMLButtonElement | null>;
+}> = ({ serverStatus, connectionDetails, restartDisabled, onClose, anchorRef }) => {
+	const { postMessage } = useVSCode();
+	const menuRef = useRef<HTMLDivElement>(null);
+	const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+	// Compute position from anchor button
+	useLayoutEffect(() => {
+		const anchor = anchorRef.current;
+		if (!anchor) return;
+		const rect = anchor.getBoundingClientRect();
+		setPos({
+			top: rect.bottom + 4,
+			left: Math.max(0, rect.right - 220),
+		});
+	}, [anchorRef]);
+
+	useEffect(() => {
+		const handleClickOutside = (e: MouseEvent) => {
+			const target = e.target as Node;
+			if (
+				menuRef.current &&
+				!menuRef.current.contains(target) &&
+				!anchorRef.current?.contains(target)
+			) {
+				onClose();
+			}
+		};
+		const handleEscape = (e: KeyboardEvent) => {
+			if (e.key === 'Escape') onClose();
+		};
+		document.addEventListener('mousedown', handleClickOutside);
+		document.addEventListener('keydown', handleEscape);
+		return () => {
+			document.removeEventListener('mousedown', handleClickOutside);
+			document.removeEventListener('keydown', handleEscape);
+		};
+	}, [onClose, anchorRef]);
+
+	const statusLabel =
+		serverStatus === 'connected'
+			? 'Connected'
+			: serverStatus === 'error'
+				? 'Connection Error'
+				: 'Disconnected';
+
+	const statusColor =
+		serverStatus === 'connected'
+			? 'text-green-400'
+			: serverStatus === 'error'
+				? 'text-red-400'
+				: 'text-gray-400';
+
+	const uptimeLabel =
+		typeof connectionDetails?.uptime === 'number'
+			? `${Math.max(0, Math.floor(connectionDetails.uptime / 1000))}s`
+			: null;
+
+	if (!pos) return null;
+
+	return createPortal(
+		<div
+			ref={menuRef}
+			style={{ position: 'fixed', top: pos.top, left: pos.left }}
+			className="z-[10000] min-w-[220px] rounded-md border border-(--alpha-10) bg-vscode-dropdown-background shadow-lg overflow-hidden"
+		>
+			{/* Status header */}
+			<div className="px-3 py-2 border-b border-(--alpha-10)">
+				<div className="flex items-center gap-2">
+					<div
+						className={cn(
+							'w-2 h-2 rounded-full shrink-0',
+							serverStatus === 'connected'
+								? 'bg-green-500'
+								: serverStatus === 'error'
+									? 'bg-red-500'
+									: 'bg-gray-500',
+						)}
+					/>
+					<span className={cn('text-xs font-medium', statusColor)}>{statusLabel}</span>
+				</div>
+				{connectionDetails && (
+					<div className="mt-1.5 space-y-0.5">
+						{connectionDetails.port && (
+							<div className="text-[10px] text-vscode-descriptionForeground">
+								Port: {connectionDetails.port}
+							</div>
+						)}
+						{connectionDetails.serverUrl && (
+							<div className="text-[10px] text-vscode-descriptionForeground truncate max-w-[200px]">
+								{connectionDetails.serverUrl}
+							</div>
+						)}
+						<div className="text-[10px] text-vscode-descriptionForeground">
+							{connectionDetails.isServerOwner ? 'Server owner: this window' : 'Shared server'}
+						</div>
+						<div className="text-[10px] text-vscode-descriptionForeground">
+							Health: {connectionDetails.healthy ? 'OK' : 'Unhealthy'}
+						</div>
+						{uptimeLabel && (
+							<div className="text-[10px] text-vscode-descriptionForeground">
+								Uptime: {uptimeLabel}
+							</div>
+						)}
+					</div>
+				)}
+			</div>
+
+			{/* Actions */}
+			<div className="py-1">
+				<button
+					type="button"
+					disabled={restartDisabled}
+					className="w-full text-left px-3 py-1.5 text-xs text-vscode-foreground hover:bg-(--alpha-10) transition-colors flex items-center gap-2"
+					onClick={() => {
+						if (restartDisabled) return;
+						postMessage({ type: 'restartOpenCode' });
+						onClose();
+					}}
+					title={restartDisabled ? 'Only the server-owning window can restart OpenCode' : undefined}
+				>
+					<svg
+						width="14"
+						height="14"
+						viewBox="0 0 16 16"
+						fill="currentColor"
+						className="shrink-0 opacity-70"
+						aria-hidden="true"
+					>
+						<path d="M12.75 8a4.5 4.5 0 0 1-8.61 1.834l-1.391.565A6.001 6.001 0 0 0 14.25 8 6 6 0 0 0 3.5 4.334V2.5H2v4h4V5H3.934A4.5 4.5 0 0 1 12.75 8z" />
+					</svg>
+					Restart OpenCode
+				</button>
+				<button
+					type="button"
+					className="w-full text-left px-3 py-1.5 text-xs text-vscode-foreground hover:bg-(--alpha-10) transition-colors flex items-center gap-2"
+					onClick={() => {
+						postMessage({ type: 'reloadExtension' });
+						onClose();
+					}}
+				>
+					<svg
+						width="14"
+						height="14"
+						viewBox="0 0 16 16"
+						fill="currentColor"
+						className="shrink-0 opacity-70"
+						aria-hidden="true"
+					>
+						<path d="M2 1h12l1 1v12l-1 1H2l-1-1V2l1-1zm0 1v12h12V2H2zm3.5 5h5l-2.5 3-2.5-3z" />
+					</svg>
+					Reload Extension
+				</button>
+			</div>
+		</div>,
+		document.body,
+	);
+};
+
 export const Header: React.FC = React.memo(() => {
 	// Optimized selectors
 	const { showHistoryDropdown, setShowHistoryDropdown } = useHistoryDropdownState();
@@ -43,10 +224,18 @@ export const Header: React.FC = React.memo(() => {
 	);
 	const serverUrl = useUIStore(state => state.serverUrl);
 	const serverStatus = useUIStore(state => state.serverStatus);
+	const serverUrlVersion = useUIStore(state => state.serverUrlVersion);
+	const connectionDetails = useUIStore(state => state.connectionDetails);
+
+	const [showStatusMenu, setShowStatusMenu] = useState(false);
+	const statusBtnRef = useRef<HTMLButtonElement>(null);
+	const restartDisabled = connectionDetails?.isServerOwner === false;
 
 	const sessions: TabInfo[] = useMemo(() => sessionOrder.map(id => ({ id })), [sessionOrder]);
 
-	// Subscribe to server events for connection status
+	// Subscribe to server events for connection status.
+	// serverUrlVersion is appended as a cache-buster to force SSE reconnect
+	// even when the URL hasn't changed (e.g. after server restart).
 	useEffect(() => {
 		if (!serverUrl) {
 			setServerStatus('disconnected');
@@ -54,9 +243,8 @@ export const Header: React.FC = React.memo(() => {
 		}
 
 		const unsubscribe = proxyEventSource(
-			`${serverUrl}/event`,
+			`${serverUrl}/event?v=${serverUrlVersion}`,
 			() => {
-				// Any event means we are connected
 				setServerStatus('connected');
 			},
 			() => {
@@ -67,7 +255,7 @@ export const Header: React.FC = React.memo(() => {
 		return () => {
 			unsubscribe();
 		};
-	}, [serverUrl, setServerStatus]);
+	}, [serverUrl, setServerStatus, serverUrlVersion]);
 
 	const handleSwitchSession = useCallback(
 		(sessionId: string) => {
@@ -138,6 +326,16 @@ export const Header: React.FC = React.memo(() => {
 	const handleSettingsOpen = useCallback(() => {
 		setActiveModal('settings');
 	}, [setActiveModal]);
+
+	const handleStatusClick = useCallback(() => {
+		// Request fresh connection details when opening the menu
+		postMessage({ type: 'getConnectionDetails' });
+		setShowStatusMenu(prev => !prev);
+	}, [postMessage]);
+
+	const handleStatusMenuClose = useCallback(() => {
+		setShowStatusMenu(false);
+	}, []);
 
 	const SessionTab: React.FC<{ sessionId: string; index: number }> = ({ sessionId, index }) => {
 		const isProcessing = useChatStore(
@@ -235,22 +433,42 @@ export const Header: React.FC = React.memo(() => {
 					</div>
 				</div>
 
-				{/* Right side - Order: New (Plus), History, Settings */}
+				{/* Right side - Order: Status, New (Plus), History, Settings */}
 				<div className="flex items-center gap-(--header-gap)">
-					{/* Connection Status Indicator */}
-					{serverUrl && (
-						<div
+					{/* Connection Status Button */}
+					<div className="relative">
+						<button
+							ref={statusBtnRef}
+							type="button"
+							onClick={handleStatusClick}
 							className={cn(
-								'w-2 h-2 rounded-full mr-2 transition-colors duration-300',
-								serverStatus === 'connected'
-									? 'bg-green-500'
-									: serverStatus === 'error'
-										? 'bg-red-500'
-										: 'bg-gray-500',
+								'flex items-center justify-center w-(--header-btn-size) h-(--header-btn-size) rounded transition-colors duration-150',
+								'hover:bg-(--alpha-10)',
+								showStatusMenu && 'bg-(--alpha-10)',
 							)}
 							title={`OpenCode Server: ${serverStatus}`}
-						/>
-					)}
+						>
+							<div
+								className={cn(
+									'w-2 h-2 rounded-full transition-colors duration-300',
+									serverStatus === 'connected'
+										? 'bg-green-500'
+										: serverStatus === 'error'
+											? 'bg-red-500'
+											: 'bg-gray-500',
+								)}
+							/>
+						</button>
+						{showStatusMenu && (
+							<ConnectionStatusMenu
+								serverStatus={serverStatus}
+								connectionDetails={connectionDetails}
+								restartDisabled={restartDisabled}
+								onClose={handleStatusMenuClose}
+								anchorRef={statusBtnRef}
+							/>
+						)}
+					</div>
 
 					<Button
 						variant="icon"

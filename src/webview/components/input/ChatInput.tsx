@@ -49,6 +49,8 @@ interface ChatInputProps {
 	placeholder?: string;
 	hideFilesPanel?: boolean;
 	hideContextBar?: boolean;
+	/** When true, the send button is disabled but no stop button is shown. */
+	sendDisabled?: boolean;
 	initialFiles?: string[];
 	initialCodeSnippets?: Array<{
 		filePath: string;
@@ -73,6 +75,7 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 		autoFocus = false,
 		className,
 		placeholder = 'Type your message here...',
+		sendDisabled = false,
 		initialFiles = [],
 		initialCodeSnippets = [],
 		initialImages = [],
@@ -195,6 +198,8 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 		// on every character input (massive perf hit).
 		const handleSendRef = useRef(controller.handleSend);
 		handleSendRef.current = controller.handleSend;
+		const sendDisabledRef = useRef(sendDisabled);
+		sendDisabledRef.current = sendDisabled;
 		const onCancelRef = useRef(onCancel);
 		onCancelRef.current = onCancel;
 		const dropdownsOpenRef = useRef(dropdownsOpen);
@@ -211,6 +216,7 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 		// Stable wrappers that read from refs — identity never changes
 		const stableOnSubmit = useCallback(() => {
 			if (showSlashRef.current || showFilePickerRef.current) return false;
+			if (sendDisabledRef.current) return true; // block send but consume the key
 			handleSendRef.current();
 			return true;
 		}, []);
@@ -372,10 +378,11 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 					</div>
 
 					<SendButton
-						isProcessing={controller.isProcessing}
+						isProcessing={sendDisabled ? false : controller.isProcessing}
 						hasContent={!!(controller.inputValue.trim() || attachedFiles.length > 0)}
 						onSend={controller.handleSend}
 						onStop={controller.handleStop}
+						disabled={sendDisabled}
 					/>
 				</div>
 

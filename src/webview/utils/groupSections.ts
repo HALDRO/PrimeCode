@@ -98,6 +98,12 @@ export const groupMessagesIntoSections = (
 		}
 	}
 
+	// Collect any messages that arrive before the first user message (e.g. system
+	// messages, assistant messages from fast responses, error messages). These are
+	// stored as "orphan" responses and will be attached to the first user section
+	// so they are never silently dropped.
+	const orphanedMessages: Message[] = [];
+
 	for (const msg of visibleMsgs) {
 		if (msg.type === 'user') {
 			if (currentSection) {
@@ -125,8 +131,17 @@ export const groupMessagesIntoSections = (
 				isRevertPoint: isThisRevertPoint,
 				stats: null as unknown as SectionStats, // computed after responses are collected
 			};
+
+			// Prepend any orphaned messages that arrived before this first user message
+			if (orphanedMessages.length > 0) {
+				currentResponses.push(...orphanedMessages);
+				orphanedMessages.length = 0;
+			}
 		} else if (currentSection) {
 			currentResponses.push(msg);
+		} else {
+			// No user message yet — collect as orphan so it's not lost
+			orphanedMessages.push(msg);
 		}
 	}
 
@@ -191,26 +206,31 @@ function computeSectionStats(
 	}
 
 	// File changes: iterate tool_use messages and look up in the Map (O(1) per lookup).
-	// When cumulativeDiffs are available, use them for per-file stats so that
-	// the numbers match ChangedFilesPanel (git diff original→current).
+	// First collect per-edit stats for every file, then override with cumulative diffs
+	// (git diff original→current) when available — matching ChangedFilesPanel logic.
+	// This two-pass approach ensures files whose paths don't match the cumulative map
+	// (e.g. absolute vs relative) still get correct per-edit stats as a fallback.
 	let fileChanges: SectionStats['fileChanges'] = null;
 	const hasCumulative = cumulativeMap.size > 0;
 
 	if (changedFilesMap.size > 0) {
-		let added = 0;
-		let removed = 0;
-		const filesSet = new Set<string>();
+		// Per-file aggregated stats from individual edits
+		const perFileStats = new Map<string, { added: number; removed: number }>();
 
 		// Collect all file paths touched by tool_use messages in this turn
 		const collectFiles = (toolUseId: string) => {
 			const files = changedFilesMap.get(toolUseId);
 			if (!files) return;
 			for (const file of files) {
-				filesSet.add(file.filePath);
-				if (!hasCumulative) {
-					// No cumulative diffs — use per-edit stats
-					added += file.linesAdded;
-					removed += file.linesRemoved;
+				const existing = perFileStats.get(file.filePath);
+				if (existing) {
+					existing.added += file.linesAdded;
+					existing.removed += file.linesRemoved;
+				} else {
+					perFileStats.set(file.filePath, {
+						added: file.linesAdded,
+						removed: file.linesRemoved,
+					});
 				}
 			}
 		};
@@ -228,20 +248,21 @@ function computeSectionStats(
 			}
 		}
 
-		// When cumulative diffs are available, use them for accurate per-file stats.
-		// This matches how ChangedFilesPanel computes its totals.
-		if (hasCumulative && filesSet.size > 0) {
-			for (const filePath of filesSet) {
-				const cumulative = cumulativeMap.get(filePath);
+		// Sum totals: prefer cumulative diffs per file, fall back to per-edit stats.
+		if (perFileStats.size > 0) {
+			let added = 0;
+			let removed = 0;
+			for (const [filePath, editStats] of perFileStats) {
+				const cumulative = hasCumulative ? cumulativeMap.get(filePath) : undefined;
 				if (cumulative) {
 					added += cumulative.additions;
 					removed += cumulative.deletions;
+				} else {
+					added += editStats.added;
+					removed += editStats.removed;
 				}
 			}
-		}
-
-		if (filesSet.size > 0) {
-			fileChanges = { added, removed, files: filesSet.size };
+			fileChanges = { added, removed, files: perFileStats.size };
 		}
 	}
 

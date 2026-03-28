@@ -597,6 +597,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 						autoFocus
 						hideFilesPanel
 						hideContextBar
+						sendDisabled={isProcessing}
 						placeholder="Edit your message..."
 						initialFiles={attachedFiles}
 						initialCodeSnippets={attachedSnippets}
@@ -625,13 +626,12 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 					)}
 					<button
 						type="button"
-						onClick={() => !isProcessing && message.id && setEditingMessageId(message.id)}
-						disabled={isProcessing}
+						onClick={() => message.id && setEditingMessageId(message.id)}
 						className={cn(
 							'w-full bg-transparent border-none text-left font-(family-name:--vscode-font-family) text-vscode-foreground',
 							'p-(--gap-3)_(--gap-6)_(--gap-1)_(--gap-6)',
-							showRestore || showUnrevert ? 'pr-20' : '', // Add padding for buttons
-							isProcessing ? 'cursor-default' : 'cursor-pointer',
+							showRestore || showUnrevert ? 'pr-20' : '',
+							'cursor-pointer',
 						)}
 					>
 						{/* Message content with inline file badges at the beginning */}

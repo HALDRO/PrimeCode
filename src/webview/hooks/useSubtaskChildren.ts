@@ -12,17 +12,9 @@ interface SubtaskTokenStats {
 	total: number;
 }
 
-/**
- * Hook to retrieve all child messages for a given subtask.
- * Reads directly from the subtask message's `transcript` array —
- * child events are aggregated into the parent session by the backend,
- * so no separate child session bucket lookup is needed.
- */
-function useSubtaskChildren(subtaskId: string): Message[] {
+function useSubtaskChildrenInSession(subtaskId: string, sessionId: string): Message[] {
 	const transcript = useChatStore(state => {
-		const sid = state.activeSessionId;
-		if (!sid) return EMPTY_MESSAGES;
-		const msg = state.sessionsById[sid]?.messages.find((m: Message) => m.id === subtaskId);
+		const msg = state.sessionsById[sessionId]?.messages.find((m: Message) => m.id === subtaskId);
 		if (!msg || msg.type !== 'subtask') return EMPTY_MESSAGES;
 		return msg.transcript?.length ? (msg.transcript as Message[]) : EMPTY_MESSAGES;
 	});
@@ -36,6 +28,7 @@ function useSubtaskChildren(subtaskId: string): Message[] {
  */
 export function useSubtaskThread(
 	subtaskId: string,
+	sessionId: string,
 	mcpServerNames: string[],
 ): {
 	message?: Extract<Message, { type: 'subtask' }>;
@@ -46,15 +39,13 @@ export function useSubtaskThread(
 	childModelId: string | undefined;
 } {
 	const message = useChatStore(state => {
-		const sid = state.activeSessionId;
-		if (!sid) return undefined;
-		const found = state.sessionsById[sid]?.messages.find((m: Message) => m.id === subtaskId);
+		const found = state.sessionsById[sessionId]?.messages.find((m: Message) => m.id === subtaskId);
 		return found && found.type === 'subtask'
 			? (found as Extract<Message, { type: 'subtask' }>)
 			: undefined;
 	});
 
-	const children = useSubtaskChildren(subtaskId);
+	const children = useSubtaskChildrenInSession(subtaskId, sessionId);
 
 	const isRunning = message?.status === 'running';
 

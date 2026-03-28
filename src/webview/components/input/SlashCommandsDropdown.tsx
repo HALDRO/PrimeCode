@@ -27,10 +27,10 @@ const CLI_COMMANDS_UI_BLOCKLIST = new Set([
 	'unshare',
 ]);
 
-const getTypeLabel = (type: string) => {
+const getTypeLabel = (type: string, source?: string) => {
 	switch (type) {
 		case 'cli':
-			return 'CLI';
+			return source === 'mcp' ? 'MCP' : 'CLI';
 		case 'custom':
 			return 'Command';
 		case 'subagent':
@@ -131,6 +131,7 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 				name: cmd.name,
 				description: cmd.description ?? '',
 				type: 'cli' as const,
+				source: cmd.source,
 			}));
 
 		return [...customList, ...cliList, ...subagentList];
@@ -179,7 +180,7 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 					id: `${cmd.type}-${cmd.id}`,
 					label: `/${cmd.name}`,
 					description: tooltipContent,
-					meta: getTypeLabel(cmd.type),
+					meta: getTypeLabel(cmd.type, cmd.source),
 					data: cmd,
 				};
 			}),

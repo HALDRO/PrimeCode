@@ -6,7 +6,7 @@
  *              Inline code that looks like file paths becomes clickable.
  */
 
-import React, { useState } from 'react';
+import React, { useDeferredValue, useState } from 'react';
 import type { Components } from 'react-markdown';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
@@ -14,7 +14,8 @@ import remarkGfm from 'remark-gfm';
 
 // Stable plugin arrays — prevents ReactMarkdown from re-initializing on every render
 const REMARK_PLUGINS = [remarkGfm];
-const REHYPE_PLUGINS = [rehypeHighlight];
+const REHYPE_PLUGINS_FULL = [rehypeHighlight];
+const REHYPE_PLUGINS_STREAMING: typeof REHYPE_PLUGINS_FULL = [];
 
 import { CheckIcon, CopyIcon } from '../components/icons';
 import { IconButton, PathChip } from '../components/ui';
@@ -306,14 +307,25 @@ const preprocessContent = (content: string): string => {
 // ----------------------------------------------------------------------
 
 export const Markdown: React.FC<MarkdownProps> = React.memo(
-	({ content, className }) => {
-		const processedContent = React.useMemo(() => preprocessContent(content), [content]);
+	({ content, className, isStreaming }) => {
+		// useDeferredValue lets React deprioritize the expensive markdown parse
+		// during streaming, keeping the UI responsive without manual setTimeout.
+		const deferredContent = useDeferredValue(content);
+		const displayContent = isStreaming ? deferredContent : content;
+		const processedContent = React.useMemo(
+			() => preprocessContent(displayContent),
+			[displayContent],
+		);
+
+		// Skip expensive syntax highlighting during streaming — the most costly
+		// rehype plugin. Full highlighting kicks in once streaming completes.
+		const rehypePlugins = isStreaming ? REHYPE_PLUGINS_STREAMING : REHYPE_PLUGINS_FULL;
 
 		return (
 			<div className={cn('markdown-body', className)}>
 				<ReactMarkdown
 					remarkPlugins={REMARK_PLUGINS}
-					rehypePlugins={REHYPE_PLUGINS}
+					rehypePlugins={rehypePlugins}
 					components={components}
 					urlTransform={url => url}
 				>
@@ -323,5 +335,7 @@ export const Markdown: React.FC<MarkdownProps> = React.memo(
 		);
 	},
 	(prevProps, nextProps) =>
-		prevProps.content === nextProps.content && prevProps.className === nextProps.className,
+		prevProps.content === nextProps.content &&
+		prevProps.className === nextProps.className &&
+		prevProps.isStreaming === nextProps.isStreaming,
 );

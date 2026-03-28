@@ -37,6 +37,7 @@ import { ToolCard, ToolCardMessage } from './ToolCard';
 
 interface MessageItemContext {
 	totalSections: number;
+	sessionId: string;
 }
 
 const subtaskStatusIcon = (status: Extract<Message, { type: 'subtask' }>['status']) => {
@@ -82,7 +83,7 @@ const SubtaskItem = React.memo<{
 		totalDurationMs,
 		tokenStats,
 		childModelId,
-	} = useSubtaskThread(message.id || '', mcpServerNames);
+	} = useSubtaskThread(message.id || '', ctx.sessionId, mcpServerNames);
 
 	// Strip trailing assistant message that duplicates the subtask result
 	const groupedChildren = useMemo(() => {
@@ -126,6 +127,11 @@ const SubtaskItem = React.memo<{
 	}, [message.status, message.result, message.description, message.timestamp, message]);
 
 	const isRunning = message.status === 'running';
+	const retryInfo = (
+		message as typeof message & {
+			retryInfo?: { message: string; attempt: number; nextRetryAt?: string };
+		}
+	).retryInfo;
 
 	// Agent display name for the header
 	const agentLabel =
@@ -134,18 +140,27 @@ const SubtaskItem = React.memo<{
 			: 'SubAgent';
 
 	// Auto-scroll the preview container to bottom as content streams in.
-	// Uses MutationObserver to catch all DOM changes (streaming text, new children, etc.)
+	// Uses MutationObserver with rAF dedup to avoid layout thrashing from
+	// synchronous scrollTop writes on every streaming token.
 	const bodyRef = useRef<HTMLDivElement>(null);
 	useEffect(() => {
 		const el = bodyRef.current;
 		if (!isRunning || !el) return;
+		let rafId: number | null = null;
 		const scroll = () => {
-			el.scrollTop = el.scrollHeight;
+			if (rafId !== null) return;
+			rafId = requestAnimationFrame(() => {
+				rafId = null;
+				el.scrollTop = el.scrollHeight;
+			});
 		};
 		scroll();
 		const observer = new MutationObserver(scroll);
-		observer.observe(el, { childList: true, subtree: true, characterData: true });
-		return () => observer.disconnect();
+		observer.observe(el, { childList: true, subtree: true });
+		return () => {
+			observer.disconnect();
+			if (rafId !== null) cancelAnimationFrame(rafId);
+		};
 	}, [isRunning]);
 
 	// Cycle: preview ↔ expanded
@@ -182,6 +197,14 @@ const SubtaskItem = React.memo<{
 			}
 			headerRight={
 				<span className="flex items-center gap-3 text-sm font-bold text-vscode-descriptionForeground">
+					{retryInfo?.message && isRunning && (
+						<span
+							className="text-xs font-medium text-warning whitespace-nowrap"
+							title={retryInfo.message}
+						>
+							{retryInfo.message}
+						</span>
+					)}
 					{tokenStats && (
 						<span
 							className="flex items-center gap-1"
@@ -303,7 +326,13 @@ const SimpleToolGroup = React.memo<{
 		const order: string[] = [];
 
 		for (const msg of toolUseMessages) {
-			const name = formatToolName(msg.toolName || 'Tool');
+			let name = formatToolName(msg.toolName || 'Tool');
+			if ((msg.toolName || '').toLowerCase() === 'skill') {
+				const skillName = (msg.rawInput as { name?: string } | undefined)?.name;
+				if (skillName) {
+					name = `Skill: ${skillName}`;
+				}
+			}
 			if (!counts.has(name)) {
 				counts.set(name, 0);
 				order.push(name);

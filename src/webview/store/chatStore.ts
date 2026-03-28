@@ -244,12 +244,17 @@ function mergeOrAddMessage(messages: Message[], incoming: Message): void {
 	}
 
 	const existing = messages[existingIdx];
+	const preserveSubtaskType = existing.type === 'subtask' && incoming.type === 'tool_use';
 
 	// Delta content concatenation
 	if ('isDelta' in incoming && incoming.isDelta && 'content' in existing && 'content' in incoming) {
 		existing.content = (existing.content || '') + (incoming.content || '');
 		const preservedStartTime = 'startTime' in existing ? existing.startTime : undefined;
-		Object.assign(existing, { ...incoming, content: existing.content });
+		Object.assign(existing, {
+			...incoming,
+			...(preserveSubtaskType ? { type: 'subtask' as const } : {}),
+			content: existing.content,
+		});
 		if (preservedStartTime !== undefined && 'startTime' in existing) {
 			(existing as { startTime: number }).startTime = preservedStartTime as number;
 		}
@@ -278,10 +283,13 @@ function mergeOrAddMessage(messages: Message[], incoming: Message): void {
 						  }
 						| undefined,
 					childModelId: (existing as Record<string, unknown>).childModelId as string | undefined,
+					retryInfo: (existing as Record<string, unknown>).retryInfo as
+						| { attempt: number; message: string; nextRetryAt?: string }
+						| undefined,
 				}
 			: undefined;
 
-	Object.assign(existing, incoming);
+	Object.assign(existing, incoming, preserveSubtaskType ? { type: 'subtask' as const } : {});
 
 	if (existing.type === 'subtask' && preservedSubtaskMeta) {
 		if (!existing.description && preservedSubtaskMeta.description)
@@ -301,6 +309,8 @@ function mergeOrAddMessage(messages: Message[], incoming: Message): void {
 			ex.childTokens = preservedSubtaskMeta.childTokens;
 		if (!ex.childModelId && preservedSubtaskMeta.childModelId)
 			ex.childModelId = preservedSubtaskMeta.childModelId;
+		if (!ex.retryInfo && preservedSubtaskMeta.retryInfo)
+			ex.retryInfo = preservedSubtaskMeta.retryInfo;
 	}
 	if (preservedStartTime !== undefined && 'startTime' in existing) {
 		(existing as { startTime: number }).startTime = preservedStartTime as number;
@@ -320,8 +330,9 @@ function handleMessageEvent(targetSession: ChatSession, payload: SessionEventPay
 		timestamp: msgData.timestamp || new Date().toISOString(),
 	} as Message;
 
-	// Notification-like messages are transient UI overlays,
-	// and should not be stored in chat history/persistence.
+	// Notification-like messages are transient UI overlays — they are NOT stored
+	// in chat history. The side-effect (pushNotification) is handled by the caller
+	// OUTSIDE of Immer produce to keep this function pure.
 	if (
 		message.type === 'error' ||
 		message.type === 'interrupted' ||
@@ -590,6 +601,102 @@ function handleSubtaskTranscriptEvent(
 	}
 }
 
+/**
+ * Extract notification side-effect data from a message event payload.
+ * Returns notification params if the message is a transient notification type,
+ * or null if it should be handled normally by Immer.
+ * This is a pure function — no side-effects.
+ */
+function extractNotification(
+	eventType: SessionEventType,
+	payload: SessionEventPayload,
+): {
+	type: 'error' | 'system_notice';
+	content: string;
+	timestamp: string;
+	autoDismissMs: number;
+} | null {
+	if (eventType !== 'message') return null;
+	const msgData = (payload as SessionMessagePayload).message;
+	if (
+		msgData.type !== 'error' &&
+		msgData.type !== 'interrupted' &&
+		msgData.type !== 'system_notice'
+	) {
+		return null;
+	}
+	const content =
+		'content' in msgData && typeof msgData.content === 'string' ? msgData.content : '';
+	if (!content) return null;
+	return {
+		type: msgData.type === 'interrupted' ? 'system_notice' : msgData.type,
+		content,
+		timestamp: msgData.timestamp || new Date().toISOString(),
+		autoDismissMs: msgData.type === 'error' ? 8000 : 5000,
+	};
+}
+
+/**
+ * Route an event to the correct handler for a session. Pure function (Immer-safe).
+ * Used by both single `dispatch` and `session_event_batch` to avoid duplication.
+ */
+function dispatchToSession(
+	targetSession: ChatSession,
+	eventType: SessionEventType,
+	payload: SessionEventPayload,
+): void {
+	switch (eventType) {
+		case 'message':
+			handleMessageEvent(targetSession, payload);
+			break;
+		case 'status':
+			handleStatusEvent(targetSession, payload);
+			break;
+		case 'stats':
+			handleStatsEvent(targetSession, payload);
+			break;
+		case 'turn_tokens':
+			handleTurnTokensEvent(targetSession, payload);
+			break;
+		case 'complete':
+			handleCompleteEvent(targetSession, payload);
+			break;
+		case 'restore':
+			handleRestoreEvent(targetSession, payload);
+			break;
+		case 'file':
+			handleFileEvent(targetSession, payload);
+			break;
+		case 'file_diff':
+			handleFileDiffEvent(targetSession, payload);
+			break;
+		case 'access':
+			handleAccessEvent(targetSession, payload);
+			break;
+		case 'messages_reload':
+			handleMessagesReloadEvent(targetSession, payload);
+			break;
+		case 'delete_messages_after':
+			handleDeleteMessagesAfterEvent(targetSession, payload);
+			break;
+		case 'message_removed':
+			handleMessageRemovedEvent(targetSession, payload);
+			break;
+		case 'terminal':
+			// Terminal notifications are transient UI overlays; ignore in chat history.
+			break;
+		case 'subtask_transcript':
+			handleSubtaskTranscriptEvent(targetSession, payload);
+			break;
+		case 'session_info': {
+			const info = payload as { data?: { tools?: string[]; mcpServers?: string[] } };
+			targetSession.availableTools = info.data?.tools ?? [];
+			targetSession.availableMcpServers = info.data?.mcpServers ?? [];
+			break;
+		}
+	}
+}
+
 const createEmptySession = (id: string): ChatSession => ({
 	id,
 	agent: undefined,
@@ -706,13 +813,31 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 				return;
 			}
 
-			// Handle batched session events (history replay optimization)
+			// Handle batched session events (history replay optimization).
+			// Process all events in a single produce() to avoid intermediate states
+			// visible to React selectors (e.g. a message without its completion marker).
 			if (message.type === 'session_event_batch') {
 				const batch = message as { type: string; messages: SessionEventMessage[] };
-				const { dispatch } = get().actions;
+				// Side-effect: push transient notifications OUTSIDE of Immer produce.
 				for (const event of batch.messages) {
-					dispatch(event.targetId, event.eventType, event.payload);
+					const notification = extractNotification(event.eventType, event.payload);
+					if (notification) {
+						useUIStore.getState().actions.pushNotification(notification);
+					}
 				}
+				set(
+					produce((state: ChatState) => {
+						for (const event of batch.messages) {
+							const targetId = event.targetId;
+							if (!state.sessionsById[targetId]) {
+								state.sessionsById[targetId] = createEmptySession(targetId);
+							}
+							const targetSession = state.sessionsById[targetId];
+							targetSession.lastActive = Date.now();
+							dispatchToSession(targetSession, event.eventType, event.payload);
+						}
+					}),
+				);
 				return;
 			}
 
@@ -814,6 +939,13 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 		},
 
 		dispatch: (targetId, eventType, payload) => {
+			// Side-effect: push transient notifications OUTSIDE of Immer produce.
+			// handleMessageEvent is pure — it skips notification messages entirely.
+			const notification = extractNotification(eventType, payload);
+			if (notification) {
+				useUIStore.getState().actions.pushNotification(notification);
+			}
+
 			set(
 				produce((state: ChatState) => {
 					if (!state.sessionsById[targetId]) {
@@ -823,56 +955,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 					const targetSession = state.sessionsById[targetId];
 					targetSession.lastActive = Date.now();
 
-					switch (eventType) {
-						case 'message':
-							handleMessageEvent(targetSession, payload);
-							break;
-						case 'status':
-							handleStatusEvent(targetSession, payload);
-							break;
-						case 'stats':
-							handleStatsEvent(targetSession, payload);
-							break;
-						case 'turn_tokens':
-							handleTurnTokensEvent(targetSession, payload);
-							break;
-						case 'complete':
-							handleCompleteEvent(targetSession, payload);
-							break;
-						case 'restore':
-							handleRestoreEvent(targetSession, payload);
-							break;
-						case 'file':
-							handleFileEvent(targetSession, payload);
-							break;
-						case 'file_diff':
-							handleFileDiffEvent(targetSession, payload);
-							break;
-						case 'access':
-							handleAccessEvent(targetSession, payload);
-							break;
-						case 'messages_reload':
-							handleMessagesReloadEvent(targetSession, payload);
-							break;
-						case 'delete_messages_after':
-							handleDeleteMessagesAfterEvent(targetSession, payload);
-							break;
-						case 'message_removed':
-							handleMessageRemovedEvent(targetSession, payload);
-							break;
-						case 'terminal':
-							// Terminal notifications are transient UI overlays; ignore in chat history.
-							break;
-						case 'subtask_transcript':
-							handleSubtaskTranscriptEvent(targetSession, payload);
-							break;
-						case 'session_info': {
-							const info = payload as { data?: { tools?: string[]; mcpServers?: string[] } };
-							targetSession.availableTools = info.data?.tools ?? [];
-							targetSession.availableMcpServers = info.data?.mcpServers ?? [];
-							break;
-						}
-					}
+					dispatchToSession(targetSession, eventType, payload);
 				}),
 			);
 		},

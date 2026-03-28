@@ -94,13 +94,14 @@ describe('groupMessagesIntoSections', () => {
 			expect(result.map(s => s.sectionIndex)).toEqual([0, 1, 2]);
 		});
 
-		it('should ignore non-user messages before the first user message', () => {
+		it('should preserve non-user messages before the first user message', () => {
 			const msgs = [assistantMsg('a0'), userMsg('u1'), assistantMsg('a1')];
 			const result = groupMessagesIntoSections(msgs, [], null);
 
 			expect(result).toHaveLength(1);
 			expect(result[0].userMessage.id).toBe('u1');
-			expect(result[0].responses).toHaveLength(1);
+			// a0 is prepended as an orphan response, a1 is the normal response
+			expect(result[0].responses).toHaveLength(2);
 		});
 	});
 

@@ -425,6 +425,13 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 					meta = action.description;
 				} else if (action.type === 'TodoManagement') {
 					label = 'Todo';
+				} else if (isSkill) {
+					const args =
+						'arguments' in action && typeof action.arguments === 'object'
+							? (action.arguments as Record<string, unknown>)
+							: null;
+					const skillName = (args?.name as string) || (rawInput as { name?: string })?.name;
+					label = skillName ? `Skill: ${skillName}` : 'Skill';
 				} else if (isLs) {
 					label = 'Listed';
 					const args =

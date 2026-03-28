@@ -41,6 +41,8 @@ interface SendButtonProps {
 	onSend: () => void;
 	/** Stop handler */
 	onStop: () => void;
+	/** When true, the button is force-disabled (no send, no stop). */
+	disabled?: boolean;
 }
 
 export const SendButton: React.FC<SendButtonProps> = ({
@@ -48,6 +50,7 @@ export const SendButton: React.FC<SendButtonProps> = ({
 	hasContent,
 	onSend,
 	onStop,
+	disabled = false,
 }) => {
 	const [isHovered, setIsHovered] = useState(false);
 	const [isPressed, setIsPressed] = useState(false);
@@ -64,6 +67,7 @@ export const SendButton: React.FC<SendButtonProps> = ({
 	}, [hasContent, isProcessing]);
 
 	const handleClick = () => {
+		if (disabled) return;
 		if (isProcessing) {
 			onStop();
 		} else if (hasContent) {
@@ -71,7 +75,7 @@ export const SendButton: React.FC<SendButtonProps> = ({
 		}
 	};
 
-	const isDisabled = !isProcessing && !hasContent;
+	const isDisabled = disabled || (!isProcessing && !hasContent);
 	const isActive = hasContent || isProcessing;
 
 	// Refined color palette

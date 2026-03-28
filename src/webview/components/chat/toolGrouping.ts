@@ -33,6 +33,16 @@ const isGroupableTool = (msg: Message, mcpServerNames: string[]): boolean => {
 	if (msg.type !== 'tool_use' && msg.type !== 'tool_result') {
 		return false;
 	}
+
+	// tool_result is always groupable: it renders inside its paired ToolCard and
+	// carries no visual weight on its own.  During live streaming, parallel tools
+	// from one CLI step arrive as all tool_use first, then all tool_result.  A
+	// tool_result from a non-groupable tool (e.g. bash) can land between groupable
+	// tool_use messages — treating it as a hard boundary would split the group.
+	if (msg.type === 'tool_result') {
+		return true;
+	}
+
 	const toolName = msg.toolName || '';
 
 	if (isMcpTool(toolName, mcpServerNames)) {
@@ -136,10 +146,12 @@ export const groupToolMessages = (
 				continue;
 			}
 
-			// While streaming, trailing bridge messages are kept in the group so it
+			// While streaming, trailing thinking messages are kept in the group so it
 			// stays "live" and doesn't collapse prematurely. If more tools arrive on
 			// the next render cycle the bridge will already be inside the group.
-			if (isStreaming) {
+			// NOTE: Only absorb thinking messages — assistant text is user-visible
+			// content that must not be hidden inside a collapsed tool group.
+			if (isStreaming && msg.type === 'thinking') {
 				currentToolGroup.push(msg);
 				continue;
 			}
