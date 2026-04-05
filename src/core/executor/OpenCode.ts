@@ -287,28 +287,198 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			return;
 		}
 
-		if (await this.tryConnectToLocalServer(config)) return;
+		if (await this.tryConnectToExistingServer(config)) return;
 
+		// No live server found — kill any zombie opencode processes holding ports,
+		// then spawn a fresh one.
+		await this.killZombieOpenCodeProcesses();
 		await this.spawnServer(config.workspaceRoot, config);
 	}
 
-	/**
-	 * Try to connect to the shared local OpenCode server.
-	 * This matches the official desktop approach more closely: a single loopback
-	 * URL is the rendezvous point, instead of persisting ad-hoc temp files.
-	 */
-	private async tryConnectToLocalServer(config: CLIConfig): Promise<boolean> {
-		const baseUrl = this.getLocalServerUrl();
-		if (!(await this.isOpenCodeServer(baseUrl))) return false;
+	// =========================================================================
+	// Process-based server discovery
+	//
+	// Instead of only probing a fixed port (4096), we discover ALL running
+	// opencode processes, find which ports they listen on, and health-check
+	// each one.  This handles:
+	//   - Server on default port 4096
+	//   - Server on random port (from previous port:0 spawn)
+	//   - Zombie processes that hold a port but don't respond to health
+	// =========================================================================
 
-		logger.info(`[OpenCode] Connected to existing local server at ${baseUrl}`);
-		this.serverUrl = baseUrl;
-		this.isServerOwner = false;
-		this.serverStartedAt = null;
-		this.directory = config.workspaceRoot;
-		this.initSdkClient();
-		void this.preloadMetadata();
-		return true;
+	/**
+	 * Try to connect to any already-running OpenCode server.
+	 * 1. Probe the canonical port first (fast path).
+	 * 2. If that fails, discover opencode processes via OS, find their listen
+	 *    ports, and health-check each one.
+	 */
+	private async tryConnectToExistingServer(config: CLIConfig): Promise<boolean> {
+		// Fast path: try the canonical port (4096 or OPENCODE_PORT)
+		const canonicalUrl = this.getLocalServerUrl();
+		if (await this.isOpenCodeServer(canonicalUrl)) {
+			logger.info(`[OpenCode] Connected to existing server at ${canonicalUrl}`);
+			this.serverUrl = canonicalUrl;
+			this.isServerOwner = false;
+			this.serverStartedAt = null;
+			this.directory = config.workspaceRoot;
+			this.initSdkClient();
+			void this.preloadMetadata();
+			return true;
+		}
+
+		// Slow path: discover opencode processes and their listen ports
+		const ports = await this.discoverOpenCodePorts();
+		for (const port of ports) {
+			if (port === OpenCodeExecutor.LOCAL_SERVER_PORT) continue; // already tried
+			const url = `http://${OpenCodeExecutor.LOCAL_SERVER_HOST}:${port}`;
+			if (await this.isOpenCodeServer(url)) {
+				logger.info(
+					`[OpenCode] Connected to existing server at ${url} (discovered via process scan)`,
+				);
+				this.serverUrl = url;
+				this.isServerOwner = false;
+				this.serverStartedAt = null;
+				this.directory = config.workspaceRoot;
+				this.initSdkClient();
+				void this.preloadMetadata();
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Discover listen ports of running `opencode` processes.
+	 * Uses OS-specific commands (runs in ~50-100ms).
+	 */
+	private async discoverOpenCodePorts(): Promise<number[]> {
+		const { execFile } = await import('node:child_process');
+		const { promisify } = await import('node:util');
+		const execFileAsync = promisify(execFile);
+
+		try {
+			const isWindows = process.platform === 'win32';
+
+			if (isWindows) {
+				// Step 1: find PIDs of opencode.exe processes
+				const { stdout: tasklistOut } = await execFileAsync(
+					'tasklist',
+					['/FI', 'IMAGENAME eq opencode.exe', '/FO', 'CSV', '/NH'],
+					{ timeout: 5000 },
+				);
+				const pids = new Set<string>();
+				for (const line of tasklistOut.split('\n')) {
+					const match = line.match(/"opencode\.exe","(\d+)"/i);
+					if (match) pids.add(match[1]);
+				}
+				if (pids.size === 0) return [];
+
+				// Step 2: find which ports those PIDs are listening on
+				const { stdout: netstatOut } = await execFileAsync('netstat', ['-ano', '-p', 'TCP'], {
+					timeout: 5000,
+				});
+				const ports: number[] = [];
+				for (const line of netstatOut.split('\n')) {
+					if (!line.includes('LISTENING')) continue;
+					const parts = line.trim().split(/\s+/);
+					// Format: TCP  127.0.0.1:PORT  0.0.0.0:0  LISTENING  PID
+					const pid = parts[parts.length - 1];
+					if (!pids.has(pid)) continue;
+					const addrPort = parts[1];
+					const portStr = addrPort?.split(':').pop();
+					if (portStr) {
+						const port = Number.parseInt(portStr, 10);
+						if (port > 0) ports.push(port);
+					}
+				}
+				logger.info('[OpenCode] Discovered opencode processes', { pids: [...pids], ports });
+				return ports;
+			}
+
+			// Linux / macOS: use `ss` or `lsof`
+			try {
+				// Try ss first (Linux)
+				const { stdout } = await execFileAsync('ss', ['-tlnp'], { timeout: 5000 });
+				const ports: number[] = [];
+				for (const line of stdout.split('\n')) {
+					if (!line.includes('opencode')) continue;
+					const match = line.match(/:(\d+)\s/);
+					if (match) ports.push(Number.parseInt(match[1], 10));
+				}
+				if (ports.length > 0) {
+					logger.info('[OpenCode] Discovered opencode ports via ss', { ports });
+					return ports;
+				}
+			} catch {
+				// ss not available, try lsof (macOS)
+			}
+
+			try {
+				const { stdout } = await execFileAsync('lsof', ['-iTCP', '-sTCP:LISTEN', '-P', '-n'], {
+					timeout: 5000,
+				});
+				const ports: number[] = [];
+				for (const line of stdout.split('\n')) {
+					if (!line.includes('opencode')) continue;
+					const match = line.match(/:(\d+)\s/);
+					if (match) ports.push(Number.parseInt(match[1], 10));
+				}
+				logger.info('[OpenCode] Discovered opencode ports via lsof', { ports });
+				return ports;
+			} catch {
+				// lsof not available either
+			}
+
+			return [];
+		} catch (error) {
+			logger.warn('[OpenCode] Failed to discover opencode processes', { error: String(error) });
+			return [];
+		}
+	}
+
+	/**
+	 * Kill zombie opencode processes that are holding ports but not responding
+	 * to health checks.  Best-effort — if we can't kill them, we proceed anyway
+	 * and let the CLI's tryServe(4096) ?? tryServe(0) handle port conflicts.
+	 */
+	private async killZombieOpenCodeProcesses(): Promise<void> {
+		const { execFile } = await import('node:child_process');
+		const { promisify } = await import('node:util');
+		const execFileAsync = promisify(execFile);
+
+		try {
+			if (process.platform === 'win32') {
+				// Find opencode.exe PIDs
+				const { stdout } = await execFileAsync(
+					'tasklist',
+					['/FI', 'IMAGENAME eq opencode.exe', '/FO', 'CSV', '/NH'],
+					{ timeout: 5000 },
+				);
+				const pids: string[] = [];
+				for (const line of stdout.split('\n')) {
+					const match = line.match(/"opencode\.exe","(\d+)"/i);
+					if (match) pids.push(match[1]);
+				}
+				for (const pid of pids) {
+					try {
+						await execFileAsync('taskkill', ['/PID', pid, '/F'], { timeout: 5000 });
+						logger.info(`[OpenCode] Killed zombie opencode process PID ${pid}`);
+					} catch {
+						logger.warn(`[OpenCode] Failed to kill opencode PID ${pid}`);
+					}
+				}
+			} else {
+				try {
+					await execFileAsync('pkill', ['-f', 'opencode.*serve'], { timeout: 5000 });
+					logger.info('[OpenCode] Killed zombie opencode serve processes');
+				} catch {
+					// pkill returns non-zero if no processes matched — that's fine
+				}
+			}
+		} catch (error) {
+			logger.warn('[OpenCode] Failed to kill zombie processes', { error: String(error) });
+		}
 	}
 
 	/**
@@ -340,12 +510,13 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	 * We pass `port: 0` so the CLI uses its built-in fallback logic:
 	 *   tryServe(4096) ?? tryServe(0)
 	 * This means it first tries the canonical port 4096, and if that's
-	 * occupied (zombie, another instance, etc.) it picks a random free port.
-	 * The SDK parses the actual URL from stdout, so we always get the
-	 * correct address regardless of which port was chosen.
+	 * occupied it picks a random free port.  The SDK parses the actual URL
+	 * from stdout, so we always get the correct address.
 	 *
-	 * This eliminates all EADDRINUSE issues without any platform-specific
-	 * hacks (netstat, taskkill, etc.).
+	 * Before reaching this point, tryConnectToExistingServer() has already
+	 * scanned all running opencode processes and their ports.  If none
+	 * responded to health checks, killZombieOpenCodeProcesses() has cleaned
+	 * them up, so port 4096 should be free for the new server.
 	 */
 	private async spawnServer(workspaceRoot: string, config: CLIConfig): Promise<void> {
 		if (this.serverUrl) return;
@@ -382,7 +553,12 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 			Object.assign(process.env, processEnv);
 
-			const opencode = await this.createServerWithRetry(config.serverTimeoutMs ?? 15000);
+			const { createOpencode } = await import('@opencode-ai/sdk');
+			const opencode = await createOpencode({
+				hostname: OpenCodeExecutor.LOCAL_SERVER_HOST,
+				port: 0,
+				timeout: config.serverTimeoutMs ?? 15000,
+			});
 
 			this.serverInstance = { close: () => opencode.server.close() };
 			this.serverUrl = opencode.server.url;
@@ -403,36 +579,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 					process.chdir(prevCwd);
 				} catch {}
 			}
-		}
-	}
-
-	/**
-	 * Try to create the server, with one retry on failure.
-	 *
-	 * Uses `port: 0` which tells the CLI to try 4096 first, then fall back
-	 * to an OS-assigned random port.  If the first attempt fails (e.g. the
-	 * binary wasn't ready, transient OS error), we wait briefly and retry once.
-	 */
-	private async createServerWithRetry(
-		timeout: number,
-	): Promise<{ server: { url: string; close: () => void }; client: unknown }> {
-		const { createOpencode } = await import('@opencode-ai/sdk');
-
-		const spawn = () =>
-			createOpencode({
-				hostname: OpenCodeExecutor.LOCAL_SERVER_HOST,
-				port: 0,
-				timeout,
-			});
-
-		try {
-			return await spawn();
-		} catch (firstError) {
-			logger.warn('[OpenCode] First spawn attempt failed, retrying...', {
-				error: String(firstError),
-			});
-			await new Promise(resolve => setTimeout(resolve, 2000));
-			return await spawn();
 		}
 	}
 

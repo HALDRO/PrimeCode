@@ -9,6 +9,7 @@ import {
 	type Message,
 	useActiveModelID,
 	useChatActions,
+	useEditDraft,
 	useEditingMessageId,
 	useIsProcessing,
 	useRestoreCommits,
@@ -372,36 +373,50 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 		}, [restoreCommits, message.id]);
 
 		const isEditing = editingMessageId === message.id;
-		const [editText, setEditText] = useState(messageText); // Use parsed text without file paths
+		const editDraft = useEditDraft(message.id);
+		const [editText, setEditText] = useState(editDraft ?? messageText);
 		const contentRef = useRef<HTMLDivElement>(null);
 		const editContainerRef = useRef<HTMLDivElement>(null);
+		const prevIsEditingRef = useRef(false);
+		const handleCancelRef = useRef<() => void>(() => {});
 
 		const handleCancel = useCallback(() => {
-			setEditingMessageId(null);
-		}, [setEditingMessageId]);
-
-		useEffect(() => {
-			if (isEditing) {
-				setEditText(messageText); // Use parsed text without file paths
-
-				// Handle outside click to cancel editing
-				const handleOutsideClick = (e: MouseEvent) => {
-					if (editContainerRef.current && !editContainerRef.current.contains(e.target as Node)) {
-						// Check if click is on a dropdown or portal (common for menus)
-						const isDropdownClick = (e.target as HTMLElement).closest(
-							'[data-radix-popper-content-wrapper], .dropdown-menu',
-						);
-						if (!isDropdownClick) {
-							handleCancel();
-						}
-					}
-				};
-
-				document.addEventListener('mousedown', handleOutsideClick);
-				return () => document.removeEventListener('mousedown', handleOutsideClick);
+			// Save draft to store so it survives cancel
+			if (message.id && editText !== messageText) {
+				chatActions.setEditDraft(message.id, editText);
 			}
-			return undefined;
-		}, [isEditing, messageText, handleCancel]);
+			setEditingMessageId(null);
+		}, [setEditingMessageId, message.id, editText, messageText, chatActions]);
+
+		// Keep ref in sync so outside click always calls the latest version
+		handleCancelRef.current = handleCancel;
+
+		// Initialize editText only when entering edit mode (false → true transition)
+		useEffect(() => {
+			if (isEditing && !prevIsEditingRef.current) {
+				setEditText(editDraft ?? messageText);
+			}
+			prevIsEditingRef.current = isEditing;
+		}, [isEditing, editDraft, messageText]);
+
+		// Outside click handler — separate effect, stable deps via ref
+		useEffect(() => {
+			if (!isEditing) return undefined;
+
+			const handleOutsideClick = (e: MouseEvent) => {
+				if (editContainerRef.current && !editContainerRef.current.contains(e.target as Node)) {
+					const isDropdownClick = (e.target as HTMLElement).closest(
+						'[data-radix-popper-content-wrapper], .dropdown-menu',
+					);
+					if (!isDropdownClick) {
+						handleCancelRef.current();
+					}
+				}
+			};
+
+			document.addEventListener('mousedown', handleOutsideClick);
+			return () => document.removeEventListener('mousedown', handleOutsideClick);
+		}, [isEditing]);
 
 		const { showConfirmDialog } = useUIActions();
 
@@ -475,6 +490,10 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 					// Pass the ID of the message being edited so the backend knows to truncate history
 					messageID: message.id,
 				});
+				// Clear the draft — edit was successfully sent
+				if (message.id) {
+					chatActions.clearEditDraft(message.id);
+				}
 				setEditingMessageId(null);
 			},
 			[

@@ -374,7 +374,8 @@ StandaloneStatsPanel.displayName = 'StandaloneStatsPanel';
 
 export const ChangedFilesPanel: React.FC = React.memo(() => {
 	const { changedFiles, cumulativeDiffs } = useChangedFilesState();
-	const hasFiles = changedFiles.length > 0 || cumulativeDiffs.length > 0;
+	const hasFiles =
+		changedFiles.length > 0 || cumulativeDiffs.some(d => d.additions > 0 || d.deletions > 0);
 
 	// When no changed files — always show SessionStatsDisplay
 	if (!hasFiles) {
@@ -389,7 +390,8 @@ ChangedFilesPanel.displayName = 'ChangedFilesPanel';
 const ChangedFilesPanelContent: React.FC = React.memo(() => {
 	const { postMessage } = useVSCode();
 	const { changedFiles, cumulativeDiffs } = useChangedFilesState();
-	const hasFiles = changedFiles.length > 0 || cumulativeDiffs.length > 0;
+	const hasFiles =
+		changedFiles.length > 0 || cumulativeDiffs.some(d => d.additions > 0 || d.deletions > 0);
 	const { clearChangedFiles, removeChangedFile } = useChatActions();
 	const { showConfirmDialog } = useUIActions();
 	const mcpServers = useMcpServers();

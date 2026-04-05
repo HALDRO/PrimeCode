@@ -24,6 +24,7 @@ import {
 	WandIcon,
 } from '../icons';
 import { AccessGate } from './AccessGate';
+import { SubtaskGenerationStatus } from './GenerationStatus';
 import { SubtaskTimer } from './LiveStats';
 import { QuestionCard } from './QuestionCard';
 import {
@@ -197,14 +198,6 @@ const SubtaskItem = React.memo<{
 			}
 			headerRight={
 				<span className="flex items-center gap-3 text-sm font-bold text-vscode-descriptionForeground">
-					{retryInfo?.message && isRunning && (
-						<span
-							className="text-xs font-medium text-warning whitespace-nowrap"
-							title={retryInfo.message}
-						>
-							{retryInfo.message}
-						</span>
-					)}
 					{tokenStats && (
 						<span
 							className="flex items-center gap-1"
@@ -272,6 +265,13 @@ const SubtaskItem = React.memo<{
 							/>
 						);
 					})}
+					{isRunning && (
+						<SubtaskGenerationStatus
+							isRunning={isRunning}
+							status={message.status}
+							retryMessage={retryInfo?.message}
+						/>
+					)}
 					{pendingAccess && (
 						<AccessGate
 							requestId={pendingAccess.requestId}

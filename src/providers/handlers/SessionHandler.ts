@@ -61,7 +61,11 @@ export class SessionHandler implements WebviewMessageHandler {
 	/** Deferred flag: webviewDidLaunch arrived before the server was ready. */
 	private pendingWebviewLaunch = false;
 
-	/** Guard: prevents persistOpenTabs from overwriting good persisted state before restoration completes. */
+	/**
+	 * Guard: true once initial restoration has finished.
+	 * While false, the only persistence writes allowed are the explicit
+	 * `writePersistedTabs` calls inside `restoreOrCreateSession` itself.
+	 */
 	private restorationComplete = false;
 
 	// Improve Prompt State
@@ -330,7 +334,6 @@ export class SessionHandler implements WebviewMessageHandler {
 	 * for first-time users so they can start typing immediately.
 	 */
 	private async restoreOrCreateSession(): Promise<void> {
-		// Restore all previously open tabs from globalState, then replay their history.
 		try {
 			const config = this.buildBaseConfig();
 			const allSessions = await this.context.cli.listSessions(config);
@@ -432,7 +435,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			}
 		} finally {
 			this.restorationComplete = true;
-			logger.info('[SessionHandler] Restoration complete, persistOpenTabs now active');
+			logger.info('[SessionHandler] Restoration complete, tab persistence now active');
 		}
 	}
 
@@ -675,7 +678,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			this.postLifecycle('switched', newSessionId, { isProcessing: false });
 			this.postStatus(newSessionId, 'idle', 'Ready');
 			this.initializeSessionStats(newSessionId);
-			await this.persistOpenTabs(newSessionId);
+			await this.persistAddTab(newSessionId);
 		} catch (error) {
 			logger.error('[SessionHandler] Failed to create session:', error);
 			this.context.sessionState.activeSessionId = undefined;
@@ -697,7 +700,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		const isActive = this.context.cli.isSessionActive?.(sessionId) ?? false;
 		this.postLifecycle('switched', sessionId, { isProcessing: isActive });
 		this.initializeSessionStats(sessionId);
-		await this.persistOpenTabs(sessionId);
+		await this.persistAddTab(sessionId);
 
 		// Lazy-load history for tabs that were restored but not yet replayed
 		if (!this.replayedSessions.has(sessionId)) {
@@ -758,7 +761,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		}
 
 		this.postLifecycle('closed', sessionId);
-		await this.persistOpenTabs(undefined, sessionId);
+		await this.persistRemoveTab(sessionId);
 	}
 
 	private async onSendMessage(msg: CommandOf<'sendMessage'>): Promise<void> {
@@ -1285,7 +1288,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			this.context.sessionState.activeSessionId = sessionId;
 			const isBusy = this.context.cli.isSessionActive?.(sessionId) ?? false;
 			this.postLifecycle('switched', sessionId, { isProcessing: isBusy });
-			await this.persistOpenTabs(sessionId);
+			await this.persistAddTab(sessionId);
 			return;
 		}
 
@@ -1298,7 +1301,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		// New conversations are never busy — they haven't been sent to yet
 		this.postLifecycle('switched', sessionId, { isProcessing: false });
 		this.initializeSessionStats(sessionId);
-		await this.persistOpenTabs(sessionId);
+		await this.persistAddTab(sessionId);
 
 		try {
 			const config = this.buildBaseConfig();
@@ -1734,7 +1737,7 @@ export class SessionHandler implements WebviewMessageHandler {
 					const isProcessing = this.context.cli.isSessionActive?.(nextActiveSessionId) ?? false;
 					this.postLifecycle('switched', nextActiveSessionId, { isProcessing });
 				}
-				await this.persistOpenTabs(nextActiveSessionId, sessionId);
+				await this.persistRemoveTab(sessionId);
 			}
 		} catch (error) {
 			logger.error('[SessionHandler] Failed to delete conversation:', error);
@@ -1776,7 +1779,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			}
 
 			this.context.bridge.send({ type: 'allConversationsCleared' });
-			await this.writePersistedTabs([], undefined);
+			await this.persistClearAllTabs();
 		} catch (error) {
 			logger.error('[SessionHandler] Failed to clear all conversations:', error);
 		}
@@ -2074,9 +2077,20 @@ export class SessionHandler implements WebviewMessageHandler {
 		this.sessionTotalsByUiSession.delete(sessionId);
 	}
 
+	// =========================================================================
+	// Tab persistence — delta-based, read-modify-write approach.
+	//
+	// Instead of deriving persisted state from the in-memory `startedSessions`
+	// set (which can be empty/stale during startup or after errors), every
+	// mutation reads the *current* persisted state, applies a small delta,
+	// and writes back.  This makes each operation self-contained and immune
+	// to in-memory state corruption.
+	// =========================================================================
+
 	private static readonly OPEN_TABS_KEY = 'primecode.openTabs';
 	private static readonly ACTIVE_TAB_KEY = 'primecode.activeTab';
 
+	/** Low-level write — only called by the delta helpers and restoreOrCreateSession. */
 	private async writePersistedTabs(
 		openTabs: string[],
 		activeTab: string | undefined,
@@ -2085,39 +2099,13 @@ export class SessionHandler implements WebviewMessageHandler {
 			this.context.extensionContext.globalState.update(SessionHandler.OPEN_TABS_KEY, openTabs),
 			this.context.extensionContext.globalState.update(SessionHandler.ACTIVE_TAB_KEY, activeTab),
 		]);
-
 		logger.trace('[SessionHandler] Wrote persisted tabs', {
 			count: openTabs.length,
 			active: activeTab,
 		});
 	}
 
-	private getLastStartedSessionId(): string | undefined {
-		const started = [...this.context.sessionState.startedSessions];
-		return started[started.length - 1];
-	}
-
-	/**
-	 * Persist the current set of open tabs and active tab to globalState.
-	 * Skipped until initial restoration completes to avoid overwriting good
-	 * persisted state with an empty in-memory startedSessions set.
-	 * @param activeSessionId - the tab to mark active (defaults to current)
-	 * @param excludeSessionId - a tab to remove (used on close)
-	 */
-	private async persistOpenTabs(
-		activeSessionId?: string,
-		excludeSessionId?: string,
-	): Promise<void> {
-		if (!this.restorationComplete) {
-			logger.trace('[SessionHandler] Skipping persistOpenTabs — restoration not yet complete');
-			return;
-		}
-		const tabs = [...this.context.sessionState.startedSessions];
-		const filtered = excludeSessionId ? tabs.filter(id => id !== excludeSessionId) : tabs;
-		const active = activeSessionId || this.context.sessionState.activeSessionId;
-		await this.writePersistedTabs(filtered, active);
-	}
-
+	/** Low-level read. */
 	private getPersistedTabs(): { openTabs: string[]; activeTab: string | undefined } {
 		const openTabs =
 			this.context.extensionContext.globalState.get<string[]>(SessionHandler.OPEN_TABS_KEY) || [];
@@ -2125,6 +2113,55 @@ export class SessionHandler implements WebviewMessageHandler {
 			SessionHandler.ACTIVE_TAB_KEY,
 		);
 		return { openTabs, activeTab };
+	}
+
+	/**
+	 * Add a tab to persisted state and set it as active.
+	 * No-op if already present (just updates active).
+	 * Guarded: skipped before restoration completes.
+	 */
+	private async persistAddTab(sessionId: string): Promise<void> {
+		if (!this.restorationComplete) return;
+		const { openTabs } = this.getPersistedTabs();
+		const newTabs = openTabs.includes(sessionId) ? openTabs : [...openTabs, sessionId];
+		await this.writePersistedTabs(newTabs, sessionId);
+	}
+
+	/**
+	 * Remove a tab from persisted state.
+	 * If the removed tab was active, picks the last remaining tab.
+	 * Safety: never writes an empty list if the previous state was non-empty.
+	 * Guarded: skipped before restoration completes.
+	 */
+	private async persistRemoveTab(sessionId: string): Promise<void> {
+		if (!this.restorationComplete) return;
+		const { openTabs, activeTab } = this.getPersistedTabs();
+		const newTabs = openTabs.filter(id => id !== sessionId);
+
+		// Safety: never overwrite non-empty with empty (protects against bugs)
+		if (newTabs.length === 0 && openTabs.length > 0) {
+			logger.warn('[SessionHandler] persistRemoveTab would produce empty tab list — skipping', {
+				sessionId,
+				previousTabs: openTabs,
+			});
+			return;
+		}
+
+		const newActive = activeTab === sessionId ? newTabs[newTabs.length - 1] : activeTab;
+		await this.writePersistedTabs(newTabs, newActive);
+	}
+
+	/**
+	 * Explicitly clear all persisted tabs (used by clearAllConversations).
+	 * This is the ONLY path that is allowed to write an empty list.
+	 */
+	private async persistClearAllTabs(): Promise<void> {
+		await this.writePersistedTabs([], undefined);
+	}
+
+	private getLastStartedSessionId(): string | undefined {
+		const started = [...this.context.sessionState.startedSessions];
+		return started[started.length - 1];
 	}
 
 	/**

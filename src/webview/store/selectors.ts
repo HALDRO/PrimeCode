@@ -67,6 +67,10 @@ export const useStreamingToolId = () =>
 /** Select editing message ID */
 export const useEditingMessageId = () => useChatStore((state: ChatState) => state.editingMessageId);
 
+/** Select edit draft for a specific message (returns undefined if no draft) */
+export const useEditDraft = (messageId: string | undefined) =>
+	useChatStore((state: ChatState) => (messageId ? state.editDrafts[messageId] : undefined));
+
 /** Select chat input state and setter (active session) */
 export const useChatInputState = () =>
 	useChatStore(

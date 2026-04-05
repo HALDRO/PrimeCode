@@ -98,6 +98,83 @@ const isThinkingStatus = (status: string): boolean => {
 	);
 };
 
+// ---------------------------------------------------------------------------
+// SubtaskGenerationStatus — props-driven variant for subtask cards.
+// Reads status from the subtask message instead of the global session store.
+// ---------------------------------------------------------------------------
+
+interface SubtaskGenerationStatusProps {
+	isRunning: boolean;
+	status?: string;
+	retryMessage?: string;
+}
+
+export const SubtaskGenerationStatus: React.FC<SubtaskGenerationStatusProps> = ({
+	isRunning,
+	status,
+	retryMessage,
+}) => {
+	const [visible, setVisible] = useState(false);
+	const [displayStatus, setDisplayStatus] = useState('');
+
+	useEffect(() => {
+		if (isRunning) {
+			const timer = setTimeout(() => setVisible(true), 100);
+			return () => clearTimeout(timer);
+		}
+		const timer = setTimeout(() => setVisible(false), 300);
+		return () => clearTimeout(timer);
+	}, [isRunning]);
+
+	useEffect(() => {
+		const raw = retryMessage || status || '';
+		if (raw && raw !== 'Ready') {
+			const timer = setTimeout(() => setDisplayStatus(formatStatus(raw)), 50);
+			return () => clearTimeout(timer);
+		}
+		setDisplayStatus('');
+		return undefined;
+	}, [status, retryMessage]);
+
+	if (!visible || !isRunning) return null;
+
+	const isRetrying = !!retryMessage;
+	const isThinking = !isRetrying && isThinkingStatus(displayStatus || status || '');
+	const showStatus = displayStatus || 'Generating';
+
+	return (
+		<div
+			className={cn(
+				'flex items-center justify-start gap-1.5 py-2',
+				'transition-all duration-300 ease-out',
+				visible && isRunning ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-1',
+			)}
+		>
+			<StatusIcon isThinking={isThinking} />
+			<span
+				className={cn('text-xs relative inline-block', isRetrying && 'text-warning')}
+				style={
+					isRetrying
+						? undefined
+						: {
+								background:
+									'linear-gradient(90deg, var(--vscode-descriptionForeground) 0%, var(--vscode-foreground) 50%, var(--vscode-descriptionForeground) 100%)',
+								backgroundSize: '200% 100%',
+								backgroundClip: 'text',
+								WebkitBackgroundClip: 'text',
+								color: 'transparent',
+								animation: 'shimmer 3s linear infinite',
+							}
+				}
+			>
+				{showStatus}
+				<TypingDots />
+			</span>
+		</div>
+	);
+};
+SubtaskGenerationStatus.displayName = 'SubtaskGenerationStatus';
+
 export const GenerationStatus: React.FC = () => {
 	const isProcessing = useIsProcessing();
 	const status = useChatStatus();

@@ -109,6 +109,8 @@ export interface ChatState {
 	sessionOrder: string[];
 	activeSessionId: string | undefined;
 	editingMessageId: string | null;
+	/** Temporary drafts for edited messages — survives cancel, cleared on send/session close */
+	editDrafts: Record<string, string>;
 	// Prompt Improver state (not persisted)
 	isImprovingPrompt: boolean;
 	improvingPromptRequestId: string | null;
@@ -141,6 +143,12 @@ export interface ChatActions {
 	deleteMessagesAfterId: (id: string, sessionId?: string) => void;
 	removeMessageByPartId: (partId: string, sessionId?: string) => void;
 	setEditingMessageId: (id: string | null) => void;
+	/** Save a draft for a message being edited (survives cancel) */
+	setEditDraft: (messageId: string, text: string) => void;
+	/** Clear a single edit draft (e.g. after successful send) */
+	clearEditDraft: (messageId: string) => void;
+	/** Clear all edit drafts (e.g. on session switch/close) */
+	clearAllEditDrafts: () => void;
 
 	// Per-session UI state — universal setter + convenience wrappers
 	updateSession: (updates: Partial<ChatSession>, sessionId?: string) => void;
@@ -758,6 +766,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 	sessionOrder: [],
 	activeSessionId: undefined,
 	editingMessageId: null,
+	editDrafts: {},
 	isImprovingPrompt: false,
 	improvingPromptRequestId: null,
 	promptVersions: null,
@@ -1024,6 +1033,22 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
 		setEditingMessageId: id => set({ editingMessageId: id }),
 
+		setEditDraft: (messageId, text) =>
+			set(
+				produce((state: ChatState) => {
+					state.editDrafts[messageId] = text;
+				}),
+			),
+
+		clearEditDraft: messageId =>
+			set(
+				produce((state: ChatState) => {
+					delete state.editDrafts[messageId];
+				}),
+			),
+
+		clearAllEditDrafts: () => set({ editDrafts: {} }),
+
 		deleteMessagesAfterId: (id, sessionId) =>
 			mutateSession(set, sessionId ?? get().activeSessionId, s => {
 				const idx = s.messages.findIndex(m => m.id === id);
@@ -1095,6 +1120,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 					}
 					state.activeSessionId = sessionId;
 					state.editingMessageId = null;
+					state.editDrafts = {};
 				}),
 			);
 		},
@@ -1108,6 +1134,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 						if (state.activeSessionId === sessionId) {
 							state.activeSessionId = state.sessionOrder[state.sessionOrder.length - 1];
 							state.editingMessageId = null;
+							state.editDrafts = {};
 						}
 					}
 				}),
