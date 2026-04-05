@@ -309,7 +309,7 @@ const FileEditCard: React.FC<FileEditCardProps> = ({
 						<ToolCardLeadingIcon>
 							<FileTypeIcon name={name} size={14} />
 						</ToolCardLeadingIcon>
-						<Tooltip content="Open file in editor" position="top" delay={200}>
+						<Tooltip content={effectiveFilePath || name} position="top" delay={200}>
 							<button
 								type="button"
 								onClick={e => {
