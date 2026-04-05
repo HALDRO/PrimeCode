@@ -1,11 +1,6 @@
 import React, { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { NormalizedEntry } from '../../../common/normalizedTypes';
 import { cn } from '../../lib/cn';
-import { CollapseOverlay } from '../ui';
-
-/** Max search results shown inline before collapsing with "+N more" */
-const SEARCH_PREVIEW_LIMIT = 10;
-
 import { formatDuration, formatToolName } from '../../utils/format';
 import { Markdown } from '../../utils/markdown';
 import { useVSCode } from '../../utils/vscode';
@@ -23,7 +18,7 @@ import {
 	WandIcon,
 	ZapIcon,
 } from '../icons';
-import { Badge, PathChip } from '../ui';
+import { Badge, CollapseOverlay, PathChip } from '../ui';
 
 /** Module-level component — avoids full DOM remount on every parent render */
 const TodoStatusIcon: React.FC<{ status: string }> = ({ status }) => {
@@ -257,77 +252,6 @@ const getLeafName = (value: string) => {
 	if (!trimmed) return '';
 	const parts = trimmed.replace(/\\/g, '/').split('/').filter(Boolean);
 	return parts[parts.length - 1] || trimmed;
-};
-
-const cleanPathToken = (value: string) =>
-	value
-		.trim()
-		.replace(/^[`"'([{<]+/, '')
-		.replace(/[>"'`)\]}.,;!?]+$/, '');
-
-const isLikelyPathToken = (value: string) => {
-	const candidate = value.trim();
-	if (!candidate) return false;
-	if (/^https?:\/\//i.test(candidate)) return false;
-	if (candidate === '.' || candidate === '..') return false;
-	if (candidate.includes('*')) return false;
-
-	const startsLikePath =
-		candidate.startsWith('/') ||
-		candidate.startsWith('./') ||
-		candidate.startsWith('../') ||
-		/^[A-Za-z]:[\\/]/.test(candidate);
-	const hasSeparator = /[\\/]/.test(candidate);
-	const hasExtension = /(?:^|[\\/])[^\\/]+\.[A-Za-z0-9_-]+$/.test(candidate);
-	const isWellKnownNoExtFile =
-		/^(?:Dockerfile|Makefile|README|LICENSE|CHANGELOG|\.env(?:\.[\w.-]+)?|\.gitignore|\.gitattributes)$/i.test(
-			candidate,
-		);
-	const isFolderLike = /[\\/]$/.test(candidate);
-
-	return startsLikePath || hasSeparator || hasExtension || isWellKnownNoExtFile || isFolderLike;
-};
-
-const fileRefFromLine = (
-	line: string,
-): { path: string; line?: number; detail?: string; isFolder?: boolean } | null => {
-	const trimmed = line.trim();
-	if (!trimmed) return null;
-
-	const withLine = /^(.+?):(\d+)(?::\d+)?:\s*(.*)$/.exec(trimmed);
-	if (withLine) {
-		const pathCandidate = cleanPathToken(withLine[1]);
-		if (isLikelyPathToken(pathCandidate)) {
-			const lineNum = Number(withLine[2]);
-			return {
-				path: pathCandidate,
-				line: Number.isFinite(lineNum) ? lineNum : undefined,
-				detail: withLine[3]?.trim() || '',
-				isFolder: /[\\/]$/.test(pathCandidate),
-			};
-		}
-	}
-
-	const withColon = /^(.+):\s+(.+)$/.exec(trimmed);
-	if (withColon) {
-		const pathCandidate = cleanPathToken(withColon[1]);
-		if (isLikelyPathToken(pathCandidate)) {
-			return {
-				path: pathCandidate,
-				detail: withColon[2]?.trim() || '',
-				isFolder: /[\\/]$/.test(pathCandidate),
-			};
-		}
-	}
-
-	const pathCandidate = cleanPathToken(trimmed);
-	if (!isLikelyPathToken(pathCandidate)) return null;
-
-	return {
-		path: pathCandidate,
-		detail: '',
-		isFolder: /[\\/]$/.test(pathCandidate),
-	};
 };
 
 interface InlineToolLineProps {
@@ -566,26 +490,6 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 		// Todo always starts collapsed. User can manually toggle to expand.
 		const [todoExpanded, setTodoExpanded] = useState(false);
 
-		const listEntries = useMemo(() => {
-			if (!isListDir) return [];
-			return lines
-				.map(l => l.trim())
-				.filter(Boolean)
-				.filter(l => l !== meta);
-		}, [isListDir, lines, meta]);
-
-		const searchEntries = useMemo(() => {
-			if (!isSearch)
-				return [] as Array<{ path: string; line?: number; detail?: string; isFolder?: boolean }>;
-			return lines.reduce<
-				Array<{ path: string; line?: number; detail?: string; isFolder?: boolean }>
-			>((acc, line) => {
-				const ref = fileRefFromLine(line);
-				if (ref) acc.push(ref);
-				return acc;
-			}, []);
-		}, [isSearch, lines]);
-
 		const ToolIcon = useMemo(() => {
 			if (toolName === 'thinking') return BrainSideIcon;
 			if (isSkill) return ZapIcon;
@@ -672,117 +576,10 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 							</div>
 						))}
 					</div>
-				) : isListDir ? (
-					<div className="flex flex-col gap-1">
-						{listEntries.map((entry, idx) => {
-							const trimmedEntry = entry.trim();
-							const isFolder = trimmedEntry.endsWith('/');
-							const path = meta ? `${meta.replace(/[\\/]+$/, '')}/${trimmedEntry}` : trimmedEntry;
-							return (
-								<div
-									// biome-ignore lint/suspicious/noArrayIndexKey: static list
-									key={idx}
-									className="flex items-center min-w-0"
-								>
-									<PathChip
-										path={path}
-										isFolder={isFolder}
-										onClick={
-											!isFolder
-												? () => postMessage({ type: 'openFile', filePath: path })
-												: undefined
-										}
-										title={path}
-									/>
-								</div>
-							);
-						})}
-					</div>
-				) : isSearch ? (
-					searchEntries.length > 0 ? (
-						<div className="flex flex-col gap-1">
-							{searchEntries.slice(0, SEARCH_PREVIEW_LIMIT).map((ref, idx) => (
-								<div
-									// biome-ignore lint/suspicious/noArrayIndexKey: static rendering
-									key={idx}
-									className="flex items-center gap-2 min-w-0"
-								>
-									<PathChip
-										path={ref.path}
-										isFolder={ref.isFolder}
-										line={ref.line}
-										onClick={
-											!ref.isFolder
-												? () =>
-														postMessage({ type: 'openFile', filePath: ref.path, line: ref.line })
-												: undefined
-										}
-										title={ref.path}
-									/>
-									{ref.detail && (
-										<span className="text-sm text-vscode-foreground opacity-50 truncate">
-											{ref.detail}
-										</span>
-									)}
-								</div>
-							))}
-							{searchEntries.length > SEARCH_PREVIEW_LIMIT && (
-								<span className="text-sm text-vscode-foreground opacity-50 pl-1">
-									+{searchEntries.length - SEARCH_PREVIEW_LIMIT} more
-								</span>
-							)}
-						</div>
-					) : fullText.trim().length > 0 ? (
-						<pre className="m-0 px-1 py-0.5 rounded-sm text-sm leading-(--line-height-code) whitespace-pre-wrap text-vscode-foreground opacity-60">
-							{fullText}
-						</pre>
-					) : null
-				) : hasBody ? (
-					<div className="flex flex-col gap-1">
-						{lines.map((line, idx) => {
-							const ref = fileRefFromLine(line);
-							if (!ref) {
-								return (
-									<pre
-										// biome-ignore lint/suspicious/noArrayIndexKey: static rendering
-										key={idx}
-										className={cn(
-											'm-0 px-1 py-0.5 rounded-sm text-sm leading-(--line-height-code) whitespace-pre-wrap',
-											isError ? 'text-error opacity-100' : 'text-vscode-foreground opacity-60',
-										)}
-									>
-										{line}
-									</pre>
-								);
-							}
-
-							return (
-								<div
-									// biome-ignore lint/suspicious/noArrayIndexKey: static rendering
-									key={idx}
-									className="flex items-center gap-2 min-w-0 px-1 py-0.5 rounded-sm hover:bg-vscode-toolbar-hoverBackground"
-								>
-									<PathChip
-										path={ref.path}
-										isFolder={ref.isFolder}
-										line={ref.line}
-										onClick={
-											!ref.isFolder
-												? () =>
-														postMessage({ type: 'openFile', filePath: ref.path, line: ref.line })
-												: undefined
-										}
-										title={ref.path}
-									/>
-									{ref.detail && (
-										<span className="text-sm text-vscode-foreground opacity-60 truncate">
-											{ref.detail}
-										</span>
-									)}
-								</div>
-							);
-						})}
-					</div>
+				) : isError && hasBody ? (
+					<pre className="m-0 px-1 py-0.5 rounded-sm text-sm leading-(--line-height-code) whitespace-pre-wrap text-error opacity-100">
+						{fullText}
+					</pre>
 				) : null}
 			</SimpleTool>
 		);
