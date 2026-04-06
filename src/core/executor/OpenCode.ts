@@ -9,6 +9,7 @@ import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 
 import type {
+	EventMessagePartDelta,
 	EventMessagePartUpdated,
 	EventMessageUpdated,
 	EventSessionError,
@@ -20,27 +21,8 @@ import type {
 	Session,
 	TextPart,
 	ToolPart,
-} from '@opencode-ai/sdk';
-import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk';
-
-/**
- * SDK v2 event type for incremental text/reasoning deltas.
- * The server emits `message.part.delta` for every streaming token (no DB write),
- * separate from `message.part.updated` which carries full snapshots (with DB write).
- * Our v1 SDK doesn't include this type, so we define it locally.
- */
-interface EventMessagePartDelta {
-	type: 'message.part.delta';
-	properties: {
-		sessionID: string;
-		messageID: string;
-		partID: string;
-		/** The part field being appended to (e.g. "text") */
-		field: string;
-		/** The incremental text chunk */
-		delta: string;
-	};
-}
+} from '@opencode-ai/sdk/v2/client';
+import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk/v2/client';
 
 import { Value } from '@sinclair/typebox/value';
 import { parseModelId } from '../../common';
@@ -553,7 +535,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 			Object.assign(process.env, processEnv);
 
-			const { createOpencode } = await import('@opencode-ai/sdk');
+			const { createOpencode } = await import('@opencode-ai/sdk/v2');
 			const opencode = await createOpencode({
 				hostname: OpenCodeExecutor.LOCAL_SERVER_HOST,
 				port: 0,
@@ -859,9 +841,9 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 		const client = this.requireSdk();
 		await client.session.revert({
-			path: { id: sessionId },
-			body: { messageID: messageId },
-			query: { directory: config.workspaceRoot },
+			sessionID: sessionId,
+			messageID: messageId,
+			directory: config.workspaceRoot,
 		});
 	}
 
@@ -872,8 +854,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 		const client = this.requireSdk();
 		await client.session.unrevert({
-			path: { id: sessionId },
-			query: { directory: config.workspaceRoot },
+			sessionID: sessionId,
+			directory: config.workspaceRoot,
 		});
 	}
 
@@ -939,8 +921,9 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		try {
 			const client = this.requireSdk();
 			const { data: messages } = await client.session.messages({
-				path: { id: sessionId },
-				query: { directory, limit: 3 },
+				sessionID: sessionId,
+				directory,
+				limit: 3,
 			});
 
 			if (!Array.isArray(messages) || messages.length === 0) {
@@ -1001,13 +984,11 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 		try {
 			const client = this.requireSdk();
-			// Do NOT pass directory in query — it becomes an additional SQL WHERE
-			// exact-match filter that can hide sessions created with a slightly
-			// different path. The SDK client already sends directory via the
-			// x-opencode-directory header (set in createOpencodeClient), which the
-			// server middleware uses for project resolution. This matches the
-			// official OpenCode TUI behavior (session.list without directory filter).
-			const { data: raw } = await client.session.list({});
+			// Pass roots=true so the server filters out child sessions (subtasks)
+			// at the SQL level BEFORE applying the limit. Without this, child
+			// sessions consume most of the 100-row limit, leaving very few
+			// top-level conversations visible in the history dropdown.
+			const { data: raw } = await client.session.list({ roots: true });
 
 			const sessions = Array.isArray(raw) ? raw : [];
 
@@ -1072,8 +1053,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		try {
 			const client = this.requireSdk();
 			const { data: messages } = await client.session.messages({
-				path: { id: sessionId },
-				query: { directory: config.workspaceRoot },
+				sessionID: sessionId,
+				directory: config.workspaceRoot,
 			});
 
 			if (!Array.isArray(messages)) return [];
@@ -1491,7 +1472,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (cached) return cached;
 		try {
 			const client = this.requireSdk();
-			const { data } = await client.command.list({ query: { directory } });
+			const { data } = await client.command.list({ directory });
 			const commands = (data ?? []) as Array<{ name: string; description?: string }>;
 			return this._commandsCache.set(commands);
 		} catch {
@@ -1504,7 +1485,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (cached) return cached;
 		try {
 			const client = this.requireSdk();
-			const { data } = await client.config.providers({ query: { directory } });
+			const { data } = await client.config.providers({ directory });
 			return this._providersCache.set(data);
 		} catch {
 			return {};
@@ -1516,7 +1497,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (cached) return cached;
 		try {
 			const client = this.requireSdk();
-			const { data } = await client.app.agents({ query: { directory } });
+			const { data } = await client.app.agents({ directory });
 			return this._agentsCache.set(data);
 		} catch {
 			return [];
@@ -1524,8 +1505,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	}
 
 	/**
-	 * Fetch skills from the OpenCode server via raw HTTP GET /skill.
-	 * The SDK does not expose an `app.skills` method, so we use direct fetch.
+	 * Fetch skills from the OpenCode server via SDK v2.
 	 */
 	public async listSkills(
 		directory: string,
@@ -1533,19 +1513,15 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		const cached = this._skillsCache.get();
 		if (cached) return cached;
 		try {
-			if (!this.serverUrl) return [];
-			const url = `${this.serverUrl}/skill?directory=${encodeURIComponent(directory)}`;
-			const resp = await fetch(url, {
-				headers: { 'x-opencode-directory': directory },
-			});
-			if (!resp.ok) return [];
-			const data = (await resp.json()) as Array<{
+			const client = this.requireSdk();
+			const { data } = await client.app.skills({ directory });
+			const skills = (data ?? []) as Array<{
 				name: string;
 				description: string;
 				location?: string;
 				content?: string;
 			}>;
-			return this._skillsCache.set(Array.isArray(data) ? data : []);
+			return this._skillsCache.set(Array.isArray(skills) ? skills : []);
 		} catch {
 			return [];
 		}
@@ -1556,7 +1532,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (cached) return cached;
 		try {
 			const client = this.requireSdk();
-			const { data } = await client.mcp.status({ query: { directory } });
+			const { data } = await client.mcp.status({ directory });
 			return this._mcpCache.set(data);
 		} catch {
 			return {};
@@ -1570,15 +1546,16 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	): Promise<void> {
 		const client = this.requireSdk();
 		await client.session.summarize({
-			path: { id: sessionId },
-			body: { providerID: model.providerID, modelID: model.modelID },
-			query: { directory },
+			sessionID: sessionId,
+			providerID: model.providerID,
+			modelID: model.modelID,
+			directory,
 		});
 	}
 
 	private async createSession(directory: string): Promise<string> {
 		const client = this.requireSdk();
-		const { data, error } = await client.session.create({ query: { directory } });
+		const { data, error } = await client.session.create({ directory });
 		if (error || !data?.id) throw new Error(`OpenCode create session: ${error ?? 'missing id'}`);
 		return data.id;
 	}
@@ -1599,8 +1576,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		try {
 			const client = this.requireSdk();
 			await client.session.delete({
-				path: { id: sessionId },
-				query: { directory: config.workspaceRoot },
+				sessionID: sessionId,
+				directory: config.workspaceRoot,
 			});
 			// Clean up per-session metadata to prevent unbounded Map growth
 			this.cleanupSessionMessages(sessionId);
@@ -1616,9 +1593,9 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		try {
 			const client = this.requireSdk();
 			await client.session.update({
-				path: { id: sessionId },
-				body: { title },
-				query: { directory: config.workspaceRoot },
+				sessionID: sessionId,
+				title,
+				directory: config.workspaceRoot,
 			});
 			logger.info(`[OpenCodeExecutor] Session renamed: ${sessionId} -> "${title}"`);
 			return true;
@@ -1630,7 +1607,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 	private async sendAbort(directory: string, sessionId: string): Promise<void> {
 		const client = this.requireSdk();
-		await client.session.abort({ path: { id: sessionId }, query: { directory } });
+		await client.session.abort({ sessionID: sessionId, directory });
 	}
 
 	private async sendPermissionReply(
@@ -1638,22 +1615,13 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		requestId: string,
 		payload: { reply: 'once' | 'always' | 'reject'; message?: string },
 	): Promise<void> {
-		if (!this.serverUrl) throw new Error('OpenCode server not running');
-		// Use the NEW /permission/:requestID/reply endpoint (session-independent).
-		// The legacy /session/:id/permissions/:permissionID endpoint requires a sessionId
-		// which breaks for child session (subtask) permissions.
-		const url = `${this.serverUrl}/permission/${encodeURIComponent(requestId)}/reply`;
-		const body: Record<string, unknown> = { reply: payload.reply };
-		if (payload.message) body.message = payload.message;
-		const res = await fetch(url, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify(body),
+		const client = this.requireSdk();
+		const { error } = await client.permission.reply({
+			requestID: requestId,
+			reply: payload.reply,
+			...(payload.message ? { message: payload.message } : {}),
 		});
-		if (!res.ok) {
-			const text = await res.text().catch(() => '');
-			throw new Error(`Permission reply failed: ${res.status} ${text}`);
-		}
+		if (error) throw new Error(`Permission reply failed: ${JSON.stringify(error)}`);
 	}
 
 	private async sendPrompt(
@@ -1714,15 +1682,13 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 		const client = this.requireSdk();
 		await client.session.promptAsync({
-			path: { id: sessionId },
-			query: { directory },
-			body: {
-				parts,
-				...(config.messageID ? { messageID: config.messageID } : {}),
-				...modelOverride,
-				...(config.agent ? { agent: config.agent } : {}),
-				...(config.variant ? { variant: config.variant } : {}),
-			},
+			sessionID: sessionId,
+			directory,
+			parts,
+			...(config.messageID ? { messageID: config.messageID } : {}),
+			...modelOverride,
+			...(config.agent ? { agent: config.agent } : {}),
+			...(config.variant ? { variant: config.variant } : {}),
 		});
 	}
 
@@ -1739,18 +1705,22 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 		void (async () => {
 			try {
-				const { stream } = await client.event.subscribe({
-					query: { directory },
-					signal,
-					sseDefaultRetryDelay: 250,
-					sseMaxRetryAttempts: 6,
-					sseMaxRetryDelay: 1500,
-					onSseError: error => {
-						if (!signal.aborted) {
-							logger.warn('[OpenCode] SSE stream error (SDK will retry):', error);
-						}
+				const { stream } = await client.event.subscribe(
+					{
+						directory,
 					},
-				});
+					{
+						signal,
+						sseDefaultRetryDelay: 250,
+						sseMaxRetryAttempts: 6,
+						sseMaxRetryDelay: 1500,
+						onSseError: (error: unknown) => {
+							if (!signal.aborted) {
+								logger.warn('[OpenCode] SSE stream error (SDK will retry):', error);
+							}
+						},
+					},
+				);
 
 				for await (const event of stream) {
 					if (signal.aborted) break;
@@ -2143,7 +2113,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		sessionId?: string,
 	): void {
 		const part = this.normalizePart(props.part);
-		const delta = props.delta;
+		const delta = (props as { delta?: string }).delta;
 		const sid = part.sessionID ?? sessionId;
 
 		if (part.type === 'text') this.handleTextPart(part, sid, delta);
@@ -2642,24 +2612,18 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	}
 
 	async respondToQuestion(decision: { requestId: string; answers: string[][] }): Promise<void> {
-		if (!this.serverUrl) throw new Error('OpenCode server not running');
-		const url = `${this.serverUrl}/question/${decision.requestId}/reply`;
-		const res = await fetch(url, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ answers: decision.answers }),
+		const client = this.requireSdk();
+		const { error } = await client.question.reply({
+			requestID: decision.requestId,
+			answers: decision.answers,
 		});
-		if (!res.ok) throw new Error(`Question reply failed: ${res.status}`);
+		if (error) throw new Error(`Question reply failed: ${JSON.stringify(error)}`);
 	}
 
 	async rejectQuestion(requestId: string): Promise<void> {
-		if (!this.serverUrl) throw new Error('OpenCode server not running');
-		const url = `${this.serverUrl}/question/${requestId}/reject`;
-		const res = await fetch(url, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-		});
-		if (!res.ok) throw new Error(`Question reject failed: ${res.status}`);
+		const client = this.requireSdk();
+		const { error } = await client.question.reject({ requestID: requestId });
+		if (error) throw new Error(`Question reject failed: ${JSON.stringify(error)}`);
 	}
 
 	getSessionId(): string | null {

@@ -253,7 +253,7 @@ export interface CLIExecutor extends EventEmitter {
 	/** Returns true if the given session is currently active (busy) on the backend. */
 	isSessionActive?(sessionId: string): boolean;
 	/** Returns the SDK client instance if available (OpenCode only). */
-	getSdkClient?(): import('@opencode-ai/sdk').OpencodeClient | null;
+	getSdkClient?(): import('@opencode-ai/sdk/v2/client').OpencodeClient | null;
 	/** Fetch skills from the OpenCode server (GET /skill). */
 	listSkills?(
 		directory: string,

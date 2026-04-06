@@ -250,7 +250,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 			const client = this.context.cli.getSdkClient();
 			const serverInfo = this.context.cli.getOpenCodeServerInfo();
 			if (!client || !serverInfo?.directory) return internalCommands;
-			const { data } = await client.command.list({ query: { directory: serverInfo.directory } });
+			const { data } = await client.command.list({ directory: serverInfo.directory });
 			const serverCommands = (data ?? []) as Array<{
 				name: string;
 				description?: string;

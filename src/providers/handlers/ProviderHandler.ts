@@ -208,8 +208,8 @@ export class ProviderHandler implements WebviewMessageHandler {
 		}
 
 		try {
-			const info = this.context.cli.getOpenCodeServerInfo();
-			if (!info) {
+			const client = this.context.cli.getSdkClient();
+			if (!client) {
 				this.context.bridge.data('openCodeDisconnectResult', {
 					success: false,
 					error: 'OpenCode server not running',
@@ -218,12 +218,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 				return;
 			}
 
-			await this.context.services.openCodeClient.disconnectProvider(
-				info.baseUrl,
-				info.directory,
-				providerId,
-			);
-			// Note: disconnectProvider still uses fetch (no SDK method for DELETE /auth/{id})
+			await this.context.services.openCodeClient.disconnectProvider(client, providerId);
 
 			this.context.bridge.data('openCodeDisconnectResult', { success: true, providerId });
 

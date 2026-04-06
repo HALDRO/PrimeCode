@@ -4,8 +4,7 @@
  * using the typed @opencode-ai/sdk client. Handles data fetching and normalization for the UI.
  */
 
-import type { OpencodeClient } from '@opencode-ai/sdk';
-import type { Model as ModelV2 } from '@opencode-ai/sdk/v2/client';
+import type { Model as ModelV2, OpencodeClient } from '@opencode-ai/sdk/v2/client';
 import * as vscode from 'vscode';
 import { normalizeProxyBaseUrl } from '../common';
 
@@ -99,8 +98,7 @@ export class OpenCodeClientService {
 				name: p.name || p.id,
 				isCustom: false,
 				models: Object.values(p.models).map(m => {
-					// SDK v1 types don't include `variants`, but the API returns it.
-					// Use v2 Model type which fully describes the response.
+					// Cast to full ModelV2 type to access `variants` field.
 					const model = m as unknown as ModelV2;
 					const variantKeys = model.variants ? Object.keys(model.variants) : undefined;
 					return {
@@ -133,24 +131,18 @@ export class OpenCodeClientService {
 
 	async setProviderAuth(client: OpencodeClient, providerId: string, apiKey: string): Promise<void> {
 		const { error } = await client.auth.set({
-			path: { id: providerId },
-			body: { type: 'api', key: apiKey },
+			providerID: providerId,
+			auth: { type: 'api', key: apiKey },
 		});
 		if (error) {
 			throw new Error(`OpenCode auth set failed: ${JSON.stringify(error)}`);
 		}
 	}
 
-	async disconnectProvider(baseUrl: string, directory: string, providerId: string): Promise<void> {
-		// SDK has no DELETE /auth/{id} method — use direct fetch
-		const url = `${baseUrl}/auth/${encodeURIComponent(providerId)}?directory=${encodeURIComponent(directory)}`;
-		const resp = await fetch(url, {
-			method: 'DELETE',
-			headers: { 'x-opencode-directory': directory },
-		});
-		if (!resp.ok) {
-			const text = await resp.text().catch(() => '');
-			throw new Error(`OpenCode auth delete failed: ${resp.status} ${resp.statusText}: ${text}`);
+	async disconnectProvider(client: OpencodeClient, providerId: string): Promise<void> {
+		const { error } = await client.auth.remove({ providerID: providerId });
+		if (error) {
+			throw new Error(`OpenCode auth delete failed: ${JSON.stringify(error)}`);
 		}
 	}
 

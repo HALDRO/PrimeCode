@@ -1284,7 +1284,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			const config = this.buildBaseConfig();
 			const sessions = await this.context.cli.listSessions(config);
 			return sessions
-				.filter(s => !s.parentID && s.hasMessages !== false)
+				.filter(s => s.hasMessages !== false)
 				.map(s => ({
 					filename: s.id,
 					sessionId: s.id,
@@ -1949,7 +1949,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		text: string;
 		template: string;
 		model?: string;
-		client: import('@opencode-ai/sdk').OpencodeClient;
+		client: import('@opencode-ai/sdk/v2/client').OpencodeClient;
 		signal: AbortSignal;
 	}): Promise<string> {
 		const { client, signal } = params;
@@ -1972,7 +1972,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		const directory = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 
 		// 1. Create a temporary session
-		const { data: sessionData, error: createError } = await client.session.create({ signal });
+		const { data: sessionData, error: createError } = await client.session.create({ directory });
 		if (createError || !sessionData?.id) {
 			throw new Error(`Failed to create temp session: ${createError ?? 'no session id'}`);
 		}
@@ -1987,15 +1987,15 @@ export class SessionHandler implements WebviewMessageHandler {
 				: undefined;
 
 			// 2. Synchronous prompt — blocks until the LLM finishes, returns full response
-			const { data, error } = await client.session.prompt({
-				path: { id: sessionId },
-				query: { directory },
-				body: {
+			const { data, error } = await client.session.prompt(
+				{
+					sessionID: sessionId,
+					directory,
 					parts: [{ type: 'text', text: fullText }],
 					...(modelOverride ? { model: modelOverride } : {}),
 				},
-				signal,
-			});
+				{ signal },
+			);
 
 			if (error) throw new Error(`Prompt failed: ${JSON.stringify(error)}`);
 
@@ -2012,7 +2012,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			logger.info(`[ImprovePrompt] Got response: ${result.length} chars`);
 			return result;
 		} finally {
-			client.session.delete({ path: { id: sessionId } }).catch(() => {});
+			client.session.delete({ sessionID: sessionId }).catch(() => {});
 		}
 	}
 
