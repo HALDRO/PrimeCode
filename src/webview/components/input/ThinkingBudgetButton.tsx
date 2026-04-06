@@ -18,6 +18,18 @@ function capitalize(s: string): string {
 	return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+/** Color mapping for the thinking level indicator dot on the button */
+function getLevelDotColors(
+	levelIndex: number,
+	total: number,
+): { color: string; glow: string } | undefined {
+	if (total <= 0) return undefined;
+	const ratio = total === 1 ? 1 : levelIndex / (total - 1);
+	if (ratio <= 0.33) return { color: 'var(--color-success)', glow: 'var(--glow-success)' };
+	if (ratio <= 0.66) return { color: 'var(--color-warning)', glow: 'var(--glow-warning)' };
+	return { color: 'var(--color-error)', glow: 'var(--glow-error)' };
+}
+
 export const ThinkingBudgetButton: React.FC = React.memo(() => {
 	const variant = useSessionVariant();
 	const [isOpen, setIsOpen] = useState(false);
@@ -80,13 +92,22 @@ export const ThinkingBudgetButton: React.FC = React.memo(() => {
 				onClick={() => setIsOpen(!isOpen)}
 				title={`Thinking effort: ${currentLabel}`}
 				className={cn(
-					'inline-flex items-center justify-center font-medium rounded cursor-pointer transition-all duration-200 select-none border-none bg-transparent focus:outline-none',
+					'relative inline-flex items-center justify-center font-medium rounded cursor-pointer transition-all duration-200 select-none border-none bg-transparent focus:outline-none',
 					'h-(--input-toolbar-height) w-(--input-toolbar-height)',
 					'opacity-70 hover:opacity-100 hover:bg-(--alpha-5)',
 					isOpen && 'bg-(--alpha-5) opacity-100',
 				)}
 			>
 				<ThinkingLevelIcon size={13} level={effectiveLevel} total={variantNames.length} />
+				{effectiveLevel !== undefined &&
+					(() => {
+						const dotColors = getLevelDotColors(effectiveLevel, variantNames.length);
+						return dotColors ? (
+							<span className="absolute top-[3px] right-[3px] pointer-events-none">
+								<GlowDot color={dotColors.color} glow={dotColors.glow} size={4} />
+							</span>
+						) : null;
+					})()}
 			</button>
 			{isOpen && (
 				<DropdownMenu

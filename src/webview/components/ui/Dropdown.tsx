@@ -365,6 +365,7 @@ export function DropdownMenu<T>({
 	const [internalSearch, setInternalSearch] = useState('');
 	const [selectedIndex, setSelectedIndex] = useState(0);
 	const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+	const scrollContainerRef = useRef<HTMLDivElement>(null);
 
 	const effectiveSearch = searchValue ?? internalSearch;
 	const allItems = sections ? sections.flatMap(s => s.items) : items || [];
@@ -391,6 +392,17 @@ export function DropdownMenu<T>({
 			setSelectedIndex(Math.max(0, filteredItems.length - 1));
 		}
 	}, [filteredItems.length, selectedIndex]);
+
+	// Scroll selected item into view on keyboard navigation
+	useEffect(() => {
+		const scroller = scrollContainerRef.current;
+		if (!scroller || selectedIndex < 0) return;
+		const items = scroller.querySelectorAll('[data-dropdown-item]');
+		const target = items[selectedIndex];
+		if (target) {
+			target.scrollIntoView({ block: 'nearest' });
+		}
+	}, [selectedIndex]);
 
 	useEffect(() => {
 		if (disableKeyboardNav) {
@@ -448,20 +460,25 @@ export function DropdownMenu<T>({
 		const isHovered = index === hoveredIndex;
 
 		if (renderItem) {
-			return renderItem(item, {
-				selected: isSelected,
-				hovered: isHovered,
-				onSelect: () => !item.disabled && onSelect(item.data),
-				onHover: () => {
-					setSelectedIndex(index);
-					setHoveredIndex(index);
-				},
-			});
+			return (
+				<div key={item.id} data-dropdown-item>
+					{renderItem(item, {
+						selected: isSelected,
+						hovered: isHovered,
+						onSelect: () => !item.disabled && onSelect(item.data),
+						onHover: () => {
+							setSelectedIndex(index);
+							setHoveredIndex(index);
+						},
+					})}
+				</div>
+			);
 		}
 
 		return (
 			<div
 				key={item.id}
+				data-dropdown-item
 				onClick={() => !item.disabled && onSelect(item.data)}
 				onMouseEnter={() => {
 					setSelectedIndex(index);
@@ -582,7 +599,11 @@ export function DropdownMenu<T>({
 					setHoveredIndex(null);
 				}}
 			>
-				<ScrollContainer className="py-(--gap-1) px-(--gap-3)" autoHide="never">
+				<ScrollContainer
+					ref={scrollContainerRef}
+					className="py-(--gap-1) px-(--gap-3)"
+					autoHide="never"
+				>
 					{loading ? (
 						<div className="p-(--gap-4) text-center text-sm text-(--alpha-50)">Loading...</div>
 					) : filteredItems.length === 0 ? (
@@ -608,10 +629,10 @@ export function DropdownMenu<T>({
 				</ScrollContainer>
 			</div>
 
-			{footer && <div className="border-t border-(--alpha-10)">{footer}</div>}
+			{footer && <div className="shrink-0 border-t border-(--alpha-10)">{footer}</div>}
 
 			{hints.length > 0 && (
-				<div className="flex gap-(--gap-2-5) px-(--dropdown-padding-x) py-(--gap-1) border-t border-(--alpha-10) text-xs text-(--alpha-40) h-(--dropdown-footer-height) box-border items-center">
+				<div className="shrink-0 flex gap-(--gap-2-5) px-(--dropdown-padding-x) py-(--gap-1) border-t border-(--alpha-10) text-xs text-(--alpha-40) h-(--dropdown-footer-height) box-border items-center">
 					{hints.map(hint => (
 						<span key={hint.keys} className="flex items-center gap-(--gap-1)">
 							<kbd className="text-2xs text-(--alpha-50)">{hint.keys}</kbd>

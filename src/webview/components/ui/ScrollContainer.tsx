@@ -275,7 +275,10 @@ export const ScrollContainer = React.forwardRef<HTMLDivElement, ScrollContainerP
 
 		return (
 			<div
-				className={cn('relative h-full w-full min-h-0 flex flex-col overflow-hidden', className)}
+				className={cn(
+					'relative h-full flex-1 w-full min-h-0 flex flex-col overflow-hidden',
+					className,
+				)}
 				style={style}
 			>
 				<div
