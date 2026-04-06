@@ -1,5 +1,5 @@
 /**
- * @file InputToolbar — Bottom toolbar with agent, model, thinking, permissions, slash, file, image buttons
+ * @file InputToolbar — Bottom toolbar with agent, model, thinking, permissions, plus (attach), improve buttons
  * @description Extracted from ChatInput. Contains all toolbar buttons and their dropdowns.
  */
 
@@ -8,20 +8,11 @@ import { useMemo, useState } from 'react';
 import { cn } from '../../lib/cn';
 import { useSettingsStore } from '../../store';
 import { useVSCode } from '../../utils/vscode';
-import {
-	AtSignIcon,
-	ChevronIcon,
-	ImageIcon,
-	ImprovePromptIcon,
-	LoaderIcon,
-	TerminalIcon,
-} from '../icons';
-import { type AnchorRectLike, Button, IconButton } from '../ui';
+import { ChevronIcon, ImprovePromptIcon, LoaderIcon, PlusIcon } from '../icons';
+import { Button, IconButton } from '../ui';
 import { AgentButtonIcon, AgentDropdown, getAgentLabel } from './AgentDropdown';
 import { AutoAcceptButton } from './AutoAcceptButton';
-import { FilePickerDropdown } from './FilePickerDropdown';
 import { ModelDropdown } from './ModelDropdown';
-import { SlashCommandsDropdown } from './SlashCommandsDropdown';
 import { ThinkingBudgetButton } from './ThinkingBudgetButton';
 
 /** IDs of built-in agents that are toggled via the main button click. */
@@ -37,17 +28,6 @@ interface InputToolbarProps {
 	isImproving: boolean;
 	canImprove: boolean;
 	onImprovePrompt: () => void;
-	// Slash commands
-	showSlashCommands: boolean;
-	slashCommandsAnchorRect: AnchorRectLike | null;
-	slashButtonAnchorElement: HTMLElement | null;
-	onSlashToggle: (anchor: HTMLElement) => void;
-	// File picker
-	showFilePicker: boolean;
-	filePickerAnchorRect: AnchorRectLike | null;
-	fileButtonAnchorElement: HTMLElement | null;
-	onFileToggle: (anchor: HTMLElement) => void;
-	onFileSelect: (path: string) => void;
 	// Model dropdown
 	showModelDropdown: boolean;
 	modelButtonAnchorElement: HTMLElement | null;
@@ -62,15 +42,6 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({
 	isImproving,
 	canImprove,
 	onImprovePrompt,
-	showSlashCommands,
-	slashCommandsAnchorRect,
-	slashButtonAnchorElement,
-	onSlashToggle,
-	showFilePicker,
-	filePickerAnchorRect,
-	fileButtonAnchorElement,
-	onFileToggle,
-	onFileSelect,
 	showModelDropdown,
 	modelButtonAnchorElement,
 	onModelToggle,
@@ -97,7 +68,6 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({
 
 	/** Toggle between build and plan on click. */
 	const handleAgentToggle = () => {
-		// undefined (build) → 'plan', 'plan' → undefined (build)
 		onAgentChange(selectedAgent === 'plan' ? undefined : 'plan');
 	};
 
@@ -126,7 +96,6 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({
 						/>
 						<span>{getAgentLabel(selectedAgent)}</span>
 					</Button>
-					{/* Chevron for dropdown — only shown when custom agents exist */}
 					{hasCustomAgents && (
 						<IconButton
 							icon={<ChevronIcon expanded={showAgentDropdown} size={10} />}
@@ -205,70 +174,19 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({
 						)}
 					/>
 				</div>
-				{/* Slash commands */}
-				<div className="relative">
-					<IconButton
-						icon={
-							<TerminalIcon
-								size={14}
-								strokeWidth={2.5}
-								className="transition-transform duration-200 group-hover/terminal:scale-110"
-							/>
-						}
-						onClick={e => onSlashToggle(e.currentTarget as HTMLElement)}
-						title="Slash commands (/)"
-						size={22}
-						className="group/terminal text-vscode-foreground opacity-70 hover:opacity-100"
-					/>
-					{showSlashCommands && (
-						<SlashCommandsDropdown
-							anchorElement={slashButtonAnchorElement}
-							anchorRect={
-								!slashButtonAnchorElement ? (slashCommandsAnchorRect ?? undefined) : undefined
-							}
-						/>
-					)}
-				</div>
-				{/* File picker */}
-				<div className="relative">
-					<IconButton
-						icon={
-							<AtSignIcon
-								size={14}
-								strokeWidth={2.5}
-								className="transition-transform duration-200 group-hover/at:scale-110"
-							/>
-						}
-						onClick={e => onFileToggle(e.currentTarget as HTMLElement)}
-						title="Reference files (@)"
-						size={22}
-						className="group/at text-vscode-foreground opacity-70 hover:opacity-100"
-					/>
-					{showFilePicker && (
-						<FilePickerDropdown
-							onSelectFile={onFileSelect}
-							anchorElement={fileButtonAnchorElement}
-							anchorRect={
-								!fileButtonAnchorElement ? (filePickerAnchorRect ?? undefined) : undefined
-							}
-							showSearch
-							searchAutoFocus
-						/>
-					)}
-				</div>
-				{/* Image attach */}
+				{/* Plus button — opens native file dialog for files and images */}
 				<IconButton
 					icon={
-						<ImageIcon
+						<PlusIcon
 							size={14}
 							strokeWidth={2.5}
-							className="transition-transform duration-200 group-hover/image:scale-110"
+							className="transition-transform duration-200 group-hover/plus:scale-110"
 						/>
 					}
-					onClick={() => postMessage({ type: 'getImageData' })}
-					title="Attach image"
+					onClick={() => postMessage({ type: 'browseFiles' })}
+					title="Attach file or image"
 					size={22}
-					className="group/image text-vscode-foreground opacity-70 hover:opacity-100"
+					className="group/plus text-vscode-foreground opacity-70 hover:opacity-100"
 				/>
 			</div>
 		</div>

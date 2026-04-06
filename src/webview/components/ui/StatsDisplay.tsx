@@ -10,7 +10,7 @@ import { type CSSProperties, type ReactNode, useMemo } from 'react';
 import { cn } from '../../lib/cn';
 import { useModelContextWindow, useSubagentTokenTotals, useTotalStats } from '../../store';
 import { formatCost, formatDuration, formatNumber } from '../../utils/format';
-import { BotIcon, HashIcon, TagIcon, TimerIcon, TokensIcon, ZapIcon } from '../icons';
+import { BotIcon, HashIcon, TagIcon, TimerIcon, TokensIcon } from '../icons';
 import { Tooltip } from './Tooltip';
 
 export interface StatItem {
@@ -112,10 +112,19 @@ export const SessionStatsDisplay: React.FC<{
 	const items = useMemo<StatItem[]>(() => {
 		// Context window usage: total tokens (input + output) from CLI
 		const windowUsed = totalStats.totalTokens ?? 0;
+		const inputTokens = totalStats.contextTokens ?? 0;
+		const cacheRead = totalStats.cacheReadTokens ?? 0;
 		const percentage = Math.min((windowUsed / contextLimit) * 100, 100);
 
 		const tokenParts = [`${formatNumber(windowUsed)} / ${formatNumber(contextLimit)}`];
 		tokenParts.push(`(${percentage.toFixed(1)}%)`);
+
+		// Show cache hit rate inline when cache data is consistent
+		// (cacheRead must be <= inputTokens to be from the same snapshot)
+		if (cacheRead > 0 && inputTokens > 0 && cacheRead <= inputTokens) {
+			const cacheHitRate = Math.round((cacheRead / inputTokens) * 100);
+			tokenParts.push(`· ${cacheHitRate}% cached`);
+		}
 
 		const result: StatItem[] = [];
 
@@ -123,7 +132,10 @@ export const SessionStatsDisplay: React.FC<{
 			key: 'tokens',
 			icon: <TokensIcon size={11} />,
 			value: tokenParts.join(' '),
-			tooltip: 'Context window (in+out) / limit',
+			tooltip:
+				cacheRead > 0 && inputTokens > 0 && cacheRead <= inputTokens
+					? `Context: ${formatNumber(windowUsed)} / ${formatNumber(contextLimit)} · Cache: ${formatNumber(cacheRead)} of ${formatNumber(inputTokens)} input tokens`
+					: 'Context window (in+out) / limit',
 		});
 
 		if (subagentTokensTotal > 0) {
@@ -132,15 +144,6 @@ export const SessionStatsDisplay: React.FC<{
 				icon: <BotIcon size={11} />,
 				value: formatNumber(subagentTokensTotal),
 				tooltip: 'Total subagent tokens',
-			});
-		}
-
-		if (totalStats.cacheReadTokens > 0) {
-			result.push({
-				key: 'cache',
-				icon: <ZapIcon size={11} />,
-				value: formatNumber(totalStats.cacheReadTokens),
-				tooltip: 'Cache read tokens',
 			});
 		}
 

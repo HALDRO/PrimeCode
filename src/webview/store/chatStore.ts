@@ -387,7 +387,29 @@ function handleStatusEvent(targetSession: ChatSession, payload: SessionEventPayl
 
 function handleStatsEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
 	const s = payload as SessionStatsPayload;
-	if (s.totalStats) Object.assign(targetSession.totalStats, s.totalStats);
+	if (s.totalStats) {
+		// Token snapshot fields must be updated atomically — only when a full
+		// token snapshot arrives (totalTokens > 0).  Partial stats events
+		// (e.g. requestCount-only) must NOT overwrite token fields, otherwise
+		// cacheReadTokens and totalTokens become desynchronized.
+		const patch = s.totalStats;
+		const isTokenSnapshot = typeof patch.totalTokens === 'number' && patch.totalTokens > 0;
+		if (isTokenSnapshot) {
+			Object.assign(targetSession.totalStats, patch);
+		} else {
+			// Apply only non-token fields from the patch
+			const {
+				totalTokens,
+				contextTokens,
+				outputTokens,
+				cacheReadTokens,
+				cacheCreationTokens,
+				reasoningTokens,
+				...nonTokenFields
+			} = patch;
+			Object.assign(targetSession.totalStats, nonTokenFields);
+		}
+	}
 	if (s.modelID) {
 		targetSession.activeModelID = s.modelID;
 		// Stamp modelID on the last user message so it's preserved per-message

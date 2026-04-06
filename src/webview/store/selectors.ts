@@ -41,6 +41,12 @@ function getActiveSession(state: ChatState): ChatSession | undefined {
 export const useMessages = () =>
 	useChatStore((state: ChatState) => getActiveSession(state)?.messages ?? EMPTY_MESSAGES);
 
+/** Select whether active session has any messages (lightweight — avoids subscribing to full array) */
+export const useHasMessages = () =>
+	useChatStore(
+		(state: ChatState) => (getActiveSession(state)?.messages ?? EMPTY_MESSAGES).length > 0,
+	);
+
 /** Select processing state for active session */
 export const useIsProcessing = () =>
 	useChatStore((state: ChatState) => getActiveSession(state)?.isProcessing ?? false);

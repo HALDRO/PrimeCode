@@ -19,6 +19,9 @@ export class FileHandler implements WebviewMessageHandler {
 			case 'getImageData':
 				await this.onGetImageData(msg);
 				break;
+			case 'browseFiles':
+				await this.onBrowseFiles();
+				break;
 		}
 	}
 
@@ -205,5 +208,76 @@ export class FileHandler implements WebviewMessageHandler {
 			path: fileUri.fsPath,
 			dataUrl,
 		});
+	}
+
+	private static readonly IMAGE_EXTENSIONS = new Set([
+		'png',
+		'jpg',
+		'jpeg',
+		'gif',
+		'webp',
+		'bmp',
+		'svg',
+		'ico',
+	]);
+
+	private async onBrowseFiles(): Promise<void> {
+		const picks = await vscode.window.showOpenDialog({
+			canSelectMany: true,
+			openLabel: 'Attach',
+			filters: {
+				'All Files': ['*'],
+			},
+		});
+
+		if (!picks || picks.length === 0) return;
+
+		const filePaths: string[] = [];
+
+		for (const fileUri of picks) {
+			const ext = fileUri.path.split('.').pop()?.toLowerCase() ?? '';
+
+			if (FileHandler.IMAGE_EXTENSIONS.has(ext)) {
+				// Treat as image — base64 encode and send imageData
+				const mime =
+					ext === 'png'
+						? 'image/png'
+						: ext === 'jpg' || ext === 'jpeg'
+							? 'image/jpeg'
+							: ext === 'gif'
+								? 'image/gif'
+								: ext === 'webp'
+									? 'image/webp'
+									: ext === 'bmp'
+										? 'image/bmp'
+										: ext === 'svg'
+											? 'image/svg+xml'
+											: 'image/x-icon';
+
+				const bytes = await vscode.workspace.fs.readFile(fileUri);
+				const base64 = Buffer.from(bytes).toString('base64');
+				const dataUrl = `data:${mime};base64,${base64}`;
+				const name = fileUri.path.split('/').pop() || 'image';
+				const id = `img-${Date.now()}-${name}`;
+
+				this.context.bridge.send({
+					type: 'imageData',
+					id,
+					name,
+					path: fileUri.fsPath,
+					dataUrl,
+				});
+			} else {
+				// Regular file — collect path
+				filePaths.push(fileUri.fsPath);
+			}
+		}
+
+		if (filePaths.length > 0) {
+			this.context.bridge.send({
+				type: 'browsedFiles',
+				paths: filePaths,
+			});
+		}
 	}
 }

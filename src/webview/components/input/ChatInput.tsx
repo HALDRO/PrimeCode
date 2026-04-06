@@ -23,9 +23,11 @@ import {
 } from '.';
 import { AttachmentsBar } from './AttachmentsBar';
 import { EditorCore, type EditorCoreRef } from './EditorCore';
+import { FilePickerDropdown } from './FilePickerDropdown';
 import { ImagePreviewModal } from './ImagePreviewModal';
 import { InputToolbar } from './InputToolbar';
 import { SendButton } from './SendButton';
+import { SlashCommandsDropdown } from './SlashCommandsDropdown';
 
 interface ChatInputProps {
 	value?: string;
@@ -74,7 +76,7 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 		onCancel,
 		autoFocus = false,
 		className,
-		placeholder = 'Type your message here...',
+		placeholder = 'Plan, @ for context, / for commands',
 		sendDisabled = false,
 		initialFiles = [],
 		initialCodeSnippets = [],
@@ -358,15 +360,6 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 							isImproving={controller.isImproving}
 							canImprove={!!controller.inputValue.trim()}
 							onImprovePrompt={controller.handleImprovePrompt}
-							showSlashCommands={showSlashCommands}
-							slashCommandsAnchorRect={dropdowns.slashCommandsAnchorRect}
-							slashButtonAnchorElement={dropdowns.slashButtonAnchorElement}
-							onSlashToggle={dropdowns.openSlashFromButton}
-							showFilePicker={showFilePicker}
-							filePickerAnchorRect={dropdowns.filePickerAnchorRect}
-							fileButtonAnchorElement={dropdowns.fileButtonAnchorElement}
-							onFileToggle={dropdowns.openFilePickerFromButton}
-							onFileSelect={handleFileSelect}
 							showModelDropdown={showModelDropdown}
 							modelButtonAnchorElement={modelBtnAnchor}
 							onModelToggle={anchor => {
@@ -375,6 +368,31 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 							}}
 							onModelClose={() => setShowModelDropdown(false)}
 						/>
+
+						{/* Dropdowns triggered by typing @ or / in the editor */}
+						{showSlashCommands && (
+							<SlashCommandsDropdown
+								anchorElement={dropdowns.slashButtonAnchorElement}
+								anchorRect={
+									!dropdowns.slashButtonAnchorElement
+										? (dropdowns.slashCommandsAnchorRect ?? undefined)
+										: undefined
+								}
+							/>
+						)}
+						{showFilePicker && (
+							<FilePickerDropdown
+								onSelectFile={handleFileSelect}
+								anchorElement={dropdowns.fileButtonAnchorElement}
+								anchorRect={
+									!dropdowns.fileButtonAnchorElement
+										? (dropdowns.filePickerAnchorRect ?? undefined)
+										: undefined
+								}
+								showSearch
+								searchAutoFocus
+							/>
+						)}
 					</div>
 
 					<SendButton
