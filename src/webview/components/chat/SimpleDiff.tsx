@@ -32,6 +32,17 @@ export interface DiffLine {
 	content: string;
 }
 
+export interface ResolvedFileChange {
+	filePath: string;
+	name: string;
+	lines: DiffLine[];
+	hasDeleteChange: boolean;
+	stats: { added: number; removed: number };
+	firstChangedLine: number | undefined;
+	status: 'add' | 'update' | 'delete' | 'move';
+	movedTo?: string;
+}
+
 interface DisplayLine extends DiffLine {
 	id: string;
 	hiddenBefore?: number;
@@ -180,7 +191,7 @@ export function computeStats(lines: DiffLine[]): { added: number; removed: numbe
 // Diff data resolution (used by ToolCard)
 // ---------------------------------------------------------------------------
 
-export type ResolvedDiffData = {
+type ResolvedDiffData = {
 	lines: DiffLine[];
 	effectiveFilePath: string;
 	name: string;
@@ -188,6 +199,61 @@ export type ResolvedDiffData = {
 	stats: { added: number; removed: number };
 	firstChangedLine: number | undefined;
 };
+
+interface ApplyPatchMetadataFile {
+	filePath?: string;
+	relativePath?: string;
+	path?: string;
+	type?: 'add' | 'update' | 'delete' | 'move';
+	status?: 'add' | 'update' | 'delete' | 'move';
+	diff?: string;
+	before?: string;
+	after?: string;
+	oldContent?: string;
+	newContent?: string;
+	additions?: number;
+	deletions?: number;
+	movePath?: string;
+	newPath?: string;
+}
+
+const getApplyPatchFiles = (metadata: unknown): ApplyPatchMetadataFile[] => {
+	if (!metadata || typeof metadata !== 'object') return [];
+	const files = (metadata as { files?: unknown }).files;
+	return Array.isArray(files)
+		? files.filter((file): file is ApplyPatchMetadataFile =>
+				Boolean(file && typeof file === 'object'),
+			)
+		: [];
+};
+
+const getPatchFilePath = (file: ApplyPatchMetadataFile): string =>
+	file.relativePath || file.filePath || file.path || '';
+
+const getPatchFileStatus = (file: ApplyPatchMetadataFile): 'add' | 'update' | 'delete' | 'move' =>
+	file.type || file.status || 'update';
+
+const getPatchFileBefore = (file: ApplyPatchMetadataFile): string =>
+	typeof file.before === 'string'
+		? file.before
+		: typeof file.oldContent === 'string'
+			? file.oldContent
+			: '';
+
+const getPatchFileAfter = (file: ApplyPatchMetadataFile): string =>
+	typeof file.after === 'string'
+		? file.after
+		: typeof file.newContent === 'string'
+			? file.newContent
+			: '';
+
+const getPatchFileStats = (
+	file: ApplyPatchMetadataFile,
+	fallback: { added: number; removed: number },
+) => ({
+	added: typeof file.additions === 'number' ? file.additions : fallback.added,
+	removed: typeof file.deletions === 'number' ? file.deletions : fallback.removed,
+});
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
 	value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
@@ -204,11 +270,74 @@ const getString = (
 	return undefined;
 };
 
-/**
- * Resolve diff data from various sources and parse into DiffLine[].
- * Priority: metadata.diff (unified diff, O(N)) > filediff.additions/deletions > actionType content.
- */
-export function resolveDiffData(params: {
+export function resolveFileChanges(params: {
+	actionType: unknown;
+	toolResultMetadata?: unknown;
+	accessRequestRaw?: unknown;
+	fallbackFilePath?: string;
+}): ResolvedFileChange[] {
+	const actionRec = asRecord(params.actionType);
+	const patchFiles = getApplyPatchFiles(params.toolResultMetadata);
+
+	if (patchFiles.length > 0) {
+		const changes: ResolvedFileChange[] = [];
+		for (const file of patchFiles) {
+			const filePath = getPatchFilePath(file);
+			if (!filePath) continue;
+			const status = getPatchFileStatus(file);
+			const resolved = resolveSingleDiffData({
+				actionType: {
+					type: 'ApplyPatch',
+					files: [
+						{
+							path: filePath,
+							status,
+							newContent: getPatchFileAfter(file),
+							oldContent: getPatchFileBefore(file),
+						},
+					],
+				},
+				toolResultMetadata: {
+					diff: typeof file.diff === 'string' ? file.diff : undefined,
+					filePath,
+				},
+				fallbackFilePath: filePath,
+			});
+			changes.push({
+				filePath,
+				name: resolved.name,
+				lines: resolved.lines,
+				hasDeleteChange: resolved.hasDeleteChange,
+				stats: getPatchFileStats(file, resolved.stats),
+				firstChangedLine: resolved.firstChangedLine,
+				status,
+				movedTo: file.movePath || file.newPath,
+			});
+		}
+		return changes;
+	}
+
+	if (actionRec?.type === 'FileEdit' || actionRec?.type === 'ApplyPatch') {
+		const resolved = resolveSingleDiffData(params);
+		if (resolved.effectiveFilePath || resolved.lines.length > 0 || resolved.hasDeleteChange) {
+			return [
+				{
+					filePath: resolved.effectiveFilePath || params.fallbackFilePath || '',
+					name: resolved.name,
+					lines: resolved.lines,
+					hasDeleteChange: resolved.hasDeleteChange,
+					stats: resolved.stats,
+					firstChangedLine: resolved.firstChangedLine,
+					status: resolved.hasDeleteChange ? 'delete' : 'update',
+				} satisfies ResolvedFileChange,
+			].filter(change => Boolean(change.filePath || change.lines.length || change.hasDeleteChange));
+		}
+	}
+
+	return [];
+}
+
+function resolveSingleDiffData(params: {
 	actionType: unknown;
 	toolResultMetadata?: unknown;
 	accessRequestRaw?: unknown;
@@ -218,7 +347,6 @@ export function resolveDiffData(params: {
 	let effectiveFilePath = '';
 	let hasDeleteChange = false;
 
-	// 1. Extract path and detect delete from ActionType
 	const actionRec = asRecord(params.actionType);
 	if (actionRec?.type === 'FileEdit') {
 		effectiveFilePath = typeof actionRec.path === 'string' ? actionRec.path : '';
@@ -236,7 +364,6 @@ export function resolveDiffData(params: {
 		}
 	}
 
-	// 2. Tool result metadata — try unified diff (O(N))
 	const meta = asRecord(params.toolResultMetadata);
 	const metaPath = getString(meta, ['filepath', 'filePath', 'path']);
 
@@ -250,7 +377,6 @@ export function resolveDiffData(params: {
 		}
 	}
 
-	// 3. If no unified diff, try filediff path extraction
 	if (lines.length === 0) {
 		const fileDiffRaw = meta?.filediff;
 		const fileDiff = Array.isArray(fileDiffRaw)
@@ -262,7 +388,6 @@ export function resolveDiffData(params: {
 		}
 	}
 
-	// 4. If still nothing, fall back to actionType content
 	if (lines.length === 0 && actionRec?.type === 'FileEdit') {
 		const changesRaw = actionRec.changes;
 		const change = Array.isArray(changesRaw) ? asRecord(changesRaw[0]) : undefined;
@@ -281,7 +406,6 @@ export function resolveDiffData(params: {
 		}
 	}
 
-	// 5. Access request metadata (last resort)
 	if (lines.length === 0) {
 		const accRec = asRecord(params.accessRequestRaw);
 		const accMeta = asRecord(accRec?.metadata);
@@ -298,7 +422,6 @@ export function resolveDiffData(params: {
 	if (!effectiveFilePath && metaPath) effectiveFilePath = metaPath;
 	if (!effectiveFilePath && params.fallbackFilePath) effectiveFilePath = params.fallbackFilePath;
 
-	// Extract first changed line from any available unified diff source
 	const anyDiffText =
 		unifiedDiff ||
 		(actionRec?.type === 'FileEdit'

@@ -1042,7 +1042,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				// then send the access response event to the webview.
 				const autoRespond = (approved: boolean, alwaysAllow?: boolean) => {
 					// Always create the access_request message (with metadata/diff)
-					// so ToolCard.resolveDiffData() can find it via useAccessRequestByToolUseId.
+					// so chat diff rendering can find it via useAccessRequestByToolUseId.
 					this.sessionHandler.postSessionMessage(
 						{
 							id: `access-${requestId}`,

@@ -3,9 +3,13 @@
  * Запуск: bun run scripts/dump-sessions.ts
  */
 
+import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 
 const WORKSPACE =
 	process.platform === 'win32' && /^[A-Z]:/.test(process.cwd())
@@ -26,6 +30,132 @@ function ask(q: string): Promise<string> {
 function getBaseUrl(): string {
 	const port = process.env.OPENCODE_PORT ?? '4096';
 	return `http://127.0.0.1:${port}`;
+}
+
+/**
+ * Check if a real OpenCode server is running at the given URL.
+ */
+async function isOpenCodeServer(baseUrl: string): Promise<boolean> {
+	try {
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), 2000);
+		const res = await fetch(`${baseUrl}/global/health`, {
+			method: 'GET',
+			signal: controller.signal,
+		});
+		clearTimeout(timeout);
+		if (!res.ok) return false;
+		const data = (await res.json()) as { healthy?: boolean };
+		return data.healthy === true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Discover listen ports of running `opencode` processes.
+ * Uses OS-specific commands (tasklist + netstat on Windows, ss/lsof on Unix).
+ */
+async function discoverOpenCodePorts(): Promise<number[]> {
+	const isWindows = process.platform === 'win32';
+
+	if (isWindows) {
+		// Step 1: find PIDs of opencode.exe processes
+		let tasklistOut: string;
+		try {
+			const result = await execFileAsync(
+				'tasklist',
+				['/FI', 'IMAGENAME eq opencode.exe', '/FO', 'CSV', '/NH'],
+				{ timeout: 5000 },
+			);
+			tasklistOut = result.stdout;
+		} catch {
+			return [];
+		}
+
+		const pids = new Set<string>();
+		for (const line of tasklistOut.split('\n')) {
+			const match = line.match(/"opencode\.exe","(\d+)"/i);
+			if (match) pids.add(match[1]);
+		}
+		if (pids.size === 0) return [];
+
+		// Step 2: find which ports those PIDs are listening on
+		let netstatOut: string;
+		try {
+			const result = await execFileAsync('netstat', ['-ano', '-p', 'TCP'], { timeout: 5000 });
+			netstatOut = result.stdout;
+		} catch {
+			return [];
+		}
+
+		const ports: number[] = [];
+		for (const line of netstatOut.split('\n')) {
+			if (!line.includes('LISTENING')) continue;
+			const parts = line.trim().split(/\s+/);
+			const pid = parts[parts.length - 1];
+			if (!pids.has(pid)) continue;
+			const addrPort = parts[1];
+			const portStr = addrPort?.split(':').pop();
+			if (portStr) {
+				const port = Number.parseInt(portStr, 10);
+				if (port > 0) ports.push(port);
+			}
+		}
+		return ports;
+	}
+
+	// Linux / macOS: use `ss` or `lsof`
+	try {
+		const { stdout } = await execFileAsync('ss', ['-tlnp'], { timeout: 5000 });
+		const ports: number[] = [];
+		for (const line of stdout.split('\n')) {
+			if (!line.includes('opencode')) continue;
+			const match = line.match(/:(\d+)\s/);
+			if (match) ports.push(Number.parseInt(match[1], 10));
+		}
+		if (ports.length > 0) return ports;
+	} catch {}
+
+	try {
+		const { stdout } = await execFileAsync('lsof', ['-iTCP', '-sTCP:LISTEN', '-P', '-n'], {
+			timeout: 5000,
+		});
+		const ports: number[] = [];
+		for (const line of stdout.split('\n')) {
+			if (!line.includes('opencode')) continue;
+			const match = line.match(/:(\d+)\s/);
+			if (match) ports.push(Number.parseInt(match[1], 10));
+		}
+		return ports;
+	} catch {}
+
+	return [];
+}
+
+/**
+ * Find a working OpenCode server URL.
+ * 1. Try canonical port first (4096 or OPENCODE_PORT env).
+ * 2. Discover opencode processes and health-check each port.
+ * 3. Return first working URL or null.
+ */
+async function findWorkingServer(): Promise<string | null> {
+	// Fast path: canonical port
+	const canonicalUrl = getBaseUrl();
+	if (await isOpenCodeServer(canonicalUrl)) {
+		return canonicalUrl;
+	}
+
+	// Slow path: discover processes
+	const ports = await discoverOpenCodePorts();
+	for (const port of ports) {
+		const url = `http://127.0.0.1:${port}`;
+		if (await isOpenCodeServer(url)) {
+			return url;
+		}
+	}
+
+	return null;
 }
 
 /** Проверяет, доступна ли сессия на сервере (с указанием directory) */
@@ -94,13 +224,11 @@ async function dumpSession(base: string, id: string, directory?: string) {
 }
 
 async function main() {
-	const base = getBaseUrl();
-	if (
-		!(await fetch(`${base}/path`)
-			.then(r => r.ok)
-			.catch(() => false))
-	) {
-		console.error('Server not responding.');
+	console.log('Searching for OpenCode server...');
+	const base = await findWorkingServer();
+	if (!base) {
+		console.error('No working OpenCode server found.');
+		console.log('\nHint: start OpenCode TUI first: opencode');
 		process.exit(1);
 	}
 	console.log(`Server: ${base}\n`);

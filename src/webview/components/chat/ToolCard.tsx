@@ -33,7 +33,12 @@ import {
 import { FileTypeIcon } from '../icons/FileTypeIcon';
 import { Button, CollapseOverlay, IconButton, Tooltip } from '../ui';
 import { AccessGate } from './AccessGate';
-import { getDiffContentHeight, resolveDiffData, SimpleDiff } from './SimpleDiff';
+import {
+	getDiffContentHeight,
+	type ResolvedFileChange,
+	resolveFileChanges,
+	SimpleDiff,
+} from './SimpleDiff';
 import { InlineToolLine, SimpleTool } from './SimpleTool';
 
 const TOOL_CARD_CLASSES = 'bg-(--tool-bg-header) border border-(--tool-border-color) rounded-lg';
@@ -257,10 +262,8 @@ const DiagnosticsDisplay: React.FC<{ diagnostics: LspDiagnosticsByFile }> = ({ d
 // ---------------------------------------------------------------------------
 
 interface FileEditCardProps {
-	actionType: unknown;
-	toolResult: ToolResult | undefined;
+	change: ResolvedFileChange;
 	accessRequest: ReturnType<typeof useAccessRequestByToolUseId>;
-	filePath: string | undefined;
 	toolName: string;
 	rawInput: unknown;
 	diffExpanded: boolean;
@@ -270,10 +273,8 @@ interface FileEditCardProps {
 }
 
 const FileEditCard: React.FC<FileEditCardProps> = ({
-	actionType,
-	toolResult,
+	change,
 	accessRequest,
-	filePath,
 	toolName,
 	rawInput,
 	diffExpanded,
@@ -281,18 +282,14 @@ const FileEditCard: React.FC<FileEditCardProps> = ({
 	diagnostics,
 	postMessage,
 }) => {
-	const resolved = useMemo(
-		() =>
-			resolveDiffData({
-				actionType,
-				toolResultMetadata: toolResult?.metadata,
-				accessRequestRaw: accessRequest,
-				fallbackFilePath: filePath,
-			}),
-		[actionType, toolResult?.metadata, accessRequest, filePath],
-	);
-
-	const { lines, effectiveFilePath, name, hasDeleteChange, stats, firstChangedLine } = resolved;
+	const {
+		lines,
+		filePath: effectiveFilePath,
+		name,
+		hasDeleteChange,
+		stats,
+		firstChangedLine,
+	} = change;
 	const hasContent = lines.length > 0 || hasDeleteChange;
 
 	if (!hasContent) return null;
@@ -433,6 +430,21 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		const isDiffTool = isFileEdit || isApplyPatch;
 		const isWebSearch = actionType?.type === 'WebSearch' || toolName.toLowerCase() === 'websearch';
 		const isWebFetch = actionType?.type === 'WebFetch' || toolName.toLowerCase() === 'webfetch';
+		// Use metadata from toolResult (final) or from the tool_use message itself
+		// (streaming). tool_streaming events merge metadata into the tool_use message
+		// via mergeOrAddMessage, so we can pick up incremental file data as it arrives.
+		const streamingMetadata = (message as unknown as { metadata?: unknown }).metadata;
+		const effectiveMetadata = toolResult?.metadata ?? streamingMetadata;
+		const fileChanges = useMemo(
+			() =>
+				resolveFileChanges({
+					actionType,
+					toolResultMetadata: effectiveMetadata,
+					accessRequestRaw: accessRequest,
+					fallbackFilePath: filePath,
+				}),
+			[actionType, effectiveMetadata, accessRequest, filePath],
+		);
 
 		const isRunning = message.isRunning ?? !toolResult;
 		const liveElapsed = useElapsedTimer(isRunning, message.timestamp);
@@ -502,19 +514,27 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 
 		// 1) Diff Card (File Edits / Apply Patch)
 		if (isDiffTool) {
+			if (fileChanges.length === 0) return null;
 			return (
-				<FileEditCard
-					actionType={actionType}
-					toolResult={toolResult}
-					accessRequest={accessRequest}
-					filePath={filePath}
-					toolName={toolName}
-					rawInput={rawInput}
-					diffExpanded={diffExpanded}
-					onToggleDiff={() => setDiffExpanded(prev => !prev)}
-					diagnostics={diagnostics}
-					postMessage={postMessage}
-				/>
+				<div className="flex flex-col gap-1">
+					{fileChanges.map((change, i) => (
+						<FileEditCard
+							key={change.filePath || i}
+							change={change}
+							accessRequest={i === 0 ? accessRequest : undefined}
+							toolName={toolName}
+							rawInput={rawInput}
+							diffExpanded={diffExpanded}
+							onToggleDiff={() => setDiffExpanded(prev => !prev)}
+							diagnostics={
+								diagnostics?.[change.filePath]
+									? { [change.filePath]: diagnostics[change.filePath] }
+									: undefined
+							}
+							postMessage={postMessage}
+						/>
+					))}
+				</div>
 			);
 		}
 
