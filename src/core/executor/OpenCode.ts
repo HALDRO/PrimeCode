@@ -1716,6 +1716,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				...(config.messageID ? { messageID: config.messageID } : {}),
 				...modelOverride,
 				...(config.agent ? { agent: config.agent } : {}),
+				...(config.variant ? { variant: config.variant } : {}),
 			},
 		});
 	}

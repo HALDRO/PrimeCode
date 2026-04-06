@@ -14,6 +14,7 @@ const POLICIES_KEY = 'primeCode.permissionPolicies';
 export class ToolHandler implements WebviewMessageHandler {
 	private alwaysAllowByTool: Record<string, boolean> = {};
 	private policies: PermissionPolicies;
+	private readonly autoAcceptBySession = new Map<string, boolean>();
 
 	constructor(private context: HandlerContext) {
 		this.alwaysAllowByTool =
@@ -60,6 +61,9 @@ export class ToolHandler implements WebviewMessageHandler {
 				break;
 			case 'setPermissions':
 				await this.onSetPermissions(msg);
+				break;
+			case 'setAutoAccept':
+				this.onSetAutoAccept(msg);
 				break;
 			case 'checkDiscoveryStatus':
 				await this.onCheckDiscoveryStatus();
@@ -197,6 +201,40 @@ export class ToolHandler implements WebviewMessageHandler {
 				.filter(([, allow]) => allow)
 				.map(([toolName]) => ({ toolName, allowAll: true })),
 		);
+	}
+
+	/** Check if auto-accept mode is currently active for a session. */
+	isAutoAccept(sessionId?: string): boolean {
+		if (!sessionId) return false;
+		const visited = new Set<string>();
+		let current: string | undefined = sessionId;
+		while (current && !visited.has(current)) {
+			visited.add(current);
+			const own = this.autoAcceptBySession.get(current);
+			if (own !== undefined) return own;
+			current = this.context.sessionGraph.getParent(current);
+		}
+		return false;
+	}
+
+	clearSessionAutoAccept(sessionId: string): void {
+		this.autoAcceptBySession.delete(sessionId);
+	}
+
+	private onSetAutoAccept(msg: CommandOf<'setAutoAccept'>): void {
+		const sessionId = msg.sessionId || this.context.sessionState.activeSessionId;
+		if (!sessionId) {
+			logger.warn('[ToolHandler] setAutoAccept ignored: no target session', {
+				enabled: msg.enabled,
+			});
+			return;
+		}
+
+		logger.info('[ToolHandler] setAutoAccept', { enabled: msg.enabled, sessionId });
+		if (msg.enabled) this.autoAcceptBySession.set(sessionId, true);
+		else this.autoAcceptBySession.delete(sessionId);
+
+		this.context.bridge.session.info(sessionId, undefined, undefined, msg.enabled);
 	}
 
 	private async onCheckCliDiagnostics(): Promise<void> {

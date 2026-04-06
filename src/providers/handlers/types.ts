@@ -19,6 +19,10 @@ export interface HandlerContext {
 	sessionGraph: SessionGraph;
 	/** Returns current permission policies from ToolHandler. Used by SessionHandler for reconnect. */
 	getPermissionPolicies?: () => PermissionPolicies;
+	/** Returns whether runtime auto-accept is enabled for a session. */
+	getSessionAutoAccept?: (sessionId: string) => boolean;
+	/** Clears runtime auto-accept state for a session. */
+	clearSessionAutoAccept?: (sessionId: string) => void;
 	/** Register a checkpoint on the backend so the frontend can restore by commitId alone. */
 	registerCheckpoint?: (
 		commitId: string,

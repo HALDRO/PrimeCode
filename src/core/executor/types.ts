@@ -18,6 +18,8 @@ export interface CLIConfig {
 	workspaceRoot: string;
 	yoloMode?: boolean;
 	agent?: string;
+	/** Thinking effort variant (e.g. 'high', 'max', 'low'). Sent to CLI as-is. */
+	variant?: string;
 	/** Additional env vars for the spawned CLI process. */
 	env?: Record<string, string>;
 	/** Optional server startup timeout override (milliseconds). */

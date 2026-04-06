@@ -5,6 +5,7 @@
  */
 
 import type { OpencodeClient } from '@opencode-ai/sdk';
+import type { Model as ModelV2 } from '@opencode-ai/sdk/v2/client';
 import * as vscode from 'vscode';
 import { normalizeProxyBaseUrl } from '../common';
 
@@ -97,12 +98,19 @@ export class OpenCodeClientService {
 				id: p.id,
 				name: p.name || p.id,
 				isCustom: false,
-				models: Object.values(p.models).map(m => ({
-					id: m.id,
-					name: m.name || m.id,
-					reasoning: m.reasoning,
-					limit: m.limit ? { context: m.limit.context, output: m.limit.output } : undefined,
-				})),
+				models: Object.values(p.models).map(m => {
+					// SDK v1 types don't include `variants`, but the API returns it.
+					// Use v2 Model type which fully describes the response.
+					const model = m as unknown as ModelV2;
+					const variantKeys = model.variants ? Object.keys(model.variants) : undefined;
+					return {
+						id: m.id,
+						name: m.name || m.id,
+						reasoning: m.reasoning,
+						limit: m.limit ? { context: m.limit.context, output: m.limit.output } : undefined,
+						variants: variantKeys && variantKeys.length > 0 ? variantKeys : undefined,
+					};
+				}),
 			}))
 			.filter(p => p.id.length > 0);
 	}

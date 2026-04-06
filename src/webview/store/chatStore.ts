@@ -102,6 +102,8 @@ export interface ChatSession {
 	availableTools?: string[];
 	/** Session-scoped MCP server names advertised by the backend. */
 	availableMcpServers?: string[];
+	/** Per-session auto-accept permissions toggle. */
+	autoAccept?: boolean;
 }
 
 export interface ChatState {
@@ -211,6 +213,10 @@ export interface ChatActions {
 	getSessionAgent: (sessionId?: string) => string | undefined;
 	setSessionModel: (model: string | undefined, sessionId?: string) => void;
 	getSessionModel: (sessionId?: string) => string | undefined;
+
+	// Per-session auto-accept permissions
+	setSessionAutoAccept: (autoAccept: boolean, sessionId?: string) => void;
+	getSessionAutoAccept: (sessionId?: string) => boolean;
 }
 
 // =============================================================================
@@ -697,9 +703,14 @@ function dispatchToSession(
 			handleSubtaskTranscriptEvent(targetSession, payload);
 			break;
 		case 'session_info': {
-			const info = payload as { data?: { tools?: string[]; mcpServers?: string[] } };
-			targetSession.availableTools = info.data?.tools ?? [];
-			targetSession.availableMcpServers = info.data?.mcpServers ?? [];
+			const info = payload as {
+				data?: { tools?: string[]; mcpServers?: string[]; autoAccept?: boolean };
+			};
+			if (info.data?.tools) targetSession.availableTools = info.data.tools;
+			if (info.data?.mcpServers) targetSession.availableMcpServers = info.data.mcpServers;
+			if (typeof info.data?.autoAccept === 'boolean') {
+				targetSession.autoAccept = info.data.autoAccept;
+			}
 			break;
 		}
 	}
@@ -728,6 +739,7 @@ const createEmptySession = (id: string): ChatSession => ({
 	queuedMessages: [],
 	availableTools: [],
 	availableMcpServers: [],
+	autoAccept: false,
 });
 
 function resolveTargetSessionId(state: ChatState, sessionId?: string): string | undefined {
@@ -1254,6 +1266,16 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 			const sid = resolveTargetSessionId(state, sessionId);
 			if (!sid) return undefined;
 			return state.sessionsById[sid]?.model;
+		},
+
+		setSessionAutoAccept: (autoAccept, sessionId) =>
+			get().actions.updateSession({ autoAccept }, sessionId),
+
+		getSessionAutoAccept: (sessionId): boolean => {
+			const state = get();
+			const sid = resolveTargetSessionId(state, sessionId);
+			if (!sid) return false;
+			return state.sessionsById[sid]?.autoAccept ?? false;
 		},
 	},
 }));

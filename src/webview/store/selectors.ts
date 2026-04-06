@@ -380,6 +380,8 @@ export const useModelSelection = () => {
 			opencodeProviders: state.opencodeProviders,
 			enabledOpenCodeModels: state.enabledOpenCodeModels,
 			disabledProviders: state.disabledProviders,
+			getModelVariant: state.actions.getModelVariant,
+			setModelVariant: state.actions.setModelVariant,
 			setSelectedModel: state.actions.setSelectedModel,
 			getSessionAgent: chatActions.getSessionAgent,
 			setSessionAgent: chatActions.setSessionAgent,
@@ -458,3 +460,17 @@ export const useDraftAgent = () =>
 /** Reactive selector for the active session's agent (build = undefined, plan = 'plan', etc.) */
 export const useSessionAgent = () =>
 	useChatStore((state: ChatState) => getActiveSession(state)?.agent);
+
+/** Reactive selector for the effective model's thinking effort variant. */
+export const useSessionVariant = () => {
+	const activeSessionModel = useChatStore((state: ChatState) => getActiveSession(state)?.model);
+	return useSettingsStore((state: SettingsState) => {
+		const effectiveModel = activeSessionModel ?? state.selectedModel;
+		if (!effectiveModel || effectiveModel === 'default') return undefined;
+		return state.modelVariants[effectiveModel];
+	});
+};
+
+/** Reactive selector for the active session's auto-accept permissions toggle. */
+export const useSessionAutoAccept = () =>
+	useChatStore((state: ChatState) => getActiveSession(state)?.autoAccept ?? false);

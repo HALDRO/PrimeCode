@@ -719,6 +719,8 @@ export class SessionHandler implements WebviewMessageHandler {
 		} else {
 			this.postStatus(sessionId, 'idle', 'Ready');
 		}
+
+		this.syncSessionRuntimeState(sessionId);
 	}
 
 	private async onCloseSession(msg: CommandOf<'closeSession'>): Promise<void> {
@@ -750,6 +752,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		this.replayedSessions.delete(sessionId);
 		this.clearSessionStats(sessionId);
 		this.clearPendingMessage(sessionId);
+		this.context.clearSessionAutoAccept?.(sessionId);
 		// Clean up session graph entries to prevent unbounded Map growth
 		this.context.sessionGraph.clearParent(sessionId);
 		// Clean up pending child message buffers
@@ -765,7 +768,7 @@ export class SessionHandler implements WebviewMessageHandler {
 	}
 
 	private async onSendMessage(msg: CommandOf<'sendMessage'>): Promise<void> {
-		const { text, model: uiModel, sessionId, messageID, attachments, agent } = msg;
+		const { text, model: uiModel, sessionId, messageID, attachments, agent, variant } = msg;
 		const resolvedAgent = agent;
 
 		// Resolve target session
@@ -788,11 +791,19 @@ export class SessionHandler implements WebviewMessageHandler {
 				sessionId: targetId,
 				textLen: text.length,
 			});
-			this.enqueueMessage(targetId, text, uiModel, resolvedAgent, attachments);
+			this.enqueueMessage(targetId, text, uiModel, resolvedAgent, attachments, variant);
 			return;
 		}
 
-		await this.handleSendMessage(text, uiModel, sessionId, messageID, attachments, resolvedAgent);
+		await this.handleSendMessage(
+			text,
+			uiModel,
+			sessionId,
+			messageID,
+			attachments,
+			resolvedAgent,
+			variant,
+		);
 	}
 
 	private onCancelQueuedMessage(msg: CommandOf<'cancelQueuedMessage'>): void {
@@ -870,6 +881,7 @@ export class SessionHandler implements WebviewMessageHandler {
 				undefined,
 				entry.attachments,
 				entry.agent,
+				entry.variant,
 			);
 		} finally {
 			this.sendingLock.delete(sessionId);
@@ -905,6 +917,7 @@ export class SessionHandler implements WebviewMessageHandler {
 				undefined,
 				entry.attachments,
 				entry.agent,
+				entry.variant,
 			);
 		} catch (error) {
 			logger.error('[SessionHandler] Failed to send dequeued message, returning to input', error);
@@ -931,6 +944,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		model?: string,
 		agent?: string,
 		attachments?: QueuedMessageData['attachments'],
+		variant?: string,
 	): void {
 		const queue = this.pendingMessages.get(sessionId) ?? [];
 		if (queue.length >= SessionHandler.MAX_QUEUE_SIZE) {
@@ -952,6 +966,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			model,
 			sessionId,
 			agent,
+			variant,
 			attachments,
 			queuedAt: Date.now(),
 		};
@@ -1042,6 +1057,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		messageIdToTruncate?: string,
 		attachments?: CommandOf<'sendMessage'>['attachments'],
 		agent?: string,
+		variant?: string,
 	): Promise<void> {
 		// Clear stop guard for the target session — user is explicitly sending
 		// a new message, so SSE 'busy' events should be allowed through again.
@@ -1055,6 +1071,9 @@ export class SessionHandler implements WebviewMessageHandler {
 		// Per-message agent override takes precedence over the global opencode.agent setting.
 		if (agent) {
 			config.agent = agent;
+		}
+		if (variant) {
+			config.variant = variant;
 		}
 		if (config.provider === 'opencode' && typeof config.model === 'string' && config.model.trim()) {
 			const selectedModel = config.model.trim();
@@ -2232,6 +2251,15 @@ export class SessionHandler implements WebviewMessageHandler {
 				this.context.bridge.lifecycle.cleared(sessionId);
 				break;
 		}
+	}
+
+	private syncSessionRuntimeState(sessionId: string): void {
+		this.context.bridge.session.info(
+			sessionId,
+			undefined,
+			undefined,
+			this.context.getSessionAutoAccept?.(sessionId) ?? false,
+		);
 	}
 
 	private postStats(

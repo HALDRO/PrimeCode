@@ -375,8 +375,9 @@ export interface SessionMessageRemovedPayload {
 
 export interface SessionInfoData {
 	sessionId: string;
-	tools: string[];
-	mcpServers: string[];
+	tools?: string[];
+	mcpServers?: string[];
+	autoAccept?: boolean;
 }
 
 export interface SessionInfoPayload {
@@ -963,6 +964,8 @@ export interface SendMessageCommand {
 	messageID?: string;
 	/** Agent override for this message (e.g. 'plan', 'build'). */
 	agent?: string;
+	/** Thinking effort variant (e.g. 'high', 'max', 'low'). Sent to CLI as-is. */
+	variant?: string;
 	attachments?: {
 		files?: string[];
 		codeSnippets?: Array<{
@@ -1140,6 +1143,11 @@ export interface SetPermissionsCommand {
 	type: 'setPermissions';
 	policies: Partial<PermissionPolicies>;
 	provider?: string;
+}
+export interface SetAutoAcceptCommand {
+	type: 'setAutoAccept';
+	enabled: boolean;
+	sessionId?: string;
 }
 export interface CheckDiscoveryStatusCommand {
 	type: 'checkDiscoveryStatus';
@@ -1353,6 +1361,8 @@ export interface QueuedMessageData {
 	sessionId: string;
 	/** Agent override (e.g. 'plan', 'build') */
 	agent?: string;
+	/** Thinking effort variant (e.g. 'high', 'max', 'low'). */
+	variant?: string;
 	/** Attachments */
 	attachments?: SendMessageCommand['attachments'];
 	/** Timestamp when queued */
@@ -1449,6 +1459,7 @@ export type WebviewCommand =
 	| QuestionRejectCommand
 	| GetPermissionsCommand
 	| SetPermissionsCommand
+	| SetAutoAcceptCommand
 	| CheckDiscoveryStatusCommand
 	| GetAccessCommand
 	| CheckCLIDiagnosticsCommand

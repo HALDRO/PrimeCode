@@ -468,6 +468,8 @@ const OpenCodeModelDataSchema = Type.Object({
 			output: Type.Optional(Type.Number()),
 		}),
 	),
+	/** Thinking effort variant names available for this model (e.g. ['low','medium','high']). */
+	variants: Type.Optional(Type.Array(Type.String())),
 });
 
 export const OpenCodeProviderDataSchema = Type.Object({

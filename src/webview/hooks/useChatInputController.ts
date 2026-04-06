@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useMemo } from 'react';
 import { resolveModelDisplayName } from '../../common';
+import { getAvailableModelVariants, resolveValidVariant } from '../lib/modelVariants';
 import {
 	useChatActions,
 	useDraftAgent,
@@ -95,6 +96,7 @@ export function useChatInputController(
 		selectedModel,
 		proxyModels,
 		opencodeProviders,
+		getModelVariant,
 		getSessionModel,
 		setSessionModel,
 		getSessionAgent,
@@ -103,6 +105,11 @@ export function useChatInputController(
 	const isImproving = useIsImprovingPrompt();
 	const currentImproveRequestId = useImprovingPromptRequestId();
 	const promptVersions = usePromptVersions();
+	const validSessionVariant = useMemo(() => {
+		const effectiveModel = getSessionModel() ?? selectedModel;
+		const variants = getAvailableModelVariants(opencodeProviders, effectiveModel);
+		return resolveValidVariant(variants, getModelVariant(effectiveModel));
+	}, [getModelVariant, getSessionModel, opencodeProviders, selectedModel]);
 
 	// Build a set of valid agent names for @mention parsing
 	const subagentItems = useSettingsStore(s => s.subagents.items);
@@ -239,6 +246,7 @@ export function useChatInputController(
 			text: inputValue.trim(),
 			agent,
 			model: sessionModel,
+			...(validSessionVariant ? { variant: validSessionVariant } : {}),
 			attachments: hasAttachments ? builtAttachments : undefined,
 		});
 
@@ -252,6 +260,7 @@ export function useChatInputController(
 		isControlled,
 		controlledOnSend,
 		selectedAgent,
+		validSessionVariant,
 		postSessionMessage,
 		clearRevertedMessages,
 		setStoreInput,

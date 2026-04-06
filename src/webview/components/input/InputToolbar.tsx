@@ -1,5 +1,5 @@
 /**
- * @file InputToolbar — Bottom toolbar with agent, model, slash, file, image buttons
+ * @file InputToolbar — Bottom toolbar with agent, model, thinking, permissions, slash, file, image buttons
  * @description Extracted from ChatInput. Contains all toolbar buttons and their dropdowns.
  */
 
@@ -18,9 +18,11 @@ import {
 } from '../icons';
 import { type AnchorRectLike, Button, IconButton } from '../ui';
 import { AgentButtonIcon, AgentDropdown, getAgentLabel } from './AgentDropdown';
+import { AutoAcceptButton } from './AutoAcceptButton';
 import { FilePickerDropdown } from './FilePickerDropdown';
 import { ModelDropdown } from './ModelDropdown';
 import { SlashCommandsDropdown } from './SlashCommandsDropdown';
+import { ThinkingBudgetButton } from './ThinkingBudgetButton';
 
 /** IDs of built-in agents that are toggled via the main button click. */
 const BUILTIN_TOGGLE_IDS = new Set(['build', 'plan']);
@@ -168,6 +170,12 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({
 						<ModelDropdown anchorElement={modelButtonAnchorElement} onClose={onModelClose} />
 					)}
 				</div>
+
+				{/* Thinking effort variant */}
+				<ThinkingBudgetButton />
+
+				{/* Auto-accept permissions */}
+				<AutoAcceptButton />
 			</div>
 
 			{/* Right Toolbar */}

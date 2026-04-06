@@ -129,6 +129,8 @@ export interface SettingsActions {
 	setProviderAuthState: (state: ProviderAuthState | null) => void;
 	// Model selection for OpenCode
 	setEnabledOpenCodeModels: (models: string[]) => void;
+	setModelVariant: (modelId: string, variant: string | undefined) => void;
+	getModelVariant: (modelId: string | undefined) => string | undefined;
 	// Unified provider visibility (disabled = hidden from dropdown but keeps model selection)
 	// Works for all providers: OpenAI Compatible (__openai_compatible__) and OpenCode providers
 	setDisabledProviders: (providers: string[]) => void;
@@ -241,6 +243,7 @@ export interface SettingsState {
 
 	// Model
 	selectedModel: string;
+	modelVariants: Record<string, string | undefined>;
 	proxyModels: Array<{
 		id: string;
 		name: string;
@@ -411,6 +414,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 	},
 
 	selectedModel: 'default',
+	modelVariants: {},
 	proxyModels: [],
 	enabledProxyModels: [],
 
@@ -491,6 +495,17 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 	actions: {
 		setSettings: settings => set(state => ({ ...state, ...settings })),
 		setSelectedModel: selectedModel => set({ selectedModel }),
+		setModelVariant: (modelId, variant) =>
+			set(state => {
+				const next = { ...state.modelVariants };
+				if (variant) next[modelId] = variant;
+				else delete next[modelId];
+				return { modelVariants: next };
+			}),
+		getModelVariant: modelId => {
+			if (!modelId || modelId === 'default') return undefined;
+			return get().modelVariants[modelId];
+		},
 		setProxyModels: proxyModels => set({ proxyModels }),
 		setEnabledProxyModels: enabledProxyModels => set({ enabledProxyModels }),
 		setProxyTestStatus: (status: Partial<SettingsState['proxyTestStatus']>) =>

@@ -99,6 +99,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			...baseContext,
 			// Lazy getter — ToolHandler is created below but the closure captures `this`
 			getPermissionPolicies: () => this.toolHandler.getPermissionPolicies(),
+			getSessionAutoAccept: (sessionId: string) => this.toolHandler.isAutoAccept(sessionId),
+			clearSessionAutoAccept: (sessionId: string) =>
+				this.toolHandler.clearSessionAutoAccept(sessionId),
 			registerCheckpoint: (commitId, record) =>
 				this.restoreHandler.registerCheckpoint(commitId, record),
 			cleanupSessionRestore: sessionId => this.restoreHandler.cleanupSession(sessionId),
@@ -454,6 +457,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				'questionReject',
 				'getPermissions',
 				'setPermissions',
+				'setAutoAccept',
 				'checkDiscoveryStatus',
 				'getAccess',
 				'checkCLIDiagnostics',
@@ -1069,15 +1073,17 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				// Auto-approve everything if yoloMode or autoApprove is enabled in settings.
 				const isYolo = Boolean(this.settings.get('access.yoloMode'));
 				const isAutoApprove = Boolean(this.settings.get('access.autoApprove'));
+				const isAutoAccept = this.toolHandler.isAutoAccept(permissionTargetSessionId);
 				logger.debug('[ChatProvider] Permission check', {
 					tool,
 					requestId,
 					isYolo,
 					isAutoApprove,
+					isAutoAccept,
 					isChildPermission,
 				});
-				if (isYolo || isAutoApprove) {
-					logger.debug('[ChatProvider] Auto-approve via yolo/autoApprove');
+				if (isYolo || isAutoApprove || isAutoAccept) {
+					logger.debug('[ChatProvider] Auto-approve via yolo/autoApprove/autoAccept');
 					autoRespond(true);
 					break;
 				}

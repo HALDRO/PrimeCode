@@ -316,15 +316,20 @@ export class OutboundBridge {
 			} satisfies SessionEventMessage);
 		},
 
-		/** Post session info (tools, mcp servers). */
-		info: (sessionId: string, tools: string[], mcpServers: string[]): void => {
+		/** Post session info (tools, mcp servers, runtime toggles). */
+		info: (
+			sessionId: string,
+			tools?: string[],
+			mcpServers?: string[],
+			autoAccept?: boolean,
+		): void => {
 			this.send({
 				type: 'session_event',
 				targetId: sessionId,
 				eventType: 'session_info',
 				payload: {
 					eventType: 'session_info',
-					data: { sessionId, tools, mcpServers },
+					data: { sessionId, tools, mcpServers, autoAccept },
 				},
 				timestamp: Date.now(),
 				sessionId,

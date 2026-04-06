@@ -75,6 +75,7 @@ export {
 	PlanIcon,
 	RejectIcon,
 	SmallCloseIcon,
+	ThinkingLevelIcon,
 	TodoCheckIcon,
 	TodoListIcon,
 	TodoPendingIcon,
