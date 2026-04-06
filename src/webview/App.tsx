@@ -51,12 +51,13 @@ function sectionChanged(prev: MessageSection, next: MessageSection): boolean {
 		const p = prev.responses[i];
 		const n = next.responses[i];
 		if (p !== n) {
-			// Arrays are recreated by groupToolMessages — compare by last id + length
+			// Arrays are recreated by groupToolMessages — compare by last id + length + isLive
 			if (Array.isArray(p) && Array.isArray(n)) {
 				if (p.length !== n.length) return true;
 				const pId = p[p.length - 1]?.id;
 				const nId = n[n.length - 1]?.id;
 				if (pId !== nId) return true;
+				if ((p as { isLive?: boolean }).isLive !== (n as { isLive?: boolean }).isLive) return true;
 			} else {
 				return true;
 			}

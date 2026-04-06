@@ -20,10 +20,18 @@ const MAX_BRIDGE_MESSAGE_LENGTH = 200;
 // -----------------------------------------------------------------------------
 
 /**
- * WeakSet of grouped Message[] arrays that were created as trailing streaming groups.
- * SimpleToolGroup checks this to enable preview mode (maxHeight + auto-scroll).
+ * A grouped tool array with an `isLive` data marker.
+ *
+ * When `isLive` is true the group is the trailing streaming group —
+ * SimpleToolGroup uses this to enable preview mode (maxHeight + auto-scroll).
+ *
+ * Unlike the previous WeakSet approach, the marker travels with the data
+ * and survives array recreation across render cycles, eliminating the
+ * expand→collapse→expand flickering caused by lost object identity.
  */
-export const liveToolGroups = new WeakSet<Message[]>();
+export interface ToolGroup extends Array<Message> {
+	isLive?: boolean;
+}
 
 // -----------------------------------------------------------------------------
 // Internal helpers
@@ -116,7 +124,7 @@ export const groupToolMessages = (
 
 		if (canGroup) {
 			if (reason === 'final' && isStreaming) {
-				liveToolGroups.add(currentToolGroup);
+				(currentToolGroup as ToolGroup).isLive = true;
 			}
 			result.push(currentToolGroup);
 		} else {

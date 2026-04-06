@@ -29,10 +29,10 @@ import { SubtaskTimer } from './LiveStats';
 import { QuestionCard } from './QuestionCard';
 import {
 	InlineToolLine,
-	liveToolGroups,
 	SimpleTool,
 	shouldCollapseGroupedItem,
 	ThinkingMessage,
+	type ToolGroup,
 } from './SimpleTool';
 import { ToolCard, ToolCardMessage } from './ToolCard';
 
@@ -305,7 +305,7 @@ const SimpleToolGroup = React.memo<{
 	messages: Message[];
 	shouldCollapse: boolean;
 }>(({ messages, shouldCollapse }) => {
-	const isLive = liveToolGroups.has(messages);
+	const isLive = (messages as ToolGroup).isLive ?? false;
 	const toolUseMessages = useMemo(
 		() =>
 			messages.filter((m): m is Extract<Message, { type: 'tool_use' }> => m.type === 'tool_use'),

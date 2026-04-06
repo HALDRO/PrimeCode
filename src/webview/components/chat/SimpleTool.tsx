@@ -238,9 +238,9 @@ ThinkingMessage.displayName = 'ThinkingMessage';
 
 export {
 	groupToolMessages,
-	liveToolGroups,
 	precomputeCollapseFlags,
 	shouldCollapseGroupedItem,
+	type ToolGroup,
 } from './toolGrouping';
 
 // -----------------------------------------------------------------------------
