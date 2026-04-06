@@ -984,6 +984,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			parentID?: string;
 			/** true when the session has at least one user message. */
 			hasMessages?: boolean;
+			/** Server-side revert state — source of truth for whether the session is reverted. */
+			revert?: { messageID: string; partID?: string };
 		}>
 	> {
 		if (!this.serverUrl) {
@@ -1042,6 +1044,9 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 						created: s.time?.created,
 						parentID: s.parentID,
 						hasMessages,
+						revert: s.revert
+							? { messageID: s.revert.messageID, partID: s.revert.partID }
+							: undefined,
 					};
 				}),
 			);

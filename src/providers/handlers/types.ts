@@ -37,8 +37,6 @@ export interface HandlerContext {
 	cleanupSessionRestore?: (sessionId: string) => void;
 	/** Clean up pending child message buffers when a session is closed/deleted. */
 	cleanupPendingChildMessages?: (sessionId: string) => void;
-	/** Check if a session is currently in reverted state (persisted across restarts). */
-	isSessionReverted?: (sessionId: string) => boolean;
 }
 
 export interface WebviewMessageHandler {

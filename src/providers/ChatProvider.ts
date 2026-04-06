@@ -105,7 +105,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			registerCheckpoint: (commitId, record) =>
 				this.restoreHandler.registerCheckpoint(commitId, record),
 			cleanupSessionRestore: sessionId => this.restoreHandler.cleanupSession(sessionId),
-			isSessionReverted: sessionId => this.restoreHandler.isSessionReverted(sessionId),
 			cleanupPendingChildMessages: sessionId => this.cleanupPendingChildMessages(sessionId),
 		};
 

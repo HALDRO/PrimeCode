@@ -6,11 +6,13 @@
  *              messageId) and calls the appropriate endpoint. The frontend has ZERO
  *              knowledge of OpenCode message IDs, session IDs, or provider differences.
  *
- * Multi-chat safety: revertedSessions is a per-session Set, so reverting in
- * chat A then chat B doesn't lose the ability to unrevert A.
+ * Multi-chat safety: the CLI server tracks revert state per-session via session.revert,
+ * so reverting in chat A then chat B doesn't lose the ability to unrevert A.
  *
  * Restart safety: checkpoints are re-registered during history replay
  * (SessionHandler.replayHistoryIntoSession), so they survive extension restarts.
+ * Revert state is read from the server's session.revert field during replay,
+ * so it also survives restarts without local persistence.
  */
 
 import * as vscode from 'vscode';
@@ -37,31 +39,9 @@ export class RestoreHandler implements WebviewMessageHandler {
 	 */
 	private readonly checkpoints = new Map<string, CheckpointRecord>();
 
-	/**
-	 * Per-session revert tracking. When a session is reverted, its ID is added.
-	 * When unrevert completes, it's removed. This ensures multi-chat safety:
-	 * reverting in chat A then chat B doesn't lose the ability to unrevert A.
-	 *
-	 * Cached in-memory and persisted to workspaceState so unrevert survives
-	 * extension restarts. The in-memory Set avoids repeated deserialization
-	 * from workspaceState on every isSessionReverted() call.
-	 */
-	private static readonly REVERTED_KEY = 'primecode.revertedSessions';
-	private readonly revertedSessions: Set<string>;
-
 	constructor(private readonly context: HandlerContext) {
-		const arr = context.extensionContext.workspaceState.get<string[]>(
-			RestoreHandler.REVERTED_KEY,
-			[],
-		);
-		this.revertedSessions = new Set(arr);
-	}
-
-	private persistRevertedSessions(): void {
-		void this.context.extensionContext.workspaceState.update(
-			RestoreHandler.REVERTED_KEY,
-			Array.from(this.revertedSessions),
-		);
+		// Clean up legacy workspaceState key if present (was used before server-side revert tracking)
+		void context.extensionContext.workspaceState.update('primecode.revertedSessions', undefined);
 	}
 
 	/** Register a checkpoint so the frontend can later restore it by commitId alone. */
@@ -70,28 +50,13 @@ export class RestoreHandler implements WebviewMessageHandler {
 		logger.trace('[RestoreHandler] Registered checkpoint', { commitId, ...record });
 	}
 
-	/** Clean up revert state when a session is deleted. Prevents stale entries in workspaceState. */
+	/** Clean up checkpoint data when a session is deleted. */
 	cleanupSession(sessionId: string): void {
-		if (this.revertedSessions.delete(sessionId)) {
-			this.persistRevertedSessions();
-			logger.debug('[RestoreHandler] Cleaned up revertedSessions for deleted session', {
-				sessionId,
-			});
-		}
-		// Remove checkpoints belonging to this session
 		for (const [commitId, record] of this.checkpoints) {
 			if (record.sessionId === sessionId) {
 				this.checkpoints.delete(commitId);
 			}
 		}
-	}
-
-	/**
-	 * Check if a session is currently in reverted state.
-	 * Used during session restore to re-apply revert markers.
-	 */
-	isSessionReverted(sessionId: string): boolean {
-		return this.revertedSessions.has(sessionId);
 	}
 
 	async handleMessage(msg: WebviewCommand): Promise<void> {
@@ -147,10 +112,6 @@ export class RestoreHandler implements WebviewMessageHandler {
 				workspaceRoot,
 			});
 
-			// Track this session as reverted (persisted to workspaceState)
-			this.revertedSessions.add(record.sessionId);
-			this.persistRevertedSessions();
-
 			// Single notification: success + unrevert available
 			this.context.bridge.session.restore(record.sessionId, {
 				action: 'success',
@@ -167,9 +128,8 @@ export class RestoreHandler implements WebviewMessageHandler {
 	/**
 	 * Handle unrevert from webview.
 	 *
-	 * Uses activeSessionId and validates it against revertedSessions.
-	 * The UI only shows the unrevert button on sessions that were actually reverted,
-	 * so activeSessionId is correct here — the user must be viewing the reverted session.
+	 * Uses activeSessionId — the UI only shows the unrevert button on sessions
+	 * that were actually reverted, so activeSessionId is correct here.
 	 */
 	private async handleUnrevert(msg: CommandOf<'unrevert'>): Promise<void> {
 		const sessionId = msg.sessionId || this.context.sessionState.activeSessionId;
@@ -192,15 +152,7 @@ export class RestoreHandler implements WebviewMessageHandler {
 				workspaceRoot,
 			});
 
-			// Remove from reverted set (persisted to workspaceState)
-			this.revertedSessions.delete(sessionId);
-			this.persistRevertedSessions();
-
 			// Single notification: clear both unrevert flag and revert marker atomically.
-			// Previously this was two separate notifications (success + unrevert_available),
-			// which caused a race: between the two events the UI saw canUnrevert=false
-			// but revertedFromMessageId still set — messages stayed dimmed with no
-			// way to undo.
 			this.context.bridge.session.restore(sessionId, {
 				action: 'unrevert_available',
 				available: false,

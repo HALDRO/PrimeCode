@@ -455,6 +455,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			lastModified?: number;
 			created?: number;
 			parentID?: string;
+			revert?: { messageID: string; partID?: string };
 		}>,
 	): Promise<void> {
 		const graph = this.context.sessionGraph;
@@ -574,10 +575,10 @@ export class SessionHandler implements WebviewMessageHandler {
 
 		// Batch all replay messages into a single postMessage to reduce overhead.
 		// startCollect() buffers session_event messages; flushCollected() sends them as one batch.
-		// Restore revert state from persisted workspaceState.
-		// If this session was reverted before the extension restarted,
-		// we need to re-apply the revert marker so messages stay dimmed.
-		const isReverted = this.context.isSessionReverted?.(sessionId) ?? false;
+		// Use server-side revert state (source of truth) instead of persisted workspaceState.
+		// The CLI session object has a `revert` field that tracks the real revert point.
+		const currentSession = allSessions.find(s => s.id === sessionId);
+		const serverRevert = currentSession?.revert;
 
 		this.context.bridge.startCollect();
 		try {
@@ -627,37 +628,46 @@ export class SessionHandler implements WebviewMessageHandler {
 			this.context.bridge.flushCollected();
 		}
 
-		// After replay is flushed, restore revert state if this session was
-		// reverted before the extension restarted. This must happen AFTER
-		// flushCollected() so the messages are already in the webview store
-		// and the revert marker can dim them correctly.
-		if (isReverted) {
-			// Find the last user message ID to use as the revert point.
-			// The OpenCode server's session.revert field tracks the real revert point,
-			// but we don't have it here. The last user message in the replayed history
-			// is the closest approximation — messages after it were reverted.
-			// Reverse search without allocating a copy (findLast unavailable in extension tsconfig)
-			let lastUserEvent: CLIEvent | undefined;
+		// After replay is flushed, restore revert state using the server's revert field
+		// (source of truth). The CLI session object has a `revert.messageID` that tracks
+		// the exact revert point. This replaces the old workspaceState-based approach
+		// which could become stale and cause phantom UnRevert buttons.
+		if (serverRevert?.messageID) {
+			// The server's revert.messageID is the real message ID. Find the matching
+			// user message in the replayed history to use as the revert point.
+			let revertUserMessageId: string | undefined;
 			for (let i = parentHistory.length - 1; i >= 0; i--) {
 				const ev = parentHistory[i];
 				if (ev.type === 'normalized_log' && (ev.data as { role?: string }).role === 'user') {
-					lastUserEvent = ev;
-					break;
+					const evMsgId = (ev.data as { messageId?: string }).messageId;
+					if (evMsgId === serverRevert.messageID) {
+						revertUserMessageId = evMsgId;
+						break;
+					}
 				}
 			}
-			const lastUserMessageId = lastUserEvent
-				? (lastUserEvent.data as { messageId?: string }).messageId
-				: undefined;
 
-			if (lastUserMessageId) {
+			// Fallback: if exact match not found, use the last user message
+			if (!revertUserMessageId) {
+				for (let i = parentHistory.length - 1; i >= 0; i--) {
+					const ev = parentHistory[i];
+					if (ev.type === 'normalized_log' && (ev.data as { role?: string }).role === 'user') {
+						revertUserMessageId = (ev.data as { messageId?: string }).messageId;
+						break;
+					}
+				}
+			}
+
+			if (revertUserMessageId) {
 				this.context.bridge.session.restore(sessionId, {
 					action: 'success',
 					canUnrevert: true,
-					revertedFromMessageId: lastUserMessageId,
+					revertedFromMessageId: revertUserMessageId,
 				});
-				logger.info('[SessionHandler] Restored revert state after replay', {
+				logger.info('[SessionHandler] Restored revert state from server', {
 					sessionId,
-					revertedFromMessageId: lastUserMessageId,
+					revertedFromMessageId: revertUserMessageId,
+					serverRevertMessageId: serverRevert.messageID,
 				});
 			}
 		}
