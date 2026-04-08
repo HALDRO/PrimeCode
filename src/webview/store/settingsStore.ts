@@ -100,6 +100,7 @@ export interface ProxyEndpointState {
 	baseUrl: string;
 	apiKey: string;
 	enabledModels: string[];
+	headers?: Record<string, string>;
 	models: Array<{
 		id: string;
 		name: string;

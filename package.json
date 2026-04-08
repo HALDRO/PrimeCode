@@ -337,6 +337,12 @@
 								"items": {
 									"type": "string"
 								}
+							},
+							"headers": {
+								"type": "object",
+								"additionalProperties": {
+									"type": "string"
+								}
 							}
 						},
 						"required": [

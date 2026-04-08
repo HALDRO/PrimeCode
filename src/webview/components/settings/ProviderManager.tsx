@@ -244,6 +244,9 @@ export const ProviderManager: React.FC = () => {
 			baseUrl: endpoint.baseUrl,
 			apiKey: endpoint.apiKey,
 			enabledModels: endpoint.enabledModels,
+			...(endpoint.headers && Object.keys(endpoint.headers).length > 0
+				? { headers: endpoint.headers }
+				: {}),
 		}));
 		postMessage({ type: 'updateSettings', settings: { 'proxy.endpoints': persistedEndpoints } });
 	};
@@ -279,6 +282,16 @@ export const ProviderManager: React.FC = () => {
 		persistProxyEndpoints(nextEndpoints);
 	};
 
+	const handleUpdateEndpointHeaders = (endpointId: string, headers: Record<string, string>) => {
+		updateProxyEndpoint(endpointId, { headers });
+		const nextEndpoints = useSettingsStore
+			.getState()
+			.proxyEndpoints.map(endpoint =>
+				endpoint.id === endpointId ? { ...endpoint, headers } : endpoint,
+			);
+		persistProxyEndpoints(nextEndpoints);
+	};
+
 	const handleEndpointBlur = () => undefined;
 
 	const handleFetchEndpointModels = (endpointId: string) => {
@@ -294,6 +307,7 @@ export const ProviderManager: React.FC = () => {
 			baseUrl: endpoint.baseUrl,
 			apiKey: endpoint.apiKey,
 			endpointId,
+			headers: endpoint.headers,
 		});
 	};
 
@@ -318,6 +332,7 @@ export const ProviderManager: React.FC = () => {
 			endpointId,
 			providerId: getProxyEndpointProviderId(endpointId),
 			providerName: endpoint.name || undefined,
+			headers: endpoint.headers,
 		});
 	};
 
@@ -654,6 +669,7 @@ export const ProviderManager: React.FC = () => {
 									onFieldChange={(field, value) =>
 										handleUpdateEndpointField(endpoint.id, field, value)
 									}
+									onHeadersChange={headers => handleUpdateEndpointHeaders(endpoint.id, headers)}
 									onBlur={handleEndpointBlur}
 									onFetchModels={() => handleFetchEndpointModels(endpoint.id)}
 									onToggleModel={modelId => handleToggleEndpointModel(endpoint.id, modelId)}
@@ -700,6 +716,7 @@ interface CustomEndpointConfigProps {
 	endpoint: import('../../store/settingsStore').ProxyEndpointState;
 	onToggle: () => void;
 	onFieldChange: (field: 'name' | 'baseUrl' | 'apiKey', value: string) => void;
+	onHeadersChange: (headers: Record<string, string>) => void;
 	onBlur: () => void;
 	onFetchModels: () => void;
 	onToggleModel: (modelId: string) => void;
@@ -815,12 +832,19 @@ const CustomEndpointConfig: React.FC<CustomEndpointConfigProps> = ({
 	endpoint,
 	onToggle,
 	onFieldChange,
+	onHeadersChange,
 	onBlur,
 	onFetchModels,
 	onToggleModel,
 	onRemove,
 }) => {
 	const [modelSearch, setModelSearch] = useState('');
+	const [headerKey, setHeaderKey] = useState('');
+	const [headerValue, setHeaderValue] = useState('');
+	const baseUrlError =
+		endpoint.baseUrl.trim() && !/^https?:\/\//i.test(endpoint.baseUrl.trim())
+			? 'URL must start with http:// or https://'
+			: undefined;
 	const status = endpoint.testStatus.isLoading
 		? 'loading'
 		: endpoint.testStatus.success
@@ -835,6 +859,24 @@ const CustomEndpointConfig: React.FC<CustomEndpointConfigProps> = ({
 					m.id.toLowerCase().includes(modelSearch.toLowerCase()),
 			)
 		: endpoint.models;
+
+	const headers = endpoint.headers ?? {};
+	const headerEntries = Object.entries(headers);
+
+	const handleAddHeader = () => {
+		const key = headerKey.trim();
+		const value = headerValue.trim();
+		if (!key) return;
+		onHeadersChange({ ...headers, [key]: value });
+		setHeaderKey('');
+		setHeaderValue('');
+	};
+
+	const handleRemoveHeader = (key: string) => {
+		const next = { ...headers };
+		delete next[key];
+		onHeadersChange(next);
+	};
 
 	return (
 		<>
@@ -851,13 +893,18 @@ const CustomEndpointConfig: React.FC<CustomEndpointConfigProps> = ({
 				/>
 			</SettingRow>
 			<SettingRow title="Base URL">
-				<TextInput
-					value={endpoint.baseUrl}
-					onChange={e => onFieldChange('baseUrl', e.target.value)}
-					onBlur={onBlur}
-					placeholder="http://localhost:11434"
-					className="flex-1 max-w-(--input-width-lg)"
-				/>
+				<div className="flex flex-col flex-1 max-w-(--input-width-lg)">
+					<TextInput
+						value={endpoint.baseUrl}
+						onChange={e => onFieldChange('baseUrl', e.target.value)}
+						onBlur={onBlur}
+						placeholder="http://localhost:11434"
+						className="flex-1"
+					/>
+					{baseUrlError && (
+						<span className="text-xs text-vscode-errorForeground mt-0.5">{baseUrlError}</span>
+					)}
+				</div>
 			</SettingRow>
 			<SettingRow title="API Key">
 				<TextInput
@@ -869,6 +916,49 @@ const CustomEndpointConfig: React.FC<CustomEndpointConfigProps> = ({
 					className="flex-1 max-w-(--input-width-lg)"
 				/>
 			</SettingRow>
+			<div className="px-2.5 py-1.5">
+				<div className="flex items-center justify-between mb-1">
+					<span className="text-sm text-vscode-foreground">Headers</span>
+					{headerEntries.length > 0 && <SettingsBadge>{headerEntries.length}</SettingsBadge>}
+				</div>
+				{headerEntries.map(([key, value]) => (
+					<div key={key} className="flex items-center gap-1 mb-1">
+						<span className="text-xs text-vscode-descriptionForeground truncate min-w-0 flex-1">
+							{key}: {value}
+						</span>
+						<button
+							type="button"
+							onClick={() => handleRemoveHeader(key)}
+							className="text-xs text-vscode-errorForeground/70 hover:text-vscode-errorForeground shrink-0"
+						>
+							×
+						</button>
+					</div>
+				))}
+				<div className="flex items-center gap-1">
+					<TextInput
+						value={headerKey}
+						onChange={e => setHeaderKey(e.target.value)}
+						placeholder="Header name"
+						className="flex-1 text-xs"
+					/>
+					<TextInput
+						value={headerValue}
+						onChange={e => setHeaderValue(e.target.value)}
+						placeholder="Value"
+						className="flex-1 text-xs"
+					/>
+					<Button
+						size="sm"
+						variant="secondary"
+						onClick={handleAddHeader}
+						disabled={!headerKey.trim()}
+						className="text-xs px-2 py-0.5 h-(--btn-height-sm) min-h-[unset] shrink-0"
+					>
+						Add
+					</Button>
+				</div>
+			</div>
 			<div className="flex items-center justify-between px-2.5 py-1.5">
 				<div className="flex items-center gap-1.5">
 					<span className="text-sm text-vscode-foreground">Models</span>
@@ -881,7 +971,7 @@ const CustomEndpointConfig: React.FC<CustomEndpointConfigProps> = ({
 					size="sm"
 					variant="secondary"
 					onClick={onFetchModels}
-					disabled={endpoint.testStatus.isLoading || !endpoint.baseUrl.trim()}
+					disabled={endpoint.testStatus.isLoading || !endpoint.baseUrl.trim() || !!baseUrlError}
 					className="text-xs px-2 py-0.5 h-(--btn-height-sm) min-h-[unset]"
 				>
 					{endpoint.testStatus.isLoading
@@ -910,7 +1000,9 @@ const CustomEndpointConfig: React.FC<CustomEndpointConfigProps> = ({
 			) : (
 				<EmptyState>
 					{endpoint.baseUrl.trim()
-						? 'Click "Fetch" to load available models'
+						? baseUrlError
+							? 'Fix the Base URL format first'
+							: 'Click "Fetch" to load available models'
 						: 'Enter a Base URL first'}
 				</EmptyState>
 			)}

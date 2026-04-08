@@ -208,6 +208,7 @@ export class OpenCodeClientService {
 		apiKey: string,
 		enabledModels: EnrichedProxyModel[],
 		providerName?: string,
+		customHeaders?: Record<string, string>,
 	): Promise<void> {
 		const configPath = vscode.Uri.file(`${workspaceRoot}/opencode.json`);
 		const existing = await this.readProjectConfig(workspaceRoot);
@@ -247,7 +248,13 @@ export class OpenCodeClientService {
 			...providerSection[providerId],
 			name: providerName || 'OpenAI Compatible',
 			npm: '@ai-sdk/openai-compatible',
-			options: { baseURL: normalizedBaseUrl, apiKey },
+			options: {
+				baseURL: normalizedBaseUrl,
+				apiKey,
+				...(customHeaders && Object.keys(customHeaders).length > 0
+					? { headers: customHeaders }
+					: {}),
+			},
 			models: modelsRecord,
 		};
 

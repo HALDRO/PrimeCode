@@ -151,7 +151,10 @@ export class SettingsHandler implements WebviewMessageHandler {
 								typeof (entry as Record<string, unknown>).name === 'string' &&
 								typeof (entry as Record<string, unknown>).baseUrl === 'string' &&
 								typeof (entry as Record<string, unknown>).apiKey === 'string' &&
-								Array.isArray((entry as Record<string, unknown>).enabledModels),
+								Array.isArray((entry as Record<string, unknown>).enabledModels) &&
+								((entry as Record<string, unknown>).headers === undefined ||
+									(typeof (entry as Record<string, unknown>).headers === 'object' &&
+										!Array.isArray((entry as Record<string, unknown>).headers))),
 						)
 					) {
 						await this.context.settings.set(

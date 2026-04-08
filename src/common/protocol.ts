@@ -1104,6 +1104,7 @@ export interface LoadProxyModelsCommand {
 	baseUrl: string;
 	apiKey: string;
 	endpointId?: string;
+	headers?: Record<string, string>;
 }
 export interface SyncProxyModelsCommand {
 	type: 'syncProxyModels';
@@ -1113,6 +1114,7 @@ export interface SyncProxyModelsCommand {
 	endpointId?: string;
 	providerId?: string;
 	providerName?: string;
+	headers?: Record<string, string>;
 }
 export interface RemoveProxyEndpointCommand {
 	type: 'removeProxyEndpoint';

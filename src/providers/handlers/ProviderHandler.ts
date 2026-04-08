@@ -260,6 +260,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 
 	private async onLoadProxyModels(msg: CommandOf<'loadProxyModels'>): Promise<void> {
 		const endpointId = msg.endpointId;
+		const customHeaders = msg.headers;
 
 		let baseUrlRaw = msg.baseUrl;
 		if (!baseUrlRaw.trim()) {
@@ -318,6 +319,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 				headers: {
 					Accept: 'application/json',
 					...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+					...(customHeaders ?? {}),
 				},
 			});
 
@@ -412,6 +414,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 			endpointId,
 			providerId,
 			providerName,
+			headers: customHeaders,
 			enabledModelIds: rawEnabledIds,
 		} = msg;
 		if (!baseUrl?.trim()) return;
@@ -435,6 +438,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 					apiKey,
 					[],
 					providerName,
+					customHeaders,
 				);
 				const sdkClient = this.context.cli.getSdkClient();
 				if (sdkClient) {
@@ -489,6 +493,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 				apiKey,
 				enrichedModels,
 				providerName,
+				customHeaders,
 			);
 
 			// Trigger OpenCode config reload
