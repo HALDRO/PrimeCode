@@ -6,6 +6,11 @@
  */
 
 import { useMemo } from 'react';
+import {
+	getProxyEndpointProviderId,
+	isProxyEndpointProviderId,
+	OPENAI_COMPATIBLE_PROVIDER_ID,
+} from '../../common';
 import { useSettingsStore } from '../store/settingsStore';
 
 export interface ModelOption {
@@ -19,6 +24,7 @@ export function useModelOptions(includeDefault = true): ModelOption[] {
 	const disabledProviders = useSettingsStore(s => s.disabledProviders);
 	const proxyModels = useSettingsStore(s => s.proxyModels);
 	const enabledProxyModels = useSettingsStore(s => s.enabledProxyModels);
+	const proxyEndpoints = useSettingsStore(s => s.proxyEndpoints);
 
 	return useMemo(() => {
 		const opts: ModelOption[] = [];
@@ -28,7 +34,12 @@ export function useModelOptions(includeDefault = true): ModelOption[] {
 		const enabledSet = new Set(enabledOpenCodeModels);
 
 		for (const provider of opencodeProviders) {
-			if (disabledSet.has(provider.id) || provider.id === 'oai') continue;
+			if (
+				disabledSet.has(provider.id) ||
+				provider.id === OPENAI_COMPATIBLE_PROVIDER_ID ||
+				isProxyEndpointProviderId(provider.id)
+			)
+				continue;
 			for (const model of provider.models) {
 				const compositeId = `${provider.id}/${model.id}`;
 				if (!enabledSet.has(compositeId)) continue;
@@ -45,6 +56,19 @@ export function useModelOptions(includeDefault = true): ModelOption[] {
 			}
 		}
 
+		for (const endpoint of proxyEndpoints) {
+			const providerId = getProxyEndpointProviderId(endpoint.id);
+			if (disabledSet.has(providerId)) continue;
+			const enabled = new Set(endpoint.enabledModels);
+			for (const model of endpoint.models) {
+				if (!enabled.has(model.id)) continue;
+				opts.push({
+					value: `${providerId}/${model.id}`,
+					label: `${model.name || model.id} (${endpoint.name || 'Custom'})`,
+				});
+			}
+		}
+
 		return opts;
 	}, [
 		opencodeProviders,
@@ -52,6 +76,7 @@ export function useModelOptions(includeDefault = true): ModelOption[] {
 		disabledProviders,
 		proxyModels,
 		enabledProxyModels,
+		proxyEndpoints,
 		includeDefault,
 	]);
 }

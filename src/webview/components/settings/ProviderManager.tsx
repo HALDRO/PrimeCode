@@ -8,7 +8,12 @@
 
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
-import { isNonDisconnectableProviderId, OPENAI_COMPATIBLE_PROVIDER_ID } from '../../../common';
+import {
+	getProxyEndpointProviderId,
+	isNonDisconnectableProviderId,
+	isProxyEndpointProviderId,
+	OPENAI_COMPATIBLE_PROVIDER_ID,
+} from '../../../common';
 import { useSettingsActions, useSettingsStore } from '../../store';
 import { useVSCode } from '../../utils/vscode';
 import { BrainSideIcon, RefreshIcon } from '../icons';
@@ -53,6 +58,7 @@ export const ProviderManager: React.FC = () => {
 		proxyModels,
 		enabledProxyModels,
 		proxyTestStatus,
+		proxyEndpoints,
 		enabledOpenCodeModels,
 		disabledProviders,
 	} = useSettingsStore();
@@ -62,6 +68,9 @@ export const ProviderManager: React.FC = () => {
 		setSettings,
 		setEnabledProxyModels,
 		setProxyTestStatus,
+		addProxyEndpoint,
+		updateProxyEndpoint,
+		removeProxyEndpoint,
 		setEnabledOpenCodeModels,
 	} = useSettingsActions();
 	const { postMessage } = useVSCode();
@@ -119,7 +128,7 @@ export const ProviderManager: React.FC = () => {
 		if (isOpenCodeCLI) {
 			list.push(
 				...opencodeProviders
-					.filter(p => p.id !== OPENAI_COMPATIBLE_PROVIDER_ID)
+					.filter(p => p.id !== OPENAI_COMPATIBLE_PROVIDER_ID && !isProxyEndpointProviderId(p.id))
 					.map(p => ({
 						id: p.id,
 						name: p.name,
@@ -224,6 +233,104 @@ export const ProviderManager: React.FC = () => {
 			: [...disabledProviders, providerId];
 		setSettings({ disabledProviders: nextDisabled });
 		postMessage({ type: 'updateSettings', settings: { 'providers.disabled': nextDisabled } });
+	};
+
+	const persistProxyEndpoints = (
+		endpoints: import('../../store/settingsStore').ProxyEndpointState[],
+	) => {
+		const persistedEndpoints = endpoints.map(endpoint => ({
+			id: endpoint.id,
+			name: endpoint.name,
+			baseUrl: endpoint.baseUrl,
+			apiKey: endpoint.apiKey,
+			enabledModels: endpoint.enabledModels,
+		}));
+		postMessage({ type: 'updateSettings', settings: { 'proxy.endpoints': persistedEndpoints } });
+	};
+
+	const handleAddProxyEndpoint = () => {
+		const endpointId = crypto.randomUUID();
+		const nextEndpoint = {
+			id: endpointId,
+			name: '',
+			baseUrl: '',
+			apiKey: '',
+			enabledModels: [],
+			models: [],
+			testStatus: { isLoading: false, success: null, error: null, lastTested: null },
+		};
+		const nextEndpoints = [...useSettingsStore.getState().proxyEndpoints, nextEndpoint];
+		addProxyEndpoint(nextEndpoint);
+		setExpandedProvider(`endpoint:${endpointId}`);
+		persistProxyEndpoints(nextEndpoints);
+	};
+
+	const handleUpdateEndpointField = (
+		endpointId: string,
+		field: 'name' | 'baseUrl' | 'apiKey',
+		value: string,
+	) => {
+		updateProxyEndpoint(endpointId, { [field]: value });
+		const nextEndpoints = useSettingsStore
+			.getState()
+			.proxyEndpoints.map(endpoint =>
+				endpoint.id === endpointId ? { ...endpoint, [field]: value } : endpoint,
+			);
+		persistProxyEndpoints(nextEndpoints);
+	};
+
+	const handleEndpointBlur = () => undefined;
+
+	const handleFetchEndpointModels = (endpointId: string) => {
+		const endpoint = useSettingsStore
+			.getState()
+			.proxyEndpoints.find(item => item.id === endpointId);
+		if (!endpoint) return;
+		updateProxyEndpoint(endpointId, {
+			testStatus: { ...endpoint.testStatus, isLoading: true, error: null },
+		});
+		postMessage({
+			type: 'loadProxyModels',
+			baseUrl: endpoint.baseUrl,
+			apiKey: endpoint.apiKey,
+			endpointId,
+		});
+	};
+
+	const handleToggleEndpointModel = (endpointId: string, modelId: string) => {
+		const endpoint = useSettingsStore
+			.getState()
+			.proxyEndpoints.find(item => item.id === endpointId);
+		if (!endpoint) return;
+		const enabledModels = endpoint.enabledModels.includes(modelId)
+			? endpoint.enabledModels.filter(id => id !== modelId)
+			: [...endpoint.enabledModels, modelId];
+		updateProxyEndpoint(endpointId, { enabledModels });
+		const nextEndpoints = useSettingsStore
+			.getState()
+			.proxyEndpoints.map(item => (item.id === endpointId ? { ...item, enabledModels } : item));
+		persistProxyEndpoints(nextEndpoints);
+		postMessage({
+			type: 'syncProxyModels',
+			baseUrl: endpoint.baseUrl,
+			apiKey: endpoint.apiKey,
+			enabledModelIds: enabledModels,
+			endpointId,
+			providerId: getProxyEndpointProviderId(endpointId),
+			providerName: endpoint.name || undefined,
+		});
+	};
+
+	const handleRemoveEndpoint = (endpointId: string) => {
+		postMessage({
+			type: 'removeProxyEndpoint',
+			providerId: getProxyEndpointProviderId(endpointId),
+		});
+		const nextEndpoints = useSettingsStore
+			.getState()
+			.proxyEndpoints.filter(endpoint => endpoint.id !== endpointId);
+		removeProxyEndpoint(endpointId);
+		persistProxyEndpoints(nextEndpoints);
 	};
 
 	const handleConnectProvider = (providerId: string) => {
@@ -504,6 +611,63 @@ export const ProviderManager: React.FC = () => {
 					);
 				})}
 			</div>
+
+			<div className="flex items-center justify-between mb-(--gap-2)">
+				<GroupTitle className="mb-0">Custom Endpoints</GroupTitle>
+				<Button
+					size="sm"
+					variant="secondary"
+					onClick={handleAddProxyEndpoint}
+					className="text-xs px-2 py-0.5 h-(--btn-height-sm) min-h-[unset]"
+				>
+					+ Add Endpoint
+				</Button>
+			</div>
+
+			{proxyEndpoints.length > 0 ? (
+				<div className="border border-vscode-panel-border rounded overflow-hidden mb-(--gap-6) mx-(--gap-1)">
+					{proxyEndpoints.map((endpoint, idx) => {
+						const providerKey = `endpoint:${endpoint.id}`;
+						const enabledCount = endpoint.enabledModels.length;
+						const modelCount = endpoint.models.length;
+						return (
+							<ExpandableRow
+								key={endpoint.id}
+								title={endpoint.name || 'New Endpoint'}
+								subtitle={
+									modelCount > 0
+										? `${enabledCount}/${modelCount} models`
+										: endpoint.baseUrl || 'Not configured'
+								}
+								badge={<SettingsBadge variant="blue">custom</SettingsBadge>}
+								statusDot={endpoint.baseUrl ? 'connected' : 'disconnected'}
+								expanded={expandedProvider === providerKey}
+								onToggle={() => handleToggleProvider(providerKey)}
+								last={idx === proxyEndpoints.length - 1}
+							>
+								<CustomEndpointConfig
+									enabled={!disabledProviders.includes(getProxyEndpointProviderId(endpoint.id))}
+									endpoint={endpoint}
+									onToggle={() =>
+										handleToggleProviderEnabled(getProxyEndpointProviderId(endpoint.id))
+									}
+									onFieldChange={(field, value) =>
+										handleUpdateEndpointField(endpoint.id, field, value)
+									}
+									onBlur={handleEndpointBlur}
+									onFetchModels={() => handleFetchEndpointModels(endpoint.id)}
+									onToggleModel={modelId => handleToggleEndpointModel(endpoint.id, modelId)}
+									onRemove={() => handleRemoveEndpoint(endpoint.id)}
+								/>
+							</ExpandableRow>
+						);
+					})}
+				</div>
+			) : (
+				<div className="mx-(--gap-1) mb-(--gap-6)">
+					<EmptyState>Add an extra OpenAI-compatible endpoint</EmptyState>
+				</div>
+			)}
 		</div>
 	);
 };
@@ -529,6 +693,17 @@ interface OpenAICompatibleConfigProps {
 	onBlur: () => void;
 	onFetchModels: () => void;
 	onToggleModel: (modelId: string) => void;
+}
+
+interface CustomEndpointConfigProps {
+	enabled: boolean;
+	endpoint: import('../../store/settingsStore').ProxyEndpointState;
+	onToggle: () => void;
+	onFieldChange: (field: 'name' | 'baseUrl' | 'apiKey', value: string) => void;
+	onBlur: () => void;
+	onFetchModels: () => void;
+	onToggleModel: (modelId: string) => void;
+	onRemove: () => void;
 }
 
 const OpenAICompatibleConfig: React.FC<OpenAICompatibleConfigProps> = ({
@@ -631,6 +806,123 @@ const OpenAICompatibleConfig: React.FC<OpenAICompatibleConfigProps> = ({
 					)}
 				</>
 			)}
+		</>
+	);
+};
+
+const CustomEndpointConfig: React.FC<CustomEndpointConfigProps> = ({
+	enabled,
+	endpoint,
+	onToggle,
+	onFieldChange,
+	onBlur,
+	onFetchModels,
+	onToggleModel,
+	onRemove,
+}) => {
+	const [modelSearch, setModelSearch] = useState('');
+	const status = endpoint.testStatus.isLoading
+		? 'loading'
+		: endpoint.testStatus.success
+			? 'success'
+			: endpoint.testStatus.error
+				? 'error'
+				: 'idle';
+	const filteredModels = modelSearch
+		? endpoint.models.filter(
+				m =>
+					m.name.toLowerCase().includes(modelSearch.toLowerCase()) ||
+					m.id.toLowerCase().includes(modelSearch.toLowerCase()),
+			)
+		: endpoint.models;
+
+	return (
+		<>
+			<SettingRow title="Enable Provider">
+				<Switch checked={enabled} onChange={onToggle} />
+			</SettingRow>
+			<SettingRow title="Name">
+				<TextInput
+					value={endpoint.name}
+					onChange={e => onFieldChange('name', e.target.value)}
+					onBlur={onBlur}
+					placeholder="e.g. Ollama"
+					className="flex-1 max-w-(--input-width-lg)"
+				/>
+			</SettingRow>
+			<SettingRow title="Base URL">
+				<TextInput
+					value={endpoint.baseUrl}
+					onChange={e => onFieldChange('baseUrl', e.target.value)}
+					onBlur={onBlur}
+					placeholder="http://localhost:11434"
+					className="flex-1 max-w-(--input-width-lg)"
+				/>
+			</SettingRow>
+			<SettingRow title="API Key">
+				<TextInput
+					type="password"
+					value={endpoint.apiKey}
+					onChange={e => onFieldChange('apiKey', e.target.value)}
+					onBlur={onBlur}
+					placeholder="Optional"
+					className="flex-1 max-w-(--input-width-lg)"
+				/>
+			</SettingRow>
+			<div className="flex items-center justify-between px-2.5 py-1.5">
+				<div className="flex items-center gap-1.5">
+					<span className="text-sm text-vscode-foreground">Models</span>
+					{endpoint.models.length > 0 && (
+						<SettingsBadge>{endpoint.models.length} found</SettingsBadge>
+					)}
+					{status !== 'idle' && <SettingsBadge variant="blue">{status}</SettingsBadge>}
+				</div>
+				<Button
+					size="sm"
+					variant="secondary"
+					onClick={onFetchModels}
+					disabled={endpoint.testStatus.isLoading || !endpoint.baseUrl.trim()}
+					className="text-xs px-2 py-0.5 h-(--btn-height-sm) min-h-[unset]"
+				>
+					{endpoint.testStatus.isLoading
+						? 'Loading...'
+						: endpoint.models.length > 0
+							? 'Refresh'
+							: 'Fetch'}
+				</Button>
+			</div>
+			{endpoint.testStatus.error && (
+				<div className="px-2.5 py-1.5">
+					<StatusMessage error={endpoint.testStatus.error} />
+				</div>
+			)}
+			{endpoint.models.length > 0 ? (
+				<ModelList searchValue={modelSearch} onSearchChange={setModelSearch}>
+					{filteredModels.map(model => (
+						<ModelItem key={model.id} name={model.name} id={model.id}>
+							<Switch
+								checked={endpoint.enabledModels.includes(model.id)}
+								onChange={() => onToggleModel(model.id)}
+							/>
+						</ModelItem>
+					))}
+				</ModelList>
+			) : (
+				<EmptyState>
+					{endpoint.baseUrl.trim()
+						? 'Click "Fetch" to load available models'
+						: 'Enter a Base URL first'}
+				</EmptyState>
+			)}
+			<SettingRow title="" last>
+				<button
+					type="button"
+					onClick={onRemove}
+					className="text-xs text-vscode-errorForeground/70 hover:text-vscode-errorForeground transition-colors"
+				>
+					Remove Endpoint
+				</button>
+			</SettingRow>
 		</>
 	);
 };

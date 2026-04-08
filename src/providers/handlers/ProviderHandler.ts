@@ -1,5 +1,9 @@
 import * as vscode from 'vscode';
-import { normalizeProxyBaseUrl, type OpenCodeProviderData } from '../../common';
+import {
+	getProxyEndpointProviderId,
+	normalizeProxyBaseUrl,
+	type OpenCodeProviderData,
+} from '../../common';
 import { OPENAI_COMPATIBLE_PROVIDER_ID } from '../../common/constants';
 import type { CommandOf, WebviewCommand } from '../../common/protocol';
 import type { EnrichedProxyModel } from '../../services/OpenCodeClientService';
@@ -78,6 +82,9 @@ export class ProviderHandler implements WebviewMessageHandler {
 				break;
 			case 'syncProxyModels':
 				await this.onSyncProxyModels(msg);
+				break;
+			case 'removeProxyEndpoint':
+				await this.onRemoveProxyEndpoint(msg);
 				break;
 		}
 	}
@@ -252,6 +259,8 @@ export class ProviderHandler implements WebviewMessageHandler {
 	}
 
 	private async onLoadProxyModels(msg: CommandOf<'loadProxyModels'>): Promise<void> {
+		const endpointId = msg.endpointId;
+
 		let baseUrlRaw = msg.baseUrl;
 		if (!baseUrlRaw.trim()) {
 			const setting = this.context.settings.get('proxy.baseUrl');
@@ -272,6 +281,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 				enabled: false,
 				models: [],
 				error: 'Missing proxy baseUrl',
+				endpointId,
 			});
 			return;
 		}
@@ -284,6 +294,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 				enabled: true,
 				models: cached,
 				baseUrl,
+				endpointId,
 			});
 		}
 
@@ -296,6 +307,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 				models: cached ?? [],
 				baseUrl,
 				error: 'Invalid proxy baseUrl',
+				endpointId,
 			});
 			return;
 		}
@@ -317,6 +329,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 					models: cached ?? [],
 					baseUrl,
 					error: `Proxy models request failed (${response.status})${detail}`,
+					endpointId,
 				});
 				return;
 			}
@@ -360,6 +373,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 					models: cached ?? [],
 					baseUrl,
 					error: 'No models returned by proxy',
+					endpointId,
 				});
 				return;
 			}
@@ -373,6 +387,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 				enabled: true,
 				models: enriched,
 				baseUrl,
+				endpointId,
 			});
 		} catch (error) {
 			const errMsg = error instanceof Error ? error.message : String(error);
@@ -381,6 +396,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 				models: cached ?? [],
 				baseUrl,
 				error: `Proxy models fetch failed: ${errMsg}`,
+				endpointId,
 			});
 		}
 	}
@@ -390,12 +406,44 @@ export class ProviderHandler implements WebviewMessageHandler {
 	 * Triggered when the user toggles models in the ProviderManager UI.
 	 */
 	private async onSyncProxyModels(msg: CommandOf<'syncProxyModels'>): Promise<void> {
-		const { baseUrl, apiKey, enabledModelIds } = msg;
-		if (!baseUrl?.trim() || !enabledModelIds?.length) return;
+		const {
+			baseUrl,
+			apiKey,
+			endpointId,
+			providerId,
+			providerName,
+			enabledModelIds: rawEnabledIds,
+		} = msg;
+		if (!baseUrl?.trim()) return;
 
 		try {
 			const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 			if (!workspaceRoot) return;
+			// Use the exact list from the UI message — never read from settings,
+			// which may contain stale/merged data from OpenCode CLI global config.
+			const enabledModelIds = (rawEnabledIds ?? []).filter(Boolean);
+
+			const resolvedProviderId =
+				providerId ||
+				(endpointId ? getProxyEndpointProviderId(endpointId) : OPENAI_COMPATIBLE_PROVIDER_ID);
+
+			if (!enabledModelIds?.length) {
+				await this.context.services.openCodeClient.syncProxyProviderToProjectConfig(
+					workspaceRoot,
+					resolvedProviderId,
+					baseUrl,
+					apiKey,
+					[],
+					providerName,
+				);
+				const sdkClient = this.context.cli.getSdkClient();
+				if (sdkClient) {
+					await sdkClient.instance.dispose().catch((err: unknown) => {
+						console.warn('[ProviderHandler] instance.dispose() after sync failed:', err);
+					});
+				}
+				return;
+			}
 
 			// Build enriched models from the cached proxy models (preserves /v1/models metadata),
 			// falling back to models.dev for any missing fields.
@@ -436,10 +484,11 @@ export class ProviderHandler implements WebviewMessageHandler {
 
 			await this.context.services.openCodeClient.syncProxyProviderToProjectConfig(
 				workspaceRoot,
-				OPENAI_COMPATIBLE_PROVIDER_ID,
+				resolvedProviderId,
 				baseUrl,
 				apiKey,
 				enrichedModels,
+				providerName,
 			);
 
 			// Trigger OpenCode config reload
@@ -451,6 +500,26 @@ export class ProviderHandler implements WebviewMessageHandler {
 			}
 		} catch (syncErr) {
 			console.warn('[ProviderHandler] Failed to sync proxy models to opencode.json:', syncErr);
+		}
+	}
+
+	private async onRemoveProxyEndpoint(msg: CommandOf<'removeProxyEndpoint'>): Promise<void> {
+		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		if (!workspaceRoot || !msg.providerId) return;
+
+		try {
+			await this.context.services.openCodeClient.removeProviderFromProjectConfig(
+				workspaceRoot,
+				msg.providerId,
+			);
+			const sdkClient = this.context.cli.getSdkClient();
+			if (sdkClient) {
+				await sdkClient.instance.dispose().catch((err: unknown) => {
+					console.warn('[ProviderHandler] instance.dispose() after remove failed:', err);
+				});
+			}
+		} catch (error) {
+			console.warn('[ProviderHandler] Failed to remove proxy endpoint:', error);
 		}
 	}
 

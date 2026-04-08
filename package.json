@@ -315,6 +315,41 @@
 					"default": [],
 					"description": "List of enabled model IDs from the proxy server"
 				},
+				"primeCode.proxy.endpoints": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {
+							"id": {
+								"type": "string"
+							},
+							"name": {
+								"type": "string"
+							},
+							"baseUrl": {
+								"type": "string"
+							},
+							"apiKey": {
+								"type": "string"
+							},
+							"enabledModels": {
+								"type": "array",
+								"items": {
+									"type": "string"
+								}
+							}
+						},
+						"required": [
+							"id",
+							"name",
+							"baseUrl",
+							"apiKey",
+							"enabledModels"
+						]
+					},
+					"default": [],
+					"description": "Additional custom OpenAI-compatible endpoints"
+				},
 				"primeCode.proxy.useSingleModel": {
 					"type": "boolean",
 					"default": true,

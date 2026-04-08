@@ -18,6 +18,10 @@ interface OpenCodeModelConfig {
 	temperature?: boolean;
 	attachment?: boolean;
 	tool_call?: boolean;
+	limit?: {
+		context?: number;
+		output?: number;
+	};
 }
 
 interface OpenCodeJsonConfig {
@@ -61,6 +65,14 @@ export interface EnrichedProxyModel {
 	capabilities?: { reasoning?: boolean; vision?: boolean; tools?: boolean };
 }
 
+export interface ProjectProxyProviderConfig {
+	id: string;
+	name: string;
+	baseUrl: string;
+	apiKey: string;
+	models: EnrichedProxyModel[];
+}
+
 interface OpenCodeProviderModel {
 	id: string;
 	name: string;
@@ -85,6 +97,16 @@ interface AvailableProvider {
 }
 
 export class OpenCodeClientService {
+	private async readProjectConfig(workspaceRoot: string): Promise<OpenCodeJsonConfig> {
+		const configPath = vscode.Uri.file(`${workspaceRoot}/opencode.json`);
+		try {
+			const raw = await vscode.workspace.fs.readFile(configPath);
+			return JSON.parse(Buffer.from(raw).toString('utf-8')) as OpenCodeJsonConfig;
+		} catch {
+			return {};
+		}
+	}
+
 	async getConnectedProviders(client: OpencodeClient): Promise<OpenCodeProvider[]> {
 		const { data } = await client.provider.list();
 		if (!data) throw new Error('OpenCode /provider returned no data');
@@ -129,6 +151,39 @@ export class OpenCodeClientService {
 			.filter(p => p.id.length > 0);
 	}
 
+	async getProjectProxyProvider(
+		workspaceRoot: string,
+		providerId: string,
+	): Promise<ProjectProxyProviderConfig | undefined> {
+		const config = await this.readProjectConfig(workspaceRoot);
+		const provider = config.provider?.[providerId];
+		if (!provider || provider.npm !== '@ai-sdk/openai-compatible') return undefined;
+
+		const rawBaseUrl =
+			typeof provider.options?.baseURL === 'string' ? String(provider.options.baseURL) : '';
+		const rawApiKey =
+			typeof provider.options?.apiKey === 'string' ? String(provider.options.apiKey) : '';
+		const models = Object.entries(provider.models ?? {}).map(([id, model]) => ({
+			id,
+			name: model.name || id,
+			contextLength: model.limit?.context,
+			maxCompletionTokens: model.limit?.output,
+			capabilities: {
+				reasoning: model.reasoning,
+				vision: model.modalities?.input?.includes('image'),
+				tools: model.tool_call,
+			},
+		}));
+
+		return {
+			id: providerId,
+			name: provider.name || providerId,
+			baseUrl: normalizeProxyBaseUrl(rawBaseUrl),
+			apiKey: rawApiKey,
+			models,
+		};
+	}
+
 	async setProviderAuth(client: OpencodeClient, providerId: string, apiKey: string): Promise<void> {
 		const { error } = await client.auth.set({
 			providerID: providerId,
@@ -146,82 +201,16 @@ export class OpenCodeClientService {
 		}
 	}
 
-	/**
-	 * Ensure the project-level opencode.json exists and reflects the current
-	 * VS Code proxy settings. Called automatically on extension activation so
-	 * that a fresh workspace inherits the user's global proxy configuration
-	 * without requiring a manual toggle in the UI.
-	 *
-	 * Does nothing when proxy is not configured (no baseUrl or no enabled models).
-	 * Non-destructively merges — existing opencode.json keys are preserved.
-	 */
-	async ensureProjectConfig(
-		workspaceRoot: string,
-		settings: {
-			proxyBaseUrl: string;
-			proxyApiKey: string;
-			enabledModelIds: string[];
-		},
-		enrichModels?: (ids: string[]) => Promise<EnrichedProxyModel[]>,
-	): Promise<boolean> {
-		const { proxyBaseUrl, proxyApiKey, enabledModelIds } = settings;
-
-		// Nothing to sync — proxy not configured
-		if (!proxyBaseUrl.trim() || enabledModelIds.length === 0) return false;
-
-		const configPath = vscode.Uri.file(`${workspaceRoot}/opencode.json`);
-
-		// Check if config already has the proxy provider with matching models
-		try {
-			const raw = await vscode.workspace.fs.readFile(configPath);
-			const existing = JSON.parse(Buffer.from(raw).toString('utf-8')) as OpenCodeJsonConfig;
-			const providerSection = existing.provider?.['openai-compatible'];
-			if (providerSection?.models) {
-				const existingIds = new Set(Object.keys(providerSection.models));
-				const allPresent = enabledModelIds.every(id => existingIds.has(id));
-				if (allPresent && existingIds.size === enabledModelIds.length) {
-					// Config is already in sync — skip write
-					return false;
-				}
-			}
-		} catch {
-			// File doesn't exist or is invalid — will create/overwrite
-		}
-
-		// Build enriched models — use callback if provided, otherwise minimal stubs
-		let models: EnrichedProxyModel[];
-		if (enrichModels) {
-			models = await enrichModels(enabledModelIds);
-		} else {
-			models = enabledModelIds.map(id => ({ id, name: id }));
-		}
-
-		await this.syncProxyProviderToProjectConfig(
-			workspaceRoot,
-			'openai-compatible',
-			proxyBaseUrl,
-			proxyApiKey,
-			models,
-		);
-		return true;
-	}
-
 	async syncProxyProviderToProjectConfig(
 		workspaceRoot: string,
 		providerId: string,
 		baseUrl: string,
 		apiKey: string,
 		enabledModels: EnrichedProxyModel[],
+		providerName?: string,
 	): Promise<void> {
 		const configPath = vscode.Uri.file(`${workspaceRoot}/opencode.json`);
-
-		let existing: OpenCodeJsonConfig = {};
-		try {
-			const raw = await vscode.workspace.fs.readFile(configPath);
-			existing = JSON.parse(Buffer.from(raw).toString('utf-8')) as OpenCodeJsonConfig;
-		} catch {
-			// file doesn't exist yet — start fresh
-		}
+		const existing = await this.readProjectConfig(workspaceRoot);
 
 		const modelsRecord: Record<string, OpenCodeModelConfig> = {};
 		for (const m of enabledModels) {
@@ -256,7 +245,7 @@ export class OpenCodeClientService {
 		const providerSection = existing.provider ?? {};
 		providerSection[providerId] = {
 			...providerSection[providerId],
-			name: 'OpenAI Compatible',
+			name: providerName || 'OpenAI Compatible',
 			npm: '@ai-sdk/openai-compatible',
 			options: { baseURL: normalizedBaseUrl, apiKey },
 			models: modelsRecord,
@@ -264,6 +253,29 @@ export class OpenCodeClientService {
 
 		existing.provider = providerSection;
 
+		const content = Buffer.from(this.compactJsonStringify(existing), 'utf-8');
+		await vscode.workspace.fs.writeFile(configPath, content);
+	}
+
+	/**
+	 * JSON.stringify with indent 2, but short string arrays (e.g. modalities)
+	 * are kept on a single line for readability.
+	 */
+	private compactJsonStringify(obj: unknown): string {
+		const raw = JSON.stringify(obj, null, 2);
+		// Collapse arrays that contain only short strings onto one line.
+		// Matches: [\n  "text",\n  "image"\n] → ["text", "image"]
+		return raw.replace(/\[(?:\s*"[^"]{1,20}"\s*,?)+\s*\]/g, match => {
+			const items = [...match.matchAll(/"([^"]{1,20})"/g)].map(m => `"${m[1]}"`);
+			return `[${items.join(', ')}]`;
+		});
+	}
+
+	async removeProviderFromProjectConfig(workspaceRoot: string, providerId: string): Promise<void> {
+		const configPath = vscode.Uri.file(`${workspaceRoot}/opencode.json`);
+		const existing = await this.readProjectConfig(workspaceRoot);
+		if (!existing.provider?.[providerId]) return;
+		delete existing.provider[providerId];
 		const content = Buffer.from(JSON.stringify(existing, null, 2), 'utf-8');
 		await vscode.workspace.fs.writeFile(configPath, content);
 	}

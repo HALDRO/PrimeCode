@@ -25,6 +25,13 @@ export interface PrimeCodeSettings {
 	'proxy.baseUrl': string;
 	'proxy.apiKey': string;
 	'proxy.enabledModels': string[];
+	'proxy.endpoints'?: Array<{
+		id: string;
+		name: string;
+		baseUrl: string;
+		apiKey: string;
+		enabledModels: string[];
+	}>;
 	'proxy.useSingleModel'?: boolean;
 	'proxy.haikuModel'?: string;
 	'proxy.sonnetModel'?: string;
@@ -112,6 +119,7 @@ export class Settings implements ISettings {
 			'proxy.baseUrl': this.get('proxy.baseUrl') ?? 'http://localhost:11434',
 			'proxy.apiKey': this.get('proxy.apiKey') ?? '',
 			'proxy.enabledModels': this.get('proxy.enabledModels') ?? [],
+			'proxy.endpoints': this.get('proxy.endpoints') ?? [],
 			'proxy.useSingleModel': this.get('proxy.useSingleModel'),
 			'proxy.haikuModel': this.get('proxy.haikuModel'),
 			'proxy.sonnetModel': this.get('proxy.sonnetModel'),

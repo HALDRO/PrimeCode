@@ -140,6 +140,29 @@ export class SettingsHandler implements WebviewMessageHandler {
 					}
 					break;
 
+				case 'proxy.endpoints':
+					if (
+						Array.isArray(value) &&
+						value.every(
+							entry =>
+								entry &&
+								typeof entry === 'object' &&
+								typeof (entry as Record<string, unknown>).id === 'string' &&
+								typeof (entry as Record<string, unknown>).name === 'string' &&
+								typeof (entry as Record<string, unknown>).baseUrl === 'string' &&
+								typeof (entry as Record<string, unknown>).apiKey === 'string' &&
+								Array.isArray((entry as Record<string, unknown>).enabledModels),
+						)
+					) {
+						await this.context.settings.set(
+							'proxy.endpoints',
+							value as NonNullable<
+								import('../../core/Settings').PrimeCodeSettings['proxy.endpoints']
+							>,
+						);
+					}
+					break;
+
 				case 'proxy.useSingleModel':
 					if (typeof value === 'boolean') {
 						await this.context.settings.set('proxy.useSingleModel', value);

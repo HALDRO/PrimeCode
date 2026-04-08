@@ -598,9 +598,11 @@ export interface ProxyModelData {
 
 export interface ProxyModelsData {
 	enabled: boolean;
-	models: ProxyModelData[];
+	models?: ProxyModelData[];
+	enabledModelIds?: string[];
 	baseUrl?: string;
 	error?: string;
+	endpointId?: string;
 }
 export type ProxyModelsMessage = BaseExtensionMessage<'proxyModels', ProxyModelsData>;
 
@@ -1101,12 +1103,20 @@ export interface LoadProxyModelsCommand {
 	type: 'loadProxyModels';
 	baseUrl: string;
 	apiKey: string;
+	endpointId?: string;
 }
 export interface SyncProxyModelsCommand {
 	type: 'syncProxyModels';
 	baseUrl: string;
 	apiKey: string;
 	enabledModelIds: string[];
+	endpointId?: string;
+	providerId?: string;
+	providerName?: string;
+}
+export interface RemoveProxyEndpointCommand {
+	type: 'removeProxyEndpoint';
+	providerId: string;
 }
 
 // =============================================================================
@@ -1457,6 +1467,7 @@ export type WebviewCommand =
 	| SelectModelCommand
 	| LoadProxyModelsCommand
 	| SyncProxyModelsCommand
+	| RemoveProxyEndpointCommand
 	| AccessResponseCommand
 	| QuestionResponseCommand
 	| QuestionRejectCommand

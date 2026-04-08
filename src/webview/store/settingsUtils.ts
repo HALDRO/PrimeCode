@@ -1,7 +1,11 @@
-import type { SettingsActions } from './settingsStore';
+import type { ProxyEndpointState, SettingsActions, SettingsState } from './settingsStore';
 
 // Helper for settings data mapping
-export const handleSettingsData = (settings: Record<string, unknown>, actions: SettingsActions) => {
+export const handleSettingsData = (
+	settings: Record<string, unknown>,
+	actions: SettingsActions,
+	currentState?: Pick<SettingsState, 'proxyEndpoints'>,
+) => {
 	const mappedSettings: Record<string, unknown> = {};
 
 	if (settings.provider !== undefined) mappedSettings.provider = settings.provider;
@@ -10,6 +14,33 @@ export const handleSettingsData = (settings: Record<string, unknown>, actions: S
 	if (settings['proxy.apiKey'] !== undefined) mappedSettings.proxyApiKey = settings['proxy.apiKey'];
 	if (settings['proxy.enabledModels'] !== undefined)
 		mappedSettings.enabledProxyModels = settings['proxy.enabledModels'];
+	if (settings['proxy.endpoints'] !== undefined && Array.isArray(settings['proxy.endpoints'])) {
+		const currentById = new Map(
+			(currentState?.proxyEndpoints ?? []).map(endpoint => [endpoint.id, endpoint]),
+		);
+		mappedSettings.proxyEndpoints = (settings['proxy.endpoints'] as Record<string, unknown>[])
+			.filter(endpoint => typeof endpoint.id === 'string')
+			.map(endpoint => {
+				const id = String(endpoint.id);
+				const current = currentById.get(id);
+				return {
+					id,
+					name: String(endpoint.name ?? ''),
+					baseUrl: String(endpoint.baseUrl ?? ''),
+					apiKey: String(endpoint.apiKey ?? ''),
+					enabledModels: Array.isArray(endpoint.enabledModels)
+						? endpoint.enabledModels.filter((value): value is string => typeof value === 'string')
+						: [],
+					models: current?.models ?? [],
+					testStatus: current?.testStatus ?? {
+						isLoading: false,
+						success: null,
+						error: null,
+						lastTested: null,
+					},
+				} satisfies ProxyEndpointState;
+			});
+	}
 	if (settings['proxy.useSingleModel'] !== undefined)
 		mappedSettings.proxyUseSingleModel = settings['proxy.useSingleModel'];
 	if (settings['proxy.haikuModel'] !== undefined)

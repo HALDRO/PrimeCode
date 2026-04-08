@@ -154,9 +154,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 		// Wire up McpConfigWatcher config change events
 		this.disposables.push(
-			this.services.mcpConfigWatcher.onConfigChanged(e =>
-				this.bridge.data('mcpConfigReloaded', { source: e.source, timestamp: e.timestamp }),
-			),
+			this.services.mcpConfigWatcher.onConfigChanged(async e => {
+				this.bridge.data('mcpConfigReloaded', { source: e.source, timestamp: e.timestamp });
+				await this.settingsHandler.handleMessage({ type: 'getSettings' });
+			}),
 		);
 
 		// Wire up ResourceWatcher — auto-refresh UI when .opencode/ resource files change
@@ -316,51 +317,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	 * automatically inherit the user's proxy configuration.
 	 */
 	private async ensureProjectConfigSync(workspaceRoot: string): Promise<void> {
-		try {
-			const proxyBaseUrl = (this.settings.get<string>('proxy.baseUrl') || '').trim();
-			const proxyApiKey = (this.settings.get<string>('proxy.apiKey') || '').trim();
-			const enabledModelIds = this.settings.get<string[]>('proxy.enabledModels') || [];
-
-			if (!proxyBaseUrl || enabledModelIds.length === 0) return;
-
-			const synced = await this.services.openCodeClient.ensureProjectConfig(
-				workspaceRoot,
-				{ proxyBaseUrl, proxyApiKey, enabledModelIds },
-				async (ids: string[]) => {
-					// Try to enrich from models.dev for better metadata
-					const devData = await this.services.modelsDev.lookupModels(ids);
-					return ids.map(id => {
-						const dev = devData.get(id);
-						return {
-							id,
-							name: id,
-							contextLength: dev?.context,
-							maxCompletionTokens: dev?.output,
-							capabilities: dev
-								? {
-										reasoning: dev.reasoning,
-										vision: dev.modalities?.input?.includes('image'),
-										tools: dev.tool_call,
-									}
-								: undefined,
-						};
-					});
-				},
-			);
-
-			if (synced) {
-				logger.info('[ChatProvider] Auto-synced proxy config to opencode.json');
-
-				const sdkClient = this.cli.getSdkClient();
-				if (sdkClient) {
-					await sdkClient.instance.dispose().catch((error: unknown) => {
-						logger.warn('[ChatProvider] OpenCode runtime reload after auto-sync failed:', error);
-					});
-				}
-			}
-		} catch (error) {
-			logger.warn('[ChatProvider] Failed to auto-sync proxy config:', error);
-		}
+		void workspaceRoot;
 	}
 
 	/**
@@ -443,6 +400,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				'selectModel',
 				'loadProxyModels',
 				'syncProxyModels',
+				'removeProxyEndpoint',
 			],
 			'provider',
 		);

@@ -94,6 +94,27 @@ export interface CLIDiagnostics {
 	isChecking: boolean;
 }
 
+export interface ProxyEndpointState {
+	id: string;
+	name: string;
+	baseUrl: string;
+	apiKey: string;
+	enabledModels: string[];
+	models: Array<{
+		id: string;
+		name: string;
+		contextLength?: number;
+		maxCompletionTokens?: number;
+		capabilities?: { reasoning?: boolean; vision?: boolean; tools?: boolean };
+	}>;
+	testStatus: {
+		isLoading: boolean;
+		success: boolean | null;
+		error: string | null;
+		lastTested: number | null;
+	};
+}
+
 export interface SettingsActions {
 	setSettings: (settings: Partial<SettingsState>) => void;
 	setSelectedModel: (model: string) => void;
@@ -106,6 +127,14 @@ export interface SettingsActions {
 	) => void;
 	setEnabledProxyModels: (models: string[]) => void;
 	setProxyTestStatus: (status: Partial<SettingsState['proxyTestStatus']>) => void;
+	setProxyEndpoints: (endpoints: ProxyEndpointState[]) => void;
+	addProxyEndpoint: (endpoint: ProxyEndpointState) => void;
+	updateProxyEndpoint: (
+		endpointId: string,
+		updates: Partial<Omit<ProxyEndpointState, 'id'>>,
+	) => void;
+	removeProxyEndpoint: (endpointId: string) => void;
+	syncEnabledProxyModelsFromAvailable: () => void;
 	setSubagents: (subagents: Partial<SettingsState['subagents']>) => void;
 	setAgents: (agents: Partial<SettingsState['agents']>) => void;
 	setCommands: (commands: Partial<SettingsState['commands']>) => void;
@@ -252,6 +281,7 @@ export interface SettingsState {
 		capabilities?: { reasoning?: boolean; vision?: boolean; tools?: boolean };
 	}>;
 	enabledProxyModels: string[]; // IDs of models enabled for selection in chat
+	proxyEndpoints: ProxyEndpointState[];
 	proxyTestStatus: {
 		isLoading: boolean;
 		success: boolean | null;
@@ -417,6 +447,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 	modelVariants: {},
 	proxyModels: [],
 	enabledProxyModels: [],
+	proxyEndpoints: [],
 
 	proxyTestStatus: {
 		isLoading: false,
@@ -508,6 +539,33 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 		},
 		setProxyModels: proxyModels => set({ proxyModels }),
 		setEnabledProxyModels: enabledProxyModels => set({ enabledProxyModels }),
+		setProxyEndpoints: proxyEndpoints => set({ proxyEndpoints }),
+		addProxyEndpoint: proxyEndpoint =>
+			set(state => ({
+				proxyEndpoints: [...state.proxyEndpoints, proxyEndpoint],
+			})),
+		updateProxyEndpoint: (endpointId, updates) =>
+			set(state => ({
+				proxyEndpoints: state.proxyEndpoints.map(endpoint =>
+					endpoint.id === endpointId ? { ...endpoint, ...updates } : endpoint,
+				),
+			})),
+		removeProxyEndpoint: endpointId =>
+			set(state => ({
+				proxyEndpoints: state.proxyEndpoints.filter(endpoint => endpoint.id !== endpointId),
+			})),
+		syncEnabledProxyModelsFromAvailable: () =>
+			set(state => ({
+				enabledProxyModels: state.enabledProxyModels.filter(id =>
+					state.proxyModels.some(model => model.id === id),
+				),
+				proxyEndpoints: state.proxyEndpoints.map(endpoint => ({
+					...endpoint,
+					enabledModels: endpoint.enabledModels.filter(id =>
+						endpoint.models.some(model => model.id === id),
+					),
+				})),
+			})),
 		setProxyTestStatus: (status: Partial<SettingsState['proxyTestStatus']>) =>
 			set(state => ({
 				proxyTestStatus: { ...state.proxyTestStatus, ...status },
@@ -550,9 +608,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 		removeOpenCodeProvider: providerId =>
 			set(state => ({
 				opencodeProviders: state.opencodeProviders.filter(p => p.id !== providerId),
-				enabledOpenCodeModels: state.enabledOpenCodeModels.filter(
-					id => !id.startsWith(`${providerId}/`),
-				),
+				enabledOpenCodeModels: state.enabledOpenCodeModels.filter(id => {
+					const slashIndex = id.indexOf('/');
+					return slashIndex === -1 || id.slice(0, slashIndex) !== providerId;
+				}),
 				// Track disconnected provider to filter out stale CLI cache data
 				sessionDisconnectedProviders: state.sessionDisconnectedProviders.includes(providerId)
 					? state.sessionDisconnectedProviders
@@ -677,7 +736,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
 				case 'settingsData':
 					if (message.data) {
-						handleSettingsData(message.data as Record<string, unknown>, actions);
+						handleSettingsData(message.data as Record<string, unknown>, actions, {
+							proxyEndpoints: get().proxyEndpoints,
+						});
 					}
 					break;
 
@@ -707,16 +768,30 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
 				case 'proxyModels':
 					if (message.data) {
-						const { models, error, baseUrl } = message.data;
-						actions.setProxyModels(models || []);
-						actions.setProxyTestStatus({
-							isLoading: false,
-							success: !error && models && models.length > 0,
-							error: error || null,
-							lastTested: Date.now(),
-						});
-						if (baseUrl) {
-							actions.setSettings({ proxyBaseUrl: baseUrl });
+						const { models, enabledModelIds, error, baseUrl, endpointId } = message.data;
+						if (endpointId) {
+							actions.updateProxyEndpoint(endpointId, {
+								...(baseUrl ? { baseUrl } : {}),
+								...(models ? { models } : {}),
+								testStatus: {
+									isLoading: false,
+									success: !error && ((models?.length ?? 0) > 0 || !!enabledModelIds),
+									error: error || null,
+									lastTested: Date.now(),
+								},
+							});
+						} else {
+							if (models) actions.setProxyModels(models);
+							actions.setProxyTestStatus({
+								isLoading: false,
+								success: !error && ((models?.length ?? 0) > 0 || !!enabledModelIds),
+								error: error || null,
+								lastTested: Date.now(),
+							});
+							if (baseUrl) {
+								actions.setSettings({ proxyBaseUrl: baseUrl });
+							}
+							actions.syncEnabledProxyModelsFromAvailable();
 						}
 					}
 					break;
@@ -847,9 +922,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 						if (providerId) {
 							const provider = get().opencodeProviders.find(p => p.id === providerId);
 							actions.removeOpenCodeProvider(providerId);
-							const nextEnabled = get().enabledOpenCodeModels.filter(
-								id => !id.startsWith(`${providerId}/`),
-							);
+							const nextEnabled = get().enabledOpenCodeModels.filter(id => {
+								const slashIndex = id.indexOf('/');
+								return slashIndex === -1 || id.slice(0, slashIndex) !== providerId;
+							});
 							actions.setEnabledOpenCodeModels(nextEnabled);
 							if (provider || providerName) {
 								actions.addAvailableProvider({

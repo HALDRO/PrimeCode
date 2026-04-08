@@ -9,7 +9,7 @@
 
 import type React from 'react';
 import { useCallback, useMemo } from 'react';
-import { OPENAI_COMPATIBLE_PROVIDER_ID } from '../../../common';
+import { getProxyEndpointProviderId, OPENAI_COMPATIBLE_PROVIDER_ID } from '../../../common';
 import { cn } from '../../lib/cn';
 import { useModelDropdownState, useModelSelection } from '../../store';
 import { useVSCode } from '../../utils/vscode';
@@ -51,6 +51,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 		selectedModel,
 		proxyModels,
 		enabledProxyModels,
+		proxyEndpoints,
 		opencodeProviders,
 		enabledOpenCodeModels,
 		disabledProviders,
@@ -234,8 +235,55 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 			});
 		}
 
+		for (const endpoint of proxyEndpoints) {
+			if (!endpoint.enabledModels.length || !endpoint.models.length) continue;
+			const providerId = getProxyEndpointProviderId(endpoint.id);
+			if (disabledProviders.includes(providerId)) continue;
+			for (const model of endpoint.models) {
+				if (!endpoint.enabledModels.includes(model.id)) continue;
+				const modelId = `${providerId}/${model.id}`;
+				const isActive = effectiveActiveModel === modelId;
+				const hasReasoning = model.capabilities?.reasoning === true;
+				result.push({
+					id: modelId,
+					label: model.name || model.id,
+					icon: hasReasoning ? (
+						<BrainSideIcon
+							size={14}
+							style={{
+								color: isActive ? 'var(--color-accent)' : 'var(--vscode-descriptionForeground)',
+								opacity: isActive ? 1 : 0.7,
+							}}
+						/>
+					) : (
+						<ZapIcon
+							size={14}
+							style={{
+								color: isActive ? 'var(--color-accent)' : 'var(--vscode-descriptionForeground)',
+								opacity: isActive ? 1 : 0.7,
+							}}
+						/>
+					),
+					meta: endpoint.name || 'Custom',
+					data: {
+						id: modelId,
+						name: model.name || model.id,
+						isActive,
+						capabilities: model.capabilities,
+					},
+				});
+			}
+		}
+
 		return result;
-	}, [effectiveActiveModel, enabledProxyModelsList, filteredOpencodeProviders, extraItems]);
+	}, [
+		effectiveActiveModel,
+		enabledProxyModelsList,
+		filteredOpencodeProviders,
+		proxyEndpoints,
+		disabledProviders,
+		extraItems,
+	]);
 
 	return (
 		<DropdownMenu

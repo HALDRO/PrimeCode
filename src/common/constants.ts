@@ -24,6 +24,14 @@ export const TIMEOUTS = {
 /** Canonical provider ID for OpenAI-compatible APIs (OpenCode provider id). */
 export const OPENAI_COMPATIBLE_PROVIDER_ID = 'oai' as const;
 
+export const getProxyEndpointProviderId = (endpointId: string): string => {
+	return `${OPENAI_COMPATIBLE_PROVIDER_ID}-${endpointId}`;
+};
+
+export const isProxyEndpointProviderId = (providerId: string): boolean => {
+	return providerId.startsWith(`${OPENAI_COMPATIBLE_PROVIDER_ID}-`);
+};
+
 /** Providers that are built-in and must not be disconnected from UI. */
 const NON_DISCONNECTABLE_PROVIDER_IDS = ['opencode', 'opencode-zen', 'zen'] as const;
 

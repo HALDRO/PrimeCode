@@ -383,6 +383,7 @@ export const useModelSelection = () => {
 			selectedModel: state.selectedModel,
 			proxyModels: state.proxyModels,
 			enabledProxyModels: state.enabledProxyModels,
+			proxyEndpoints: state.proxyEndpoints,
 			opencodeProviders: state.opencodeProviders,
 			enabledOpenCodeModels: state.enabledOpenCodeModels,
 			disabledProviders: state.disabledProviders,
