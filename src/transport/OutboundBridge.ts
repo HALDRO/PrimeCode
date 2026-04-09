@@ -175,6 +175,12 @@ export class OutboundBridge {
 			status: SessionStatus,
 			statusText?: string,
 			retryInfo?: { attempt: number; message: string; nextRetryAt?: string },
+			toolActivity?: {
+				toolName: string;
+				label: string;
+				filePath?: string;
+				toolUseId?: string;
+			} | null,
 		): void => {
 			this.send({
 				type: 'session_event',
@@ -185,6 +191,7 @@ export class OutboundBridge {
 					status,
 					statusText,
 					...(retryInfo ? { retryInfo } : {}),
+					...(toolActivity !== undefined ? { toolActivity } : {}),
 				},
 				timestamp: Date.now(),
 				sessionId,

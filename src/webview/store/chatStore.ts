@@ -75,6 +75,8 @@ export interface ChatSession {
 	isAutoRetrying: boolean;
 	retryInfo: { attempt: number; message: string; nextRetryAt?: string } | null;
 	isLoading: boolean;
+	/** Current tool activity — tracks what tool is running with a human-readable label. */
+	toolActivity: { toolName: string; label: string; filePath?: string; toolUseId?: string } | null;
 	lastActive: number;
 	changedFiles: ChangedFile[];
 	/** Cumulative diffs from CLI session.diff — original→current per file. */
@@ -383,6 +385,14 @@ function handleStatusEvent(targetSession: ChatSession, payload: SessionEventPayl
 	if (s.status === 'retrying') targetSession.retryInfo = s.retryInfo || null;
 	else if (s.status === 'idle') targetSession.retryInfo = null;
 	targetSession.isLoading = Boolean(s.loadingMessage);
+	// Update tool activity: explicit null clears, undefined preserves current value.
+	if (s.toolActivity !== undefined) {
+		targetSession.toolActivity = s.toolActivity;
+	}
+	// Always clear tool activity when session goes idle.
+	if (s.status === 'idle') {
+		targetSession.toolActivity = null;
+	}
 }
 
 function handleStatsEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
@@ -750,6 +760,7 @@ const createEmptySession = (id: string): ChatSession => ({
 	isAutoRetrying: false,
 	retryInfo: null,
 	isLoading: false,
+	toolActivity: null,
 	lastActive: Date.now(),
 	changedFiles: [],
 	cumulativeDiffs: [],

@@ -30,6 +30,7 @@ export type {
 	SessionStatusPayload,
 	SessionTurnTokensPayload,
 	SubtaskTranscriptPayload,
+	ToolActivityInfo,
 	WebviewCommand,
 } from './protocol';
 // Schemas: runtime-validated types (TypeBox) — exported first as source of truth for Rule, ParsedCommand, etc.

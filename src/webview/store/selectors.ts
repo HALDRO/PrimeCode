@@ -70,6 +70,10 @@ export const useChatStatus = () =>
 export const useStreamingToolId = () =>
 	useChatStore((state: ChatState) => getActiveSession(state)?.streamingToolId ?? null);
 
+/** Select current tool activity for active session */
+export const useToolActivity = () =>
+	useChatStore((state: ChatState) => getActiveSession(state)?.toolActivity ?? null);
+
 /** Select editing message ID */
 export const useEditingMessageId = () => useChatStore((state: ChatState) => state.editingMessageId);
 

@@ -282,6 +282,17 @@ export interface SessionMessagePayload {
 	message: SessionMessageData;
 }
 
+export interface ToolActivityInfo {
+	/** Canonical lowercase tool name (e.g. 'write', 'edit', 'bash'). */
+	toolName: string;
+	/** Human-readable label (e.g. 'Writing file...', 'Running command...'). */
+	label: string;
+	/** Optional file path associated with the tool call. */
+	filePath?: string;
+	/** Tool use ID for correlation with tool_use messages. */
+	toolUseId?: string;
+}
+
 export interface SessionStatusPayload {
 	eventType: 'status';
 	status: SessionStatus;
@@ -292,6 +303,8 @@ export interface SessionStatusPayload {
 		message: string;
 		nextRetryAt?: string;
 	};
+	/** Current tool activity — set when a tool starts, cleared on idle/tool_result. */
+	toolActivity?: ToolActivityInfo | null;
 }
 
 export interface SessionStatsPayload {

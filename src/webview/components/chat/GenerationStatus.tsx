@@ -4,8 +4,9 @@
  *              Normalizes incoming status text (removes trailing dots/ellipsis) and
  *              renders animated typing dots to avoid duplicate static punctuation.
  *              Displays pulsing glow effects and status text.
- *              Only visible during active processing. Uses CSS animations for
- *              smooth, performant visual feedback without layout shifts.
+ *              Shows tool-specific activity (e.g. "Writing file: foo.ts") even during
+ *              active streaming, so the user always knows what's happening.
+ *              Uses CSS animations for smooth, performant visual feedback without layout shifts.
  */
 
 import type React from 'react';
@@ -16,6 +17,7 @@ import {
 	useIsLastMessageStreaming,
 	useIsProcessing,
 	useStreamingToolId,
+	useToolActivity,
 } from '../../store';
 
 /**
@@ -98,6 +100,32 @@ const isThinkingStatus = (status: string): boolean => {
 	);
 };
 
+/**
+ * Derive the best display text from tool activity and session status.
+ * Tool activity takes priority when available (more specific).
+ */
+function deriveStatusText(
+	toolActivity: { toolName: string; label: string; filePath?: string } | null,
+	status: string,
+): string {
+	if (toolActivity?.label) {
+		return formatStatus(toolActivity.label);
+	}
+	const formatted = formatStatus(status);
+	return formatted || 'Generating';
+}
+
+// Shared shimmer style
+const shimmerStyle = {
+	background:
+		'linear-gradient(90deg, var(--vscode-descriptionForeground) 0%, var(--vscode-foreground) 50%, var(--vscode-descriptionForeground) 100%)',
+	backgroundSize: '200% 100%',
+	backgroundClip: 'text',
+	WebkitBackgroundClip: 'text',
+	color: 'transparent',
+	animation: 'shimmer 3s linear infinite',
+} as const;
+
 // ---------------------------------------------------------------------------
 // SubtaskGenerationStatus — props-driven variant for subtask cards.
 // Reads status from the subtask message instead of the global session store.
@@ -153,19 +181,7 @@ export const SubtaskGenerationStatus: React.FC<SubtaskGenerationStatusProps> = (
 			<StatusIcon isThinking={isThinking} />
 			<span
 				className={cn('text-xs relative inline-block', isRetrying && 'text-warning')}
-				style={
-					isRetrying
-						? undefined
-						: {
-								background:
-									'linear-gradient(90deg, var(--vscode-descriptionForeground) 0%, var(--vscode-foreground) 50%, var(--vscode-descriptionForeground) 100%)',
-								backgroundSize: '200% 100%',
-								backgroundClip: 'text',
-								WebkitBackgroundClip: 'text',
-								color: 'transparent',
-								animation: 'shimmer 3s linear infinite',
-							}
-				}
+				style={isRetrying ? undefined : shimmerStyle}
 			>
 				{showStatus}
 				<TypingDots />
@@ -180,62 +196,65 @@ export const GenerationStatus: React.FC = () => {
 	const status = useChatStatus();
 	const streamingToolId = useStreamingToolId();
 	const isTextStreaming = useIsLastMessageStreaming();
+	const toolActivity = useToolActivity();
 	const [visible, setVisible] = useState(false);
 	const [displayStatus, setDisplayStatus] = useState('');
 
-	// Don't show status if there's active streaming (tool or text)
+	// Active stream means tool output or text is being streamed to the user.
 	const hasActiveStream = !!streamingToolId || isTextStreaming;
+
+	// Show the indicator when:
+	// 1. Processing with no active stream (waiting between tool calls, model thinking)
+	// 2. Processing with tool activity info (even during streams — shows what tool is running)
+	const shouldShow = isProcessing && (!hasActiveStream || !!toolActivity);
 
 	// Smooth show/hide with slight delay to prevent flicker
 	useEffect(() => {
-		if (isProcessing && !hasActiveStream) {
+		if (shouldShow) {
 			const timer = setTimeout(() => setVisible(true), 100);
 			return () => clearTimeout(timer);
 		}
 		// Fade out with delay
 		const timer = setTimeout(() => setVisible(false), 300);
 		return () => clearTimeout(timer);
-	}, [isProcessing, hasActiveStream]);
+	}, [shouldShow]);
 
-	// Update display status with debounce to prevent rapid changes
+	// Update display status — tool activity takes priority over generic session status
 	useEffect(() => {
-		if (status && status !== 'Ready') {
-			const timer = setTimeout(() => setDisplayStatus(formatStatus(status)), 50);
+		const text = deriveStatusText(toolActivity, status);
+		if (text) {
+			const timer = setTimeout(() => setDisplayStatus(text), 50);
 			return () => clearTimeout(timer);
 		}
 		setDisplayStatus('');
 		return undefined;
-	}, [status]);
+	}, [toolActivity, status]);
 
-	// Don't render if not visible or has active stream
-	if (!visible || hasActiveStream || !isProcessing) {
+	// Don't render if not visible or not processing
+	if (!visible || !isProcessing) {
 		return null;
 	}
 
 	const isThinking = isThinkingStatus(displayStatus || status);
 	const showStatus = displayStatus || (isProcessing ? 'Generating' : '');
 
+	// When there's an active stream but we have tool activity, show a compact inline indicator
+	const isCompact = hasActiveStream && !!toolActivity;
+
 	return (
 		<div
 			className={cn(
-				'flex items-center justify-start gap-1.5 py-2',
+				'flex items-center justify-start gap-1.5',
+				isCompact ? 'py-1' : 'py-2',
 				'transition-all duration-300 ease-out',
 				visible && isProcessing ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-1',
+				isCompact && 'opacity-70',
 			)}
 		>
 			<StatusIcon isThinking={isThinking} />
 			<span
-				className="text-xs relative inline-block"
-				style={{
-					background: isThinking
-						? 'linear-gradient(90deg, var(--vscode-descriptionForeground) 0%, var(--vscode-foreground) 50%, var(--vscode-descriptionForeground) 100%)'
-						: 'linear-gradient(90deg, var(--vscode-descriptionForeground) 0%, var(--vscode-foreground) 50%, var(--vscode-descriptionForeground) 100%)',
-					backgroundSize: '200% 100%',
-					backgroundClip: 'text',
-					WebkitBackgroundClip: 'text',
-					color: 'transparent',
-					animation: 'shimmer 3s linear infinite',
-				}}
+				className={cn('text-xs relative inline-block', isCompact && 'text-[10px]')}
+				style={shimmerStyle}
 			>
 				{showStatus}
 				<TypingDots />

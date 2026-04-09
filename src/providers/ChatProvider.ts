@@ -34,6 +34,37 @@ import { UtilityHandler } from './handlers/UtilityHandler';
 /** Commands whose errors should not be surfaced as chat messages (file/UI ops). */
 const SILENT_COMMANDS = new Set(['openFile', 'openFileDiff', 'openExternal', 'getImageData']);
 
+/**
+ * Short tool activity labels shown during execution.
+ * Maps canonical lowercase tool names to concise status text.
+ */
+const TOOL_ACTIVITY_LABELS: ReadonlyMap<string, string> = new Map([
+	['write', 'Writing'],
+	['edit', 'Editing'],
+	['multiedit', 'Editing'],
+	['patch', 'Patching'],
+	['apply_patch', 'Patching'],
+	['read', 'Reading'],
+	['bash', 'Running'],
+	['grep', 'Searching'],
+	['glob', 'Searching'],
+	['search', 'Searching'],
+	['semanticsearch', 'Searching'],
+	['codesearch', 'Searching'],
+	['ls', 'Listing'],
+	['task', 'Delegating'],
+	['lsp', 'Analyzing'],
+	['websearch', 'Searching'],
+	['webfetch', 'Fetching'],
+	['todowrite', 'Planning'],
+	['todoread', 'Planning'],
+	['skill', 'Loading'],
+]);
+
+function getToolActivityLabel(canonicalName: string): string {
+	return TOOL_ACTIVITY_LABELS.get(canonicalName) ?? 'Working';
+}
+
 export class ChatProvider implements vscode.WebviewViewProvider {
 	private view?: vscode.WebviewView;
 	private cli: OpenCodeExecutor;
@@ -1228,8 +1259,31 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 		if (isChildSession) {
 			this.routeToParentTranscript(targetSessionId, toolData);
+
+			// Emit tool activity to the PARENT session so the subtask card
+			// can show what the child agent is doing (e.g. "Writing file: foo.ts").
+			const parentSessionId = this.sessionGraph.getParent(targetSessionId);
+			if (parentSessionId) {
+				const canonicalName = resolveToolName(toolName) ?? toolName;
+				const label = getToolActivityLabel(canonicalName);
+				this.bridge.session.status(parentSessionId, 'busy', label, undefined, {
+					toolName: canonicalName,
+					label,
+					toolUseId,
+				});
+			}
 		} else {
 			this.sessionHandler.postSessionMessage(toolData, targetSessionId);
+
+			// Emit tool-specific activity status so the UI can show granular progress
+			// (e.g. "Writing file...", "Running command...") instead of generic "Working...".
+			const canonicalName = resolveToolName(toolName) ?? toolName;
+			const label = getToolActivityLabel(canonicalName);
+			this.bridge.session.status(targetSessionId, 'busy', label, undefined, {
+				toolName: canonicalName,
+				label,
+				toolUseId,
+			});
 		}
 	}
 
@@ -1242,6 +1296,17 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		const e = event.data as Record<string, unknown>;
 		const toolUseId = (e.tool_use_id as string) || (e.id as string) || `tool-${now}`;
 		const toolName = (e.name as string) || (e.tool as string) || 'unknown';
+
+		// Clear tool activity on tool completion.
+		if (!isChildSession) {
+			this.bridge.session.status(targetSessionId, 'busy', 'Working...', undefined, null);
+		} else {
+			// For child sessions, clear tool activity on the parent session.
+			const parentSessionId = this.sessionGraph.getParent(targetSessionId);
+			if (parentSessionId) {
+				this.bridge.session.status(parentSessionId, 'busy', 'Working...', undefined, null);
+			}
+		}
 
 		if (isTaskTool(toolName)) {
 			const metadata =
