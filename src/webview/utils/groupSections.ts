@@ -60,7 +60,7 @@ export const groupMessagesIntoSections = (
 		{ input: number; output: number; total: number; cacheRead: number; durationMs?: number }
 	> = {},
 	isProcessing = false,
-	cumulativeDiffs: Array<{
+	_cumulativeDiffs: Array<{
 		file: string;
 		additions: number;
 		deletions: number;
@@ -75,13 +75,10 @@ export const groupMessagesIntoSections = (
 	let sectionIndex = 0;
 	let pastRevertPoint = false;
 
-	// Build cumulative diffs lookup (file → {additions, deletions}) for per-file override.
-	// When available, these represent the real git diff (original→current) and are more
-	// accurate than per-edit old_string/new_string sums.
-	const cumulativeMap = new Map<string, { additions: number; deletions: number }>();
-	for (const d of cumulativeDiffs) {
-		cumulativeMap.set(d.file, { additions: d.additions, deletions: d.deletions });
-	}
+	// NOTE: cumulativeDiffs are NOT used for per-turn stats. They represent the
+	// session-wide git diff (original→current) and would cause double-counting
+	// if applied to individual turns. Per-turn stats use only the per-edit
+	// changedFiles entries matched by toolUseId.
 
 	// PERFORMANCE: Create a lookup map for changed files by toolUseId once per render cycle
 	// This prevents nested O(N^2) loops inside computeSectionStats.
@@ -112,7 +109,6 @@ export const groupMessagesIntoSections = (
 					currentSection,
 					currentResponses,
 					changedFilesMap,
-					cumulativeMap,
 					false,
 					turnTokens,
 				);
@@ -151,7 +147,6 @@ export const groupMessagesIntoSections = (
 			currentSection,
 			currentResponses,
 			changedFilesMap,
-			cumulativeMap,
 			true,
 			turnTokens,
 		);
@@ -187,7 +182,6 @@ function computeSectionStats(
 	section: MessageSection,
 	rawResponses: Message[],
 	changedFilesMap: Map<string, ChangedFile[]>,
-	cumulativeMap: Map<string, { additions: number; deletions: number }>,
 	isLast: boolean,
 	turnTokens: Record<
 		string,
@@ -205,19 +199,15 @@ function computeSectionStats(
 		}
 	}
 
-	// File changes: iterate tool_use messages and look up in the Map (O(1) per lookup).
-	// First collect per-edit stats for every file, then override with cumulative diffs
-	// (git diff original→current) when available — matching ChangedFilesPanel logic.
-	// This two-pass approach ensures files whose paths don't match the cumulative map
-	// (e.g. absolute vs relative) still get correct per-edit stats as a fallback.
+	// File changes: iterate tool_use messages and look up per-edit stats (O(1) per lookup).
+	// Per-turn stats use ONLY per-edit changedFiles entries matched by toolUseId.
+	// Cumulative diffs (session.diff) are NOT used here — they represent the full
+	// session diff (original→current) and would cause double-counting across turns.
 	let fileChanges: SectionStats['fileChanges'] = null;
-	const hasCumulative = cumulativeMap.size > 0;
 
 	if (changedFilesMap.size > 0) {
-		// Per-file aggregated stats from individual edits
 		const perFileStats = new Map<string, { added: number; removed: number }>();
 
-		// Collect all file paths touched by tool_use messages in this turn
 		const collectFiles = (toolUseId: string) => {
 			const files = changedFilesMap.get(toolUseId);
 			if (!files) return;
@@ -248,19 +238,12 @@ function computeSectionStats(
 			}
 		}
 
-		// Sum totals: prefer cumulative diffs per file, fall back to per-edit stats.
 		if (perFileStats.size > 0) {
 			let added = 0;
 			let removed = 0;
-			for (const [filePath, editStats] of perFileStats) {
-				const cumulative = hasCumulative ? cumulativeMap.get(filePath) : undefined;
-				if (cumulative) {
-					added += cumulative.additions;
-					removed += cumulative.deletions;
-				} else {
-					added += editStats.added;
-					removed += editStats.removed;
-				}
+			for (const [, editStats] of perFileStats) {
+				added += editStats.added;
+				removed += editStats.removed;
 			}
 			fileChanges = { added, removed, files: perFileStats.size };
 		}

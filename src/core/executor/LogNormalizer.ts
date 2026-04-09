@@ -214,27 +214,26 @@ export class LogNormalizer extends EventEmitter {
 			case 'bash':
 				return { type: 'CommandRun', command: (input.command as string) || '' };
 
-			case 'search':
 			case 'grep':
 				return {
 					type: 'Search',
-					query: (input.query as string) || (input.pattern as string) || '',
+					query: (input.pattern as string) || (input.query as string) || '',
 				};
 
-			case 'semanticsearch':
 			case 'glob':
 				return {
 					type: 'Search',
 					query:
-						(input.query as string) ||
+						(input.pattern as string) ||
 						(input.glob_pattern as string) ||
 						(input.glob as string) ||
-						(input.pattern as string) ||
+						(input.query as string) ||
 						'',
 				};
 
+			case 'list':
 			case 'ls':
-				return { type: 'Tool', toolName: 'ls', arguments: input };
+				return { type: 'Tool', toolName: 'list', arguments: input };
 
 			case 'task':
 				return {

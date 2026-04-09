@@ -410,14 +410,22 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 
 	const hasCumulative = cumulativeMap.size > 0;
 
-	// Group changedFiles by filePath for display, using cumulative stats when available
+	// Build the file list for display.
+	// When cumulativeDiffs are available (from CLI session.diff — git-level original→current),
+	// they are the single source of truth for stats. Per-edit changedFiles[] are only used
+	// to know which files were touched (for file list membership and metadata like toolUseId).
+	// This eliminates the "double count" problem where per-edit sums showed wrong numbers
+	// before the cumulative event arrived and corrected them.
 	const groupedFiles = useMemo(() => {
 		const fileMap = new Map<string, ChangedFile>();
+
+		// Start with changedFiles grouped by path (for file list + metadata)
 		for (const file of changedFiles) {
 			const existing = fileMap.get(file.filePath);
 			if (existing) {
 				fileMap.set(file.filePath, {
 					...existing,
+					// Don't sum per-edit stats — they'll be overridden by cumulative
 					linesAdded: existing.linesAdded + file.linesAdded,
 					linesRemoved: existing.linesRemoved + file.linesRemoved,
 					timestamp: Math.max(existing.timestamp, file.timestamp),
@@ -427,18 +435,39 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 				fileMap.set(file.filePath, { ...file });
 			}
 		}
-		// Override per-file stats with cumulative diffs when available
+
 		if (hasCumulative) {
+			// Override ALL file stats with cumulative diffs (authoritative git-level data)
 			for (const [filePath, entry] of fileMap) {
 				const cumulative = cumulativeMap.get(filePath);
 				if (cumulative) {
 					entry.linesAdded = cumulative.additions;
 					entry.linesRemoved = cumulative.deletions;
+				} else {
+					// File is in changedFiles but not in cumulativeDiffs — it was
+					// reverted or the diff is zero. Reset to 0 to avoid stale per-edit sums.
+					entry.linesAdded = 0;
+					entry.linesRemoved = 0;
+				}
+			}
+
+			// Also add files that are ONLY in cumulativeDiffs (not yet in changedFiles)
+			for (const d of cumulativeDiffs) {
+				if (!fileMap.has(d.file) && (d.additions > 0 || d.deletions > 0)) {
+					fileMap.set(d.file, {
+						filePath: d.file,
+						fileName: d.file.split(/[/\\]/).pop() || d.file,
+						linesAdded: d.additions,
+						linesRemoved: d.deletions,
+						toolUseId: '',
+						timestamp: Date.now(),
+					});
 				}
 			}
 		}
+
 		return Array.from(fileMap.values());
-	}, [changedFiles, cumulativeMap, hasCumulative]);
+	}, [changedFiles, cumulativeMap, cumulativeDiffs, hasCumulative]);
 
 	// Header totals: always derived from groupedFiles so they match the per-file rows exactly.
 	// Previously this was computed separately from cumulativeDiffs, which could include files

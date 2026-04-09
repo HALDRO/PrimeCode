@@ -298,7 +298,10 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 					: null;
 
 			const isLs =
-				toolLower === 'ls' || toolLower === 'list_dir' || toolLower === 'serena_list_dir';
+				toolLower === 'list' ||
+				toolLower === 'ls' ||
+				toolLower === 'list_dir' ||
+				toolLower === 'serena_list_dir';
 			const isRead = action?.type === 'FileRead' || toolLower.includes('read');
 			const isTodo = action?.type === 'TodoManagement' || toolLower === 'todowrite';
 			const isTaskResult = action?.type === 'TaskResult';
@@ -309,8 +312,6 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 				action?.type === 'CodeSearch' ||
 				toolLower === 'grep' ||
 				toolLower === 'glob' ||
-				toolLower === 'search' ||
-				toolLower === 'semanticsearch' ||
 				toolLower === 'websearch' ||
 				toolLower === 'codesearch';
 
@@ -330,7 +331,7 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 					label = 'Run';
 					meta = action.command;
 				} else if (action.type === 'Search') {
-					label = 'Search';
+					label = toolLower === 'grep' ? 'Grep' : toolLower === 'glob' ? 'Glob' : 'Search';
 					meta = action.query;
 				} else if (action.type === 'WebSearch') {
 					label = 'Web Search';
@@ -463,10 +464,42 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 		}, [isTaskResult, normalizedEntry]);
 
 		const fullText = isTaskResult ? taskResultText || content || '' : content || '';
-		const hasBody = !isRead && fullText.trim().length > 0;
 
 		const lines = useMemo((): string[] => fullText.split('\n'), [fullText]);
 		const nonEmptyLineCount = lines.filter((l: string) => l.length > 0).length;
+
+		// Parse search results into structured entries: { filePath, line }
+		// Grep format: "Found N matches\n/path/file.ts:\n  Line 10: content\n  Line 25: content"
+		// Glob format: "/path/file1.ts\n/path/file2.ts"
+		const searchEntries = useMemo(() => {
+			if (!isSearch || !fullText.trim()) return [];
+			const entries: Array<{ filePath: string; line?: number }> = [];
+			let currentFile = '';
+			for (const raw of lines) {
+				const trimmed = raw.trim();
+				if (!trimmed) continue;
+				// Skip summary lines like "Found N matches" or "(Results truncated...)"
+				if (/^Found \d+ matches/.test(trimmed) || /^\(/.test(trimmed)) continue;
+				// Grep file header: "/absolute/path/file.ts:"
+				if (/^.+:$/.test(trimmed) && !trimmed.startsWith('Line ')) {
+					currentFile = trimmed.slice(0, -1);
+					continue;
+				}
+				// Grep match line: "  Line 42: content"
+				const lineMatch = trimmed.match(/^Line (\d+):/);
+				if (lineMatch && currentFile) {
+					entries.push({ filePath: currentFile, line: Number(lineMatch[1]) });
+					continue;
+				}
+				// Glob: bare file path (no spaces, has extension or slashes)
+				if (!trimmed.includes(' ') && (/[\\/]/.test(trimmed) || /\.\w{1,10}$/.test(trimmed))) {
+					entries.push({ filePath: trimmed });
+				}
+			}
+			return entries;
+		}, [isSearch, fullText, lines]);
+
+		const hasBody = !isRead && fullText.trim().length > 0;
 
 		const todos = useMemo((): Array<{ content: string; status: string }> => {
 			if (!isTodoWrite) return [];
@@ -490,6 +523,9 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 		// Todo always starts collapsed. User can manually toggle to expand.
 		const [todoExpanded, setTodoExpanded] = useState(false);
 
+		// Search starts collapsed. User can manually toggle to expand.
+		const [searchExpanded, setSearchExpanded] = useState(false);
+
 		const ToolIcon = useMemo(() => {
 			if (toolName === 'thinking') return BrainSideIcon;
 			if (isSkill) return ZapIcon;
@@ -509,7 +545,9 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 				isError={isError}
 				{...(isTodoWrite
 					? { expanded: todoExpanded, onToggle: () => setTodoExpanded(prev => !prev) }
-					: { defaultExpanded })}
+					: isSearch
+						? { expanded: searchExpanded, onToggle: () => setSearchExpanded(prev => !prev) }
+						: { defaultExpanded })}
 				showCollapseOverlay={showCollapseOverlay}
 				rightContent={
 					<>
@@ -556,6 +594,30 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 						content={fullText}
 						className="[&_p]:!text-sm [&_p]:!text-vscode-descriptionForeground [&_li]:!text-sm [&_li]:!text-vscode-descriptionForeground [&_ul]:!text-sm [&_ol]:!text-sm !text-vscode-descriptionForeground"
 					/>
+				) : isSearch && searchEntries.length > 0 ? (
+					<div className="flex flex-wrap gap-1">
+						{searchEntries.map((entry, idx) => (
+							<PathChip
+								// biome-ignore lint/suspicious/noArrayIndexKey: static list
+								key={idx}
+								path={entry.filePath}
+								line={entry.line}
+								title={entry.filePath}
+								onClick={() =>
+									postMessage({
+										type: 'openFile',
+										filePath: entry.filePath,
+										...(entry.line !== undefined ? { line: entry.line } : {}),
+									})
+								}
+								className="shrink-0"
+							/>
+						))}
+					</div>
+				) : isSearch && hasBody ? (
+					<pre className="m-0 px-1 py-0.5 rounded-sm text-sm leading-(--line-height-code) whitespace-pre-wrap text-vscode-descriptionForeground opacity-80">
+						{fullText}
+					</pre>
 				) : isTodoWrite ? (
 					<div className="flex flex-col gap-1">
 						{todos.map((todo, idx) => (

@@ -31,7 +31,7 @@ import type {
 	SubtaskTranscriptPayload,
 	TotalStats,
 } from '../../common';
-import { computeDiffLineStats, generateId } from '../../common';
+import { generateId } from '../../common';
 import type { NormalizedEntry } from '../../common/normalizedTypes';
 import type { QueuedMessageData } from '../../common/protocol';
 import { useUIStore } from './uiStore';
@@ -521,23 +521,12 @@ function handleFileEvent(targetSession: ChatSession, payload: SessionEventPayloa
 	if (f.action === 'changed' && f.filePath) {
 		const fileName = f.fileName || f.filePath.split(/[/\\]/).pop() || f.filePath;
 
-		let linesAdded = f.linesAdded || 0;
-		let linesRemoved = f.linesRemoved || 0;
-
-		if (f.toolUseId && linesAdded === 0 && linesRemoved === 0) {
-			const toolMsg = targetSession.messages.find(
-				m => m.type === 'tool_use' && m.toolUseId === f.toolUseId,
-			);
-
-			if (toolMsg && toolMsg.type === 'tool_use' && toolMsg.rawInput) {
-				const raw = toolMsg.rawInput as Record<string, string>;
-				const oldContent = raw.old_string || raw.old_str || raw.oldString || '';
-				const newContent = raw.new_string || raw.new_str || raw.newString || raw.content || '';
-				const stats = computeDiffLineStats(oldContent, newContent);
-				linesAdded = stats.added;
-				linesRemoved = stats.removed;
-			}
-		}
+		// Use stats from the backend directly. Do NOT recompute from rawInput —
+		// old_string/new_string are just snippets, not full file content, producing
+		// wildly wrong numbers. The CLI session.diff event (cumulativeDiffs) will
+		// provide authoritative git-level stats shortly after.
+		const linesAdded = f.linesAdded || 0;
+		const linesRemoved = f.linesRemoved || 0;
 
 		const newFile = {
 			filePath: f.filePath,

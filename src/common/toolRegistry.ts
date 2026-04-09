@@ -24,9 +24,7 @@ export const DISPLAY_NAMES: ReadonlyMap<string, string> = new Map([
 	['bash', 'Bash'],
 	['grep', 'Grep'],
 	['glob', 'Glob'],
-	['search', 'Search'],
-	['semanticsearch', 'Semantic Search'],
-	['ls', 'List'],
+	['list', 'List'],
 	['task', 'Task'],
 	['lsp', 'LSP'],
 	['websearch', 'Web Search'],
@@ -35,6 +33,7 @@ export const DISPLAY_NAMES: ReadonlyMap<string, string> = new Map([
 	['skill', 'Skill'],
 	['todowrite', 'Todo'],
 	['todoread', 'Todo Read'],
+	['batch', 'Batch'],
 ]);
 
 // ---------------------------------------------------------------------------
@@ -69,9 +68,10 @@ const ALIASES: ReadonlyMap<string, string> = new Map([
 	['runcommand', 'bash'],
 	['run_command', 'bash'],
 
-	// ls
-	['list_dir', 'ls'],
-	['serena_list_dir', 'ls'],
+	// list
+	['ls', 'list'],
+	['list_dir', 'list'],
+	['serena_list_dir', 'list'],
 
 	// todowrite / todoread
 	['todo_write', 'todowrite'],

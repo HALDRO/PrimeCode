@@ -48,10 +48,8 @@ const TOOL_ACTIVITY_LABELS: ReadonlyMap<string, string> = new Map([
 	['bash', 'Running'],
 	['grep', 'Searching'],
 	['glob', 'Searching'],
-	['search', 'Searching'],
-	['semanticsearch', 'Searching'],
 	['codesearch', 'Searching'],
-	['ls', 'Listing'],
+	['list', 'Listing'],
 	['task', 'Delegating'],
 	['lsp', 'Analyzing'],
 	['websearch', 'Searching'],
@@ -59,6 +57,7 @@ const TOOL_ACTIVITY_LABELS: ReadonlyMap<string, string> = new Map([
 	['todowrite', 'Planning'],
 	['todoread', 'Planning'],
 	['skill', 'Loading'],
+	['batch', 'Running'],
 ]);
 
 function getToolActivityLabel(canonicalName: string): string {
