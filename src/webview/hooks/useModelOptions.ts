@@ -22,8 +22,6 @@ export function useModelOptions(includeDefault = true): ModelOption[] {
 	const opencodeProviders = useSettingsStore(s => s.opencodeProviders);
 	const enabledOpenCodeModels = useSettingsStore(s => s.enabledOpenCodeModels);
 	const disabledProviders = useSettingsStore(s => s.disabledProviders);
-	const proxyModels = useSettingsStore(s => s.proxyModels);
-	const enabledProxyModels = useSettingsStore(s => s.enabledProxyModels);
 	const proxyEndpoints = useSettingsStore(s => s.proxyEndpoints);
 
 	return useMemo(() => {
@@ -47,15 +45,6 @@ export function useModelOptions(includeDefault = true): ModelOption[] {
 			}
 		}
 
-		// Proxy models (OpenAI-compatible)
-		if (!disabledSet.has('oai')) {
-			const enabledProxy = new Set(enabledProxyModels);
-			for (const model of proxyModels) {
-				if (!enabledProxy.has(model.id)) continue;
-				opts.push({ value: `oai/${model.id}`, label: `${model.name || model.id} (OAI)` });
-			}
-		}
-
 		for (const endpoint of proxyEndpoints) {
 			const providerId = getProxyEndpointProviderId(endpoint.id);
 			if (disabledSet.has(providerId)) continue;
@@ -70,13 +59,5 @@ export function useModelOptions(includeDefault = true): ModelOption[] {
 		}
 
 		return opts;
-	}, [
-		opencodeProviders,
-		enabledOpenCodeModels,
-		disabledProviders,
-		proxyModels,
-		enabledProxyModels,
-		proxyEndpoints,
-		includeDefault,
-	]);
+	}, [opencodeProviders, enabledOpenCodeModels, disabledProviders, proxyEndpoints, includeDefault]);
 }

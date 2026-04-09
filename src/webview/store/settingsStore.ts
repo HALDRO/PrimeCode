@@ -48,6 +48,56 @@ export type {
 import { vscode } from '../utils/vscode';
 import { handleSettingsData } from './settingsUtils';
 
+// Extracted helpers to reduce cognitive complexity of handleExtensionMessage
+
+const handleAuthResult = (
+	data: {
+		success?: boolean;
+		error?: string;
+		providerId?: string;
+		isLoading?: boolean;
+	},
+	actions: SettingsActions,
+) => {
+	actions.setProviderAuthState(
+		data.providerId
+			? {
+					providerId: data.providerId,
+					isLoading: data.isLoading ?? false,
+					success: data.success ?? false,
+					error: data.error ?? undefined,
+				}
+			: null,
+	);
+	if (data.success && !data.isLoading && data.providerId) {
+		actions.clearSessionDisconnectedProvider(data.providerId);
+	}
+};
+
+const handleRemoveProvider = (
+	data: { providerId?: string; providerName?: string },
+	actions: SettingsActions,
+	getState: () => SettingsState,
+) => {
+	const { providerId, providerName } = data;
+	if (!providerId) return;
+
+	const provider = getState().opencodeProviders.find(p => p.id === providerId);
+	actions.removeOpenCodeProvider(providerId);
+	const nextEnabled = getState().enabledOpenCodeModels.filter(id => {
+		const slashIndex = id.indexOf('/');
+		return slashIndex === -1 || id.slice(0, slashIndex) !== providerId;
+	});
+	actions.setEnabledOpenCodeModels(nextEnabled);
+	if (provider || providerName) {
+		actions.addAvailableProvider({
+			id: providerId,
+			name: provider?.name || providerName || providerId,
+			env: [],
+		});
+	}
+};
+
 // Helper for loading meta logic
 const handleLoadingMeta = (
 	meta: { operation?: string; message?: string } | undefined,
@@ -119,15 +169,6 @@ export interface ProxyEndpointState {
 export interface SettingsActions {
 	setSettings: (settings: Partial<SettingsState>) => void;
 	setSelectedModel: (model: string) => void;
-	setProxyModels: (
-		models: Array<{
-			id: string;
-			name: string;
-			capabilities?: { reasoning?: boolean; vision?: boolean; tools?: boolean };
-		}>,
-	) => void;
-	setEnabledProxyModels: (models: string[]) => void;
-	setProxyTestStatus: (status: Partial<SettingsState['proxyTestStatus']>) => void;
 	setProxyEndpoints: (endpoints: ProxyEndpointState[]) => void;
 	addProxyEndpoint: (endpoint: ProxyEndpointState) => void;
 	updateProxyEndpoint: (
@@ -223,8 +264,6 @@ export interface SettingsState {
 	provider: CLIProviderType;
 
 	// Proxy Configuration
-	proxyBaseUrl: string;
-	proxyApiKey: string;
 	/** When true, only main model is used for all tasks */
 	proxyUseSingleModel: boolean;
 	/** Model for fast/simple tasks (Explore agent). Empty = use main model */
@@ -274,21 +313,7 @@ export interface SettingsState {
 	// Model
 	selectedModel: string;
 	modelVariants: Record<string, string | undefined>;
-	proxyModels: Array<{
-		id: string;
-		name: string;
-		contextLength?: number;
-		maxCompletionTokens?: number;
-		capabilities?: { reasoning?: boolean; vision?: boolean; tools?: boolean };
-	}>;
-	enabledProxyModels: string[]; // IDs of models enabled for selection in chat
 	proxyEndpoints: ProxyEndpointState[];
-	proxyTestStatus: {
-		isLoading: boolean;
-		success: boolean | null;
-		error: string | null;
-		lastTested: number | null;
-	};
 
 	// MCP servers
 	mcpServers: MCPServersMap;
@@ -374,8 +399,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
 	provider: 'opencode',
 
-	proxyBaseUrl: 'http://localhost:11434',
-	proxyApiKey: '',
 	proxyUseSingleModel: true,
 	proxyHaikuModel: '',
 	proxySonnetModel: '',
@@ -446,16 +469,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
 	selectedModel: 'default',
 	modelVariants: {},
-	proxyModels: [],
-	enabledProxyModels: [],
 	proxyEndpoints: [],
-
-	proxyTestStatus: {
-		isLoading: false,
-		success: null,
-		error: null,
-		lastTested: null,
-	},
 
 	mcpServers: {},
 	mcpStatus: {},
@@ -538,38 +552,55 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 			if (!modelId || modelId === 'default') return undefined;
 			return get().modelVariants[modelId];
 		},
-		setProxyModels: proxyModels => set({ proxyModels }),
-		setEnabledProxyModels: enabledProxyModels => set({ enabledProxyModels }),
 		setProxyEndpoints: proxyEndpoints => set({ proxyEndpoints }),
 		addProxyEndpoint: proxyEndpoint =>
 			set(state => ({
 				proxyEndpoints: [...state.proxyEndpoints, proxyEndpoint],
 			})),
 		updateProxyEndpoint: (endpointId, updates) =>
-			set(state => ({
-				proxyEndpoints: state.proxyEndpoints.map(endpoint =>
-					endpoint.id === endpointId ? { ...endpoint, ...updates } : endpoint,
-				),
-			})),
+			set(state => {
+				const exists = state.proxyEndpoints.some(ep => ep.id === endpointId);
+				if (exists) {
+					return {
+						proxyEndpoints: state.proxyEndpoints.map(endpoint =>
+							endpoint.id === endpointId ? { ...endpoint, ...updates } : endpoint,
+						),
+					};
+				}
+				// Upsert: create endpoint if proxyModels arrived before settingsData
+				return {
+					proxyEndpoints: [
+						...state.proxyEndpoints,
+						{
+							id: endpointId,
+							name: '',
+							baseUrl: '',
+							apiKey: '',
+							enabledModels: [],
+							models: [],
+							testStatus: {
+								isLoading: false,
+								success: null,
+								error: null,
+								lastTested: null,
+							},
+							...updates,
+						},
+					],
+				};
+			}),
 		removeProxyEndpoint: endpointId =>
 			set(state => ({
 				proxyEndpoints: state.proxyEndpoints.filter(endpoint => endpoint.id !== endpointId),
 			})),
 		syncEnabledProxyModelsFromAvailable: () =>
 			set(state => ({
-				enabledProxyModels: state.enabledProxyModels.filter(id =>
-					state.proxyModels.some(model => model.id === id),
-				),
 				proxyEndpoints: state.proxyEndpoints.map(endpoint => ({
 					...endpoint,
 					enabledModels: endpoint.enabledModels.filter(id =>
 						endpoint.models.some(model => model.id === id),
 					),
 				})),
-			})),
-		setProxyTestStatus: (status: Partial<SettingsState['proxyTestStatus']>) =>
-			set(state => ({
-				proxyTestStatus: { ...state.proxyTestStatus, ...status },
 			})),
 		setCommands: commands =>
 			set(state => ({
@@ -781,18 +812,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 									lastTested: Date.now(),
 								},
 							});
-						} else {
-							if (models) actions.setProxyModels(models);
-							actions.setProxyTestStatus({
-								isLoading: false,
-								success: !error && ((models?.length ?? 0) > 0 || !!enabledModelIds),
-								error: error || null,
-								lastTested: Date.now(),
-							});
-							if (baseUrl) {
-								actions.setSettings({ proxyBaseUrl: baseUrl });
-							}
-							actions.syncEnabledProxyModelsFromAvailable();
 						}
 					}
 					break;
@@ -873,25 +892,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
 				case 'openCodeAuthResult':
 					if (message.data) {
-						const { success, error, providerId, isLoading } = message.data as {
-							success?: boolean;
-							error?: string;
-							providerId?: string;
-							isLoading?: boolean;
-						};
-						actions.setProviderAuthState(
-							providerId
-								? {
-										providerId,
-										isLoading: isLoading ?? false,
-										success: success ?? false,
-										error: error ?? undefined,
-									}
-								: null,
+						handleAuthResult(
+							message.data as {
+								success?: boolean;
+								error?: string;
+								providerId?: string;
+								isLoading?: boolean;
+							},
+							actions,
 						);
-						if (success && !isLoading && providerId) {
-							actions.clearSessionDisconnectedProvider(providerId);
-						}
 					}
 					break;
 
@@ -916,26 +925,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
 				case 'removeOpenCodeProvider':
 					if (message.data) {
-						const { providerId, providerName } = message.data as {
-							providerId?: string;
-							providerName?: string;
-						};
-						if (providerId) {
-							const provider = get().opencodeProviders.find(p => p.id === providerId);
-							actions.removeOpenCodeProvider(providerId);
-							const nextEnabled = get().enabledOpenCodeModels.filter(id => {
-								const slashIndex = id.indexOf('/');
-								return slashIndex === -1 || id.slice(0, slashIndex) !== providerId;
-							});
-							actions.setEnabledOpenCodeModels(nextEnabled);
-							if (provider || providerName) {
-								actions.addAvailableProvider({
-									id: providerId,
-									name: provider?.name || providerName || providerId,
-									env: [],
-								});
-							}
-						}
+						handleRemoveProvider(
+							message.data as { providerId?: string; providerName?: string },
+							actions,
+							get,
+						);
 					}
 					break;
 

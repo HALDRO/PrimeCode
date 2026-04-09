@@ -287,7 +287,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 		const chatActions = useChatActions();
 		const { setEditingMessageId } = chatActions;
 		const activeModelID = useActiveModelID();
-		const { opencodeProviders, proxyModels } = useSettingsStore();
+		const { opencodeProviders, proxyEndpoints } = useSettingsStore();
 		const customCommands = useSettingsStore(s => s.commands.custom);
 		const cliCommands = useSettingsStore(s => s.commands.cli);
 		const subagents = useSettingsStore(s => s.subagents);
@@ -358,14 +358,15 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 		} = useMemo(() => getMessageAttachments(message), [message]);
 
 		// Get human-readable model name from model ID
+		const allProxyModels = useMemo(() => proxyEndpoints.flatMap(ep => ep.models), [proxyEndpoints]);
 		const getModelDisplayName = useCallback(
 			(modelId: string): string => {
 				if (!modelId || modelId === 'default') {
 					return 'Default';
 				}
-				return resolveModelDisplayName(modelId, opencodeProviders, proxyModels);
+				return resolveModelDisplayName(modelId, opencodeProviders, allProxyModels);
 			},
-			[opencodeProviders, proxyModels],
+			[opencodeProviders, allProxyModels],
 		);
 
 		const restoreCommit = useMemo(() => {

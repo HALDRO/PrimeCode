@@ -184,6 +184,46 @@ export class OpenCodeClientService {
 		};
 	}
 
+	/**
+	 * Read ALL OpenAI-compatible proxy providers from opencode.json.
+	 * Used for reverse-syncing config file providers into the settings UI.
+	 */
+	async getAllProjectProxyProviders(workspaceRoot: string): Promise<ProjectProxyProviderConfig[]> {
+		const config = await this.readProjectConfig(workspaceRoot);
+		if (!config.provider) return [];
+
+		const results: ProjectProxyProviderConfig[] = [];
+		for (const [providerId, provider] of Object.entries(config.provider)) {
+			if (provider.npm !== '@ai-sdk/openai-compatible') continue;
+
+			const rawBaseUrl =
+				typeof provider.options?.baseURL === 'string' ? String(provider.options.baseURL) : '';
+			const rawApiKey =
+				typeof provider.options?.apiKey === 'string' ? String(provider.options.apiKey) : '';
+			const models = Object.entries(provider.models ?? {}).map(([id, model]) => ({
+				id,
+				name: model.name || id,
+				contextLength: model.limit?.context,
+				maxCompletionTokens: model.limit?.output,
+				capabilities: {
+					reasoning: model.reasoning,
+					vision: model.modalities?.input?.includes('image'),
+					tools: model.tool_call,
+				},
+			}));
+
+			results.push({
+				id: providerId,
+				name: provider.name || providerId,
+				baseUrl: normalizeProxyBaseUrl(rawBaseUrl),
+				apiKey: rawApiKey,
+				models,
+			});
+		}
+
+		return results;
+	}
+
 	async setProviderAuth(client: OpencodeClient, providerId: string, apiKey: string): Promise<void> {
 		const { error } = await client.auth.set({
 			providerID: providerId,

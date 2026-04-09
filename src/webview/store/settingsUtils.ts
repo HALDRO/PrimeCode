@@ -9,11 +9,6 @@ export const handleSettingsData = (
 	const mappedSettings: Record<string, unknown> = {};
 
 	if (settings.provider !== undefined) mappedSettings.provider = settings.provider;
-	if (settings['proxy.baseUrl'] !== undefined)
-		mappedSettings.proxyBaseUrl = settings['proxy.baseUrl'];
-	if (settings['proxy.apiKey'] !== undefined) mappedSettings.proxyApiKey = settings['proxy.apiKey'];
-	if (settings['proxy.enabledModels'] !== undefined)
-		mappedSettings.enabledProxyModels = settings['proxy.enabledModels'];
 	if (settings['proxy.endpoints'] !== undefined && Array.isArray(settings['proxy.endpoints'])) {
 		const currentById = new Map(
 			(currentState?.proxyEndpoints ?? []).map(endpoint => [endpoint.id, endpoint]),

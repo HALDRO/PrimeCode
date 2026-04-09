@@ -4,7 +4,6 @@ import {
 	normalizeProxyBaseUrl,
 	type OpenCodeProviderData,
 } from '../../common';
-import { OPENAI_COMPATIBLE_PROVIDER_ID } from '../../common/constants';
 import type { CommandOf, WebviewCommand } from '../../common/protocol';
 import type { EnrichedProxyModel } from '../../services/OpenCodeClientService';
 import type { HandlerContext, WebviewMessageHandler } from './types';
@@ -262,17 +261,8 @@ export class ProviderHandler implements WebviewMessageHandler {
 		const endpointId = msg.endpointId;
 		const customHeaders = msg.headers;
 
-		let baseUrlRaw = msg.baseUrl;
-		if (!baseUrlRaw.trim()) {
-			const setting = this.context.settings.get('proxy.baseUrl');
-			if (typeof setting === 'string') baseUrlRaw = setting;
-		}
-
-		let apiKeyRaw = msg.apiKey;
-		if (!apiKeyRaw.trim()) {
-			const setting = this.context.settings.get('proxy.apiKey');
-			if (typeof setting === 'string') apiKeyRaw = setting;
-		}
+		const baseUrlRaw = msg.baseUrl;
+		const apiKeyRaw = msg.apiKey;
 
 		const baseUrl = normalizeProxyBaseUrl(baseUrlRaw);
 		const apiKey = apiKeyRaw.trim();
@@ -427,8 +417,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 			const enabledModelIds = (rawEnabledIds ?? []).filter(Boolean);
 
 			const resolvedProviderId =
-				providerId ||
-				(endpointId ? getProxyEndpointProviderId(endpointId) : OPENAI_COMPATIBLE_PROVIDER_ID);
+				providerId || (endpointId ? getProxyEndpointProviderId(endpointId) : '');
 
 			if (!enabledModelIds?.length) {
 				await this.context.services.openCodeClient.syncProxyProviderToProjectConfig(

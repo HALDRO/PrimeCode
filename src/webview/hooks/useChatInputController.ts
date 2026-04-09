@@ -94,7 +94,7 @@ export function useChatInputController(
 	const isProcessing = useIsProcessing();
 	const {
 		selectedModel,
-		proxyModels,
+		proxyEndpoints,
 		opencodeProviders,
 		getModelVariant,
 		getSessionModel,
@@ -312,7 +312,8 @@ export function useChatInputController(
 	const modelDisplayName = (() => {
 		const effectiveModel = getSessionModel() ?? selectedModel;
 		if (effectiveModel === 'default') return 'Default';
-		return resolveModelDisplayName(effectiveModel, opencodeProviders, proxyModels);
+		const allProxyModels = proxyEndpoints.flatMap(ep => ep.models);
+		return resolveModelDisplayName(effectiveModel, opencodeProviders, allProxyModels);
 	})();
 
 	return {

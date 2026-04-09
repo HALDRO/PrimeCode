@@ -17,7 +17,7 @@ import { Button, type DropdownMenuItem, TextArea } from '../ui';
 import { GroupTitle, SettingRow, SettingsGroup } from './SettingsUI';
 
 export const PromptImproverSettings: React.FC = () => {
-	const { promptImproveModel, promptImproveTemplate, opencodeProviders, proxyModels } =
+	const { promptImproveModel, promptImproveTemplate, opencodeProviders, proxyEndpoints } =
 		useSettingsStore();
 	const { setSettings } = useSettingsActions();
 	const { postMessage } = useVSCode();
@@ -68,8 +68,9 @@ export const PromptImproverSettings: React.FC = () => {
 
 	const selectedModelLabel = useMemo(() => {
 		if (!promptImproveModel) return 'Use main model';
-		return resolveModelDisplayName(promptImproveModel, opencodeProviders, proxyModels);
-	}, [promptImproveModel, opencodeProviders, proxyModels]);
+		const allProxyModels = proxyEndpoints.flatMap(ep => ep.models);
+		return resolveModelDisplayName(promptImproveModel, opencodeProviders, allProxyModels);
+	}, [promptImproveModel, opencodeProviders, proxyEndpoints]);
 
 	const currentTemplate = promptImproveTemplate || IMPROVE_PROMPT_DEFAULT_TEMPLATE;
 

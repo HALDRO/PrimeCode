@@ -1,8 +1,8 @@
 /**
  * @file Provider Manager Component
  * @description Unified interface for managing AI providers. Shows connected providers with
- *              ability to enable/disable individual models and disconnect providers. Includes
- *              OpenAI-compatible provider configuration. Uses shared SettingsUI primitives.
+ *              ability to enable/disable individual models and disconnect providers.
+ *              Uses shared SettingsUI primitives. Custom endpoints are managed separately.
  *              For OpenCode CLI, provider auth is handled via OpenCode server endpoints.
  */
 
@@ -12,7 +12,6 @@ import {
 	getProxyEndpointProviderId,
 	isNonDisconnectableProviderId,
 	isProxyEndpointProviderId,
-	OPENAI_COMPATIBLE_PROVIDER_ID,
 } from '../../../common';
 import { useSettingsActions, useSettingsStore } from '../../store';
 import { useVSCode } from '../../utils/vscode';
@@ -34,7 +33,6 @@ interface ProviderItemData {
 	name: string;
 	connected: boolean;
 	isCustom?: boolean;
-	isOpenAICompatible?: boolean;
 	env?: string[];
 	models?: Array<{
 		id: string;
@@ -44,20 +42,12 @@ interface ProviderItemData {
 	}>;
 }
 
-// OpenAI-compatible provider ID used by settings/UI
-const OPENAI_COMPATIBLE_ID = OPENAI_COMPATIBLE_PROVIDER_ID;
-
 export const ProviderManager: React.FC = () => {
 	const {
 		provider: cliProvider,
 		opencodeProviders,
 		availableProviders,
 		providerAuthState,
-		proxyBaseUrl,
-		proxyApiKey,
-		proxyModels,
-		enabledProxyModels,
-		proxyTestStatus,
 		proxyEndpoints,
 		enabledOpenCodeModels,
 		disabledProviders,
@@ -66,8 +56,6 @@ export const ProviderManager: React.FC = () => {
 	const {
 		setProviderAuthState,
 		setSettings,
-		setEnabledProxyModels,
-		setProxyTestStatus,
 		addProxyEndpoint,
 		updateProxyEndpoint,
 		removeProxyEndpoint,
@@ -106,41 +94,20 @@ export const ProviderManager: React.FC = () => {
 		return undefined;
 	}, [providerAuthState, setProviderAuthState, postMessage]);
 
-	// Connected providers list:
-	// - Always show OpenAI Compatible provider
-	// - If OpenCode CLI: add OpenCode connected providers (excluding OpenAI-compatible)
+	// Connected providers list (OpenCode CLI providers, excluding proxy endpoint providers)
 	const connectedProviders: ProviderItemData[] = useMemo(() => {
-		const list: ProviderItemData[] = [
-			{
-				id: OPENAI_COMPATIBLE_ID,
-				name: 'OpenAI Compatible API',
+		if (!isOpenCodeCLI) return [];
+
+		return opencodeProviders
+			.filter(p => !isProxyEndpointProviderId(p.id))
+			.map(p => ({
+				id: p.id,
+				name: p.name,
 				connected: true,
-				isOpenAICompatible: true,
-				models: proxyModels.map(m => ({
-					id: m.id,
-					name: m.name,
-					contextLimit: m.contextLength,
-					capabilities: m.capabilities,
-				})),
-			},
-		];
-
-		if (isOpenCodeCLI) {
-			list.push(
-				...opencodeProviders
-					.filter(p => p.id !== OPENAI_COMPATIBLE_PROVIDER_ID && !isProxyEndpointProviderId(p.id))
-					.map(p => ({
-						id: p.id,
-						name: p.name,
-						connected: true,
-						isCustom: p.isCustom,
-						models: p.models,
-					})),
-			);
-		}
-
-		return list;
-	}, [opencodeProviders, proxyModels, isOpenCodeCLI]);
+				isCustom: p.isCustom,
+				models: p.models,
+			}));
+	}, [opencodeProviders, isOpenCodeCLI]);
 
 	const availableForConnection = useMemo(() => {
 		if (!isOpenCodeCLI) return [];
@@ -191,40 +158,6 @@ export const ProviderManager: React.FC = () => {
 
 	const handleRefresh = () => {
 		postMessage({ type: 'syncAll' });
-	};
-
-	const saveProxySettings = () => {
-		postMessage({
-			type: 'updateSettings',
-			settings: {
-				'proxy.baseUrl': proxyBaseUrl,
-				'proxy.apiKey': proxyApiKey,
-			},
-		});
-	};
-
-	const handleFetchProxyModels = () => {
-		setProxyTestStatus({ isLoading: true, error: null });
-		postMessage({
-			type: 'loadProxyModels',
-			baseUrl: proxyBaseUrl,
-			apiKey: proxyApiKey,
-		});
-	};
-
-	const handleToggleProxyModel = (modelId: string) => {
-		const newEnabled = enabledProxyModels.includes(modelId)
-			? enabledProxyModels.filter(id => id !== modelId)
-			: [...enabledProxyModels, modelId];
-		setEnabledProxyModels(newEnabled);
-		postMessage({ type: 'updateSettings', settings: { 'proxy.enabledModels': newEnabled } });
-		// Sync only enabled models to opencode.json
-		postMessage({
-			type: 'syncProxyModels',
-			baseUrl: proxyBaseUrl,
-			apiKey: proxyApiKey,
-			enabledModelIds: newEnabled,
-		});
 	};
 
 	const handleToggleProviderEnabled = (providerId: string) => {
@@ -482,11 +415,8 @@ export const ProviderManager: React.FC = () => {
 
 				{connectedProviders.map((provider, idx) => {
 					const isExpanded = expandedProvider === provider.id;
-					const isOpenAICompatible = provider.isOpenAICompatible;
 					const modelCount = provider.models?.length ?? 0;
-					const enabledCount = isOpenAICompatible
-						? enabledProxyModels.length
-						: getEnabledCountForProvider(provider.id);
+					const enabledCount = getEnabledCountForProvider(provider.id);
 
 					const badge = (
 						<>{provider.isCustom && <SettingsBadge variant="blue">custom</SettingsBadge>}</>
@@ -507,120 +437,98 @@ export const ProviderManager: React.FC = () => {
 							onToggle={() => handleToggleProvider(provider.id)}
 							last={idx === connectedProviders.length - 1}
 						>
-							{isOpenAICompatible ? (
-								<OpenAICompatibleConfig
-									enabled={!disabledProviders.includes(OPENAI_COMPATIBLE_ID)}
-									baseUrl={proxyBaseUrl}
-									apiKey={proxyApiKey}
-									models={proxyModels}
-									enabledModels={enabledProxyModels}
-									testStatus={proxyTestStatus}
-									onToggle={() => handleToggleProviderEnabled(OPENAI_COMPATIBLE_ID)}
-									onBaseUrlChange={v => setSettings({ proxyBaseUrl: v })}
-									onApiKeyChange={v => setSettings({ proxyApiKey: v })}
-									onBlur={() => saveProxySettings()}
-									onFetchModels={handleFetchProxyModels}
-									onToggleModel={handleToggleProxyModel}
-								/>
-							) : (
-								<>
-									<SettingRow title="Enable Provider">
-										<div className="flex items-center gap-2">
-											{canDisconnect(provider.id) && (
-												<button
-													type="button"
-													onClick={() => handleDisconnectProvider(provider.id)}
-													className="text-xs text-vscode-errorForeground/70 hover:text-vscode-errorForeground transition-colors"
-												>
-													Disconnect
-												</button>
-											)}
-											<Switch
-												checked={!disabledProviders.includes(provider.id)}
-												onChange={() => handleToggleProviderEnabled(provider.id)}
-											/>
-										</div>
-									</SettingRow>
-
+							<SettingRow title="Enable Provider">
+								<div className="flex items-center gap-2">
 									{canDisconnect(provider.id) && (
-										<SettingRow title="API Key" last={!provider.models?.length}>
-											{editingApiKey === provider.id ? (
-												<div className="flex items-center gap-1.5">
-													<TextInput
-														type="password"
-														value={editApiKeyInput}
-														onChange={e => setEditApiKeyInput(e.target.value)}
-														placeholder="Enter new API key"
-														className="flex-1 max-w-(--input-width-md)"
-													/>
-													<Button
-														size="sm"
-														variant="primary"
-														onClick={() => handleUpdateApiKey(provider.id)}
-														disabled={!editApiKeyInput.trim() || providerAuthState?.isLoading}
-														className="text-xs px-2"
-													>
-														{providerAuthState?.isLoading ? '...' : 'Save'}
-													</Button>
-													<Button
-														size="sm"
-														variant="ghost"
-														onClick={() => {
-															setEditingApiKey(null);
-															setEditApiKeyInput('');
-														}}
-														className="text-xs px-2"
-													>
-														Cancel
-													</Button>
-												</div>
-											) : (
-												<Button
-													size="sm"
-													variant="secondary"
-													onClick={() => {
-														setEditingApiKey(provider.id);
-														setEditApiKeyInput('');
-													}}
-													className="text-xs px-2"
-												>
-													Change
-												</Button>
-											)}
-										</SettingRow>
+										<button
+											type="button"
+											onClick={() => handleDisconnectProvider(provider.id)}
+											className="text-xs text-vscode-errorForeground/70 hover:text-vscode-errorForeground transition-colors"
+										>
+											Disconnect
+										</button>
 									)}
+									<Switch
+										checked={!disabledProviders.includes(provider.id)}
+										onChange={() => handleToggleProviderEnabled(provider.id)}
+									/>
+								</div>
+							</SettingRow>
 
-									{provider.models && provider.models.length > 0 ? (
-										<ModelList searchValue={modelSearch} onSearchChange={setModelSearch}>
-											{provider.models
-												.filter(
-													model =>
-														!modelSearch ||
-														model.name.toLowerCase().includes(modelSearch.toLowerCase()) ||
-														model.id.toLowerCase().includes(modelSearch.toLowerCase()),
-												)
-												.map(model => {
-													const isEnabled = isOpenCodeModelEnabled(provider.id, model.id);
-													return (
-														<ModelItem key={model.id} name={model.name} id={model.id}>
-															{model.capabilities?.reasoning && (
-																<BrainSideIcon
-																	size={14}
-																	style={{ color: 'rgba(168, 85, 247, 0.8)' }}
-																/>
-															)}
-															<Switch
-																checked={isEnabled}
-																onChange={() => handleToggleOpenCodeModel(provider.id, model.id)}
-															/>
-														</ModelItem>
-													);
-												})}
-										</ModelList>
+							{canDisconnect(provider.id) && (
+								<SettingRow title="API Key" last={!provider.models?.length}>
+									{editingApiKey === provider.id ? (
+										<div className="flex items-center gap-1.5">
+											<TextInput
+												type="password"
+												value={editApiKeyInput}
+												onChange={e => setEditApiKeyInput(e.target.value)}
+												placeholder="Enter new API key"
+												className="flex-1 max-w-(--input-width-md)"
+											/>
+											<Button
+												size="sm"
+												variant="primary"
+												onClick={() => handleUpdateApiKey(provider.id)}
+												disabled={!editApiKeyInput.trim() || providerAuthState?.isLoading}
+												className="text-xs px-2"
+											>
+												{providerAuthState?.isLoading ? '...' : 'Save'}
+											</Button>
+											<Button
+												size="sm"
+												variant="ghost"
+												onClick={() => {
+													setEditingApiKey(null);
+													setEditApiKeyInput('');
+												}}
+												className="text-xs px-2"
+											>
+												Cancel
+											</Button>
+										</div>
 									) : (
-										<EmptyState>No models available</EmptyState>
+										<Button
+											size="sm"
+											variant="secondary"
+											onClick={() => {
+												setEditingApiKey(provider.id);
+												setEditApiKeyInput('');
+											}}
+											className="text-xs px-2"
+										>
+											Change
+										</Button>
 									)}
-								</>
+								</SettingRow>
+							)}
+
+							{provider.models && provider.models.length > 0 ? (
+								<ModelList searchValue={modelSearch} onSearchChange={setModelSearch}>
+									{provider.models
+										.filter(
+											model =>
+												!modelSearch ||
+												model.name.toLowerCase().includes(modelSearch.toLowerCase()) ||
+												model.id.toLowerCase().includes(modelSearch.toLowerCase()),
+										)
+										.map(model => {
+											const isEnabled = isOpenCodeModelEnabled(provider.id, model.id);
+											return (
+												<ModelItem key={model.id} name={model.name} id={model.id}>
+													{model.capabilities?.reasoning && (
+														<BrainSideIcon size={14} style={{ color: 'rgba(168, 85, 247, 0.8)' }} />
+													)}
+													<Switch
+														checked={isEnabled}
+														onChange={() => handleToggleOpenCodeModel(provider.id, model.id)}
+													/>
+												</ModelItem>
+											);
+										})}
+								</ModelList>
+							) : (
+								<EmptyState>No models available</EmptyState>
 							)}
 						</ExpandableRow>
 					);
@@ -688,29 +596,6 @@ export const ProviderManager: React.FC = () => {
 	);
 };
 
-// =============================================================================
-// OpenAI Compatible Provider Configuration
-// =============================================================================
-
-interface OpenAICompatibleConfigProps {
-	enabled: boolean;
-	baseUrl: string;
-	apiKey: string;
-	models: Array<{ id: string; name: string }>;
-	enabledModels: string[];
-	testStatus: {
-		isLoading: boolean;
-		success: boolean | null;
-		error: string | null;
-	};
-	onToggle: () => void;
-	onBaseUrlChange: (value: string) => void;
-	onApiKeyChange: (value: string) => void;
-	onBlur: () => void;
-	onFetchModels: () => void;
-	onToggleModel: (modelId: string) => void;
-}
-
 interface CustomEndpointConfigProps {
 	enabled: boolean;
 	endpoint: import('../../store/settingsStore').ProxyEndpointState;
@@ -722,110 +607,6 @@ interface CustomEndpointConfigProps {
 	onToggleModel: (modelId: string) => void;
 	onRemove: () => void;
 }
-
-const OpenAICompatibleConfig: React.FC<OpenAICompatibleConfigProps> = ({
-	enabled,
-	baseUrl,
-	apiKey,
-	models,
-	enabledModels,
-	testStatus,
-	onToggle,
-	onBaseUrlChange,
-	onApiKeyChange,
-	onBlur,
-	onFetchModels,
-	onToggleModel,
-}) => {
-	const [modelSearch, setModelSearch] = useState('');
-
-	const status = testStatus.isLoading
-		? 'loading'
-		: testStatus.success
-			? 'success'
-			: testStatus.error
-				? 'error'
-				: 'idle';
-
-	const filteredModels = modelSearch
-		? models.filter(
-				m =>
-					m.name.toLowerCase().includes(modelSearch.toLowerCase()) ||
-					m.id.toLowerCase().includes(modelSearch.toLowerCase()),
-			)
-		: models;
-
-	return (
-		<>
-			<SettingRow title="Enable Provider" last={!enabled}>
-				<Switch checked={enabled} onChange={onToggle} />
-			</SettingRow>
-
-			{enabled && (
-				<>
-					<SettingRow title="Base URL">
-						<TextInput
-							value={baseUrl}
-							onChange={e => onBaseUrlChange(e.target.value)}
-							onBlur={onBlur}
-							placeholder="http://localhost:11434"
-							className="flex-1 max-w-(--input-width-lg)"
-						/>
-					</SettingRow>
-
-					<SettingRow title="API Key">
-						<TextInput
-							type="password"
-							value={apiKey}
-							onChange={e => onApiKeyChange(e.target.value)}
-							onBlur={onBlur}
-							placeholder="Optional"
-							className="flex-1 max-w-(--input-width-lg)"
-						/>
-					</SettingRow>
-
-					<div className="flex items-center justify-between px-2.5 py-1.5">
-						<div className="flex items-center gap-1.5">
-							<span className="text-sm text-vscode-foreground">Models</span>
-							{models.length > 0 && <SettingsBadge>{models.length} found</SettingsBadge>}
-							{status !== 'idle' && <SettingsBadge variant="blue">{status}</SettingsBadge>}
-						</div>
-						<Button
-							size="sm"
-							variant="secondary"
-							onClick={onFetchModels}
-							disabled={testStatus.isLoading}
-							className="text-xs px-2 py-0.5 h-(--btn-height-sm) min-h-[unset]"
-						>
-							{testStatus.isLoading ? 'Loading...' : models.length > 0 ? 'Refresh' : 'Fetch'}
-						</Button>
-					</div>
-
-					{testStatus.error && (
-						<div className="px-2.5 py-1.5">
-							<StatusMessage error={testStatus.error} />
-						</div>
-					)}
-
-					{models.length > 0 ? (
-						<ModelList searchValue={modelSearch} onSearchChange={setModelSearch}>
-							{filteredModels.map(model => (
-								<ModelItem key={model.id} name={model.name} id={model.id}>
-									<Switch
-										checked={enabledModels.includes(model.id)}
-										onChange={() => onToggleModel(model.id)}
-									/>
-								</ModelItem>
-							))}
-						</ModelList>
-					) : (
-						<EmptyState>Click "Fetch" to load available models</EmptyState>
-					)}
-				</>
-			)}
-		</>
-	);
-};
 
 const CustomEndpointConfig: React.FC<CustomEndpointConfigProps> = ({
 	enabled,

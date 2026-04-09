@@ -1,4 +1,6 @@
+import { isProxyEndpointProviderId, OPENAI_COMPATIBLE_PROVIDER_ID } from '../../common';
 import type { CommandOf, WebviewCommand } from '../../common/protocol';
+import type { PrimeCodeSettings } from '../../core/Settings';
 import type { RulesService } from '../../services/RulesService';
 import { logger } from '../../utils/logger';
 import type { HandlerContext, WebviewMessageHandler } from './types';
@@ -80,13 +82,85 @@ export class SettingsHandler implements WebviewMessageHandler {
 	}
 
 	private async onGetSettings(): Promise<void> {
-		this.context.bridge.data('settingsData', this.context.settings.getAll());
+		const settings = this.context.settings.getAll();
+		const merged = await this.mergeOpenCodeJsonEndpoints(settings);
+		this.context.bridge.data('settingsData', merged);
+	}
+
+	/**
+	 * Returns the merged list of custom proxy endpoints from VS Code settings
+	 * and opencode.json. Used by ChatProvider to auto-fetch models on startup
+	 * without re-reading opencode.json separately.
+	 */
+	async getResolvedEndpoints(): Promise<
+		Array<{ id: string; baseUrl: string; apiKey: string; headers?: Record<string, string> }>
+	> {
+		const settings = this.context.settings.getAll();
+		const merged = await this.mergeOpenCodeJsonEndpoints(settings);
+		return (merged['proxy.endpoints'] ?? []).map(ep => ({
+			id: ep.id,
+			baseUrl: ep.baseUrl,
+			apiKey: ep.apiKey,
+			headers: ep.headers,
+		}));
+	}
+
+	/**
+	 * Reverse-sync: read proxy providers from opencode.json and merge them
+	 * into the `proxy.endpoints` settings sent to the webview.
+	 * This ensures that providers configured directly in opencode.json
+	 * (e.g. by hand or by another tool) appear in the Settings UI.
+	 */
+	private async mergeOpenCodeJsonEndpoints(
+		settings: PrimeCodeSettings,
+	): Promise<PrimeCodeSettings> {
+		try {
+			const workspaceRoot = this.context.settings.getWorkspaceRoot();
+			if (!workspaceRoot) return settings;
+
+			const configProviders =
+				await this.context.services.openCodeClient.getAllProjectProxyProviders(workspaceRoot);
+			if (configProviders.length === 0) return settings;
+
+			const existingEndpoints = settings['proxy.endpoints'] ?? [];
+			const existingById = new Map(existingEndpoints.map(ep => [ep.id, ep]));
+			const mergedSettings = { ...settings };
+
+			// Merge all OpenAI-compatible providers from opencode.json into proxy.endpoints.
+			// Provider IDs in opencode.json use the "oai-{endpointId}" format;
+			// strip the prefix to get the endpoint ID used by the UI.
+			const mergedEndpoints = [...existingEndpoints];
+
+			for (const provider of configProviders) {
+				const endpointId = isProxyEndpointProviderId(provider.id)
+					? provider.id.replace(`${OPENAI_COMPATIBLE_PROVIDER_ID}-`, '')
+					: provider.id;
+
+				if (!existingById.has(endpointId)) {
+					mergedEndpoints.push({
+						id: endpointId,
+						name: provider.name,
+						baseUrl: provider.baseUrl,
+						apiKey: provider.apiKey,
+						enabledModels: provider.models.map(m => m.id),
+					});
+				}
+			}
+
+			mergedSettings['proxy.endpoints'] = mergedEndpoints;
+			return mergedSettings;
+		} catch (error) {
+			logger.warn('[SettingsHandler] Failed to merge opencode.json endpoints:', error);
+			return settings;
+		}
 	}
 
 	private async onUpdateSettings(msg: CommandOf<'updateSettings'>): Promise<void> {
 		await this.applyWebviewSettingsPatch(msg.settings);
 		this.context.settings.refresh();
-		this.context.bridge.data('settingsData', this.context.settings.getAll());
+		const settings = this.context.settings.getAll();
+		const merged = await this.mergeOpenCodeJsonEndpoints(settings);
+		this.context.bridge.data('settingsData', merged);
 	}
 
 	private async applyWebviewSettingsPatch(patch: Record<string, unknown>): Promise<void> {
@@ -119,24 +193,6 @@ export class SettingsHandler implements WebviewMessageHandler {
 				case 'mcpServers':
 					if (typeof value === 'object' && value !== null) {
 						await this.context.settings.set('mcpServers', value as Record<string, unknown>);
-					}
-					break;
-
-				case 'proxy.baseUrl':
-					if (typeof value === 'string') {
-						await this.context.settings.set('proxy.baseUrl', value);
-					}
-					break;
-
-				case 'proxy.apiKey':
-					if (typeof value === 'string') {
-						await this.context.settings.set('proxy.apiKey', value);
-					}
-					break;
-
-				case 'proxy.enabledModels':
-					if (Array.isArray(value) && value.every(v => typeof v === 'string')) {
-						await this.context.settings.set('proxy.enabledModels', value);
 					}
 					break;
 

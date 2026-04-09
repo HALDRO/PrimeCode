@@ -385,8 +385,6 @@ export const useModelSelection = () => {
 		useShallow((state: SettingsState) => ({
 			provider: state.provider,
 			selectedModel: state.selectedModel,
-			proxyModels: state.proxyModels,
-			enabledProxyModels: state.enabledProxyModels,
 			proxyEndpoints: state.proxyEndpoints,
 			opencodeProviders: state.opencodeProviders,
 			enabledOpenCodeModels: state.enabledOpenCodeModels,
@@ -419,13 +417,19 @@ const DEFAULT_CONTEXT_WINDOW = 200000;
 
 export const useModelContextWindow = () =>
 	useSettingsStore((state: SettingsState) => {
-		const { selectedModel, opencodeProviders, proxyModels } = state;
+		const { selectedModel, opencodeProviders, proxyEndpoints } = state;
 		const parsed = parseModelId(selectedModel);
 		if (parsed) {
-			// Check proxy models (oai provider)
-			if (parsed.providerId === 'proxy' || parsed.providerId === 'oai') {
-				const proxyModel = proxyModels.find(m => m.id === parsed.modelId);
-				if (proxyModel?.contextLength) return proxyModel.contextLength;
+			// Check proxy endpoint models
+			if (
+				parsed.providerId === 'proxy' ||
+				parsed.providerId === 'oai' ||
+				parsed.providerId.startsWith('oai-')
+			) {
+				for (const endpoint of proxyEndpoints) {
+					const epModel = endpoint.models.find(m => m.id === parsed.modelId);
+					if (epModel?.contextLength) return epModel.contextLength;
+				}
 			}
 			// Check OpenCode providers (includes models.dev metadata)
 			const provider = opencodeProviders.find(p => p.id === parsed.providerId);
@@ -434,9 +438,11 @@ export const useModelContextWindow = () =>
 				if (model?.limit?.context) return model.limit.context;
 			}
 		}
-		// Fallback: check proxy models by raw ID
-		const proxyModel = proxyModels.find(m => m.id === selectedModel);
-		if (proxyModel?.contextLength) return proxyModel.contextLength;
+		// Fallback: check proxy endpoint models by raw ID
+		for (const endpoint of proxyEndpoints) {
+			const epModel = endpoint.models.find(m => m.id === selectedModel);
+			if (epModel?.contextLength) return epModel.contextLength;
+		}
 		return DEFAULT_CONTEXT_WINDOW;
 	});
 

@@ -22,9 +22,6 @@ export interface PrimeCodeSettings {
 	'access.yoloMode': boolean;
 	mcpServers: Record<string, unknown>;
 
-	'proxy.baseUrl': string;
-	'proxy.apiKey': string;
-	'proxy.enabledModels': string[];
 	'proxy.endpoints'?: Array<{
 		id: string;
 		name: string;
@@ -117,9 +114,6 @@ export class Settings implements ISettings {
 			'access.yoloMode': this.get('access.yoloMode') || false,
 			mcpServers: this.get('mcpServers') ?? {},
 
-			'proxy.baseUrl': this.get('proxy.baseUrl') ?? 'http://localhost:11434',
-			'proxy.apiKey': this.get('proxy.apiKey') ?? '',
-			'proxy.enabledModels': this.get('proxy.enabledModels') ?? [],
 			'proxy.endpoints': this.get('proxy.endpoints') ?? [],
 			'proxy.useSingleModel': this.get('proxy.useSingleModel'),
 			'proxy.haikuModel': this.get('proxy.haikuModel'),

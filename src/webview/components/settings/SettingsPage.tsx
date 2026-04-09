@@ -308,8 +308,7 @@ const MainSettings: React.FC = () => {
 		proxySonnetModel,
 		proxyOpusModel,
 		proxySubagentModel,
-		proxyModels,
-		enabledProxyModels,
+		proxyEndpoints,
 	} = useSettingsStore();
 	const { setSettings } = useSettingsActions();
 	const { postMessage } = useVSCode();
@@ -331,17 +330,18 @@ const MainSettings: React.FC = () => {
 		});
 	};
 
-	// Check if OpenAI Compatible provider is enabled and has models
-	const hasEnabledProxyModels = enabledProxyModels.length > 0;
+	// Check if any proxy endpoint has enabled models
+	const hasEnabledProxyModels = proxyEndpoints.some(ep => ep.enabledModels.length > 0);
 
-	// Build model options for Select component
+	// Build model options for Select component from all proxy endpoints
 	const modelOptions = [
 		{ value: '', label: 'Use main model' },
-		// OpenAI Compatible models
-		...enabledProxyModels.map(id => {
-			const model = proxyModels.find(m => m.id === id);
-			return { value: id, label: model?.name || id };
-		}),
+		...proxyEndpoints.flatMap(ep =>
+			ep.enabledModels.map(id => {
+				const model = ep.models.find(m => m.id === id);
+				return { value: id, label: model?.name || id };
+			}),
+		),
 	];
 
 	// Show task-specific models when we have any models available

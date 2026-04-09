@@ -542,11 +542,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			this.settingsHandler.handleMessage({ type: 'getSubagents' }),
 			this.settingsHandler.handleMessage({ type: 'getAgents' }),
 			this.mcpHandler.handleMessage({ type: 'loadMCPServers' }),
-			this.providerHandler.handleMessage({
-				type: 'loadProxyModels',
-				baseUrl: '',
-				apiKey: '',
-			}),
 			this.providerHandler.handleMessage({ type: 'reloadAllProviders' }),
 			this.toolHandler.handleMessage({ type: 'checkDiscoveryStatus' }),
 			this.settingsHandler.handleMessage({ type: 'getRules' }),
@@ -559,6 +554,44 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			rejected,
 			durationMs: Date.now() - startedAt,
 		});
+
+		// Auto-fetch models for custom proxy endpoints so they appear in the UI
+		// after restart without requiring the user to click "Fetch" manually.
+		// This runs after the main sync so that settings (proxy.endpoints) are already loaded.
+		this.fetchCustomEndpointModels().catch(err => {
+			logger.warn('[ChatProvider] fetchCustomEndpointModels failed:', err);
+		});
+	}
+
+	/**
+	 * Read custom proxy endpoints from merged settings (VS Code + opencode.json),
+	 * then trigger loadProxyModels for each one that has a baseUrl.
+	 * Uses SettingsHandler.getResolvedEndpoints() to avoid re-reading opencode.json.
+	 */
+	private async fetchCustomEndpointModels(): Promise<void> {
+		const endpoints = await this.settingsHandler.getResolvedEndpoints();
+		if (!endpoints.length) return;
+
+		const endpointRequests = endpoints
+			.filter(ep => ep.baseUrl?.trim())
+			.map(ep =>
+				this.providerHandler.handleMessage({
+					type: 'loadProxyModels',
+					baseUrl: ep.baseUrl,
+					apiKey: ep.apiKey ?? '',
+					endpointId: ep.id,
+					headers: ep.headers,
+				}),
+			);
+
+		if (endpointRequests.length > 0) {
+			const results = await Promise.allSettled(endpointRequests);
+			const rejected = results.filter(r => r.status === 'rejected').length;
+			logger.info('[ChatProvider] Custom endpoint model fetch complete', {
+				total: results.length,
+				rejected,
+			});
+		}
 	}
 
 	resolveWebviewView(webviewView: vscode.WebviewView): void {

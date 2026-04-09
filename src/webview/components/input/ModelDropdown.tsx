@@ -49,8 +49,6 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 	const {
 		provider,
 		selectedModel,
-		proxyModels,
-		enabledProxyModels,
 		proxyEndpoints,
 		opencodeProviders,
 		enabledOpenCodeModels,
@@ -60,23 +58,10 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 	} = useModelSelection();
 	const { setShowModelDropdown } = useModelDropdownState();
 
-	// OpenAI-compatible provider ID used by settings/UI
-	const OPENAI_COMPATIBLE_ID = OPENAI_COMPATIBLE_PROVIDER_ID;
-
 	// Use per-session model if set, otherwise fall back to workspace default
 	const effectiveModel = getSessionModel() ?? selectedModel;
 
-	// Filter proxy models to only show enabled ones (and only if proxy provider is not disabled)
-	const enabledProxyModelsList = useMemo(
-		() =>
-			disabledProviders.includes(OPENAI_COMPATIBLE_ID)
-				? []
-				: proxyModels.filter(m => enabledProxyModels.includes(m.id)),
-		[proxyModels, enabledProxyModels, disabledProviders],
-	);
-
 	// Filter OpenCode models to only show enabled ones from non-disabled providers
-	// Filter out 'oai' provider as it's shown separately via enabledProxyModelsList
 	const filteredOpencodeProviders = useMemo(() => {
 		// Filter each provider's models to only include enabled ones from non-disabled providers
 		return (
@@ -199,42 +184,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 			}
 		}
 
-		// Also add enabled proxy models for OpenCode (OpenAI Compatible)
-		for (const model of enabledProxyModelsList) {
-			// For OpenCode, proxy models use 'oai' provider prefix (saved to opencode.json)
-			const modelId = `${OPENAI_COMPATIBLE_PROVIDER_ID}/${model.id}`;
-			const isActive = effectiveActiveModel === modelId;
-			const hasReasoning = model.capabilities?.reasoning === true;
-			result.push({
-				id: modelId,
-				label: model.name || model.id,
-				icon: hasReasoning ? (
-					<BrainSideIcon
-						size={14}
-						style={{
-							color: isActive ? 'var(--color-accent)' : 'var(--vscode-descriptionForeground)',
-							opacity: isActive ? 1 : 0.7,
-						}}
-					/>
-				) : (
-					<ZapIcon
-						size={14}
-						style={{
-							color: isActive ? 'var(--color-accent)' : 'var(--vscode-descriptionForeground)',
-							opacity: isActive ? 1 : 0.7,
-						}}
-					/>
-				),
-				meta: 'OAI',
-				data: {
-					id: modelId,
-					name: model.name || model.id,
-					isActive,
-					capabilities: model.capabilities,
-				},
-			});
-		}
-
+		// Also add enabled proxy endpoint models for OpenCode
 		for (const endpoint of proxyEndpoints) {
 			if (!endpoint.enabledModels.length || !endpoint.models.length) continue;
 			const providerId = getProxyEndpointProviderId(endpoint.id);
@@ -278,7 +228,6 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 		return result;
 	}, [
 		effectiveActiveModel,
-		enabledProxyModelsList,
 		filteredOpencodeProviders,
 		proxyEndpoints,
 		disabledProviders,
