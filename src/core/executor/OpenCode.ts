@@ -233,6 +233,16 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		return Number.isInteger(parsed) && parsed > 0 ? parsed : 4096;
 	}
 
+	/**
+	 * Uppercase the Windows drive letter for consistent path comparison.
+	 * VS Code `uri.fsPath` returns lowercase (`c:\...`), but the OpenCode server
+	 * stores paths with uppercase (`C:\...`) via `realpathSync.native`.
+	 * The server filters sessions by exact string match on `directory`.
+	 */
+	private static normalizeDriveLetter(dir: string): string {
+		return dir.length >= 2 && dir[1] === ':' ? dir[0].toUpperCase() + dir.slice(1) : dir;
+	}
+
 	private getLocalServerUrl(): string {
 		return `http://${OpenCodeExecutor.LOCAL_SERVER_HOST}:${OpenCodeExecutor.LOCAL_SERVER_PORT}`;
 	}
@@ -263,7 +273,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			this.serverUrl = config.serverUrl;
 			this.isServerOwner = false;
 			this.serverStartedAt = null;
-			this.directory = config.workspaceRoot;
+			this.directory = OpenCodeExecutor.normalizeDriveLetter(config.workspaceRoot);
 			this.initSdkClient();
 			logger.info(`[OpenCode] Connected to existing server at ${this.serverUrl}`);
 			return;
@@ -302,7 +312,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			this.serverUrl = canonicalUrl;
 			this.isServerOwner = false;
 			this.serverStartedAt = null;
-			this.directory = config.workspaceRoot;
+			this.directory = OpenCodeExecutor.normalizeDriveLetter(config.workspaceRoot);
 			this.initSdkClient();
 			void this.preloadMetadata();
 			return true;
@@ -320,7 +330,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				this.serverUrl = url;
 				this.isServerOwner = false;
 				this.serverStartedAt = null;
-				this.directory = config.workspaceRoot;
+				this.directory = OpenCodeExecutor.normalizeDriveLetter(config.workspaceRoot);
 				this.initSdkClient();
 				void this.preloadMetadata();
 				return true;
@@ -544,7 +554,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 			this.serverInstance = { close: () => opencode.server.close() };
 			this.serverUrl = opencode.server.url;
-			this.directory = workspaceRoot;
+			this.directory = OpenCodeExecutor.normalizeDriveLetter(workspaceRoot);
 			this.isServerOwner = true;
 			this.serverStartedAt = Date.now();
 
@@ -988,9 +998,48 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			// at the SQL level BEFORE applying the limit. Without this, child
 			// sessions consume most of the 100-row limit, leaving very few
 			// top-level conversations visible in the history dropdown.
+			//
+			// On Windows, VS Code returns uri.fsPath with a lowercase drive letter
+			// (e.g. "c:\..."), while the OpenCode server stores sessions with an
+			// uppercase drive letter (e.g. "C:\...") via realpathSync.native.
+			// The SDK interceptor injects the client's directory into every GET
+			// request, and the server filters by exact string match — so sessions
+			// created with a different drive letter case become invisible.
+			//
+			// To work around this, we issue a second request with the alternate
+			// drive letter case and merge the results, deduplicating by session ID.
 			const { data: raw } = await client.session.list({ roots: true });
-
 			const sessions = Array.isArray(raw) ? raw : [];
+
+			// Fetch sessions stored under the alternate drive letter case (Windows)
+			if (this.directory && this.directory.length >= 2 && this.directory[1] === ':') {
+				const curDrive = this.directory[0];
+				const altDrive =
+					curDrive === curDrive.toUpperCase() ? curDrive.toLowerCase() : curDrive.toUpperCase();
+				const altDirectory = altDrive + this.directory.slice(1);
+
+				try {
+					const { data: altRaw } = await client.session.list({
+						roots: true,
+						directory: altDirectory,
+					});
+					const altSessions = Array.isArray(altRaw) ? altRaw : [];
+					if (altSessions.length > 0) {
+						// Merge and deduplicate by session ID
+						const seen = new Set(sessions.map(s => s.id));
+						for (const s of altSessions) {
+							if (!seen.has(s.id)) {
+								sessions.push(s);
+								seen.add(s.id);
+							}
+						}
+						// Re-sort by time_updated descending
+						sessions.sort((a, b) => (b.time?.updated || 0) - (a.time?.updated || 0));
+					}
+				} catch {
+					// Alternate drive letter fetch failed — not critical, continue
+				}
+			}
 
 			logger.info('[OpenCode] listSessions: API returned', {
 				rawCount: sessions.length,
