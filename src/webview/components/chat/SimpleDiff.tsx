@@ -270,6 +270,40 @@ const getString = (
 	return undefined;
 };
 
+/**
+ * Extract the portion of a multi-file unified diff that belongs to `filePath`.
+ * The top-level `metadata.diff` may contain sections for every file, delimited
+ * by `--- a/path` / `+++ b/path` headers. We split on those and return only
+ * the section whose path matches (suffix match to tolerate a/ b/ prefixes and
+ * absolute vs relative differences).
+ */
+function extractFileDiffFromUnified(fullDiff: string, filePath: string): string | undefined {
+	if (!fullDiff || !filePath) return undefined;
+	const normTarget = filePath.replace(/\\/g, '/');
+
+	// Split into per-file sections on `diff --git` or `--- ` boundaries
+	const sections = fullDiff.split(/^(?=diff --git |--- )/m);
+
+	for (const section of sections) {
+		// Look for +++ b/path header inside this section
+		const plusMatch = section.match(/^\+{3}\s+(.+?)$/m);
+		if (!plusMatch) continue;
+		const raw = plusMatch[1]
+			.trim()
+			.replace(/^[ab]\//, '')
+			.replace(/\\/g, '/');
+		if (raw === normTarget || normTarget.endsWith(`/${raw}`) || raw.endsWith(`/${normTarget}`)) {
+			return section;
+		}
+	}
+
+	// If only a single file diff with @@ hunks and no multi-file headers,
+	// return the whole thing when there's exactly one patch file.
+	if (fullDiff.includes('@@')) return fullDiff;
+
+	return undefined;
+}
+
 export function resolveFileChanges(params: {
 	actionType: unknown;
 	toolResultMetadata?: unknown;
@@ -280,11 +314,24 @@ export function resolveFileChanges(params: {
 	const patchFiles = getApplyPatchFiles(params.toolResultMetadata);
 
 	if (patchFiles.length > 0) {
+		// Top-level unified diff from metadata — used as fallback when per-file
+		// diff is absent (the CLI often sends a single combined diff here).
+		const topMeta = asRecord(params.toolResultMetadata);
+		const topDiff = getString(topMeta, ['diff']);
+
 		const changes: ResolvedFileChange[] = [];
 		for (const file of patchFiles) {
 			const filePath = getPatchFilePath(file);
 			if (!filePath) continue;
 			const status = getPatchFileStatus(file);
+
+			// Prefer per-file diff; fall back to the relevant slice of top-level diff
+			let fileDiff = typeof file.diff === 'string' ? file.diff : undefined;
+			if (!fileDiff && topDiff) {
+				fileDiff =
+					patchFiles.length === 1 ? topDiff : extractFileDiffFromUnified(topDiff, filePath);
+			}
+
 			const resolved = resolveSingleDiffData({
 				actionType: {
 					type: 'ApplyPatch',
@@ -298,7 +345,7 @@ export function resolveFileChanges(params: {
 					],
 				},
 				toolResultMetadata: {
-					diff: typeof file.diff === 'string' ? file.diff : undefined,
+					diff: fileDiff,
 					filePath,
 				},
 				fallbackFilePath: filePath,

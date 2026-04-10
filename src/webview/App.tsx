@@ -54,6 +54,9 @@ function sectionChanged(prev: MessageSection, next: MessageSection): boolean {
 			// Arrays are recreated by groupToolMessages — compare by last id + length + isLive
 			if (Array.isArray(p) && Array.isArray(n)) {
 				if (p.length !== n.length) return true;
+				for (let j = 0; j < p.length; j++) {
+					if (p[j] !== n[j]) return true;
+				}
 				const pId = p[p.length - 1]?.id;
 				const nId = n[n.length - 1]?.id;
 				if (pId !== nId) return true;

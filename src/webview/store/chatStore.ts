@@ -261,6 +261,7 @@ function mergeOrAddMessage(messages: Message[], incoming: Message): void {
 
 	const existing = messages[existingIdx];
 	const preserveSubtaskType = existing.type === 'subtask' && incoming.type === 'tool_use';
+	const preserveQuestionType = existing.type === 'question' && incoming.type === 'tool_use';
 
 	// Delta content concatenation
 	if ('isDelta' in incoming && incoming.isDelta && 'content' in existing && 'content' in incoming) {
@@ -269,6 +270,7 @@ function mergeOrAddMessage(messages: Message[], incoming: Message): void {
 		Object.assign(existing, {
 			...incoming,
 			...(preserveSubtaskType ? { type: 'subtask' as const } : {}),
+			...(preserveQuestionType ? { type: 'question' as const } : {}),
 			content: existing.content,
 		});
 		if (preservedStartTime !== undefined && 'startTime' in existing) {
@@ -285,6 +287,7 @@ function mergeOrAddMessage(messages: Message[], incoming: Message): void {
 					description: existing.description,
 					prompt: existing.prompt,
 					agent: existing.agent,
+					normalizedEntry: existing.normalizedEntry,
 					startTime: existing.startTime,
 					transcript: existing.transcript,
 					durationMs: existing.durationMs,
@@ -304,8 +307,21 @@ function mergeOrAddMessage(messages: Message[], incoming: Message): void {
 						| undefined,
 				}
 			: undefined;
+	const preservedQuestionMeta =
+		existing.type === 'question'
+			? {
+					questions: existing.questions,
+					tool: existing.tool,
+					toolUseId: existing.toolUseId,
+					childSessionId: existing.childSessionId,
+					answers: existing.answers,
+				}
+			: undefined;
 
-	Object.assign(existing, incoming, preserveSubtaskType ? { type: 'subtask' as const } : {});
+	Object.assign(existing, incoming, {
+		...(preserveSubtaskType ? { type: 'subtask' as const } : {}),
+		...(preserveQuestionType ? { type: 'question' as const } : {}),
+	});
 
 	if (existing.type === 'subtask' && preservedSubtaskMeta) {
 		if (!existing.description && preservedSubtaskMeta.description)
@@ -313,6 +329,9 @@ function mergeOrAddMessage(messages: Message[], incoming: Message): void {
 		if (!existing.prompt && preservedSubtaskMeta.prompt)
 			existing.prompt = preservedSubtaskMeta.prompt;
 		if (!existing.agent && preservedSubtaskMeta.agent) existing.agent = preservedSubtaskMeta.agent;
+		if (!existing.normalizedEntry && preservedSubtaskMeta.normalizedEntry) {
+			existing.normalizedEntry = preservedSubtaskMeta.normalizedEntry;
+		}
 		if (!existing.startTime && preservedSubtaskMeta.startTime)
 			existing.startTime = preservedSubtaskMeta.startTime;
 		if (!existing.transcript && preservedSubtaskMeta.transcript)
@@ -327,6 +346,21 @@ function mergeOrAddMessage(messages: Message[], incoming: Message): void {
 			ex.childModelId = preservedSubtaskMeta.childModelId;
 		if (!ex.retryInfo && preservedSubtaskMeta.retryInfo)
 			ex.retryInfo = preservedSubtaskMeta.retryInfo;
+	}
+	if (existing.type === 'question' && preservedQuestionMeta) {
+		if (!existing.questions?.length && preservedQuestionMeta.questions?.length) {
+			existing.questions = preservedQuestionMeta.questions;
+		}
+		if (!existing.tool && preservedQuestionMeta.tool) existing.tool = preservedQuestionMeta.tool;
+		if (!existing.toolUseId && preservedQuestionMeta.toolUseId) {
+			existing.toolUseId = preservedQuestionMeta.toolUseId;
+		}
+		if (!existing.childSessionId && preservedQuestionMeta.childSessionId) {
+			existing.childSessionId = preservedQuestionMeta.childSessionId;
+		}
+		if (!existing.answers?.length && preservedQuestionMeta.answers?.length) {
+			existing.answers = preservedQuestionMeta.answers;
+		}
 	}
 	if (preservedStartTime !== undefined && 'startTime' in existing) {
 		(existing as { startTime: number }).startTime = preservedStartTime as number;

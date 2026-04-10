@@ -461,21 +461,14 @@ export class SessionHandler implements WebviewMessageHandler {
 		const graph = this.context.sessionGraph;
 
 		const allSessions = cachedSessions ?? (await this.context.cli.listSessions(config));
-		const childSessions = allSessions
-			.filter(s => s.parentID === sessionId)
-			.sort((a, b) => (a.created || 0) - (b.created || 0));
-		const childSessionIds = childSessions.map(s => s.id);
 
-		// Extract task toolUseId → childSessionId links from parent history.
-		// We use explicit metadata from tool_result events instead of positional matching,
-		// because failed task calls (no child session created) would shift the mapping
-		// and cause successful calls to lose their child sessions.
+		// Extract task toolUseId → childSessionId links from parent history metadata.
+		// listSessions() returns roots-only, so we cannot rely on allSessions to find children.
+		// Instead, trust metadata.sessionId from task tool_result events directly.
 		const parentHistory = await this.context.cli.getHistory(sessionId, config);
-		const childSessionIdSet = new Set(childSessionIds);
 		const explicitLinks = new Map<string, string>(); // toolUseId → childSessionId
 
 		for (const ev of parentHistory) {
-			// Extract explicit childSessionId from task tool_result metadata
 			if (ev.type === 'tool_result') {
 				const d = ev.data as {
 					tool?: string;
@@ -484,22 +477,31 @@ export class SessionHandler implements WebviewMessageHandler {
 					content?: string;
 				};
 				if (d.tool === 'task' && d.tool_use_id) {
-					// Primary: metadata.sessionId (set by CLI task tool)
 					const metaSessionId = d.metadata?.sessionId;
-					if (metaSessionId && childSessionIdSet.has(metaSessionId)) {
+					if (metaSessionId) {
 						explicitLinks.set(d.tool_use_id, metaSessionId);
 					}
 				}
 			}
 		}
 
-		// Register explicit links first (from metadata)
+		// Build childSessions from explicitLinks (authoritative) merged with allSessions fallback
+		const linkedChildIds = new Set(explicitLinks.values());
+		const childSessionsFromList = allSessions
+			.filter(s => s.parentID === sessionId)
+			.sort((a, b) => (a.created || 0) - (b.created || 0));
+		// Merge: all linked IDs + any from allSessions not yet included
+		const allChildIds = new Set(linkedChildIds);
+		for (const s of childSessionsFromList) allChildIds.add(s.id);
+		const childSessions = [...allChildIds].map(id => {
+			const fromList = childSessionsFromList.find(s => s.id === id);
+			return { id, title: fromList?.title, created: fromList?.created };
+		});
+
+		// Register explicit links in SessionGraph
 		for (const [toolUseId, childId] of explicitLinks) {
 			graph.registerChild(childId, sessionId, toolUseId);
 		}
-		// Deliberately avoid positional fallback linking.
-		// OpenCode child sessions are first-class and should be linked only via
-		// explicit metadata/session relationships, not FIFO ordering.
 
 		// Pre-load ALL child histories in parallel (instead of sequential loop).
 		// Child events are aggregated into parent subtask transcripts (no separate buckets).
@@ -1613,7 +1615,14 @@ export class SessionHandler implements WebviewMessageHandler {
 		}
 
 		if (options?.mode === 'parent' && toolName === 'task') {
-			this.replayToolResultSubtask(data, toolUseId, sessionId, subtaskMeta, options);
+			this.replayToolResultSubtask(
+				data,
+				toolUseId,
+				sessionId,
+				subtaskMeta,
+				options,
+				event.normalizedEntry,
+			);
 			return;
 		}
 
@@ -1707,6 +1716,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		sessionId: string,
 		subtaskMeta: Map<string, { description: string; prompt: string; agent: string }>,
 		options: NonNullable<Parameters<SessionHandler['replayToolUse']>[3]>,
+		normalizedEntry?: CLIEvent['normalizedEntry'],
 	): void {
 		const graph = this.context.sessionGraph;
 		const childSessionId = graph.getChildByTaskId(toolUseId);
@@ -1716,6 +1726,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		const childTokens = childSessionId ? options.childTokensMap?.get(childSessionId) : undefined;
 		const childModelId = childSessionId ? options.childModelIdMap?.get(childSessionId) : undefined;
 		const savedMeta = subtaskMeta.get(toolUseId);
+
 		this.postSessionMessage(
 			{
 				id: toolUseId,
@@ -1729,6 +1740,7 @@ export class SessionHandler implements WebviewMessageHandler {
 				...(childTokens ? { childTokens } : {}),
 				...(childModelId ? { childModelId } : {}),
 				...(savedMeta ?? {}),
+				...(normalizedEntry ? { normalizedEntry } : {}),
 			},
 			sessionId,
 		);

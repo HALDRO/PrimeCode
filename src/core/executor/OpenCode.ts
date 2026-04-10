@@ -1319,6 +1319,22 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 						// If completed or error, emit tool_result
 						if (status === 'completed' || status === 'error') {
+							const isTask = name === 'task' || name === 'Task';
+							const taskDescription =
+								isTask && typeof input.description === 'string'
+									? input.description
+									: isTask && typeof input.prompt === 'string'
+										? input.prompt
+										: '';
+							const outputText = typeof state?.output === 'string' ? state.output : '';
+							const resultNormalized = isTask
+								? this.logNormalizer.normalizeTaskResult(
+										callID,
+										taskDescription,
+										outputText,
+										status === 'error',
+									)
+								: undefined;
 							partEvents.push({
 								type: 'tool_result' as const,
 								data: {
@@ -1331,6 +1347,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 									metadata: state?.metadata,
 									input: state?.input,
 								},
+								...(resultNormalized ? { normalizedEntry: resultNormalized } : {}),
 								sessionId,
 							});
 						}

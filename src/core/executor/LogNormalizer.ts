@@ -242,7 +242,8 @@ export class LogNormalizer extends EventEmitter {
 				};
 
 			case 'apply_patch': {
-				const patch = (input.patch as string) || (input.diff as string) || '';
+				const patch =
+					(input.patch as string) || (input.patchText as string) || (input.diff as string) || '';
 				const files = LogNormalizer.parseApplyPatchFiles(patch, input);
 				return { type: 'ApplyPatch', files };
 			}
@@ -343,13 +344,35 @@ export class LogNormalizer extends EventEmitter {
 		}
 
 		const result: ApplyPatchFile[] = [];
+
+		// New format: "*** Add File: path", "*** Update File: path", "*** Delete File: path"
+		const ACTION_RE = /^\*{3}\s+(Add|Update|Delete)\s+File:\s*(.+?)$/gm;
+		const STATUS_MAP: Record<string, ApplyPatchFile['status']> = {
+			add: 'add',
+			update: 'update',
+			delete: 'delete',
+		};
+		for (const match of patch.matchAll(ACTION_RE)) {
+			const action = match[1].toLowerCase();
+			const filePath = match[2].trim();
+			if (filePath && filePath !== '/dev/null') {
+				result.push({ path: filePath, status: STATUS_MAP[action] || 'update' });
+			}
+		}
+		if (result.length > 0) return result;
+
+		// Legacy format: "*** path" blocks with @@ hunks
+		const CONTROL_WORDS = new Set(['Begin', 'End']);
 		const fileBlocks = patch.split(/^(?=\*{3}\s)/m);
 
 		for (const block of fileBlocks) {
 			const headerMatch = /^\*{3}\s+(.+?)(?:\s|$)/m.exec(block);
 			if (!headerMatch) continue;
 
-			const filePath = headerMatch[1].trim();
+			const raw = headerMatch[1].trim();
+			const firstWord = raw.split(/\s/)[0];
+			if (!raw || raw === '/dev/null' || CONTROL_WORDS.has(firstWord)) continue;
+
 			let status: ApplyPatchFile['status'] = 'update';
 
 			// Detect status from content
@@ -361,7 +384,7 @@ export class LogNormalizer extends EventEmitter {
 				status = 'move';
 			}
 
-			result.push({ path: filePath, status });
+			result.push({ path: raw, status });
 		}
 
 		return result.length > 0 ? result : [{ path: 'patch', status: 'update' }];
