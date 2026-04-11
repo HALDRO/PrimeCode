@@ -374,8 +374,13 @@ StandaloneStatsPanel.displayName = 'StandaloneStatsPanel';
 
 export const ChangedFilesPanel: React.FC = React.memo(() => {
 	const { changedFiles, cumulativeDiffs } = useChangedFilesState();
-	const hasFiles =
-		changedFiles.length > 0 || cumulativeDiffs.some(d => d.additions > 0 || d.deletions > 0);
+	const hasCumulative = cumulativeDiffs.length > 0;
+	// When cumulative diffs are available, they are authoritative — only show panel
+	// if at least one file has non-zero stats. Before cumulative arrives, fall back
+	// to changedFiles presence so the panel appears immediately on first edit.
+	const hasFiles = hasCumulative
+		? cumulativeDiffs.some(d => d.additions > 0 || d.deletions > 0)
+		: changedFiles.length > 0;
 
 	// When no changed files — always show SessionStatsDisplay
 	if (!hasFiles) {
@@ -390,8 +395,6 @@ ChangedFilesPanel.displayName = 'ChangedFilesPanel';
 const ChangedFilesPanelContent: React.FC = React.memo(() => {
 	const { postMessage } = useVSCode();
 	const { changedFiles, cumulativeDiffs } = useChangedFilesState();
-	const hasFiles =
-		changedFiles.length > 0 || cumulativeDiffs.some(d => d.additions > 0 || d.deletions > 0);
 	const { clearChangedFiles, removeChangedFile } = useChatActions();
 	const { showConfirmDialog } = useUIActions();
 	const mcpServers = useMcpServers();
@@ -466,7 +469,8 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 			}
 		}
 
-		return Array.from(fileMap.values());
+		// Filter out files with zero additions and zero deletions (reverted edits)
+		return Array.from(fileMap.values()).filter(f => f.linesAdded > 0 || f.linesRemoved > 0);
 	}, [changedFiles, cumulativeMap, cumulativeDiffs, hasCumulative]);
 
 	// Header totals: always derived from groupedFiles so they match the per-file rows exactly.
@@ -576,7 +580,7 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 				)}
 			>
 				{/* Header - only when files exist */}
-				{hasFiles && (
+				{groupedFiles.length > 0 && (
 					<button
 						type="button"
 						tabIndex={0}
@@ -670,7 +674,7 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 					</button>
 				)}
 
-				{expanded && hasFiles && (
+				{expanded && groupedFiles.length > 0 && (
 					<div>
 						<ScrollContainer className="px-(--tool-header-padding) max-h-[40vh]">
 							{groupedFiles.map(file => (

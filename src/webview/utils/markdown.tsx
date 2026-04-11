@@ -6,7 +6,7 @@
  *              Inline code that looks like file paths becomes clickable.
  */
 
-import React, { useDeferredValue, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { Components } from 'react-markdown';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
@@ -290,6 +290,124 @@ const components: Components = {
 };
 
 // ----------------------------------------------------------------------
+// Streaming throttle — llm-ui inspired character-level smoothing
+// ----------------------------------------------------------------------
+
+/**
+ * Buffers incoming content and releases it character-by-character at the
+ * display's frame rate. This eliminates the "flicker" caused by React
+ * re-rendering the full markdown tree on every token.
+ *
+ * When `isStreaming` is false the full content is returned immediately.
+ *
+ * Approach (borrowed from llm-ui's throttleBasic):
+ *  - Keep a "visible length" that trails behind the real content length
+ *  - Each RAF tick, advance visible length by `charsPerFrame`
+ *  - `charsPerFrame` is auto-tuned: we measure how fast new chars arrive
+ *    and set the display rate slightly above that so we never fall behind
+ *  - A small read-ahead buffer (BUFFER_CHARS) is withheld so we can
+ *    smooth out pauses between LLM tokens
+ */
+const BUFFER_CHARS = 8; // chars to withhold while streaming
+const MIN_CHARS_PER_FRAME = 1;
+const MAX_CHARS_PER_FRAME = 6;
+const RATE_WINDOW_MS = 3000; // window for measuring arrival rate
+
+function useThrottledContent(content: string, isStreaming: boolean): string {
+	const [visibleLen, setVisibleLen] = useState(content.length);
+	const rafRef = useRef(0);
+	const contentRef = useRef(content);
+	const visibleLenRef = useRef(content.length);
+
+	// Track arrival rate: timestamps of content length changes
+	const samplesRef = useRef<{ time: number; len: number }[]>([]);
+
+	// Keep contentRef in sync
+	contentRef.current = content;
+
+	// When streaming starts on new content (e.g. new message), reset
+	const prevStreamingRef = useRef(isStreaming);
+	useEffect(() => {
+		if (isStreaming && !prevStreamingRef.current) {
+			// Streaming just started — snap to current length so we don't
+			// re-animate already-visible text
+			visibleLenRef.current = content.length;
+			setVisibleLen(content.length);
+			samplesRef.current = [];
+		}
+		prevStreamingRef.current = isStreaming;
+	}, [isStreaming, content.length]);
+
+	// Record arrival samples
+	useEffect(() => {
+		if (!isStreaming) return;
+		const now = performance.now();
+		const samples = samplesRef.current;
+		samples.push({ time: now, len: content.length });
+		// Prune old samples
+		const cutoff = now - RATE_WINDOW_MS;
+		while (samples.length > 1 && samples[0].time < cutoff) {
+			samples.shift();
+		}
+	}, [content.length, isStreaming]);
+
+	// Compute chars per frame from arrival rate
+	const getCharsPerFrame = useCallback(() => {
+		const samples = samplesRef.current;
+		if (samples.length < 2) return MIN_CHARS_PER_FRAME;
+		const first = samples[0];
+		const last = samples[samples.length - 1];
+		const elapsed = last.time - first.time;
+		if (elapsed <= 0) return MIN_CHARS_PER_FRAME;
+		const charsArrived = last.len - first.len;
+		// chars per ms → chars per frame (assuming ~16ms per frame)
+		const charsPerMs = charsArrived / elapsed;
+		const charsPerFrame = Math.round(charsPerMs * 16 * 1.2); // 1.2x to stay ahead
+		return Math.max(MIN_CHARS_PER_FRAME, Math.min(MAX_CHARS_PER_FRAME, charsPerFrame));
+	}, []);
+
+	// RAF loop: advance visible length toward target
+	useEffect(() => {
+		if (!isStreaming) {
+			// Not streaming — show everything immediately
+			cancelAnimationFrame(rafRef.current);
+			visibleLenRef.current = content.length;
+			setVisibleLen(content.length);
+			return;
+		}
+
+		const tick = () => {
+			const target = contentRef.current.length - BUFFER_CHARS;
+			const current = visibleLenRef.current;
+
+			if (current < target) {
+				const step = getCharsPerFrame();
+				const next = Math.min(current + step, target);
+				visibleLenRef.current = next;
+				setVisibleLen(next);
+			}
+
+			rafRef.current = requestAnimationFrame(tick);
+		};
+
+		rafRef.current = requestAnimationFrame(tick);
+		return () => cancelAnimationFrame(rafRef.current);
+	}, [isStreaming, getCharsPerFrame, content.length]);
+
+	// When streaming finishes, flush remaining buffer
+	useEffect(() => {
+		if (!isStreaming && visibleLenRef.current < content.length) {
+			visibleLenRef.current = content.length;
+			setVisibleLen(content.length);
+		}
+	}, [isStreaming, content.length]);
+
+	// During streaming return the throttled slice; otherwise full content
+	if (!isStreaming) return content;
+	return content.slice(0, Math.max(0, visibleLen));
+}
+
+// ----------------------------------------------------------------------
 // Preprocessing
 // ----------------------------------------------------------------------
 
@@ -308,10 +426,9 @@ const preprocessContent = (content: string): string => {
 
 export const Markdown: React.FC<MarkdownProps> = React.memo(
 	({ content, className, isStreaming }) => {
-		// useDeferredValue lets React deprioritize the expensive markdown parse
-		// during streaming, keeping the UI responsive without manual setTimeout.
-		const deferredContent = useDeferredValue(content);
-		const displayContent = isStreaming ? deferredContent : content;
+		// Character-level throttling: buffers incoming tokens and releases them
+		// at the display's frame rate for smooth, flicker-free streaming.
+		const displayContent = useThrottledContent(content, !!isStreaming);
 		const processedContent = React.useMemo(
 			() => preprocessContent(displayContent),
 			[displayContent],

@@ -454,23 +454,23 @@ div:hover > .user-copy-btn {
 	overflow-wrap: break-word;
 }
 
-/* Streaming text fade-in — Cursor-like trailing edge effect.
-   During streaming, the last block element gets a gradient mask
-   that fades the bottom portion, creating a soft "revealing" feel
-   as new tokens arrive. The mask covers the last ~1.5 lines. */
+/* Streaming: new block elements (paragraphs, lists, code blocks) fade in
+   gently when first inserted. With useThrottledContent feeding chars
+   gradually, React only creates a new element once (e.g. when a new
+   paragraph starts), so the animation fires once — no flicker. */
+@keyframes streamBlockIn {
+	from {
+		opacity: 0.5;
+		transform: translateY(2px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
 .markdown-body.streaming > *:last-child {
-	mask-image: linear-gradient(
-		to bottom,
-		black 0%,
-		black calc(100% - 1.4em),
-		rgba(0, 0, 0, 0.4) 100%
-	);
-	-webkit-mask-image: linear-gradient(
-		to bottom,
-		black 0%,
-		black calc(100% - 1.4em),
-		rgba(0, 0, 0, 0.4) 100%
-	);
+	animation: streamBlockIn 0.25s ease-out both;
 }
 
 /* Remove edge margins for chat bubbles */
