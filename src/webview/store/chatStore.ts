@@ -134,6 +134,11 @@ export interface ChatActions {
 	 * Auto-creates child sessions if they don't exist.
 	 */
 	dispatch: (targetId: string, eventType: SessionEventType, payload: SessionEventPayload) => void;
+	/**
+	 * Process a batch of session events in a single Immer produce() call.
+	 * Used by RAF-coalesced streaming to avoid per-token re-renders.
+	 */
+	dispatchBatch: (events: SessionEventMessage[]) => void;
 	handleExtensionMessage: (message: ExtensionMessage) => void;
 
 	// ==========================================================================
@@ -1033,6 +1038,30 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 					targetSession.lastActive = Date.now();
 
 					dispatchToSession(targetSession, eventType, payload);
+				}),
+			);
+		},
+
+		dispatchBatch: events => {
+			// Side-effect: push transient notifications OUTSIDE of Immer produce.
+			for (const event of events) {
+				const notification = extractNotification(event.eventType, event.payload);
+				if (notification) {
+					useUIStore.getState().actions.pushNotification(notification);
+				}
+			}
+
+			set(
+				produce((state: ChatState) => {
+					for (const event of events) {
+						const targetId = event.targetId;
+						if (!state.sessionsById[targetId]) {
+							state.sessionsById[targetId] = createEmptySession(targetId);
+						}
+						const targetSession = state.sessionsById[targetId];
+						targetSession.lastActive = Date.now();
+						dispatchToSession(targetSession, event.eventType, event.payload);
+					}
 				}),
 			);
 		},

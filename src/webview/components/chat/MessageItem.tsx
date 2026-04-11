@@ -355,22 +355,40 @@ const SimpleToolGroup = React.memo<{
 	const [expanded, setExpanded] = useState(isLive);
 	const wasLiveRef = useRef(isLive);
 	const prevShouldCollapseRef = useRef(shouldCollapse);
+	const collapseTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
 	useEffect(() => {
 		if (isLive && !wasLiveRef.current) {
+			// Group became live — expand it and cancel any pending collapse
+			clearTimeout(collapseTimerRef.current);
 			setExpanded(true);
 		} else if (!isLive && wasLiveRef.current) {
-			setExpanded(false);
+			// isLive went false — group finished streaming.
+			// Don't collapse immediately: wait for shouldCollapse (real content
+			// appeared after the group). If shouldCollapse doesn't arrive within
+			// a reasonable window (e.g. group is last in the list), collapse via
+			// fallback timer so the group doesn't stay open forever.
+			if (shouldCollapse) {
+				setExpanded(false);
+			} else {
+				collapseTimerRef.current = setTimeout(() => setExpanded(false), 800);
+			}
 		}
 		wasLiveRef.current = isLive;
-	}, [isLive]);
+	}, [isLive, shouldCollapse]);
 
 	useEffect(() => {
 		if (shouldCollapse && !prevShouldCollapseRef.current && !isLive) {
+			// Real content appeared after the group — collapse immediately
+			// and cancel the fallback timer.
+			clearTimeout(collapseTimerRef.current);
 			setExpanded(false);
 		}
 		prevShouldCollapseRef.current = shouldCollapse;
 	}, [shouldCollapse, isLive]);
+
+	// Cleanup timer on unmount
+	useEffect(() => () => clearTimeout(collapseTimerRef.current), []);
 
 	// Auto-scroll preview container to bottom as new tools stream in
 	const bodyRef = useRef<HTMLDivElement>(null);

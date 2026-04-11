@@ -322,7 +322,7 @@ export const Markdown: React.FC<MarkdownProps> = React.memo(
 		const rehypePlugins = isStreaming ? REHYPE_PLUGINS_STREAMING : REHYPE_PLUGINS_FULL;
 
 		return (
-			<div className={cn('markdown-body', className)}>
+			<div className={cn('markdown-body', isStreaming && 'streaming', className)}>
 				<ReactMarkdown
 					remarkPlugins={REMARK_PLUGINS}
 					rehypePlugins={rehypePlugins}

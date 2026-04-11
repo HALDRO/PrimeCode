@@ -131,7 +131,7 @@ interface ChatVirtuosoContext {
 
 interface MessageSectionProps {
 	section: MessageSection;
-	showGenerationStatus: boolean;
+	isLastSection: boolean;
 	sessionId: string;
 }
 
@@ -150,7 +150,7 @@ const HiddenNativeScroller = React.forwardRef<
 HiddenNativeScroller.displayName = 'HiddenNativeScroller';
 
 const MessageSectionComponent = React.memo<MessageSectionProps>(
-	({ section, showGenerationStatus, sessionId }) => {
+	({ section, isLastSection, sessionId }) => {
 		const collapseFlags = useMemo(
 			() => precomputeCollapseFlags(section.responses),
 			[section.responses],
@@ -188,13 +188,13 @@ const MessageSectionComponent = React.memo<MessageSectionProps>(
 							/>
 						);
 					})}
-					{showGenerationStatus && <GenerationStatus />}
+					{isLastSection && <GenerationStatus />}
 				</div>
 			</section>
 		);
 	},
 	(prev, next) => {
-		return prev.section === next.section && prev.showGenerationStatus === next.showGenerationStatus;
+		return prev.section === next.section && prev.isLastSection === next.isLastSection;
 	},
 );
 MessageSectionComponent.displayName = 'MessageSectionComponent';
@@ -368,7 +368,7 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 
 	const handleFollowOutput = useCallback(
 		(_isAtBottom: boolean) => {
-			if (isProcessing && !userScrolledUpRef.current) return 'auto' as const;
+			if (isProcessing && !userScrolledUpRef.current) return 'smooth' as const;
 			return false as const;
 		},
 		[isProcessing],
@@ -399,7 +399,7 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 				const distanceFromBottom =
 					scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
 				if (distanceFromBottom < 150) {
-					scroller.scrollTop = scroller.scrollHeight;
+					scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
 				}
 			});
 		};
@@ -432,7 +432,7 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 			return (
 				<MessageSectionComponent
 					section={section}
-					showGenerationStatus={isLast && context.isProcessing}
+					isLastSection={isLast}
 					sessionId={activeSessionId}
 				/>
 			);

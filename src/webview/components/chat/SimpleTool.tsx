@@ -84,7 +84,7 @@ export const SimpleTool: React.FC<SimpleToolProps> = ({
 	};
 
 	return (
-		<div className={cn('mb-(--tool-utility-block-margin) ml-2', className)}>
+		<div className={cn('mb-(--tool-utility-block-margin) ml-2 animate-fade-slide-in', className)}>
 			<button
 				type="button"
 				onClick={toggle}
@@ -429,7 +429,7 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 							!isFolder ? () => postMessage({ type: 'openFile', filePath: meta }) : undefined
 						}
 						title={meta}
-						className="max-w-full min-w-0 shrink"
+						className="max-w-full min-w-0 shrink animate-content-reveal"
 					/>
 				);
 			}
@@ -440,12 +440,18 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 						path={meta}
 						isFolder={true}
 						title={meta}
-						className="max-w-full min-w-0 shrink"
+						className="max-w-full min-w-0 shrink animate-content-reveal"
 					/>
 				);
 			}
 
-			return <Badge label={metaDisplay} title={meta} className="max-w-full min-w-0 shrink" />;
+			return (
+				<Badge
+					label={metaDisplay}
+					title={meta}
+					className="max-w-full min-w-0 shrink animate-content-reveal"
+				/>
+			);
 		}, [isListDir, isRead, meta, metaDisplay, postMessage]);
 
 		// For TaskResult, prefer the result text from the actionType over the raw content prop
@@ -552,14 +558,14 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 				rightContent={
 					<>
 						{isRead && (
-							<span className="text-sm whitespace-nowrap text-vscode-descriptionForeground">
+							<span className="text-sm whitespace-nowrap text-vscode-descriptionForeground animate-content-reveal">
 								{readOffset !== undefined || readLimit !== undefined
 									? `${readOffset ?? 1}–${readLimit !== undefined ? (readOffset ?? 1) + readLimit - 1 : '...'} lines`
 									: `${nonEmptyLineCount} lines`}
 							</span>
 						)}
 						{!isRead && isSearch && nonEmptyLineCount > 0 && (
-							<span className="text-sm whitespace-nowrap text-vscode-descriptionForeground">
+							<span className="text-sm whitespace-nowrap text-vscode-descriptionForeground animate-content-reveal">
 								{nonEmptyLineCount} results
 							</span>
 						)}

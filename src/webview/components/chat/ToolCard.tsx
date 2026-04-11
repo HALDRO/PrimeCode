@@ -112,7 +112,7 @@ export const ToolCard: React.FC<ToolCardProps> = ({
 }) => {
 	const canToggle = Boolean(isCollapsible && onToggle);
 	return (
-		<div className="relative">
+		<div className="relative animate-fade-slide-in">
 			<div className={cn(TOOL_CARD_CLASSES, 'group overflow-hidden', className)}>
 				<div
 					role={canToggle ? 'button' : undefined}

@@ -262,10 +262,44 @@
 			transform: rotate(360deg) scale(1);
 		}
 	}
+
+	/* Smooth fade+slide for new tool items, messages, and status transitions */
+	@keyframes fadeSlideIn {
+		from {
+			opacity: 0;
+			transform: translateY(4px);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
+	}
+
+	/* Smooth content reveal for tool result details (line counts, chips) */
+	@keyframes contentReveal {
+		from {
+			opacity: 0;
+			transform: translateX(-2px);
+		}
+		to {
+			opacity: 1;
+			transform: translateX(0);
+		}
+	}
 }
 
 .animate-spin-smooth {
 	animation: spinSmooth 2s linear infinite;
+}
+
+/* Tool items (SimpleTool, ToolCard, InlineToolLine) appear with a subtle slide */
+.animate-fade-slide-in {
+	animation: fadeSlideIn 0.2s ease-out both;
+}
+
+/* Tool result details (line counts, PathChip, status changes) slide in smoothly */
+.animate-content-reveal {
+	animation: contentReveal 0.15s ease-out both;
 }
 
 /* ===========================================
@@ -418,6 +452,25 @@ div:hover > .user-copy-btn {
 	color: var(--vscode-editor-foreground);
 	word-wrap: break-word;
 	overflow-wrap: break-word;
+}
+
+/* Streaming text fade-in — Cursor-like trailing edge effect.
+   During streaming, the last block element gets a gradient mask
+   that fades the bottom portion, creating a soft "revealing" feel
+   as new tokens arrive. The mask covers the last ~1.5 lines. */
+.markdown-body.streaming > *:last-child {
+	mask-image: linear-gradient(
+		to bottom,
+		black 0%,
+		black calc(100% - 1.4em),
+		rgba(0, 0, 0, 0.4) 100%
+	);
+	-webkit-mask-image: linear-gradient(
+		to bottom,
+		black 0%,
+		black calc(100% - 1.4em),
+		rgba(0, 0, 0, 0.4) 100%
+	);
 }
 
 /* Remove edge margins for chat bubbles */
