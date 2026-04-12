@@ -499,7 +499,12 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 
 	const handleScrollToBottom = useCallback(() => {
 		userScrolledUpRef.current = false;
-		virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end', behavior: 'smooth' });
+		const scrollOnce = () =>
+			virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end', behavior: 'smooth' });
+		scrollOnce();
+		// Virtuoso renders lazily — retry after content settles to ensure we reach true bottom
+		setTimeout(scrollOnce, 150);
+		setTimeout(scrollOnce, 400);
 	}, []);
 
 	return (
@@ -537,6 +542,7 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 				<button
 					type="button"
 					onClick={handleScrollToBottom}
+					aria-label="Scroll to bottom"
 					className="absolute bottom-2 left-1/2 z-10 flex items-center justify-center rounded-md cursor-pointer border-none transition-all duration-300 ease-out"
 					style={{
 						transform: 'translateX(-50%)',

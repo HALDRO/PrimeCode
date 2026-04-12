@@ -1,21 +1,26 @@
 /**
  * @file Markdown renderer with syntax highlighting
- * @description Standard markdown renderer using react-markdown with rehype-highlight.
- *              Uses plain CSS for styling instead of fighting Tailwind prose plugin.
- *              Code blocks have language badges, copy button, and horizontal scroll.
- *              Inline code that looks like file paths becomes clickable.
+ * @description Unified design system with minimal, consistent tokens.
+ *              Contains optimized StreamableNode for flicker-free word animations.
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import hljs from 'highlight.js';
+import React, {
+	createContext,
+	useCallback,
+	useContext,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from 'react';
 import type { Components } from 'react-markdown';
 import ReactMarkdown from 'react-markdown';
-import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
 
-// Stable plugin arrays — prevents ReactMarkdown from re-initializing on every render
+// Стабильный массив плагинов. Мы больше не меняем его на лету!
+// (Именно смена плагинов вызывала 100% перерисовку и моргание в конце)
 const REMARK_PLUGINS = [remarkGfm];
-const REHYPE_PLUGINS_FULL = [rehypeHighlight];
-const REHYPE_PLUGINS_STREAMING: typeof REHYPE_PLUGINS_FULL = [];
 
 import { CheckIcon, CopyIcon } from '../components/icons';
 import { IconButton, PathChip } from '../components/ui';
@@ -33,34 +38,40 @@ interface MarkdownProps {
 }
 
 // ----------------------------------------------------------------------
+// Streaming Context — tracks which words have already been animated
+// so remounted spans get opacity:1 immediately (no flash)
+// ----------------------------------------------------------------------
+
+const StreamingContext = createContext<{
+	isStreaming: boolean;
+	animatedWords: Set<string>;
+}>({
+	isStreaming: false,
+	animatedWords: new Set(),
+});
+
+// ----------------------------------------------------------------------
 // Helper Functions
 // ----------------------------------------------------------------------
 
-const FILE_EXTENSIONS =
-	/\.(tsx?|jsx?|json|md|css|scss|less|html|xml|yaml|yml|toml|ini|conf|sh|bash|zsh|ps1|py|rb|go|rs|java|kt|swift|c|cpp|h|hpp|cs|php|sql|graphql|vue|svelte|astro)$/i;
+// File path detection — any word with path separators ending in .ext (1-10 chars)
+const FILE_EXTENSIONS = /\.[a-zA-Z\d]{1,10}$/;
+
+const CODE_KEYWORDS = /^(import|export|from|require|const|let|var|function|class|interface|type)\b/;
 
 const isFilePath = (text: string): boolean => {
 	if (!FILE_EXTENSIONS.test(text)) return false;
 	if (text.includes(' ')) return false;
 	if (text.length > 100) return false;
-	if (/^(import|export|from|require|const|let|var|function|class|interface|type)\b/.test(text))
-		return false;
+	if (CODE_KEYWORDS.test(text)) return false;
+	// Must look like a path: has separator or starts with dot
+	if (!/[/\\]/.test(text) && !text.startsWith('.')) return false;
 	return true;
 };
 
-/**
- * Regex to detect file paths with optional :line suffix in plain text.
- * Requires at least one `/` or `\` separator to distinguish from bare filenames.
- * Matches: `src/utils/markdown.tsx`, `./components/App.tsx:42`, `C:\foo\bar.ts`, `/usr/bin/foo.py`
- * Does NOT match: `foo.ts` (no separator — handled by inline code detection instead)
- */
 const FILE_PATH_IN_TEXT =
-	/(?:(?:[a-zA-Z]:[/\\]|\.{1,2}[/\\]|[/\\])[\w.@-]+(?:[/\\][\w.@-]+)*|[\w.@-]+(?:[/\\][\w.@-]+)+)\.(tsx?|jsx?|json|md|css|scss|less|html|xml|yaml|yml|toml|ini|conf|sh|bash|zsh|ps1|py|rb|go|rs|java|kt|swift|c|cpp|h|hpp|cs|php|sql|graphql|vue|svelte|astro)(?::(\d+))?(?=[)\s,;:!?'"]|$)/g;
+	/(?:(?:[a-zA-Z]:[/\\]|\.{1,2}[/\\]|[/\\])[\w.@-]+(?:[/\\][\w.@-]+)*|[\w.@-]+(?:[/\\][\w.@-]+)+)\.[a-zA-Z\d]{1,10}(?::(\d+))?(?=[)\s,;:!?'"]|$)/g;
 
-/**
- * Scans a text string for file paths and returns an array of React nodes
- * where file paths are replaced with clickable PathChip components.
- */
 const linkifyFilePaths = (text: string): React.ReactNode[] => {
 	const parts: React.ReactNode[] = [];
 	let lastIndex = 0;
@@ -68,8 +79,8 @@ const linkifyFilePaths = (text: string): React.ReactNode[] => {
 	for (const m of text.matchAll(FILE_PATH_IN_TEXT)) {
 		const matchStart = m.index;
 		const fullMatch = m[0];
-		const lineNum = m[2] ? Number.parseInt(m[2], 10) : undefined;
-		const filePath = lineNum ? fullMatch.replace(`:${m[2]}`, '') : fullMatch;
+		const lineNum = m[1] ? Number.parseInt(m[1], 10) : undefined;
+		const filePath = lineNum ? fullMatch.replace(`:${m[1]}`, '') : fullMatch;
 
 		if (matchStart > lastIndex) {
 			parts.push(text.slice(lastIndex, matchStart));
@@ -96,22 +107,88 @@ const linkifyFilePaths = (text: string): React.ReactNode[] => {
 	return parts;
 };
 
-/**
- * Recursively processes React children, replacing plain text file paths
- * with PathChip components. Leaves non-string children untouched.
- */
-const processChildren = (children: React.ReactNode): React.ReactNode => {
-	if (typeof children === 'string') {
-		const linked = linkifyFilePaths(children);
-		return linked.length === 1 && typeof linked[0] === 'string' ? children : linked;
+// ----------------------------------------------------------------------
+// Universal Streamable Node — word animations preserved
+// ----------------------------------------------------------------------
+
+const handleAnimationEnd = (e: React.AnimationEvent<HTMLSpanElement>) => {
+	e.currentTarget.classList.remove('stream-word-new');
+};
+
+const renderTextContent = (
+	content: string,
+	isStreaming: boolean,
+	prefixKey: string,
+	animatedWords: Set<string>,
+) => {
+	const linked = linkifyFilePaths(content);
+
+	let partOffset = 0;
+	return linked.map(part => {
+		const currentPartOffset = partOffset;
+		if (typeof part === 'string') {
+			partOffset += part.length;
+			const words = part.split(/(\s+)/);
+			let charOffset = currentPartOffset;
+			return words.map(word => {
+				const offset = charOffset;
+				charOffset += word.length;
+				if (word.trim().length === 0) return word;
+
+				const wordKey = `${prefixKey}-${offset}`;
+
+				if (!isStreaming) {
+					return <span key={`w-${wordKey}`}>{word}</span>;
+				}
+
+				const isNew = !animatedWords.has(wordKey);
+				if (isNew) animatedWords.add(wordKey);
+
+				return (
+					<span
+						key={`w-${wordKey}`}
+						className={isNew ? 'stream-word stream-word-new' : 'stream-word'}
+						onAnimationEnd={isNew ? handleAnimationEnd : undefined}
+					>
+						{word}
+					</span>
+				);
+			});
+		}
+		// PathChip — estimate length from the key prop
+		const chipPath =
+			part && typeof part === 'object' && 'key' in part
+				? String((part as React.ReactElement).key)
+				: '';
+		partOffset += chipPath.length || 10;
+		return part;
+	});
+};
+
+const StreamableNode: React.FC<{ node: React.ReactNode; index?: number }> = ({
+	node,
+	index = 0,
+}) => {
+	const { isStreaming, animatedWords } = useContext(StreamingContext);
+
+	if (typeof node === 'string') {
+		return <>{renderTextContent(node, isStreaming, String(index), animatedWords)}</>;
 	}
-	if (Array.isArray(children)) {
-		return children.map((child, i) => {
-			const key = typeof child === 'string' ? `t-${i}-${child.slice(0, 8)}` : `n-${i}`;
-			return <React.Fragment key={key}>{processChildren(child)}</React.Fragment>;
-		});
+	if (Array.isArray(node)) {
+		return (
+			<>
+				{node.map((child, childIdx) => {
+					// Build a stable key from child content rather than array index
+					const childKey =
+						typeof child === 'string'
+							? `sn-${index}-str-${child.length}-${child.slice(0, 8)}`
+							: `sn-${index}-node-${childIdx}`;
+					return <StreamableNode key={childKey} node={child} index={childIdx} />;
+				})}
+			</>
+		);
 	}
-	return children;
+	return <>{node}</>;
 };
 
 // ----------------------------------------------------------------------
@@ -120,11 +197,23 @@ const processChildren = (children: React.ReactNode): React.ReactNode => {
 
 const CopyButton: React.FC<{ code: string; className?: string }> = ({ code, className }) => {
 	const [copied, setCopied] = useState(false);
+	const timerRef = useRef<ReturnType<typeof setTimeout>>(
+		0 as unknown as ReturnType<typeof setTimeout>,
+	);
+
+	useEffect(() => {
+		return () => clearTimeout(timerRef.current);
+	}, []);
 
 	const handleCopy = () => {
-		navigator.clipboard.writeText(code);
-		setCopied(true);
-		setTimeout(() => setCopied(false), 2000);
+		try {
+			navigator.clipboard.writeText(code);
+			setCopied(true);
+			clearTimeout(timerRef.current);
+			timerRef.current = setTimeout(() => setCopied(false), 2000);
+		} catch {
+			// Clipboard API unavailable in some contexts
+		}
 	};
 
 	return (
@@ -132,6 +221,7 @@ const CopyButton: React.FC<{ code: string; className?: string }> = ({ code, clas
 			icon={copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
 			onClick={handleCopy}
 			title={copied ? 'Copied!' : 'Copy'}
+			aria-label={copied ? 'Copied' : 'Copy code'}
 			size={20}
 			className={cn(copied && 'text-success', className)}
 		/>
@@ -149,10 +239,6 @@ const getTextContent = (children: React.ReactNode): string => {
 	}
 	return '';
 };
-
-// ----------------------------------------------------------------------
-// Language display names
-// ----------------------------------------------------------------------
 
 const LANG_DISPLAY: Record<string, string> = {
 	typescript: 'TS',
@@ -172,6 +258,54 @@ const LANG_DISPLAY: Record<string, string> = {
 const getLangDisplay = (lang: string) => LANG_DISPLAY[lang] || lang.toUpperCase();
 
 // ----------------------------------------------------------------------
+// Highlighted Code Block — isolated component so hooks are at top level
+// and innerHTML is set via ref instead of dangerouslySetInnerHTML
+// ----------------------------------------------------------------------
+
+const HighlightedCodeBlock: React.FC<{ code: string; language: string }> = ({ code, language }) => {
+	const codeRef = useRef<HTMLElement>(null);
+
+	const highlightedHtml = useMemo(() => {
+		try {
+			if (language !== 'plaintext' && hljs.getLanguage(language)) {
+				return hljs.highlight(code, { language }).value;
+			}
+			return hljs.highlightAuto(code).value;
+		} catch {
+			return null;
+		}
+	}, [code, language]);
+
+	useEffect(() => {
+		if (codeRef.current && highlightedHtml !== null) {
+			codeRef.current.innerHTML = highlightedHtml;
+		}
+	}, [highlightedHtml]);
+
+	return (
+		<div className="group/codeblock isolate relative my-2 rounded-lg border border-(--tool-border-color) overflow-hidden bg-(--tool-bg-header)">
+			<div className="absolute right-0 top-0 z-1 flex items-center gap-1 p-1 opacity-0 group-hover/codeblock:opacity-100 transition-opacity bg-(--tool-bg-header) rounded-bl">
+				<span className="text-xs font-mono text-vscode-descriptionForeground/50 pointer-events-none select-none">
+					{getLangDisplay(language)}
+				</span>
+				<CopyButton code={code} />
+			</div>
+			<div className="overflow-x-auto">
+				<code
+					ref={codeRef}
+					className={cn(
+						'block p-(--tool-content-padding) font-mono text-md leading-(--line-height-code) whitespace-pre hljs',
+						'text-vscode-editor-foreground bg-(--tool-bg-header) w-fit min-w-full',
+					)}
+				>
+					{highlightedHtml === null ? code : undefined}
+				</code>
+			</div>
+		</div>
+	);
+};
+
+// ----------------------------------------------------------------------
 // Markdown Components
 // ----------------------------------------------------------------------
 
@@ -183,14 +317,59 @@ const components: Components = {
 			target="_blank"
 			rel="noopener noreferrer"
 		>
-			{children}
+			<StreamableNode node={children} />
 		</a>
 	),
-
-	p: ({ children }) => <p>{processChildren(children)}</p>,
-	li: ({ children }) => <li>{processChildren(children)}</li>,
-	strong: ({ children }) => <strong>{processChildren(children)}</strong>,
-	em: ({ children }) => <em>{processChildren(children)}</em>,
+	p: ({ children }) => (
+		<p>
+			<StreamableNode node={children} />
+		</p>
+	),
+	li: ({ children }) => (
+		<li>
+			<StreamableNode node={children} />
+		</li>
+	),
+	strong: ({ children }) => (
+		<strong>
+			<StreamableNode node={children} />
+		</strong>
+	),
+	em: ({ children }) => (
+		<em>
+			<StreamableNode node={children} />
+		</em>
+	),
+	h1: ({ children }) => (
+		<h1>
+			<StreamableNode node={children} />
+		</h1>
+	),
+	h2: ({ children }) => (
+		<h2>
+			<StreamableNode node={children} />
+		</h2>
+	),
+	h3: ({ children }) => (
+		<h3>
+			<StreamableNode node={children} />
+		</h3>
+	),
+	h4: ({ children }) => (
+		<h4>
+			<StreamableNode node={children} />
+		</h4>
+	),
+	h5: ({ children }) => (
+		<h5>
+			<StreamableNode node={children} />
+		</h5>
+	),
+	h6: ({ children }) => (
+		<h6>
+			<StreamableNode node={children} />
+		</h6>
+	),
 
 	pre: ({ children }) => <>{children}</>,
 
@@ -201,51 +380,27 @@ const components: Components = {
 		const isCodeBlock = match || className?.includes('hljs') || isMultiline;
 
 		if (isCodeBlock) {
-			const language = match ? match[1] : 'text';
-			return (
-				<div className="group/codeblock isolate relative my-2 rounded-lg border border-(--tool-border-color) overflow-hidden bg-(--tool-bg-header)">
-					<div className="absolute right-0 top-0 z-1 flex items-center gap-1 p-1 opacity-0 group-hover/codeblock:opacity-100 transition-opacity bg-(--tool-bg-header) rounded-bl">
-						<span className="text-xs font-mono text-vscode-descriptionForeground/50 pointer-events-none select-none">
-							{getLangDisplay(language)}
-						</span>
-						<CopyButton code={codeContent} />
-					</div>
-					<div className="overflow-x-auto">
-						<code
-							className={cn(
-								'block p-(--tool-content-padding) font-mono text-md leading-(--line-height-code) whitespace-pre',
-								'text-vscode-editor-foreground bg-(--tool-bg-header) w-fit min-w-full',
-								className,
-							)}
-							{...props}
-						>
-							{children}
-						</code>
-					</div>
-				</div>
-			);
+			const language = match ? match[1] : 'plaintext';
+			return <HighlightedCodeBlock code={codeContent} language={language} />;
 		}
 
-		// Inline code — file path detection
-		const codeText = getTextContent(children);
-		if (isFilePath(codeText)) {
+		if (isFilePath(codeContent)) {
 			return (
 				<PathChip
-					path={codeText}
-					title={codeText}
+					path={codeContent}
+					title={codeContent}
 					className="align-text-bottom"
-					onClick={() => vscode.postMessage({ type: 'openFile', filePath: codeText })}
+					onClick={() => vscode.postMessage({ type: 'openFile', filePath: codeContent })}
 				/>
 			);
 		}
 
-		// Regular inline code
 		return (
 			<code
 				className="inline-code px-1 py-px mx-0.5 rounded-sm bg-(--alpha-10) text-md font-mono"
 				{...props}
 			>
-				{children}
+				<StreamableNode node={children} />
 			</code>
 		);
 	},
@@ -258,7 +413,6 @@ const components: Components = {
 			loading="lazy"
 		/>
 	),
-
 	table: ({ children }) => (
 		<div className="my-2 bg-(--tool-bg-header) border border-(--tool-border-color) rounded-lg overflow-hidden">
 			<table className="w-full text-md border-collapse">{children}</table>
@@ -279,58 +433,39 @@ const components: Components = {
 	),
 	th: ({ children }) => (
 		<th className="px-(--tool-content-padding) py-1.5 text-left font-medium text-sm text-vscode-editor-foreground border-r border-(--border-subtle) last:border-r-0">
-			{children}
+			<StreamableNode node={children} />
 		</th>
 	),
 	td: ({ children }) => (
 		<td className="px-(--tool-content-padding) py-1.5 text-md border-r border-(--border-subtle) last:border-r-0">
-			{children}
+			<StreamableNode node={children} />
 		</td>
 	),
 };
 
 // ----------------------------------------------------------------------
-// Streaming throttle — llm-ui inspired character-level smoothing
+// Streaming throttle
 // ----------------------------------------------------------------------
+const BUFFER_CHARS = 40;
+const MIN_CHARS_PER_FRAME = 2;
+const MAX_CHARS_PER_FRAME = 8;
+const RATE_WINDOW_MS = 2000;
 
-/**
- * Buffers incoming content and releases it character-by-character at the
- * display's frame rate. This eliminates the "flicker" caused by React
- * re-rendering the full markdown tree on every token.
- *
- * When `isStreaming` is false the full content is returned immediately.
- *
- * Approach (borrowed from llm-ui's throttleBasic):
- *  - Keep a "visible length" that trails behind the real content length
- *  - Each RAF tick, advance visible length by `charsPerFrame`
- *  - `charsPerFrame` is auto-tuned: we measure how fast new chars arrive
- *    and set the display rate slightly above that so we never fall behind
- *  - A small read-ahead buffer (BUFFER_CHARS) is withheld so we can
- *    smooth out pauses between LLM tokens
- */
-const BUFFER_CHARS = 8; // chars to withhold while streaming
-const MIN_CHARS_PER_FRAME = 1;
-const MAX_CHARS_PER_FRAME = 6;
-const RATE_WINDOW_MS = 3000; // window for measuring arrival rate
-
-function useThrottledContent(content: string, isStreaming: boolean): string {
+function useThrottledContent(
+	content: string,
+	isStreaming: boolean,
+): { text: string; isAnimating: boolean } {
 	const [visibleLen, setVisibleLen] = useState(content.length);
 	const rafRef = useRef(0);
 	const contentRef = useRef(content);
 	const visibleLenRef = useRef(content.length);
-
-	// Track arrival rate: timestamps of content length changes
 	const samplesRef = useRef<{ time: number; len: number }[]>([]);
 
-	// Keep contentRef in sync
 	contentRef.current = content;
 
-	// When streaming starts on new content (e.g. new message), reset
 	const prevStreamingRef = useRef(isStreaming);
 	useEffect(() => {
 		if (isStreaming && !prevStreamingRef.current) {
-			// Streaming just started — snap to current length so we don't
-			// re-animate already-visible text
 			visibleLenRef.current = content.length;
 			setVisibleLen(content.length);
 			samplesRef.current = [];
@@ -338,20 +473,17 @@ function useThrottledContent(content: string, isStreaming: boolean): string {
 		prevStreamingRef.current = isStreaming;
 	}, [isStreaming, content.length]);
 
-	// Record arrival samples
 	useEffect(() => {
 		if (!isStreaming) return;
 		const now = performance.now();
 		const samples = samplesRef.current;
 		samples.push({ time: now, len: content.length });
-		// Prune old samples
 		const cutoff = now - RATE_WINDOW_MS;
 		while (samples.length > 1 && samples[0].time < cutoff) {
 			samples.shift();
 		}
 	}, [content.length, isStreaming]);
 
-	// Compute chars per frame from arrival rate
 	const getCharsPerFrame = useCallback(() => {
 		const samples = samplesRef.current;
 		if (samples.length < 2) return MIN_CHARS_PER_FRAME;
@@ -360,28 +492,38 @@ function useThrottledContent(content: string, isStreaming: boolean): string {
 		const elapsed = last.time - first.time;
 		if (elapsed <= 0) return MIN_CHARS_PER_FRAME;
 		const charsArrived = last.len - first.len;
-		// chars per ms → chars per frame (assuming ~16ms per frame)
 		const charsPerMs = charsArrived / elapsed;
-		const charsPerFrame = Math.round(charsPerMs * 16 * 1.2); // 1.2x to stay ahead
+		const charsPerFrame = Math.round(charsPerMs * 16 * 1.2);
 		return Math.max(MIN_CHARS_PER_FRAME, Math.min(MAX_CHARS_PER_FRAME, charsPerFrame));
 	}, []);
 
-	// RAF loop: advance visible length toward target.
-	// content.length is intentionally excluded from deps — the loop reads the
-	// latest value via contentRef.current on each tick.  Including it would
-	// cancel+restart the rAF loop on every incoming token, breaking the smooth
-	// character-by-character animation.
+	// Single RAF loop that runs while streaming OR while buffer hasn't caught up.
+	// When isStreaming is true, we hold back BUFFER_CHARS from the end.
+	// When isStreaming turns false, the loop keeps running without the buffer
+	// offset, naturally draining remaining words with their fade-in animation.
+	const isStreamingRef = useRef(isStreaming);
+	isStreamingRef.current = isStreaming;
+
 	useEffect(() => {
-		if (!isStreaming) {
-			// Not streaming — show everything immediately
-			cancelAnimationFrame(rafRef.current);
-			visibleLenRef.current = contentRef.current.length;
-			setVisibleLen(contentRef.current.length);
-			return;
-		}
+		// Run loop while streaming OR while there's buffered content to drain
+		if (!isStreaming && visibleLenRef.current >= contentRef.current.length) return;
+
+		let lastContentLen = contentRef.current.length;
+		let stallStart = 0;
 
 		const tick = () => {
-			const target = contentRef.current.length - BUFFER_CHARS;
+			const contentLen = contentRef.current.length;
+			const now = performance.now();
+			const streaming = isStreamingRef.current;
+
+			if (contentLen !== lastContentLen) {
+				lastContentLen = contentLen;
+				stallStart = now;
+			}
+
+			// While streaming: hold back BUFFER_CHARS. After streaming ends: target = full length.
+			const isStalled = stallStart > 0 && now - stallStart > 200;
+			const target = !streaming || isStalled ? contentLen : contentLen - BUFFER_CHARS;
 			const current = visibleLenRef.current;
 
 			if (current < target) {
@@ -391,7 +533,10 @@ function useThrottledContent(content: string, isStreaming: boolean): string {
 				setVisibleLen(next);
 			}
 
-			rafRef.current = requestAnimationFrame(tick);
+			// Keep running until we've caught up to full content after streaming ends
+			if (streaming || current < contentLen) {
+				rafRef.current = requestAnimationFrame(tick);
+			}
 		};
 
 		rafRef.current = requestAnimationFrame(tick);
@@ -399,17 +544,16 @@ function useThrottledContent(content: string, isStreaming: boolean): string {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [isStreaming, getCharsPerFrame]);
 
-	// When streaming finishes, flush remaining buffer
-	useEffect(() => {
-		if (!isStreaming && visibleLenRef.current < content.length) {
-			visibleLenRef.current = content.length;
-			setVisibleLen(content.length);
-		}
-	}, [isStreaming, content.length]);
+	// If not streaming and loop has finished, return full content
+	if (!isStreaming && visibleLenRef.current >= content.length)
+		return { text: content, isAnimating: false };
 
-	// During streaming return the throttled slice; otherwise full content
-	if (!isStreaming) return content;
-	return content.slice(0, Math.max(0, visibleLen));
+	const rawSlice = content.slice(0, Math.max(0, visibleLen));
+
+	// Word-boundary snapping so animations fire per-word
+	const lastSpace = rawSlice.search(/\s\S*$/);
+	if (lastSpace <= 0) return { text: rawSlice, isAnimating: true };
+	return { text: rawSlice.slice(0, lastSpace), isAnimating: true };
 }
 
 // ----------------------------------------------------------------------
@@ -426,34 +570,42 @@ const preprocessContent = (content: string): string => {
 };
 
 // ----------------------------------------------------------------------
-// Main Component — uses plain CSS (.markdown-body) instead of Tailwind prose
+// Main Component
 // ----------------------------------------------------------------------
 
 export const Markdown: React.FC<MarkdownProps> = React.memo(
 	({ content, className, isStreaming }) => {
-		// Character-level throttling: buffers incoming tokens and releases them
-		// at the display's frame rate for smooth, flicker-free streaming.
-		const displayContent = useThrottledContent(content, !!isStreaming);
+		const { text: displayContent, isAnimating } = useThrottledContent(content, !!isStreaming);
 		const processedContent = React.useMemo(
 			() => preprocessContent(displayContent),
 			[displayContent],
 		);
 
-		// Skip expensive syntax highlighting during streaming — the most costly
-		// rehype plugin. Full highlighting kicks in once streaming completes.
-		const rehypePlugins = isStreaming ? REHYPE_PLUGINS_STREAMING : REHYPE_PLUGINS_FULL;
+		// Persistent Set of word keys that have already been animated.
+		// Survives re-renders so remounted spans get opacity:1 immediately.
+		// Cleared when animation finishes (not when streaming ends) so buffered words still animate.
+		const animatedWordsRef = useRef(new Set<string>());
+		const prevAnimatingRef = useRef(isAnimating);
+		useEffect(() => {
+			if (!isAnimating && prevAnimatingRef.current) {
+				animatedWordsRef.current = new Set<string>();
+			}
+			prevAnimatingRef.current = isAnimating;
+		}, [isAnimating]);
+
+		const streamingCtx = React.useMemo(
+			() => ({ isStreaming: isAnimating, animatedWords: animatedWordsRef.current }),
+			[isAnimating],
+		);
 
 		return (
-			<div className={cn('markdown-body', isStreaming && 'streaming', className)}>
-				<ReactMarkdown
-					remarkPlugins={REMARK_PLUGINS}
-					rehypePlugins={rehypePlugins}
-					components={components}
-					urlTransform={url => url}
-				>
-					{processedContent}
-				</ReactMarkdown>
-			</div>
+			<StreamingContext.Provider value={streamingCtx}>
+				<div className={cn('markdown-body', isStreaming && 'streaming', className)}>
+					<ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={components}>
+						{processedContent}
+					</ReactMarkdown>
+				</div>
+			</StreamingContext.Provider>
 		);
 	},
 	(prevProps, nextProps) =>

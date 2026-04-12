@@ -400,17 +400,6 @@ pre {
 /* =========================================== 
    UTILITY CLASSES
    =========================================== */
-/* Text sizes */
-.text-xs {
-	font-size: var(--text-xs);
-}
-.text-sm {
-	font-size: var(--text-sm);
-}
-.text-base {
-	font-size: var(--text-base);
-}
-
 /* Inline code - override any hljs syntax highlighting */
 .inline-code,
 .inline-code * {
@@ -454,23 +443,41 @@ div:hover > .user-copy-btn {
 	overflow-wrap: break-word;
 }
 
-/* Streaming: new block elements (paragraphs, lists, code blocks) fade in
-   gently when first inserted. With useThrottledContent feeding chars
-   gradually, React only creates a new element once (e.g. when a new
-   paragraph starts), so the animation fires once — no flicker. */
+/* Smooth appearance for new structural blocks during streaming.
+   Fires once when a new paragraph/list/code block is created.
+   Pure opacity fade — no translateY to avoid layout jitter. */
 @keyframes streamBlockIn {
 	from {
-		opacity: 0.5;
-		transform: translateY(2px);
+		opacity: 0;
 	}
 	to {
 		opacity: 1;
-		transform: translateY(0);
 	}
 }
 
 .markdown-body.streaming > *:last-child {
-	animation: streamBlockIn 0.25s ease-out both;
+	animation: streamBlockIn 0.4s ease-out both;
+}
+
+/* Streaming text fade — .stream-word-new fades in from dim to full brightness.
+   .stream-word (without -new) is always opacity:1, so remounted spans don't flash.
+   The -new suffix is removed after animation completes via animationend handler. */
+@keyframes streamWordIn {
+	0% {
+		opacity: 0;
+	}
+	100% {
+		opacity: 1;
+	}
+}
+
+.stream-word {
+	opacity: 1;
+}
+
+.stream-word-new {
+	opacity: 0;
+	animation: streamWordIn 0.8s ease-out forwards;
 }
 
 /* Remove edge margins for chat bubbles */
