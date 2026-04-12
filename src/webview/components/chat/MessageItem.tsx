@@ -8,6 +8,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { NormalizedEntry } from '../../../common/normalizedTypes';
+import { useContainerAutoScroll } from '../../hooks/useContainerAutoScroll';
 import { useSubtaskThread } from '../../hooks/useSubtaskChildren';
 import type { Message } from '../../store/chatStore';
 import { useMcpServers, useSubtaskAccessRequest } from '../../store/selectors';
@@ -23,6 +24,7 @@ import {
 	TokensIcon,
 	WandIcon,
 } from '../icons';
+import { ScrollThumb } from '../ui/ScrollContainer';
 import { AccessGate } from './AccessGate';
 import { SubtaskGenerationStatus } from './GenerationStatus';
 import { SubtaskTimer } from './LiveStats';
@@ -140,29 +142,12 @@ const SubtaskItem = React.memo<{
 			? message.agent.charAt(0).toUpperCase() + message.agent.slice(1)
 			: 'SubAgent';
 
-	// Auto-scroll the preview container to bottom as content streams in.
-	// Uses MutationObserver with rAF dedup to avoid layout thrashing from
-	// synchronous scrollTop writes on every streaming token.
-	const bodyRef = useRef<HTMLDivElement>(null);
-	useEffect(() => {
-		const el = bodyRef.current;
-		if (!isRunning || !el) return;
-		let rafId: number | null = null;
-		const scroll = () => {
-			if (rafId !== null) return;
-			rafId = requestAnimationFrame(() => {
-				rafId = null;
-				el.scrollTop = el.scrollHeight;
-			});
-		};
-		scroll();
-		const observer = new MutationObserver(scroll);
-		observer.observe(el, { childList: true, subtree: true });
-		return () => {
-			observer.disconnect();
-			if (rafId !== null) cancelAnimationFrame(rafId);
-		};
-	}, [isRunning]);
+	// Unified auto-scroll with detach support (mirrors main session behavior)
+	const {
+		scrollerRef: bodyRef,
+		showScrollToBottom: showSubtaskScrollBtn,
+		scrollToBottom: subtaskScrollToBottom,
+	} = useContainerAutoScroll({ active: isRunning });
 
 	// Cycle: preview ↔ expanded
 	const cycleExpand = () => {
@@ -220,77 +205,109 @@ const SubtaskItem = React.memo<{
 			onToggle={cycleExpand}
 			className="my-2"
 			body={
-				<div
-					ref={bodyRef}
-					className="px-(--tool-content-padding) py-2 bg-(--tool-bg-header) relative"
-					style={
-						isRunning && expandState === 'preview'
-							? { maxHeight: SUBTASK_PREVIEW_MAX_HEIGHT, overflowY: 'auto' }
-							: undefined
-					}
-				>
-					{metaBlock}
-					{message.prompt && message.prompt !== message.description && (
-						<SimpleTool
-							icon={<WandIcon size={14} />}
-							label="Prompt"
-							meta={!promptExpanded ? message.prompt : undefined}
-							expanded={promptExpanded}
-							onToggle={() => setPromptExpanded(prev => !prev)}
-							className="mb-2"
-						>
-							<div className="text-sm text-vscode-descriptionForeground whitespace-pre-wrap">
-								{message.prompt}
-							</div>
-						</SimpleTool>
-					)}
-					{message.command && (
-						<div className="text-xs font-mono opacity-50 truncate mb-2">$ {message.command}</div>
-					)}
-					{groupedChildren.map((child, idx) => {
-						const key = Array.isArray(child)
-							? (child[0]?.id ?? `tool-group-${idx}`)
-							: (child.id ?? `message-${idx}`);
-						const forceCollapse = !isRunning && expandState !== 'expanded';
-						return (
-							<MessageItem
-								key={key}
-								item={child}
-								ctx={ctx}
-								collapseGroupedTools={
-									forceCollapse ||
-									Array.isArray(child) ||
-									shouldCollapseGroupedItem(groupedChildren, idx)
-								}
+				<div className="relative bg-(--tool-bg-header)">
+					<div
+						ref={bodyRef}
+						className="px-(--tool-content-padding) py-2 relative"
+						style={
+							isRunning && expandState === 'preview'
+								? {
+										maxHeight: SUBTASK_PREVIEW_MAX_HEIGHT,
+										overflowX: 'hidden',
+										overflowY: 'auto',
+										scrollbarWidth: 'none' as const,
+									}
+								: undefined
+						}
+					>
+						{metaBlock}
+						{message.prompt && message.prompt !== message.description && (
+							<SimpleTool
+								icon={<WandIcon size={14} />}
+								label="Prompt"
+								meta={!promptExpanded ? message.prompt : undefined}
+								expanded={promptExpanded}
+								onToggle={() => setPromptExpanded(prev => !prev)}
+								className="mb-2"
+							>
+								<div className="text-sm text-vscode-descriptionForeground whitespace-pre-wrap">
+									{message.prompt}
+								</div>
+							</SimpleTool>
+						)}
+						{message.command && (
+							<div className="text-xs font-mono opacity-50 truncate mb-2">$ {message.command}</div>
+						)}
+						{groupedChildren.map((child, idx) => {
+							const key = Array.isArray(child)
+								? (child[0]?.id ?? `tool-group-${idx}`)
+								: (child.id ?? `message-${idx}`);
+							const forceCollapse = !isRunning && expandState !== 'expanded';
+							return (
+								<MessageItem
+									key={key}
+									item={child}
+									ctx={ctx}
+									collapseGroupedTools={
+										forceCollapse ||
+										Array.isArray(child) ||
+										shouldCollapseGroupedItem(groupedChildren, idx)
+									}
+								/>
+							);
+						})}
+						{isRunning && (
+							<SubtaskGenerationStatus
+								isRunning={isRunning}
+								status={message.status}
+								retryMessage={retryInfo?.message}
 							/>
-						);
-					})}
-					{isRunning && (
-						<SubtaskGenerationStatus
-							isRunning={isRunning}
-							status={message.status}
-							retryMessage={retryInfo?.message}
-						/>
-					)}
-					{pendingAccess && (
-						<AccessGate
-							requestId={pendingAccess.requestId}
-							messageId={pendingAccess.id}
-							tool={pendingAccess.tool}
-							input={pendingAccess.input}
-							pattern={pendingAccess.pattern}
-							className="my-2"
-						/>
-					)}
-					{taskResultEntry && (
-						<InlineToolLine
-							toolName="task"
-							rawInput={{}}
-							content={cleanSubtaskResult(message.result || '')}
-							isError={false}
-							normalizedEntry={taskResultEntry}
-							showCollapseOverlay
-						/>
+						)}
+						{pendingAccess && (
+							<AccessGate
+								requestId={pendingAccess.requestId}
+								messageId={pendingAccess.id}
+								tool={pendingAccess.tool}
+								input={pendingAccess.input}
+								pattern={pendingAccess.pattern}
+								className="my-2"
+							/>
+						)}
+						{taskResultEntry && (
+							<InlineToolLine
+								toolName="task"
+								rawInput={{}}
+								content={cleanSubtaskResult(message.result || '')}
+								isError={false}
+								normalizedEntry={taskResultEntry}
+								showCollapseOverlay
+							/>
+						)}
+					</div>
+					{isRunning && expandState === 'preview' && (
+						<>
+							<ScrollThumb scrollerRef={bodyRef} autoHideDelay={800} />
+							{showSubtaskScrollBtn && (
+								<button
+									type="button"
+									onClick={subtaskScrollToBottom}
+									aria-label="Scroll to bottom"
+									className="absolute bottom-1 left-1/2 z-10 flex items-center justify-center rounded-md cursor-pointer border-none transition-opacity duration-200"
+									style={{
+										transform: 'translateX(-50%)',
+										width: 22,
+										height: 22,
+										backgroundColor: 'var(--vscode-editor-background)',
+										color: 'var(--vscode-foreground)',
+										boxShadow: '0 1px 4px rgba(0,0,0,0.25)',
+										opacity: 0.9,
+									}}
+									title="Scroll to bottom"
+								>
+									<ChevronDownIcon size={12} />
+								</button>
+							)}
+						</>
 					)}
 				</div>
 			}
@@ -390,30 +407,12 @@ const SimpleToolGroup = React.memo<{
 	// Cleanup timer on unmount
 	useEffect(() => () => clearTimeout(collapseTimerRef.current), []);
 
-	// Auto-scroll preview container to bottom as new tools stream in.
-	// Uses rAF debounce to avoid layout thrashing — MutationObserver with
-	// characterData:true fires on every streamed token, and synchronous
-	// scrollTop = scrollHeight forces a reflow each time.
-	const bodyRef = useRef<HTMLDivElement>(null);
-	useEffect(() => {
-		const el = bodyRef.current;
-		if (!isLive || !el) return;
-		let rafId: number | null = null;
-		const scroll = () => {
-			if (rafId !== null) return;
-			rafId = requestAnimationFrame(() => {
-				rafId = null;
-				el.scrollTop = el.scrollHeight;
-			});
-		};
-		scroll();
-		const observer = new MutationObserver(scroll);
-		observer.observe(el, { childList: true, subtree: true, characterData: true });
-		return () => {
-			observer.disconnect();
-			if (rafId !== null) cancelAnimationFrame(rafId);
-		};
-	}, [isLive]);
+	// Unified auto-scroll with detach support (mirrors main session behavior)
+	const {
+		scrollerRef: bodyRef,
+		showScrollToBottom: showToolGroupScrollBtn,
+		scrollToBottom: toolGroupScrollToBottom,
+	} = useContainerAutoScroll({ active: isLive, observeCharacterData: true });
 
 	if (toolUseMessages.length === 0) return null;
 
@@ -433,49 +432,85 @@ const SimpleToolGroup = React.memo<{
 			}
 			className="mb-(--tool-block-margin)"
 		>
-			<div
-				ref={bodyRef}
-				className="pl-2 border-l border-(--border-subtle)"
-				style={isLive ? { maxHeight: TOOL_GROUP_PREVIEW_MAX_HEIGHT, overflowY: 'auto' } : undefined}
-			>
-				{renderItems.map(msg => {
-					if (msg.type === 'assistant') {
-						const assistantContent = (msg as { content: string }).content || '';
-						if (!assistantContent.trim()) return null;
-						return (
-							<div
-								key={msg.id}
-								className="py-1 text-sm leading-(--line-height-base) font-(family-name:--font-family-base)"
-								style={{ color: 'var(--input-text-color)' }}
-							>
-								<Markdown
-									content={assistantContent}
-									isStreaming={(msg as { isStreaming?: boolean }).isStreaming}
-								/>
-							</div>
-						);
+			<div className="relative">
+				<div
+					ref={bodyRef}
+					className="pl-2 border-l border-(--border-subtle)"
+					style={
+						isLive
+							? {
+									maxHeight: TOOL_GROUP_PREVIEW_MAX_HEIGHT,
+									overflowX: 'hidden',
+									overflowY: 'auto',
+									scrollbarWidth: 'none' as const,
+								}
+							: undefined
 					}
-					if (msg.type === 'thinking') {
+				>
+					{renderItems.map(msg => {
+						if (msg.type === 'assistant') {
+							const assistantContent = (msg as { content: string }).content || '';
+							if (!assistantContent.trim()) return null;
+							return (
+								<div
+									key={msg.id}
+									className="py-1 text-sm leading-(--line-height-base) font-(family-name:--font-family-base)"
+									style={{ color: 'var(--input-text-color)' }}
+								>
+									<Markdown
+										content={assistantContent}
+										isStreaming={(msg as { isStreaming?: boolean }).isStreaming}
+									/>
+								</div>
+							);
+						}
+						if (msg.type === 'thinking') {
+							return (
+								<ThinkingMessage
+									key={msg.id}
+									content={(msg as Extract<Message, { type: 'thinking' }>).content || ''}
+									durationMs={(msg as Extract<Message, { type: 'thinking' }>).durationMs}
+									isStreaming={(msg as Extract<Message, { type: 'thinking' }>).isStreaming}
+									startTime={(msg as Extract<Message, { type: 'thinking' }>).startTime}
+								/>
+							);
+						}
+						// tool_use
+						const toolMsg = msg as Extract<Message, { type: 'tool_use' }>;
 						return (
-							<ThinkingMessage
-								key={msg.id}
-								content={(msg as Extract<Message, { type: 'thinking' }>).content || ''}
-								durationMs={(msg as Extract<Message, { type: 'thinking' }>).durationMs}
-								isStreaming={(msg as Extract<Message, { type: 'thinking' }>).isStreaming}
-								startTime={(msg as Extract<Message, { type: 'thinking' }>).startTime}
+							<ToolCardMessage
+								key={toolMsg.id}
+								message={toolMsg}
+								toolResult={toolMsg.toolUseId ? localToolResults[toolMsg.toolUseId] : undefined}
 							/>
 						);
-					}
-					// tool_use
-					const toolMsg = msg as Extract<Message, { type: 'tool_use' }>;
-					return (
-						<ToolCardMessage
-							key={toolMsg.id}
-							message={toolMsg}
-							toolResult={toolMsg.toolUseId ? localToolResults[toolMsg.toolUseId] : undefined}
-						/>
-					);
-				})}
+					})}
+				</div>
+				{isLive && (
+					<>
+						<ScrollThumb scrollerRef={bodyRef} autoHideDelay={800} />
+						{showToolGroupScrollBtn && (
+							<button
+								type="button"
+								onClick={toolGroupScrollToBottom}
+								aria-label="Scroll to bottom"
+								className="absolute bottom-1 left-1/2 z-10 flex items-center justify-center rounded-md cursor-pointer border-none transition-opacity duration-200"
+								style={{
+									transform: 'translateX(-50%)',
+									width: 20,
+									height: 20,
+									backgroundColor: 'var(--vscode-editor-background)',
+									color: 'var(--vscode-foreground)',
+									boxShadow: '0 1px 4px rgba(0,0,0,0.25)',
+									opacity: 0.9,
+								}}
+								title="Scroll to bottom"
+							>
+								<ChevronDownIcon size={10} />
+							</button>
+						)}
+					</>
+				)}
 			</div>
 		</SimpleTool>
 	);
