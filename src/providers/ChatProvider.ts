@@ -316,9 +316,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			// Notify webview of server URL so it can establish SSE health polling
 			this.sendServerInfo(true);
 
-			// Auto-sync proxy config to opencode.json for this workspace
-			await this.ensureProjectConfigSync(workspaceRoot);
-
 			// Start background health monitor for auto-reconnect
 			this.cli.startHealthMonitor();
 
@@ -339,15 +336,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				timestamp: new Date().toISOString(),
 			});
 		}
-	}
-
-	/**
-	 * Sync proxy provider config from VS Code settings into the project-level
-	 * opencode.json. Runs on every extension activation so that new workspaces
-	 * automatically inherit the user's proxy configuration.
-	 */
-	private async ensureProjectConfigSync(workspaceRoot: string): Promise<void> {
-		void workspaceRoot;
 	}
 
 	/**

@@ -125,9 +125,9 @@ export class OutboundBridge {
 				count: messages.length,
 				queueSize: this._queue.length,
 			});
-			// Queue individual messages so they can be flushed normally
+			// Route through send() to enforce MAX_QUEUE_SIZE limit
 			for (const msg of messages) {
-				this._queue.push(msg);
+				this.send(msg);
 			}
 			return;
 		}

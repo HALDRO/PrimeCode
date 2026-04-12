@@ -81,14 +81,10 @@ export function generateId(prefix: string): string {
 	}
 	_counter++;
 
-	// Replicate OpenCode's exact encoding: 6-byte big-endian (truncates upper bits)
-	// Uses bitwise extraction instead of Buffer for browser/webview compatibility.
-	const encoded = BigInt(now) * BigInt(0x1000) + BigInt(_counter);
-	let hex = '';
-	for (let i = 0; i < 6; i++) {
-		const byte = Number((encoded >> BigInt(40 - 8 * i)) & BigInt(0xff));
-		hex += byte.toString(16).padStart(2, '0');
-	}
+	// Replicate OpenCode's exact encoding: 6-byte big-endian (truncates upper bits).
+	// Extract lower 48 bits and format as zero-padded hex.
+	const encoded = BigInt(now) * 0x1000n + BigInt(_counter);
+	const hex = (encoded & 0xffffffffffffn).toString(16).padStart(12, '0');
 
 	return `${prefix}_${hex}${secureRandomBase62(14)}`;
 }

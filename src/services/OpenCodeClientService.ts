@@ -312,8 +312,8 @@ export class OpenCodeClientService {
 		const raw = JSON.stringify(obj, null, 2);
 		// Collapse arrays that contain only short strings onto one line.
 		// Matches: [\n  "text",\n  "image"\n] → ["text", "image"]
-		return raw.replace(/\[(?:\s*"[^"]{1,20}"\s*,?)+\s*\]/g, match => {
-			const items = [...match.matchAll(/"([^"]{1,20})"/g)].map(m => `"${m[1]}"`);
+		return raw.replace(/\[(?:\s*"[^"]+"\s*,?)+\s*\]/g, match => {
+			const items = Array.from(match.matchAll(/"([^"]+)"/g)).map(m => `"${m[1]}"`);
 			return `[${items.join(', ')}]`;
 		});
 	}

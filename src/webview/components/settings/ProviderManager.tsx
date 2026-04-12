@@ -207,22 +207,12 @@ export const ProviderManager: React.FC = () => {
 		value: string,
 	) => {
 		updateProxyEndpoint(endpointId, { [field]: value });
-		const nextEndpoints = useSettingsStore
-			.getState()
-			.proxyEndpoints.map(endpoint =>
-				endpoint.id === endpointId ? { ...endpoint, [field]: value } : endpoint,
-			);
-		persistProxyEndpoints(nextEndpoints);
+		persistProxyEndpoints(useSettingsStore.getState().proxyEndpoints);
 	};
 
 	const handleUpdateEndpointHeaders = (endpointId: string, headers: Record<string, string>) => {
 		updateProxyEndpoint(endpointId, { headers });
-		const nextEndpoints = useSettingsStore
-			.getState()
-			.proxyEndpoints.map(endpoint =>
-				endpoint.id === endpointId ? { ...endpoint, headers } : endpoint,
-			);
-		persistProxyEndpoints(nextEndpoints);
+		persistProxyEndpoints(useSettingsStore.getState().proxyEndpoints);
 	};
 
 	const handleEndpointBlur = () => undefined;
@@ -253,10 +243,7 @@ export const ProviderManager: React.FC = () => {
 			? endpoint.enabledModels.filter(id => id !== modelId)
 			: [...endpoint.enabledModels, modelId];
 		updateProxyEndpoint(endpointId, { enabledModels });
-		const nextEndpoints = useSettingsStore
-			.getState()
-			.proxyEndpoints.map(item => (item.id === endpointId ? { ...item, enabledModels } : item));
-		persistProxyEndpoints(nextEndpoints);
+		persistProxyEndpoints(useSettingsStore.getState().proxyEndpoints);
 		postMessage({
 			type: 'syncProxyModels',
 			baseUrl: endpoint.baseUrl,

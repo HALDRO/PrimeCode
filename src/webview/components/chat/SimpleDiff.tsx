@@ -234,18 +234,10 @@ const getPatchFileStatus = (file: ApplyPatchMetadataFile): 'add' | 'update' | 'd
 	file.type || file.status || 'update';
 
 const getPatchFileBefore = (file: ApplyPatchMetadataFile): string =>
-	typeof file.before === 'string'
-		? file.before
-		: typeof file.oldContent === 'string'
-			? file.oldContent
-			: '';
+	file.before ?? file.oldContent ?? '';
 
 const getPatchFileAfter = (file: ApplyPatchMetadataFile): string =>
-	typeof file.after === 'string'
-		? file.after
-		: typeof file.newContent === 'string'
-			? file.newContent
-			: '';
+	file.after ?? file.newContent ?? '';
 
 const getPatchFileStats = (
 	file: ApplyPatchMetadataFile,
@@ -299,7 +291,8 @@ function extractFileDiffFromUnified(fullDiff: string, filePath: string): string 
 
 	// If only a single file diff with @@ hunks and no multi-file headers,
 	// return the whole thing when there's exactly one patch file.
-	if (fullDiff.includes('@@')) return fullDiff;
+	const hasMultipleHeaders = (fullDiff.match(/^\+{3}\s/gm)?.length ?? 0) > 1;
+	if (!hasMultipleHeaders && fullDiff.includes('@@')) return fullDiff;
 
 	return undefined;
 }

@@ -390,18 +390,29 @@ const SimpleToolGroup = React.memo<{
 	// Cleanup timer on unmount
 	useEffect(() => () => clearTimeout(collapseTimerRef.current), []);
 
-	// Auto-scroll preview container to bottom as new tools stream in
+	// Auto-scroll preview container to bottom as new tools stream in.
+	// Uses rAF debounce to avoid layout thrashing — MutationObserver with
+	// characterData:true fires on every streamed token, and synchronous
+	// scrollTop = scrollHeight forces a reflow each time.
 	const bodyRef = useRef<HTMLDivElement>(null);
 	useEffect(() => {
 		const el = bodyRef.current;
 		if (!isLive || !el) return;
+		let rafId: number | null = null;
 		const scroll = () => {
-			el.scrollTop = el.scrollHeight;
+			if (rafId !== null) return;
+			rafId = requestAnimationFrame(() => {
+				rafId = null;
+				el.scrollTop = el.scrollHeight;
+			});
 		};
 		scroll();
 		const observer = new MutationObserver(scroll);
 		observer.observe(el, { childList: true, subtree: true, characterData: true });
-		return () => observer.disconnect();
+		return () => {
+			observer.disconnect();
+			if (rafId !== null) cancelAnimationFrame(rafId);
+		};
 	}, [isLive]);
 
 	if (toolUseMessages.length === 0) return null;

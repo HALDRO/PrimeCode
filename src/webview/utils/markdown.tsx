@@ -366,13 +366,17 @@ function useThrottledContent(content: string, isStreaming: boolean): string {
 		return Math.max(MIN_CHARS_PER_FRAME, Math.min(MAX_CHARS_PER_FRAME, charsPerFrame));
 	}, []);
 
-	// RAF loop: advance visible length toward target
+	// RAF loop: advance visible length toward target.
+	// content.length is intentionally excluded from deps — the loop reads the
+	// latest value via contentRef.current on each tick.  Including it would
+	// cancel+restart the rAF loop on every incoming token, breaking the smooth
+	// character-by-character animation.
 	useEffect(() => {
 		if (!isStreaming) {
 			// Not streaming — show everything immediately
 			cancelAnimationFrame(rafRef.current);
-			visibleLenRef.current = content.length;
-			setVisibleLen(content.length);
+			visibleLenRef.current = contentRef.current.length;
+			setVisibleLen(contentRef.current.length);
 			return;
 		}
 
@@ -392,7 +396,8 @@ function useThrottledContent(content: string, isStreaming: boolean): string {
 
 		rafRef.current = requestAnimationFrame(tick);
 		return () => cancelAnimationFrame(rafRef.current);
-	}, [isStreaming, getCharsPerFrame, content.length]);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [isStreaming, getCharsPerFrame]);
 
 	// When streaming finishes, flush remaining buffer
 	useEffect(() => {
