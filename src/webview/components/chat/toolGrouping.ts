@@ -74,21 +74,17 @@ export const isBridgeMessage = (msg: Message): boolean => {
 };
 
 /**
- * Look ahead from position `start` to see if there are groupable tools
- * after a sequence of bridge messages (assistant/thinking).
- * Returns the index of the next groupable tool, or -1 if none found.
+ * Strip trailing bridge messages (assistant/thinking) from the end of a group.
+ * Returns the stripped messages so they can be emitted after the group.
+ * Bridge messages in the middle of a group (between tool sequences) stay put.
  */
-const findNextGroupableToolIndex = (
-	msgs: Message[],
-	start: number,
-	mcpServerNames: string[],
-): number => {
-	for (let i = start; i < msgs.length; i++) {
-		const msg = msgs[i];
-		if (isGroupableTool(msg, mcpServerNames)) return i;
-		if (!isBridgeMessage(msg)) return -1;
+const stripTrailingBridges = (group: Message[]): Message[] => {
+	const stripped: Message[] = [];
+	while (group.length > 0 && isBridgeMessage(group[group.length - 1])) {
+		const msg = group.pop();
+		if (msg) stripped.unshift(msg);
 	}
-	return -1;
+	return stripped;
 };
 
 // -----------------------------------------------------------------------------
@@ -98,15 +94,15 @@ const findNextGroupableToolIndex = (
 /**
  * Group consecutive lightweight tool runs.
  *
- * Groups uninterrupted sequences of groupable tool_use/tool_result messages.
- * Assistant and thinking messages between two groupable tool sequences are
- * absorbed into the group as "bridge" messages — they are preserved and
- * rendered inside the group, not removed.
+ * Simple algorithm: tools and bridge messages (short assistant / thinking)
+ * are accumulated into a group. When a non-bridge message arrives (heavy tool,
+ * long assistant, subtask, etc.) the group is flushed. On flush, trailing
+ * bridge messages are stripped from the group and emitted separately — there's
+ * no point hiding them inside a collapsed group.
  *
- * Any other non-tool message (heavy tool, subtask, etc.) acts as a hard
- * boundary that flushes the current group.
- *
- * When streaming, trailing tool runs are also grouped for preview mode.
+ * No look-ahead, no streaming-specific branching for bridge absorption.
+ * `isStreaming` is only used to mark the trailing group as `isLive` for
+ * preview mode in SimpleToolGroup.
  */
 export const groupToolMessages = (
 	msgs: Message[],
@@ -118,6 +114,10 @@ export const groupToolMessages = (
 
 	const flushGroup = (reason: 'boundary' | 'final') => {
 		if (currentToolGroup.length === 0) return;
+
+		// Strip trailing bridge messages — they shouldn't be hidden inside
+		// a collapsed group. They'll be emitted as standalone items after it.
+		const trailingBridges = stripTrailingBridges(currentToolGroup);
 
 		const toolUseCount = getToolUseCount(currentToolGroup);
 		const canGroup = toolUseCount >= MIN_SIMPLE_TOOL_GROUP_SIZE;
@@ -131,6 +131,9 @@ export const groupToolMessages = (
 			result.push(...currentToolGroup);
 		}
 
+		// Emit stripped trailing bridges after the group
+		result.push(...trailingBridges);
+
 		currentToolGroup = [];
 	};
 
@@ -142,27 +145,10 @@ export const groupToolMessages = (
 			continue;
 		}
 
-		// Bridge messages (assistant/thinking) — absorb into group if tools follow
+		// Bridge messages (short assistant / thinking) — absorb into group
 		if (isBridgeMessage(msg) && currentToolGroup.length > 0) {
-			const nextToolIdx = findNextGroupableToolIndex(msgs, i + 1, mcpServerNames);
-			if (nextToolIdx !== -1) {
-				// Absorb this bridge message and all bridges up to the next tool
-				for (let j = i; j < nextToolIdx; j++) {
-					currentToolGroup.push(msgs[j]);
-				}
-				i = nextToolIdx - 1; // loop will i++ to nextToolIdx
-				continue;
-			}
-
-			// While streaming, trailing thinking messages are kept in the group so it
-			// stays "live" and doesn't collapse prematurely. If more tools arrive on
-			// the next render cycle the bridge will already be inside the group.
-			// NOTE: Only absorb thinking messages — assistant text is user-visible
-			// content that must not be hidden inside a collapsed tool group.
-			if (isStreaming && msg.type === 'thinking') {
-				currentToolGroup.push(msg);
-				continue;
-			}
+			currentToolGroup.push(msg);
+			continue;
 		}
 
 		// Hard boundary — flush and emit as-is
