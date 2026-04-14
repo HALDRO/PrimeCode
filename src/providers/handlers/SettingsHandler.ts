@@ -1,4 +1,8 @@
-import { isProxyEndpointProviderId, OPENAI_COMPATIBLE_PROVIDER_ID } from '../../common';
+import {
+	isProxyEndpointProviderId,
+	normalizeProxyBaseUrl,
+	OPENAI_COMPATIBLE_PROVIDER_ID,
+} from '../../common';
 import type { CommandOf, WebviewCommand } from '../../common/protocol';
 import type { PrimeCodeSettings } from '../../core/Settings';
 import type { RulesService } from '../../services/RulesService';
@@ -124,6 +128,15 @@ export class SettingsHandler implements WebviewMessageHandler {
 
 			const existingEndpoints = settings['proxy.endpoints'] ?? [];
 			const existingById = new Map(existingEndpoints.map(ep => [ep.id, ep]));
+			// Index by canonical baseUrl (normalizeProxyBaseUrl) so that
+			// "http://host:8080", "http://host:8080/", "http://host:8080/v1"
+			// all resolve to the same key. This is the same normalization used
+			// when writing to opencode.json and when fetching proxy models.
+			const existingByBaseUrl = new Map(
+				existingEndpoints
+					.filter(ep => ep.baseUrl?.trim())
+					.map(ep => [normalizeProxyBaseUrl(ep.baseUrl), ep]),
+			);
 			const mergedSettings = { ...settings };
 
 			// Merge all OpenAI-compatible providers from opencode.json into proxy.endpoints.
@@ -136,14 +149,29 @@ export class SettingsHandler implements WebviewMessageHandler {
 					? provider.id.replace(`${OPENAI_COMPATIBLE_PROVIDER_ID}-`, '')
 					: provider.id;
 
-				if (!existingById.has(endpointId)) {
-					mergedEndpoints.push({
-						id: endpointId,
-						name: provider.name,
-						baseUrl: provider.baseUrl,
-						apiKey: provider.apiKey,
-						enabledModels: provider.models.map(m => m.id),
-					});
+				// Skip if already exists by ID or by canonical baseUrl (prevents
+				// duplicates when the same endpoint is in both VS Code settings
+				// and opencode.json with different IDs or slightly different URLs)
+				const canonicalBaseUrl = provider.baseUrl?.trim()
+					? normalizeProxyBaseUrl(provider.baseUrl)
+					: '';
+				if (
+					existingById.has(endpointId) ||
+					(canonicalBaseUrl && existingByBaseUrl.has(canonicalBaseUrl))
+				) {
+					continue;
+				}
+
+				const newEndpoint = {
+					id: endpointId,
+					name: provider.name,
+					baseUrl: provider.baseUrl,
+					apiKey: provider.apiKey,
+					enabledModels: provider.models.map(m => m.id),
+				};
+				mergedEndpoints.push(newEndpoint);
+				if (canonicalBaseUrl) {
+					existingByBaseUrl.set(canonicalBaseUrl, newEndpoint);
 				}
 			}
 

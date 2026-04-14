@@ -476,6 +476,14 @@ export const OpenCodeProviderDataSchema = Type.Object({
 	id: Type.String(),
 	name: Type.String(),
 	isCustom: Type.Optional(Type.Boolean()),
+	source: Type.Optional(
+		Type.Union([
+			Type.Literal('env'),
+			Type.Literal('api'),
+			Type.Literal('config'),
+			Type.Literal('custom'),
+		]),
+	),
 	models: Type.Array(OpenCodeModelDataSchema),
 });
 export type OpenCodeProviderData = Static<typeof OpenCodeProviderDataSchema>;

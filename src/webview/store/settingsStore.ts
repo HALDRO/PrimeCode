@@ -20,15 +20,16 @@
  */
 
 import { create } from 'zustand';
-import type {
-	Access,
-	CLIProviderType,
-	DiscoveryStatus,
-	ExtensionMessage,
-	MCPServersMap,
-	OpenCodeProviderData,
-	PlatformInfo,
-	Rule,
+import {
+	type Access,
+	type CLIProviderType,
+	type DiscoveryStatus,
+	type ExtensionMessage,
+	type MCPServersMap,
+	normalizeProxyBaseUrl,
+	type OpenCodeProviderData,
+	type PlatformInfo,
+	type Rule,
 } from '../../common';
 import type { PermissionPolicies } from '../../common/permissions';
 
@@ -247,6 +248,13 @@ export interface AvailableProviderData {
 	id: string;
 	name: string;
 	env: string[]; // Environment variable names for API key
+	models?: Array<{
+		id: string;
+		name: string;
+		reasoning?: boolean;
+		limit?: { context?: number; output?: number };
+		variants?: string[];
+	}>;
 }
 
 // Auth operation state
@@ -567,6 +575,26 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 						),
 					};
 				}
+				// If the endpoint doesn't exist yet (proxyModels arrived before settingsData),
+				// also check by canonical baseUrl to avoid creating a duplicate when
+				// settingsData arrives later with a different ID for the same endpoint.
+				// Uses normalizeProxyBaseUrl — the same normalization used when writing
+				// to opencode.json and when fetching proxy models.
+				const rawUpdateUrl = updates.baseUrl?.trim();
+				if (rawUpdateUrl) {
+					const canonicalUpdateUrl = normalizeProxyBaseUrl(rawUpdateUrl);
+					const existingByUrl = state.proxyEndpoints.find(ep => {
+						const rawEpUrl = ep.baseUrl?.trim();
+						return rawEpUrl ? normalizeProxyBaseUrl(rawEpUrl) === canonicalUpdateUrl : false;
+					});
+					if (existingByUrl) {
+						return {
+							proxyEndpoints: state.proxyEndpoints.map(endpoint =>
+								endpoint.id === existingByUrl.id ? { ...endpoint, ...updates } : endpoint,
+							),
+						};
+					}
+				}
 				// Upsert: create endpoint if proxyModels arrived before settingsData
 				return {
 					proxyEndpoints: [
@@ -631,12 +659,22 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 				cliDiagnostics: { ...state.cliDiagnostics, ...diagnostics },
 			})),
 		setOpenCodeProviders: opencodeProviders =>
-			set(state => ({
-				// Filter out providers that were disconnected in this session (CLI cache may be stale)
-				opencodeProviders: opencodeProviders.filter(
-					p => !state.sessionDisconnectedProviders.includes(p.id),
-				),
-			})),
+			set(state => {
+				// Deduplicate by provider ID (CLI may return duplicates across reloads
+				// or when multiple VS Code windows share the same server)
+				const seenIds = new Set<string>();
+				const deduped = opencodeProviders.filter(p => {
+					if (seenIds.has(p.id)) return false;
+					seenIds.add(p.id);
+					return true;
+				});
+				return {
+					// Filter out providers that were disconnected in this session (CLI cache may be stale)
+					opencodeProviders: deduped.filter(
+						p => !state.sessionDisconnectedProviders.includes(p.id),
+					),
+				};
+			}),
 		removeOpenCodeProvider: providerId =>
 			set(state => ({
 				opencodeProviders: state.opencodeProviders.filter(p => p.id !== providerId),
@@ -936,13 +974,25 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 				case 'availableProviders':
 					if (message.data) {
 						const { providers } = message.data as {
-							providers?: Array<{ id: string; name: string; env?: string[] }>;
+							providers?: Array<{
+								id: string;
+								name: string;
+								env?: string[];
+								models?: Array<{
+									id: string;
+									name: string;
+									reasoning?: boolean;
+									limit?: { context?: number; output?: number };
+									variants?: string[];
+								}>;
+							}>;
 						};
 						if (providers) {
 							const normalizedProviders = providers.map(p => ({
 								id: p.id,
 								name: p.name,
 								env: p.env || [],
+								models: p.models,
 							}));
 							actions.setAvailableProviders(normalizedProviders);
 						}

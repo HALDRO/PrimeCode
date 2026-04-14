@@ -1507,11 +1507,16 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 	private handleSettingsChange(): void {
 		this.settings.refresh();
-		this.bridge.data('settingsData', this.settings.getAll());
+		// Use the same merge path as syncAll/getSettings so opencode.json
+		// endpoints are always included. Without this, any VS Code config
+		// change would temporarily strip opencode.json-only endpoints from
+		// the webview, causing them to flicker or disappear.
+		void this.settingsHandler.handleMessage({ type: 'getSettings' });
 	}
 
 	private sendInitialState(): void {
-		this.bridge.data('settingsData', this.settings.getAll());
+		// Delegate to settingsHandler so opencode.json endpoints are merged.
+		void this.settingsHandler.handleMessage({ type: 'getSettings' });
 		this.bridge.data(
 			'accessData',
 			Object.entries(this.toolHandler.getAlwaysAllowByTool())

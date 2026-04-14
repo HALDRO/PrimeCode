@@ -134,8 +134,10 @@ export class ProviderHandler implements WebviewMessageHandler {
 				return;
 			}
 
+			const workspaceRoot = this.context.settings.getWorkspaceRoot();
 			const providers = (await this.context.services.openCodeClient.getConnectedProviders(
 				sdkClient,
+				workspaceRoot,
 			)) as OpenCodeProviderData[];
 
 			this.context.bridge.data('openCodeProviders', { providers, config: { isLoading: false } });
@@ -191,6 +193,10 @@ export class ProviderHandler implements WebviewMessageHandler {
 			}
 
 			await this.context.services.openCodeClient.setProviderAuth(sdkClient, providerId, apiKey);
+
+			await sdkClient.instance.dispose().catch((err: unknown) => {
+				console.warn('[ProviderHandler] instance.dispose() after auth set failed:', err);
+			});
 
 			this.context.bridge.data('openCodeAuthResult', { success: true, providerId });
 			await this.onReloadAllProviders();

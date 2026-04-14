@@ -28,7 +28,7 @@ import {
 import { Button, IconButton, ScrollContainer, Select, Switch, Tooltip } from '../ui';
 import { McpSettingsPanel } from './McpSettingsPanel';
 import { PromptImproverSettings } from './PromptImproverSettings';
-import { ProviderManager } from './ProviderManager';
+import { AddProviderSection, ProviderManager } from './ProviderManager';
 import { RulesSettingsPanel } from './RulesSettingsPanel';
 import { CLIStatusBar, GroupTitle, SettingRow, SettingsBadge, SettingsGroup } from './SettingsUI';
 
@@ -303,6 +303,9 @@ const PermissionsSettings: React.FC = () => {
 const MainSettings: React.FC = () => {
 	useMainSettings();
 	const {
+		opencodeProviders,
+		availableProviders,
+		providerAuthState,
 		proxyUseSingleModel,
 		proxyHaikuModel,
 		proxySonnetModel,
@@ -312,11 +315,8 @@ const MainSettings: React.FC = () => {
 	} = useSettingsStore();
 	const { setSettings } = useSettingsActions();
 	const { postMessage } = useVSCode();
-
-	const handleProviderChange = (_newProvider: string) => {
-		// Only OpenCode is supported
-		postMessage({ type: 'syncAll' });
-	};
+	const [selectedNewProvider, setSelectedNewProvider] = useState('');
+	const [apiKeyInput, setApiKeyInput] = useState('');
 
 	// Save task-specific model settings
 	const saveTaskModels = (key: string, value: string) => {
@@ -347,17 +347,50 @@ const MainSettings: React.FC = () => {
 	// Show task-specific models when we have any models available
 	const hasAnyModels = hasEnabledProxyModels;
 
+	const popularProviderIds = new Set([
+		'opencode',
+		'anthropic',
+		'github-copilot',
+		'openai',
+		'google',
+		'openrouter',
+		'vercel',
+	]);
+
+	const availableForConnection = availableProviders
+		.filter(ap => !opencodeProviders.some(cp => cp.id === ap.id))
+		.filter(ap => !popularProviderIds.has(ap.id));
+
+	const handleConnectProvider = (providerId: string) => {
+		if (!apiKeyInput.trim()) return;
+		postMessage({
+			type: 'setOpenCodeProviderAuth',
+			providerId,
+			apiKey: apiKeyInput.trim(),
+		});
+	};
+
+	useEffect(() => {
+		if (providerAuthState?.success && !providerAuthState.isLoading) {
+			setSelectedNewProvider('');
+			setApiKeyInput('');
+		}
+	}, [providerAuthState]);
+
 	return (
 		<div className="animate-fade-in">
 			<GroupTitle>Main</GroupTitle>
 			<SettingsGroup>
-				<SettingRow title="CLI Provider" tooltip="AI coding assistant CLI" last>
-					<Select
-						value="opencode"
-						onChange={e => handleProviderChange(e.target.value)}
-						options={[{ value: 'opencode', label: 'OpenCode' }]}
-					/>
-				</SettingRow>
+				<AddProviderSection
+					availableForConnection={availableForConnection}
+					selectedNewProvider={selectedNewProvider}
+					setSelectedNewProvider={setSelectedNewProvider}
+					apiKeyInput={apiKeyInput}
+					setApiKeyInput={setApiKeyInput}
+					providerAuthState={providerAuthState}
+					onConnect={handleConnectProvider}
+					last
+				/>
 			</SettingsGroup>
 
 			{/* Provider Manager */}

@@ -12,6 +12,7 @@ import {
 	getProxyEndpointProviderId,
 	isNonDisconnectableProviderId,
 	isProxyEndpointProviderId,
+	type OpenCodeProviderData,
 } from '../../../common';
 import { useSettingsActions, useSettingsStore } from '../../store';
 import { useVSCode } from '../../utils/vscode';
@@ -33,14 +34,113 @@ interface ProviderItemData {
 	name: string;
 	connected: boolean;
 	isCustom?: boolean;
+	source?: OpenCodeProviderData['source'];
 	env?: string[];
 	models?: Array<{
 		id: string;
 		name: string;
-		capabilities?: { reasoning?: boolean; vision?: boolean; tools?: boolean };
-		contextLimit?: number;
+		reasoning?: boolean;
+		limit?: { context?: number; output?: number };
 	}>;
 }
+
+interface AddProviderSectionProps {
+	availableForConnection: Array<{ id: string; name: string; env: string[] }>;
+	selectedNewProvider: string;
+	setSelectedNewProvider: (value: string) => void;
+	apiKeyInput: string;
+	setApiKeyInput: (value: string) => void;
+	providerAuthState: ReturnType<typeof useSettingsStore.getState>['providerAuthState'];
+	onConnect: (providerId: string) => void;
+	last?: boolean;
+}
+
+export const AddProviderSection: React.FC<AddProviderSectionProps> = ({
+	availableForConnection,
+	selectedNewProvider,
+	setSelectedNewProvider,
+	apiKeyInput,
+	setApiKeyInput,
+	providerAuthState,
+	onConnect,
+	last = false,
+}) => {
+	if (availableForConnection.length === 0) return null;
+
+	const selectedProvider = availableForConnection.find(p => p.id === selectedNewProvider);
+	const isAuthLoading =
+		selectedProvider &&
+		providerAuthState?.providerId === selectedProvider.id &&
+		providerAuthState?.isLoading;
+
+	return (
+		<>
+			<SettingRow title="Add Provider" last={!selectedProvider && last}>
+				<div className="flex items-center gap-2">
+					<span className="text-xs text-vscode-descriptionForeground shrink-0">
+						{availableForConnection.length} available
+					</span>
+					<Select
+						value={selectedNewProvider}
+						onChange={e => setSelectedNewProvider(e.target.value)}
+						options={[
+							{ value: '', label: 'Select provider...' },
+							...availableForConnection.map(p => ({ value: p.id, label: p.name })),
+						]}
+						className="min-w-(--input-width-sm)"
+					/>
+				</div>
+			</SettingRow>
+
+			{selectedProvider?.env && selectedProvider.env.length > 0 && (
+				<SettingRow title="Environment">
+					<span className="text-xs font-mono text-vscode-descriptionForeground">
+						{selectedProvider.env[0]}
+					</span>
+				</SettingRow>
+			)}
+
+			{selectedProvider && (
+				<>
+					<SettingRow
+						title="API Key"
+						last={!providerAuthState || providerAuthState.providerId !== selectedProvider.id}
+					>
+						<TextInput
+							type="password"
+							value={apiKeyInput}
+							onChange={e => setApiKeyInput(e.target.value)}
+							placeholder="Enter API key"
+							className="flex-1 max-w-(--input-width-md)"
+						/>
+					</SettingRow>
+
+					{providerAuthState && providerAuthState.providerId === selectedProvider.id && (
+						<div className="px-2.5 py-1.5 border-t border-(--border-subtle)">
+							<StatusMessage
+								isLoading={providerAuthState.isLoading}
+								success={providerAuthState.success}
+								error={providerAuthState.error}
+							/>
+						</div>
+					)}
+
+					<SettingRow title="" last>
+						<Button
+							size="sm"
+							variant="primary"
+							onClick={() => onConnect(selectedProvider.id)}
+							disabled={!apiKeyInput.trim() || Boolean(isAuthLoading)}
+							className="text-xs px-3"
+						>
+							{isAuthLoading ? 'Connecting...' : 'Connect'}
+						</Button>
+					</SettingRow>
+				</>
+			)}
+		</>
+	);
+};
 
 export const ProviderManager: React.FC = () => {
 	const {
@@ -64,8 +164,6 @@ export const ProviderManager: React.FC = () => {
 	const { postMessage } = useVSCode();
 
 	const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
-	const [apiKeyInput, setApiKeyInput] = useState('');
-	const [selectedNewProvider, setSelectedNewProvider] = useState('');
 	const [editingApiKey, setEditingApiKey] = useState<string | null>(null);
 	const [editApiKeyInput, setEditApiKeyInput] = useState('');
 	const [modelSearch, setModelSearch] = useState('');
@@ -82,8 +180,6 @@ export const ProviderManager: React.FC = () => {
 		if (providerAuthState?.success && !providerAuthState.isLoading) {
 			const timer = setTimeout(() => {
 				setExpandedProvider(null);
-				setApiKeyInput('');
-				setSelectedNewProvider('');
 				setEditingApiKey(null);
 				setEditApiKeyInput('');
 				setProviderAuthState(null);
@@ -94,67 +190,60 @@ export const ProviderManager: React.FC = () => {
 		return undefined;
 	}, [providerAuthState, setProviderAuthState, postMessage]);
 
-	// Connected providers list (OpenCode CLI providers, excluding proxy endpoint providers)
+	// Connected providers list (OpenCode CLI providers, excluding proxy endpoint and custom providers)
 	const connectedProviders: ProviderItemData[] = useMemo(() => {
 		if (!isOpenCodeCLI) return [];
 
 		return opencodeProviders
-			.filter(p => !isProxyEndpointProviderId(p.id))
+			.filter(p => !isProxyEndpointProviderId(p.id) && !p.isCustom)
 			.map(p => ({
 				id: p.id,
 				name: p.name,
 				connected: true,
 				isCustom: p.isCustom,
+				source: p.source,
 				models: p.models,
 			}));
 	}, [opencodeProviders, isOpenCodeCLI]);
 
-	const availableForConnection = useMemo(() => {
+	// Popular providers shown as separate rows (matching opencode-dev frontend).
+	// These are always visible even when not connected, so users can easily
+	// connect them without digging through the "Add Provider" dropdown.
+	const POPULAR_PROVIDER_IDS = new Set([
+		'opencode',
+		'anthropic',
+		'github-copilot',
+		'openai',
+		'google',
+		'openrouter',
+		'vercel',
+	]);
+
+	const popularForConnection = useMemo(() => {
 		if (!isOpenCodeCLI) return [];
-
-		const providerPriority: Record<string, number> = {
-			anthropic: 1,
-			openai: 2,
-			google: 3,
-			openrouter: 4,
-			groq: 5,
-			mistral: 6,
-			deepseek: 7,
-			xai: 8,
-			cohere: 9,
-			together: 10,
-			fireworks: 11,
-			perplexity: 12,
-			azure: 20,
-			bedrock: 21,
-			vertex: 22,
-		};
-
+		const connectedIds = new Set(opencodeProviders.map(p => p.id));
 		return availableProviders
-			.filter(ap => !opencodeProviders.some(cp => cp.id === ap.id))
+			.filter(ap => POPULAR_PROVIDER_IDS.has(ap.id) && !connectedIds.has(ap.id))
 			.sort((a, b) => {
-				const priorityA = providerPriority[a.id] ?? 100;
-				const priorityB = providerPriority[b.id] ?? 100;
-				if (priorityA !== priorityB) return priorityA - priorityB;
-				return a.name.localeCompare(b.name);
+				const order = [...POPULAR_PROVIDER_IDS];
+				return order.indexOf(a.id) - order.indexOf(b.id);
 			});
-	}, [availableProviders, opencodeProviders, isOpenCodeCLI]);
+	}, [availableProviders, opencodeProviders, isOpenCodeCLI, POPULAR_PROVIDER_IDS]);
 
 	const handleToggleProvider = (providerId: string) => {
 		if (expandedProvider === providerId) {
 			setExpandedProvider(null);
-			setApiKeyInput('');
-			setSelectedNewProvider('');
 			setModelSearch('');
 			return;
 		}
 		setExpandedProvider(providerId);
-		setApiKeyInput('');
-		setSelectedNewProvider('');
 		setModelSearch('');
 	};
 
-	const canDisconnect = (providerId: string) => !isNonDisconnectableProviderId(providerId);
+	const canDisconnect = (provider: ProviderItemData) => {
+		if (provider.source === 'env') return false;
+		return !isNonDisconnectableProviderId(provider.id);
+	};
 
 	const handleRefresh = () => {
 		postMessage({ type: 'syncAll' });
@@ -268,15 +357,6 @@ export const ProviderManager: React.FC = () => {
 		persistProxyEndpoints(nextEndpoints);
 	};
 
-	const handleConnectProvider = (providerId: string) => {
-		if (!apiKeyInput.trim()) return;
-		postMessage({
-			type: 'setOpenCodeProviderAuth',
-			providerId,
-			apiKey: apiKeyInput.trim(),
-		});
-	};
-
 	const handleUpdateApiKey = (providerId: string) => {
 		if (!editApiKeyInput.trim()) return;
 		postMessage({
@@ -325,81 +405,6 @@ export const ProviderManager: React.FC = () => {
 			</div>
 
 			<div className="border border-vscode-panel-border rounded overflow-hidden mb-(--gap-6) mx-(--gap-1)">
-				{availableForConnection.length > 0 && (
-					<ExpandableRow
-						title="Add Provider"
-						subtitle={`${availableForConnection.length} available`}
-						statusDot="disconnected"
-						expanded={expandedProvider === '__add_provider__'}
-						onToggle={() => handleToggleProvider('__add_provider__')}
-						last={connectedProviders.length === 0}
-					>
-						<SettingRow title="Provider">
-							<Select
-								value={selectedNewProvider}
-								onChange={e => setSelectedNewProvider(e.target.value)}
-								options={[
-									{ value: '', label: 'Select provider...' },
-									...availableForConnection.map(p => ({ value: p.id, label: p.name })),
-								]}
-								className="min-w-(--input-width-sm)"
-							/>
-						</SettingRow>
-
-						{selectedNewProvider &&
-							(() => {
-								const provider = availableForConnection.find(p => p.id === selectedNewProvider);
-								if (!provider) return null;
-								const isAuthLoading =
-									providerAuthState?.providerId === provider.id && providerAuthState?.isLoading;
-
-								return (
-									<>
-										{provider.env && provider.env.length > 0 && (
-											<SettingRow title="Environment">
-												<span className="text-xs font-mono text-vscode-descriptionForeground">
-													{provider.env[0]}
-												</span>
-											</SettingRow>
-										)}
-
-										<SettingRow title="API Key">
-											<TextInput
-												type="password"
-												value={apiKeyInput}
-												onChange={e => setApiKeyInput(e.target.value)}
-												placeholder="Enter API key"
-												className="flex-1 max-w-(--input-width-md)"
-											/>
-										</SettingRow>
-
-										{providerAuthState && providerAuthState.providerId === provider.id && (
-											<div className="px-2.5 py-1.5">
-												<StatusMessage
-													isLoading={providerAuthState.isLoading}
-													success={providerAuthState.success}
-													error={providerAuthState.error}
-												/>
-											</div>
-										)}
-
-										<SettingRow title="" last>
-											<Button
-												size="sm"
-												variant="primary"
-												onClick={() => handleConnectProvider(provider.id)}
-												disabled={!apiKeyInput.trim() || isAuthLoading}
-												className="text-xs px-3"
-											>
-												{isAuthLoading ? 'Connecting...' : 'Connect'}
-											</Button>
-										</SettingRow>
-									</>
-								);
-							})()}
-					</ExpandableRow>
-				)}
-
 				{connectedProviders.map((provider, idx) => {
 					const isExpanded = expandedProvider === provider.id;
 					const modelCount = provider.models?.length ?? 0;
@@ -422,11 +427,11 @@ export const ProviderManager: React.FC = () => {
 							statusDot={provider.connected ? 'connected' : 'disconnected'}
 							expanded={isExpanded}
 							onToggle={() => handleToggleProvider(provider.id)}
-							last={idx === connectedProviders.length - 1}
+							last={idx === connectedProviders.length - 1 && popularForConnection.length === 0}
 						>
 							<SettingRow title="Enable Provider">
 								<div className="flex items-center gap-2">
-									{canDisconnect(provider.id) && (
+									{canDisconnect(provider) && (
 										<button
 											type="button"
 											onClick={() => handleDisconnectProvider(provider.id)}
@@ -442,53 +447,51 @@ export const ProviderManager: React.FC = () => {
 								</div>
 							</SettingRow>
 
-							{canDisconnect(provider.id) && (
-								<SettingRow title="API Key" last={!provider.models?.length}>
-									{editingApiKey === provider.id ? (
-										<div className="flex items-center gap-1.5">
-											<TextInput
-												type="password"
-												value={editApiKeyInput}
-												onChange={e => setEditApiKeyInput(e.target.value)}
-												placeholder="Enter new API key"
-												className="flex-1 max-w-(--input-width-md)"
-											/>
-											<Button
-												size="sm"
-												variant="primary"
-												onClick={() => handleUpdateApiKey(provider.id)}
-												disabled={!editApiKeyInput.trim() || providerAuthState?.isLoading}
-												className="text-xs px-2"
-											>
-												{providerAuthState?.isLoading ? '...' : 'Save'}
-											</Button>
-											<Button
-												size="sm"
-												variant="ghost"
-												onClick={() => {
-													setEditingApiKey(null);
-													setEditApiKeyInput('');
-												}}
-												className="text-xs px-2"
-											>
-												Cancel
-											</Button>
-										</div>
-									) : (
+							<SettingRow title="API Key" last={!provider.models?.length}>
+								{editingApiKey === provider.id ? (
+									<div className="flex items-center gap-1.5">
+										<TextInput
+											type="password"
+											value={editApiKeyInput}
+											onChange={e => setEditApiKeyInput(e.target.value)}
+											placeholder="Enter new API key"
+											className="flex-1 max-w-(--input-width-md)"
+										/>
 										<Button
 											size="sm"
-											variant="secondary"
+											variant="primary"
+											onClick={() => handleUpdateApiKey(provider.id)}
+											disabled={!editApiKeyInput.trim() || providerAuthState?.isLoading}
+											className="text-xs px-2"
+										>
+											{providerAuthState?.isLoading ? '...' : 'Save'}
+										</Button>
+										<Button
+											size="sm"
+											variant="ghost"
 											onClick={() => {
-												setEditingApiKey(provider.id);
+												setEditingApiKey(null);
 												setEditApiKeyInput('');
 											}}
 											className="text-xs px-2"
 										>
-											Change
+											Cancel
 										</Button>
-									)}
-								</SettingRow>
-							)}
+									</div>
+								) : (
+									<Button
+										size="sm"
+										variant="secondary"
+										onClick={() => {
+											setEditingApiKey(provider.id);
+											setEditApiKeyInput('');
+										}}
+										className="text-xs px-2"
+									>
+										Change
+									</Button>
+								)}
+							</SettingRow>
 
 							{provider.models && provider.models.length > 0 ? (
 								<ModelList searchValue={modelSearch} onSearchChange={setModelSearch}>
@@ -503,7 +506,7 @@ export const ProviderManager: React.FC = () => {
 											const isEnabled = isOpenCodeModelEnabled(provider.id, model.id);
 											return (
 												<ModelItem key={model.id} name={model.name} id={model.id}>
-													{model.capabilities?.reasoning && (
+													{model.reasoning && (
 														<BrainSideIcon size={14} style={{ color: 'rgba(168, 85, 247, 0.8)' }} />
 													)}
 													<Switch
@@ -516,6 +519,55 @@ export const ProviderManager: React.FC = () => {
 								</ModelList>
 							) : (
 								<EmptyState>No models available</EmptyState>
+							)}
+						</ExpandableRow>
+					);
+				})}
+
+				{popularForConnection.map((provider, idx) => {
+					const isExpanded = expandedProvider === provider.id;
+					const modelCount = provider.models?.length ?? 0;
+					const enabledCount = getEnabledCountForProvider(provider.id);
+
+					return (
+						<ExpandableRow
+							key={provider.id}
+							title={provider.name}
+							subtitle={modelCount > 0 ? `${enabledCount}/${modelCount} models` : undefined}
+							statusDot="disconnected"
+							expanded={isExpanded}
+							onToggle={() => handleToggleProvider(provider.id)}
+							last={idx === popularForConnection.length - 1}
+						>
+							<div className="px-2.5 py-2 text-xs text-vscode-descriptionForeground">
+								You can enable models now. If the provider is unavailable at runtime, the request
+								will fail when used.
+							</div>
+
+							{provider.models && provider.models.length > 0 && (
+								<ModelList searchValue={modelSearch} onSearchChange={setModelSearch}>
+									{provider.models
+										.filter(
+											model =>
+												!modelSearch ||
+												model.name.toLowerCase().includes(modelSearch.toLowerCase()) ||
+												model.id.toLowerCase().includes(modelSearch.toLowerCase()),
+										)
+										.map(model => {
+											const isEnabled = isOpenCodeModelEnabled(provider.id, model.id);
+											return (
+												<ModelItem key={model.id} name={model.name} id={model.id}>
+													{model.reasoning && (
+														<BrainSideIcon size={14} style={{ color: 'rgba(168, 85, 247, 0.8)' }} />
+													)}
+													<Switch
+														checked={isEnabled}
+														onChange={() => handleToggleOpenCodeModel(provider.id, model.id)}
+													/>
+												</ModelItem>
+											);
+										})}
+								</ModelList>
 							)}
 						</ExpandableRow>
 					);

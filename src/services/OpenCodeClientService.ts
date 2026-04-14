@@ -81,12 +81,14 @@ interface OpenCodeProviderModel {
 		context?: number;
 		output?: number;
 	};
+	variants?: string[];
 }
 
 interface OpenCodeProvider {
 	id: string;
 	name: string;
 	isCustom: boolean;
+	source?: 'env' | 'api' | 'config' | 'custom';
 	models: OpenCodeProviderModel[];
 }
 
@@ -94,6 +96,7 @@ interface AvailableProvider {
 	id: string;
 	name: string;
 	env: string[];
+	models: OpenCodeProviderModel[];
 }
 
 export class OpenCodeClientService {
@@ -107,18 +110,51 @@ export class OpenCodeClientService {
 		}
 	}
 
-	async getConnectedProviders(client: OpencodeClient): Promise<OpenCodeProvider[]> {
+	async getConnectedProviders(
+		client: OpencodeClient,
+		workspaceRoot?: string,
+	): Promise<OpenCodeProvider[]> {
 		const { data } = await client.provider.list();
 		if (!data) throw new Error('OpenCode /provider returned no data');
 
 		const connectedSet = new Set(data.connected ?? []);
 
+		// Read project config to identify custom OpenAI-compatible providers.
+		// These should appear in CUSTOM ENDPOINTS, not in the standard PROVIDERS section.
+		const customProviderIds = new Set<string>();
+		if (workspaceRoot) {
+			try {
+				const config = await this.readProjectConfig(workspaceRoot);
+				if (config.provider) {
+					for (const [id, provider] of Object.entries(config.provider)) {
+						if (provider.npm === '@ai-sdk/openai-compatible') {
+							customProviderIds.add(id);
+						}
+					}
+				}
+			} catch {
+				// Ignore config read errors — fall back to isCustom: false
+			}
+		}
+
+		// Deduplicate by provider ID — CLI may return duplicate entries
+		// when opencode.json and server state overlap
+		const seenIds = new Set<string>();
 		return data.all
-			.filter(p => connectedSet.has(p.id))
+			.filter(p => {
+				if (!connectedSet.has(p.id)) return false;
+				if (seenIds.has(p.id)) return false;
+				seenIds.add(p.id);
+				return true;
+			})
 			.map(p => ({
 				id: p.id,
 				name: p.name || p.id,
-				isCustom: false,
+				isCustom: customProviderIds.has(p.id),
+				source:
+					p.source === 'env' || p.source === 'api' || p.source === 'config' || p.source === 'custom'
+						? p.source
+						: undefined,
 				models: Object.values(p.models).map(m => {
 					// Cast to full ModelV2 type to access `variants` field.
 					const model = m as unknown as ModelV2;
@@ -141,12 +177,30 @@ export class OpenCodeClientService {
 
 		const connectedSet = new Set(data.connected ?? []);
 
+		// Deduplicate by provider ID
+		const seenIds = new Set<string>();
 		return data.all
-			.filter(p => !connectedSet.has(p.id))
+			.filter(p => {
+				if (connectedSet.has(p.id)) return false;
+				if (seenIds.has(p.id)) return false;
+				seenIds.add(p.id);
+				return true;
+			})
 			.map(p => ({
 				id: p.id,
 				name: p.name || p.id,
 				env: p.env ?? [],
+				models: Object.values(p.models).map(m => {
+					const model = m as unknown as ModelV2;
+					const variantKeys = model.variants ? Object.keys(model.variants) : undefined;
+					return {
+						id: m.id,
+						name: m.name || m.id,
+						reasoning: m.reasoning,
+						limit: m.limit ? { context: m.limit.context, output: m.limit.output } : undefined,
+						variants: variantKeys && variantKeys.length > 0 ? variantKeys : undefined,
+					};
+				}),
 			}))
 			.filter(p => p.id.length > 0);
 	}

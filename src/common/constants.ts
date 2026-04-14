@@ -32,8 +32,12 @@ export const isProxyEndpointProviderId = (providerId: string): boolean => {
 	return providerId.startsWith(`${OPENAI_COMPATIBLE_PROVIDER_ID}-`);
 };
 
-/** Providers that are built-in and must not be disconnected from UI. */
-const NON_DISCONNECTABLE_PROVIDER_IDS = ['opencode', 'opencode-zen', 'zen'] as const;
+/**
+ * Providers that are built-in and must not be disconnected from UI.
+ * The 'opencode' provider always auto-connects (free tier without key,
+ * full access with key) and cannot be removed via auth.remove().
+ */
+const NON_DISCONNECTABLE_PROVIDER_IDS = ['opencode'] as const;
 
 export type NonDisconnectableProviderId = (typeof NON_DISCONNECTABLE_PROVIDER_IDS)[number];
 

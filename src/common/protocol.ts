@@ -659,7 +659,7 @@ export type RemoveOpenCodeProviderMessage = BaseExtensionMessage<
 >;
 export type AvailableProvidersMessage = BaseExtensionMessage<
 	'availableProviders',
-	{ providers: { id: string; name: string }[] }
+	{ providers: { id: string; name: string; env?: string[]; models?: Record<string, unknown>[] }[] }
 >;
 export type ProxyProviderSavingMessage = BaseExtensionMessage<
 	'proxyProviderSaving',
