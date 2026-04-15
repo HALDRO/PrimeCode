@@ -152,7 +152,9 @@ export const ToolCard: React.FC<ToolCardProps> = ({
 							{headerLeft}
 						</div>
 					</div>
-					<div className="flex items-center gap-1.5 shrink-0 ml-auto">{headerRight}</div>
+					<div className="flex items-center gap-1.5 shrink-0 ml-auto z-10 -mr-(--tool-header-padding) pr-1">
+						{headerRight}
+					</div>
 				</div>
 				{body && (
 					<div className="relative">
@@ -370,6 +372,7 @@ const FileEditCard: React.FC<FileEditCardProps> = ({
 								}}
 								title="Copy"
 								size={20}
+								className="bg-(--surface-base)/80 backdrop-blur-sm"
 							/>
 						</div>
 					</div>
@@ -578,6 +581,10 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		const needsExpand = lineCount > 6;
 		const showAccessGate = accessRequest && !accessRequest.resolved && accessRequest.requestId;
 
+		// Bash/terminal cards: always collapsible, start collapsed, no preview mode.
+		// Clicking the header toggles between hidden body and full output.
+		const bashAlwaysCollapsible = isBash && hasBody;
+
 		return (
 			<ToolCard
 				headerLeft={
@@ -597,7 +604,9 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 							</span>
 						)}
 						{meta && (
-							<span className="text-sm text-vscode-foreground opacity-70 truncate">{meta}</span>
+							<Tooltip content={meta} position="top" delay={300} maxWidth={400}>
+								<span className="text-sm text-vscode-foreground opacity-70 truncate">{meta}</span>
+							</Tooltip>
 						)}
 					</>
 				}
@@ -612,7 +621,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 						{meta && (
 							<div
 								className={cn(
-									'opacity-0 transition-opacity duration-150 ease-out',
+									'opacity-0 transition-opacity duration-150 ease-out z-10',
 									'group-hover:opacity-100',
 								)}
 							>
@@ -629,14 +638,20 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 						)}
 					</div>
 				}
-				isCollapsible={(needsExpand && hasBody) || Boolean(showAccessGate)}
+				isCollapsible={bashAlwaysCollapsible || (needsExpand && hasBody) || Boolean(showAccessGate)}
 				expanded={expanded}
 				onToggle={() => setExpanded(prev => !prev)}
 				body={
-					hasBody ? (
+					hasBody && (!bashAlwaysCollapsible || expanded) ? (
 						<div className="relative">
 							<OverlayScrollbarsComponent
-								style={{ maxHeight: expanded ? undefined : `${PREVIEW_MAX_HEIGHT}px` }}
+								style={{
+									maxHeight: bashAlwaysCollapsible
+										? 'calc(500px - var(--tool-header-height))'
+										: expanded
+											? undefined
+											: `${PREVIEW_MAX_HEIGHT}px`,
+								}}
 								className="bg-(--tool-bg-header)"
 								options={OVERLAY_SCROLLBAR_OPTIONS}
 								events={{ initialized: handleOsInitialized }}

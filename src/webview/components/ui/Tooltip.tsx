@@ -178,7 +178,13 @@ const ActiveTooltip: React.FC<{
 				<div
 					className={interactive ? tooltipContentInteractiveClassName : tooltipContentClassName}
 					style={{
-						...(effectiveMaxWidth ? { maxWidth: `${effectiveMaxWidth}px` } : {}),
+						...(effectiveMaxWidth
+							? {
+									maxWidth: `${effectiveMaxWidth}px`,
+									whiteSpace: 'pre-wrap',
+									wordBreak: 'break-word',
+								}
+							: {}),
 						...(maxHeight ? { maxHeight: `${maxHeight}px`, overflowY: 'auto' } : {}),
 					}}
 				>

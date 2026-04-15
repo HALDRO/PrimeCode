@@ -138,10 +138,10 @@ export const IconButton: React.FC<IconButtonProps> = ({
 	const sizeValue = typeof size === 'number' ? `${size}px` : ICON_BUTTON_SIZE_VARS[size];
 
 	const classes = cn(
-		'inline-flex items-center justify-center rounded cursor-pointer transition-all duration-150 bg-transparent border-none p-0',
+		'inline-flex items-center justify-center rounded cursor-pointer transition-all duration-150 bg-(--surface-raised) border-none p-0',
 		danger
-			? 'text-error hover:bg-error/15'
-			: 'text-vscode-icon-foreground hover:bg-(--header-item-hover) hover:text-vscode-foreground',
+			? 'text-error hover:bg-white/10'
+			: 'text-vscode-icon-foreground hover:bg-white/10 hover:text-vscode-foreground',
 		className,
 	);
 
