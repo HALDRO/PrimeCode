@@ -20,6 +20,10 @@ interface PathChipProps {
 	isFolder?: boolean;
 	/** Optional line number, rendered as :line */
 	line?: number;
+	/** Optional start line, rendered as :start or :start-end */
+	startLine?: number;
+	/** Optional end line, rendered as :start-end when different from start */
+	endLine?: number;
 	/** Optional tooltip text (e.g. full path). If omitted, no tooltip is shown. */
 	title?: string;
 	onClick?: () => void;
@@ -42,6 +46,8 @@ export const PathChip: React.FC<PathChipProps> = ({
 	iconName,
 	isFolder,
 	line,
+	startLine,
+	endLine,
 	title,
 	onClick,
 	onRemove,
@@ -53,6 +59,14 @@ export const PathChip: React.FC<PathChipProps> = ({
 	const effectiveIconName = iconName ?? displayLabel;
 	const effectiveTitle = title;
 	const canClick = Boolean(onClick);
+	const resolvedStartLine = startLine ?? line;
+	const resolvedEndLine = endLine ?? line;
+	const lineSuffix =
+		resolvedStartLine !== undefined
+			? resolvedEndLine !== undefined && resolvedEndLine !== resolvedStartLine
+				? `:${resolvedStartLine}-${resolvedEndLine}`
+				: `:${resolvedStartLine}`
+			: null;
 
 	const chip = (
 		<span
@@ -116,9 +130,9 @@ export const PathChip: React.FC<PathChipProps> = ({
 				{displayLabel}
 			</span>
 
-			{line !== undefined && (
+			{lineSuffix && (
 				<span className="text-vscode-descriptionForeground opacity-70 tabular-nums leading-none mb-px">
-					:{line}
+					{lineSuffix}
 				</span>
 			)}
 		</span>

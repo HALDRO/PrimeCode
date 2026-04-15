@@ -25,6 +25,11 @@ const REMARK_PLUGINS = [remarkGfm];
 import { CheckIcon, CopyIcon } from '../components/icons';
 import { IconButton, PathChip } from '../components/ui';
 import { cn } from '../lib/cn';
+import {
+	findPathReferences,
+	type ParsedPathReference,
+	parsePathReferenceToken,
+} from './pathReferences';
 import { vscode } from './vscode';
 
 // ----------------------------------------------------------------------
@@ -54,48 +59,104 @@ const StreamingContext = createContext<{
 // Helper Functions
 // ----------------------------------------------------------------------
 
-// File path detection — any word with path separators ending in .ext (1-10 chars)
-const FILE_EXTENSIONS = /\.[a-zA-Z\d]{1,10}$/;
+const URL_IN_TEXT = /https?:\/\/[^\s)<\]}"']+/gi;
+const EXACT_EXTERNAL_URL = /^https?:\/\/[^\s)<\]}"']+$/i;
 
-const CODE_KEYWORDS = /^(import|export|from|require|const|let|var|function|class|interface|type)\b/;
-
-const isFilePath = (text: string): boolean => {
-	if (!FILE_EXTENSIONS.test(text)) return false;
-	if (text.includes(' ')) return false;
-	if (text.length > 100) return false;
-	if (CODE_KEYWORDS.test(text)) return false;
-	// Must look like a path: has separator or starts with dot
-	if (!/[/\\]/.test(text) && !text.startsWith('.')) return false;
-	return true;
+const openExternalLink = (url: string) => {
+	vscode.postMessage({ type: 'openExternal', url });
 };
 
-const FILE_PATH_IN_TEXT =
-	/(?:(?:[a-zA-Z]:[/\\]|\.{1,2}[/\\]|[/\\])[\w.@-]+(?:[/\\][\w.@-]+)*|[\w.@-]+(?:[/\\][\w.@-]+)+)\.[a-zA-Z\d]{1,10}(?::(\d+))?(?=[)\s,;:!?'"]|$)/g;
+const openPathReference = (reference: ParsedPathReference) => {
+	vscode.postMessage({
+		type: 'openFile',
+		filePath: reference.filePath,
+		...(reference.line !== undefined ? { line: reference.line } : {}),
+		...(reference.startLine !== undefined ? { startLine: reference.startLine } : {}),
+		...(reference.endLine !== undefined ? { endLine: reference.endLine } : {}),
+	});
+};
 
-const linkifyFilePaths = (text: string): React.ReactNode[] => {
+const renderExternalLink = (url: string, key: string, className?: string) => (
+	<a
+		key={key}
+		href={url}
+		onClick={event => {
+			event.preventDefault();
+			event.stopPropagation();
+			openExternalLink(url);
+		}}
+		className={cn(
+			'text-vscode-textLink-foreground underline decoration-vscode-textLink-foreground/60 underline-offset-3',
+			'transition-colors hover:text-vscode-textLink-activeForeground hover:decoration-vscode-textLink-activeForeground',
+			'focus-visible:outline-none focus-visible:rounded-sm focus-visible:ring-1 focus-visible:ring-vscode-focusBorder focus-visible:ring-offset-1 focus-visible:ring-offset-transparent',
+			className,
+		)}
+		target="_blank"
+		rel="noopener noreferrer"
+		title={url}
+	>
+		{url}
+	</a>
+);
+
+const renderPathReferenceChip = (reference: ParsedPathReference, key: string) => (
+	<PathChip
+		key={key}
+		path={reference.filePath}
+		line={reference.line}
+		startLine={reference.startLine}
+		endLine={reference.endLine}
+		title={reference.rawText}
+		className="align-text-bottom"
+		onClick={() => openPathReference(reference)}
+	/>
+);
+
+type InlineReferenceMatch =
+	| { type: 'externalUrl'; index: number; rawText: string; url: string }
+	| ({ type: 'pathReference' } & ReturnType<typeof findPathReferences>[number]);
+
+const renderInlineReferences = (text: string): React.ReactNode[] => {
 	const parts: React.ReactNode[] = [];
 	let lastIndex = 0;
+	const matches: InlineReferenceMatch[] = [];
 
-	for (const m of text.matchAll(FILE_PATH_IN_TEXT)) {
-		const matchStart = m.index;
-		const fullMatch = m[0];
-		const lineNum = m[1] ? Number.parseInt(m[1], 10) : undefined;
-		const filePath = lineNum ? fullMatch.replace(`:${m[1]}`, '') : fullMatch;
+	for (const match of text.matchAll(URL_IN_TEXT)) {
+		matches.push({
+			type: 'externalUrl',
+			index: match.index ?? 0,
+			rawText: match[0],
+			url: match[0],
+		});
+	}
+
+	for (const match of findPathReferences(text)) {
+		const isInsideUrl = matches.some(
+			candidate =>
+				candidate.type === 'externalUrl' &&
+				match.index >= candidate.index &&
+				match.index < candidate.index + candidate.rawText.length,
+		);
+		if (!isInsideUrl) {
+			matches.push({ type: 'pathReference', ...match });
+		}
+	}
+
+	matches.sort((left, right) => left.index - right.index);
+
+	for (const match of matches) {
+		const matchStart = match.index;
+		const fullMatch = match.rawText;
 
 		if (matchStart > lastIndex) {
 			parts.push(text.slice(lastIndex, matchStart));
 		}
 
-		parts.push(
-			<PathChip
-				key={`fp-${matchStart}`}
-				path={filePath}
-				line={lineNum}
-				title={fullMatch}
-				className="align-text-bottom"
-				onClick={() => vscode.postMessage({ type: 'openFile', filePath, line: lineNum })}
-			/>,
-		);
+		if (match.type === 'externalUrl') {
+			parts.push(renderExternalLink(match.url, `url-${matchStart}`));
+		} else {
+			parts.push(renderPathReferenceChip(match, `path-ref-${matchStart}`));
+		}
 
 		lastIndex = matchStart + fullMatch.length;
 	}
@@ -120,8 +181,9 @@ const renderTextContent = (
 	isStreaming: boolean,
 	prefixKey: string,
 	animatedWords: Set<string>,
+	renderInlineReferencesEnabled = true,
 ) => {
-	const linked = linkifyFilePaths(content);
+	const linked = renderInlineReferencesEnabled ? renderInlineReferences(content) : [content];
 
 	let partOffset = 0;
 	return linked.map(part => {
@@ -155,24 +217,37 @@ const renderTextContent = (
 				);
 			});
 		}
-		// PathChip — estimate length from the key prop
-		const chipPath =
-			part && typeof part === 'object' && 'key' in part
-				? String((part as React.ReactElement).key)
-				: '';
-		partOffset += chipPath.length || 10;
+		const chipLength =
+			React.isValidElement(part) &&
+			part.props &&
+			typeof part.props === 'object' &&
+			'title' in part.props
+				? String(part.props.title ?? '').length
+				: 10;
+		partOffset += chipLength || 10;
 		return part;
 	});
 };
 
-const StreamableNode: React.FC<{ node: React.ReactNode; index?: number }> = ({
-	node,
-	index = 0,
-}) => {
+const StreamableNode: React.FC<{
+	node: React.ReactNode;
+	index?: number;
+	renderInlineReferencesEnabled?: boolean;
+}> = ({ node, index = 0, renderInlineReferencesEnabled = true }) => {
 	const { isStreaming, animatedWords } = useContext(StreamingContext);
 
 	if (typeof node === 'string') {
-		return <>{renderTextContent(node, isStreaming, String(index), animatedWords)}</>;
+		return (
+			<>
+				{renderTextContent(
+					node,
+					isStreaming,
+					String(index),
+					animatedWords,
+					renderInlineReferencesEnabled,
+				)}
+			</>
+		);
 	}
 	if (Array.isArray(node)) {
 		return (
@@ -183,7 +258,14 @@ const StreamableNode: React.FC<{ node: React.ReactNode; index?: number }> = ({
 						typeof child === 'string'
 							? `sn-${index}-str-${child.length}-${child.slice(0, 8)}`
 							: `sn-${index}-node-${childIdx}`;
-					return <StreamableNode key={childKey} node={child} index={childIdx} />;
+					return (
+						<StreamableNode
+							key={childKey}
+							node={child}
+							index={childIdx}
+							renderInlineReferencesEnabled={renderInlineReferencesEnabled}
+						/>
+					);
 				})}
 			</>
 		);
@@ -197,20 +279,24 @@ const StreamableNode: React.FC<{ node: React.ReactNode; index?: number }> = ({
 
 const CopyButton: React.FC<{ code: string; className?: string }> = ({ code, className }) => {
 	const [copied, setCopied] = useState(false);
-	const timerRef = useRef<ReturnType<typeof setTimeout>>(
-		0 as unknown as ReturnType<typeof setTimeout>,
-	);
+	const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 	useEffect(() => {
-		return () => clearTimeout(timerRef.current);
+		return () => {
+			if (timerRef.current !== null) {
+				clearTimeout(timerRef.current);
+			}
+		};
 	}, []);
 
-	const handleCopy = () => {
+	const handleCopy = async () => {
 		try {
-			navigator.clipboard.writeText(code);
+			await navigator.clipboard.writeText(code);
 			setCopied(true);
-			clearTimeout(timerRef.current);
-			timerRef.current = setTimeout(() => setCopied(false), 2000);
+			if (timerRef.current !== null) {
+				clearTimeout(timerRef.current);
+			}
+			timerRef.current = setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
 		} catch {
 			// Clipboard API unavailable in some contexts
 		}
@@ -277,10 +363,15 @@ const HighlightedCodeBlock: React.FC<{ code: string; language: string }> = ({ co
 	}, [code, language]);
 
 	useEffect(() => {
-		if (codeRef.current && highlightedHtml !== null) {
+		if (!codeRef.current) return;
+
+		if (highlightedHtml !== null) {
 			codeRef.current.innerHTML = highlightedHtml;
+			return;
 		}
-	}, [highlightedHtml]);
+
+		codeRef.current.textContent = code;
+	}, [code, highlightedHtml]);
 
 	return (
 		<div className="group/codeblock isolate relative my-2 rounded-lg border border-(--tool-border-color) overflow-hidden bg-(--tool-bg-header)">
@@ -310,16 +401,36 @@ const HighlightedCodeBlock: React.FC<{ code: string; language: string }> = ({ co
 // ----------------------------------------------------------------------
 
 const components: Components = {
-	a: ({ href, children }) => (
-		<a
-			href={href}
-			className="text-vscode-textLink-foreground hover:text-vscode-textLink-activeForeground hover:underline transition-colors underline-offset-2"
-			target="_blank"
-			rel="noopener noreferrer"
-		>
-			<StreamableNode node={children} />
-		</a>
-	),
+	a: ({ href, children }) => {
+		const safeHref = typeof href === 'string' ? href.trim() : '';
+		const isExternal = /^https?:\/\//i.test(safeHref);
+
+		if (!safeHref) {
+			return <StreamableNode node={children} renderInlineReferencesEnabled={false} />;
+		}
+
+		return (
+			<a
+				href={safeHref}
+				onClick={event => {
+					if (!isExternal) return;
+					event.preventDefault();
+					event.stopPropagation();
+					openExternalLink(safeHref);
+				}}
+				className={cn(
+					'rounded-sm text-vscode-textLink-foreground underline decoration-vscode-textLink-foreground/60 underline-offset-3',
+					'transition-colors hover:text-vscode-textLink-activeForeground hover:decoration-vscode-textLink-activeForeground',
+					'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder focus-visible:ring-offset-1 focus-visible:ring-offset-transparent',
+				)}
+				target={isExternal ? '_blank' : undefined}
+				rel={isExternal ? 'noopener noreferrer' : undefined}
+				title={safeHref}
+			>
+				<StreamableNode node={children} renderInlineReferencesEnabled={false} />
+			</a>
+		);
+	},
 	p: ({ children }) => (
 		<p>
 			<StreamableNode node={children} />
@@ -384,15 +495,13 @@ const components: Components = {
 			return <HighlightedCodeBlock code={codeContent} language={language} />;
 		}
 
-		if (isFilePath(codeContent)) {
-			return (
-				<PathChip
-					path={codeContent}
-					title={codeContent}
-					className="align-text-bottom"
-					onClick={() => vscode.postMessage({ type: 'openFile', filePath: codeContent })}
-				/>
-			);
+		const pathReference = parsePathReferenceToken(codeContent);
+		if (pathReference) {
+			return renderPathReferenceChip(pathReference, `inline-path-ref-${pathReference.rawText}`);
+		}
+
+		if (EXACT_EXTERNAL_URL.test(codeContent.trim())) {
+			return renderExternalLink(codeContent.trim(), `inline-url-${codeContent.trim()}`);
 		}
 
 		return (
@@ -450,6 +559,8 @@ const BUFFER_CHARS = 40;
 const MIN_CHARS_PER_FRAME = 2;
 const MAX_CHARS_PER_FRAME = 8;
 const RATE_WINDOW_MS = 2000;
+const STREAM_STALL_FLUSH_MS = 200;
+const COPY_FEEDBACK_MS = 2000;
 
 function useThrottledContent(
 	content: string,
@@ -497,6 +608,12 @@ function useThrottledContent(
 		return Math.max(MIN_CHARS_PER_FRAME, Math.min(MAX_CHARS_PER_FRAME, charsPerFrame));
 	}, []);
 
+	const snapToWordBoundary = useCallback((text: string) => {
+		const lastSpace = text.search(/\s\S*$/);
+		if (lastSpace <= 0) return text;
+		return text.slice(0, lastSpace);
+	}, []);
+
 	// Single RAF loop that runs while streaming OR while buffer hasn't caught up.
 	// When isStreaming is true, we hold back BUFFER_CHARS from the end.
 	// When isStreaming turns false, the loop keeps running without the buffer
@@ -509,7 +626,7 @@ function useThrottledContent(
 		if (!isStreaming && visibleLenRef.current >= contentRef.current.length) return;
 
 		let lastContentLen = contentRef.current.length;
-		let stallStart = 0;
+		let stallStart = performance.now();
 
 		const tick = () => {
 			const contentLen = contentRef.current.length;
@@ -521,9 +638,10 @@ function useThrottledContent(
 				stallStart = now;
 			}
 
-			// While streaming: hold back BUFFER_CHARS. After streaming ends: target = full length.
-			const isStalled = stallStart > 0 && now - stallStart > 200;
-			const target = !streaming || isStalled ? contentLen : contentLen - BUFFER_CHARS;
+			// If no new chars arrive for a short time, flush the buffered tail even
+			// while the backend is still busy with a tool call.
+			const isStalled = now - stallStart > STREAM_STALL_FLUSH_MS;
+			const target = !streaming || isStalled ? contentLen : Math.max(0, contentLen - BUFFER_CHARS);
 			const current = visibleLenRef.current;
 
 			if (current < target) {
@@ -540,20 +658,21 @@ function useThrottledContent(
 		};
 
 		rafRef.current = requestAnimationFrame(tick);
-		return () => cancelAnimationFrame(rafRef.current);
-		// eslint-disable-next-line react-hooks/exhaustive-deps
+		return () => {
+			cancelAnimationFrame(rafRef.current);
+			rafRef.current = 0;
+		};
 	}, [isStreaming, getCharsPerFrame]);
 
-	// If not streaming and loop has finished, return full content
-	if (!isStreaming && visibleLenRef.current >= content.length)
-		return { text: content, isAnimating: false };
+	// Once we've caught up, render the full text immediately. This avoids
+	// trimming the final word while the session is still marked streaming but
+	// the model has already moved on to a tool call.
+	if (visibleLenRef.current >= content.length) return { text: content, isAnimating: false };
 
 	const rawSlice = content.slice(0, Math.max(0, visibleLen));
 
 	// Word-boundary snapping so animations fire per-word
-	const lastSpace = rawSlice.search(/\s\S*$/);
-	if (lastSpace <= 0) return { text: rawSlice, isAnimating: true };
-	return { text: rawSlice.slice(0, lastSpace), isAnimating: true };
+	return { text: snapToWordBoundary(rawSlice), isAnimating: true };
 }
 
 // ----------------------------------------------------------------------
