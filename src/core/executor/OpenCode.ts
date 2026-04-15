@@ -24,10 +24,13 @@ import type {
 } from '@opencode-ai/sdk/v2/client';
 import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk/v2/client';
 
-import { Value } from '@sinclair/typebox/value';
 import { parseModelId } from '../../common';
 import { PERMISSION_CATEGORIES } from '../../common/permissions';
-import { QuestionRequestSchema } from '../../common/schemas';
+import {
+	mapPermissionRuntimePayloadToRequest,
+	mapQuestionRuntimePayloadToRequest,
+	parseSessionTodoItem,
+} from '../../common/schemas';
 import { logger } from '../../utils/logger';
 import { LogNormalizer } from './LogNormalizer';
 import type { CLIConfig, CLIEvent, CLIExecutor } from './types';
@@ -1850,10 +1853,59 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			this.handleQuestionAsked(props, sessionId);
 			return;
 		}
+		if (envelope.type === 'question.replied' || envelope.type === 'question.rejected') {
+			const props = (envelope.properties ?? {}) as Record<string, unknown>;
+			const sessionId = typeof props.sessionID === 'string' ? props.sessionID : undefined;
+			this.emit('event', {
+				type: 'question_replied',
+				data: {
+					sessionID: sessionId || '',
+					requestID: typeof props.requestID === 'string' ? props.requestID : '',
+					answers: Array.isArray(props.answers) ? (props.answers as string[][]) : undefined,
+					rejected: envelope.type === 'question.rejected',
+				},
+				sessionId,
+			});
+			return;
+		}
 		if (envelope.type === 'permission.asked') {
 			const props = (envelope.properties ?? {}) as Record<string, unknown>;
 			const sessionId = typeof props.sessionID === 'string' ? props.sessionID : undefined;
 			this.handlePermissionAsked(props, sessionId);
+			return;
+		}
+		if (envelope.type === 'permission.replied') {
+			const props = (envelope.properties ?? {}) as Record<string, unknown>;
+			const sessionId = typeof props.sessionID === 'string' ? props.sessionID : undefined;
+			this.emit('event', {
+				type: 'permission_replied',
+				data: {
+					sessionID: sessionId || '',
+					requestID: typeof props.requestID === 'string' ? props.requestID : '',
+					reply:
+						typeof props.reply === 'string'
+							? (props.reply as 'once' | 'always' | 'reject')
+							: undefined,
+				},
+				sessionId,
+			});
+			return;
+		}
+		if (envelope.type === 'todo.updated') {
+			const props = (envelope.properties ?? {}) as Record<string, unknown>;
+			const sessionId = typeof props.sessionID === 'string' ? props.sessionID : undefined;
+			const todosRaw = Array.isArray(props.todos) ? props.todos : [];
+			this.emit('event', {
+				type: 'todo',
+				data: {
+					sessionID: sessionId || '',
+					todos: todosRaw.flatMap(value => {
+						const todo = parseSessionTodoItem(value);
+						return todo ? [todo] : [];
+					}),
+				},
+				sessionId,
+			});
 			return;
 		}
 		if (envelope.type === 'message.part.delta') {
@@ -2140,12 +2192,15 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	 * then emits typed data that flows through all layers without re-mapping.
 	 */
 	private handleQuestionAsked(props: Record<string, unknown>, sessionId?: string): void {
-		const parsed = Value.Cast(QuestionRequestSchema, props);
+		const parsed = mapQuestionRuntimePayloadToRequest(props, sessionId ?? '');
+		if (!parsed) return;
 
 		this.emit('event', {
 			type: 'question',
 			data: {
+				id: parsed.id,
 				requestId: parsed.id,
+				sessionID: sessionId,
 				questions: parsed.questions,
 				tool: parsed.tool,
 			},
@@ -2154,17 +2209,21 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	}
 
 	private handlePermissionAsked(props: Record<string, unknown>, sessionId?: string): void {
-		const toolRecord = props.tool as Record<string, unknown> | undefined;
+		const parsed = mapPermissionRuntimePayloadToRequest(props, sessionId ?? '');
+		if (!parsed) return;
 
 		this.emit('event', {
 			type: 'permission',
 			data: {
-				id: props.id,
-				permission: props.permission,
-				patterns: props.patterns ?? [],
-				toolCallId: typeof toolRecord?.callID === 'string' ? toolRecord.callID : undefined,
-				toolInput: props.toolInput,
-				metadata: props.metadata,
+				id: parsed.id,
+				requestId: parsed.id,
+				permission: parsed.permission,
+				patterns: parsed.patterns,
+				toolCallId: parsed.tool?.callID,
+				toolUseId: parsed.tool?.callID,
+				tool: parsed.permission,
+				toolInput: parsed.metadata,
+				metadata: parsed.metadata,
 			},
 			sessionId,
 		});

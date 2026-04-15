@@ -123,6 +123,7 @@ export class ToolHandler implements WebviewMessageHandler {
 		});
 
 		if (targetSessionId) {
+			this.context.bridge.session.permissionRemove(targetSessionId, requestId, response);
 			this.context.bridge.session.accessResponse(targetSessionId, {
 				requestId,
 				approved,
@@ -252,16 +253,8 @@ export class ToolHandler implements WebviewMessageHandler {
 		// Reply to OpenCode's question API with answers array
 		await this.context.cli.respondToQuestion({ requestId, answers });
 
-		// Mark the question as resolved in the webview
-		// Use 'question-${requestId}' to match the original message ID created in ChatProvider
 		if (targetSessionId) {
-			this.context.bridge.session.message(targetSessionId, {
-				id: `question-${requestId}`,
-				type: 'question' as const,
-				resolved: true,
-				answers,
-				timestamp: new Date().toISOString(),
-			} satisfies import('../../common').SessionMessageUpdate);
+			this.context.bridge.session.questionRemove(targetSessionId, requestId, answers);
 		}
 	}
 
@@ -275,14 +268,8 @@ export class ToolHandler implements WebviewMessageHandler {
 
 		await this.context.cli.rejectQuestion(requestId);
 
-		// Mark the question as resolved (rejected) in the webview
 		if (targetSessionId) {
-			this.context.bridge.session.message(targetSessionId, {
-				id: `question-${requestId}`,
-				type: 'question' as const,
-				resolved: true,
-				timestamp: new Date().toISOString(),
-			} satisfies import('../../common').SessionMessageUpdate);
+			this.context.bridge.session.questionRemove(targetSessionId, requestId, undefined, true);
 		}
 	}
 }

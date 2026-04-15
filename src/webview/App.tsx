@@ -11,6 +11,7 @@ import { ChangedFilesPanel } from './components/chat/ChangedFilesPanel';
 import { GenerationStatus } from './components/chat/GenerationStatus';
 import { MessageItem } from './components/chat/MessageItem';
 import { NotificationOverlay } from './components/chat/NotificationOverlay.tsx';
+import { QuestionCard } from './components/chat/QuestionCard';
 import { QueuedMessageBanner } from './components/chat/QueuedMessageBanner';
 import { precomputeCollapseFlags } from './components/chat/SimpleTool';
 import { Header } from './components/header/Header';
@@ -29,6 +30,7 @@ import {
 	useIsProcessing,
 	useMcpServers,
 	useMessages,
+	usePendingQuestions,
 	useRevertedFromMessageId,
 	useTurnTokens,
 } from './store';
@@ -265,6 +267,7 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 	const messages = useMessages();
 	const mcpServers = useMcpServers();
 	const isProcessing = useIsProcessing();
+	const pendingQuestions = usePendingQuestions();
 	const revertedFromMessageId = useRevertedFromMessageId();
 	const { changedFiles, cumulativeDiffs } = useChangedFilesState();
 	const turnTokens = useTurnTokens();
@@ -509,58 +512,68 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 	}, []);
 
 	return (
-		<>
-			{sections.length === 0 ? (
-				<div className="absolute inset-0 pointer-events-none z-0">
-					<EmptyState />
+		<div className="flex flex-col h-full w-full">
+			<div className="flex-1 min-h-0 relative w-full">
+				{sections.length === 0 ? (
+					<div className="absolute inset-0 pointer-events-none z-0">
+						<EmptyState />
+					</div>
+				) : (
+					<Virtuoso
+						ref={virtuosoRef}
+						scrollerRef={handleScrollerRef}
+						className="h-full w-full"
+						style={{
+							fontFamily: 'var(--vscode-editor-font-family)',
+							fontSize: 'var(--vscode-editor-font-size)',
+							lineHeight: 1.6,
+						}}
+						data={sections}
+						context={virtuosoContext}
+						computeItemKey={computeItemKey}
+						followOutput={handleFollowOutput}
+						atBottomStateChange={handleAtBottomStateChange}
+						atBottomThreshold={40}
+						defaultItemHeight={300}
+						increaseViewportBy={{ top: 400, bottom: 400 }}
+						itemContent={renderItem}
+						components={virtuosoComponents}
+					/>
+				)}
+
+				{sections.length > 0 && <ScrollThumb scrollerRef={scrollerRef} />}
+
+				{sections.length > 0 && (
+					<button
+						type="button"
+						onClick={handleScrollToBottom}
+						aria-label="Scroll to bottom"
+						className="absolute bottom-2 left-1/2 z-10 flex items-center justify-center rounded-md cursor-pointer border-none transition-all duration-300 ease-out"
+						style={{
+							transform: 'translateX(-50%)',
+							width: 28,
+							height: 28,
+							backgroundColor: 'var(--vscode-editor-background)',
+							color: 'var(--vscode-foreground)',
+							boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
+							opacity: showScrollToBottom ? 1 : 0,
+							pointerEvents: showScrollToBottom ? 'auto' : 'none',
+						}}
+						title="Scroll to bottom"
+					>
+						<ChevronDownIcon size={16} />
+					</button>
+				)}
+			</div>
+
+			{pendingQuestions.length > 0 && (
+				<div className="px-(--content-padding-x) pb-(--message-gap) pt-2 shrink-0 max-h-[40vh] overflow-y-auto flex flex-col gap-2">
+					{pendingQuestions.map(question => (
+						<QuestionCard key={question.id} request={question} />
+					))}
 				</div>
-			) : (
-				<Virtuoso
-					ref={virtuosoRef}
-					scrollerRef={handleScrollerRef}
-					className="h-full w-full"
-					style={{
-						fontFamily: 'var(--vscode-editor-font-family)',
-						fontSize: 'var(--vscode-editor-font-size)',
-						lineHeight: 1.6,
-					}}
-					data={sections}
-					context={virtuosoContext}
-					computeItemKey={computeItemKey}
-					followOutput={handleFollowOutput}
-					atBottomStateChange={handleAtBottomStateChange}
-					atBottomThreshold={40}
-					defaultItemHeight={300}
-					increaseViewportBy={{ top: 400, bottom: 400 }}
-					itemContent={renderItem}
-					components={virtuosoComponents}
-				/>
 			)}
-
-			{sections.length > 0 && <ScrollThumb scrollerRef={scrollerRef} />}
-
-			{sections.length > 0 && (
-				<button
-					type="button"
-					onClick={handleScrollToBottom}
-					aria-label="Scroll to bottom"
-					className="absolute bottom-2 left-1/2 z-10 flex items-center justify-center rounded-md cursor-pointer border-none transition-all duration-300 ease-out"
-					style={{
-						transform: 'translateX(-50%)',
-						width: 28,
-						height: 28,
-						backgroundColor: 'var(--vscode-editor-background)',
-						color: 'var(--vscode-foreground)',
-						boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
-						opacity: showScrollToBottom ? 1 : 0,
-						pointerEvents: showScrollToBottom ? 'auto' : 'none',
-					}}
-					title="Scroll to bottom"
-				>
-					<ChevronDownIcon size={16} />
-				</button>
-			)}
-		</>
+		</div>
 	);
 });
 ChatArea.displayName = 'ChatArea';

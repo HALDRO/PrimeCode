@@ -9,6 +9,7 @@ import type {
 import { generateId, parseModelId } from '../../common';
 import { IMPROVE_PROMPT_DEFAULT_TEMPLATE } from '../../common/promptImprover';
 import type { CommandOf, QueuedMessageData, WebviewCommand } from '../../common/protocol';
+import { parseSessionUpdatedRuntimePayload } from '../../common/schemas';
 import {
 	computeDiffLineStats,
 	extractPatchFilePaths,
@@ -28,14 +29,6 @@ import { LogNormalizer } from '../../core/executor/LogNormalizer';
 import type { CLIConfig, CLIEvent } from '../../core/executor/types';
 import { logger } from '../../utils/logger';
 import type { HandlerContext, WebviewMessageHandler } from './types';
-
-const asRecord = (value: unknown): Record<string, unknown> | undefined =>
-	value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
-
-const getStringProp = (record: Record<string, unknown>, key: string): string | undefined => {
-	const value = record[key];
-	return typeof value === 'string' ? value : undefined;
-};
 
 export class SessionHandler implements WebviewMessageHandler {
 	private readonly logNormalizer = new LogNormalizer();
@@ -193,14 +186,12 @@ export class SessionHandler implements WebviewMessageHandler {
 	}
 
 	public handleSessionUpdatedEvent(data: unknown, eventSessionId?: string): void {
-		const record = asRecord(data) ?? {};
+		const parsed = parseSessionUpdatedRuntimePayload(data);
 
 		// Resolve target session: event-level sessionId > data.sessionId > activeSessionId
-		const backendSessionId = eventSessionId || getStringProp(record, 'sessionId');
+		const backendSessionId = eventSessionId || parsed.sessionId;
 
-		const status = record.status as
-			| { type?: string; attempt?: number; message?: string; next?: number }
-			| undefined;
+		const status = parsed.status;
 
 		// STRICT: never fallback to activeSessionId for any event routing.
 		// Without a real sessionId, we'd route data to the wrong session after tab switch.
@@ -208,7 +199,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		if (!targetSessionId) {
 			logger.warn('[SessionHandler] Dropping session_updated event without sessionId', {
 				statusType: status?.type,
-				hasStats: !!asRecord(record.totalStats),
+				hasStats: !!parsed.totalStats,
 			});
 			return;
 		}
@@ -250,8 +241,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			});
 		}
 
-		const totalStatsRecord = asRecord(record.totalStats);
-		const totalStatsPatch = totalStatsRecord as Partial<TotalStats> | undefined;
+		const totalStatsPatch = parsed.totalStats as Partial<TotalStats> | undefined;
 
 		// Aggregate only truly cumulative counters per UI session
 		this.initializeSessionStats(targetSessionId);
@@ -295,11 +285,9 @@ export class SessionHandler implements WebviewMessageHandler {
 				totalInputTokens: totals.totalInputTokens,
 				totalOutputTokens: totals.totalOutputTokens,
 			},
-			modelID: getStringProp(record, 'modelID'),
-			providerID: getStringProp(record, 'providerID'),
+			modelID: parsed.modelID,
+			providerID: parsed.providerID,
 		});
-
-		this.context.bridge.session.info(targetSessionId, [], []);
 	}
 
 	// =============================================================================
@@ -631,6 +619,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			// not as part of the regular message history. Restore it explicitly after
 			// replaying the session timeline so the webview gets the current diff state.
 			await this.restoreSessionDiffFromServer(sessionId, config);
+			await this.restoreSessionRuntimeStateFromServer(sessionId, config);
 		} finally {
 			this.context.bridge.flushCollected();
 		}
@@ -1442,6 +1431,69 @@ export class SessionHandler implements WebviewMessageHandler {
 		}
 	}
 
+	private async restoreSessionRuntimeStateFromServer(
+		sessionId: string,
+		config: { provider: 'opencode'; workspaceRoot: string },
+	): Promise<void> {
+		const sdkClient = this.context.cli.getSdkClient?.();
+		const admin = this.context.cli.getOpenCodeServerInfo();
+		if (!sdkClient || !admin?.baseUrl) return;
+
+		const safeFetchPermissions = async () => {
+			try {
+				return await this.context.services.openCodeClient.getSessionPermissions(
+					admin.baseUrl,
+					admin.directory,
+					sessionId,
+				);
+			} catch (error) {
+				logger.warn('[SessionHandler] Failed to fetch session permissions', { sessionId, error });
+				return [];
+			}
+		};
+		const safeFetchQuestions = async () => {
+			try {
+				return await this.context.services.openCodeClient.getSessionQuestions(
+					admin.baseUrl,
+					admin.directory,
+					sessionId,
+				);
+			} catch (error) {
+				logger.warn('[SessionHandler] Failed to fetch session questions', { sessionId, error });
+				return [];
+			}
+		};
+		const safeFetchTodos = async () => {
+			try {
+				return await this.context.services.openCodeClient.getSessionTodos(
+					sdkClient,
+					sessionId,
+					config.workspaceRoot,
+				);
+			} catch (error) {
+				logger.warn('[SessionHandler] Failed to fetch session todos', { sessionId, error });
+				return [];
+			}
+		};
+
+		try {
+			const [todos, permissionResult, questionResult] = await Promise.all([
+				safeFetchTodos(),
+				safeFetchPermissions(),
+				safeFetchQuestions(),
+			]);
+
+			this.context.bridge.session.todo(sessionId, todos);
+			this.context.bridge.session.permissionSet(sessionId, permissionResult);
+			this.context.bridge.session.questionSet(sessionId, questionResult);
+		} catch (error) {
+			logger.warn('[SessionHandler] Failed to restore session runtime state', {
+				sessionId,
+				error,
+			});
+		}
+	}
+
 	private replayNormalizedLog(
 		data: CLIEvent['data'],
 		sessionId: string,
@@ -1499,7 +1551,6 @@ export class SessionHandler implements WebviewMessageHandler {
 		const filePathFromInput = extractFilePath(input);
 
 		if (toolName.toLowerCase() === 'question') {
-			this.replayToolUseQuestion(input, toolUseId, data.timestamp, sessionId);
 			return;
 		}
 
@@ -1529,28 +1580,6 @@ export class SessionHandler implements WebviewMessageHandler {
 				});
 			}
 		}
-	}
-
-	private replayToolUseQuestion(
-		input: Record<string, unknown>,
-		toolUseId: string,
-		timestamp: string | undefined,
-		sessionId: string,
-	): void {
-		const questions = Array.isArray(input.questions)
-			? (input.questions as import('../../common/schemas').QuestionInfo[])
-			: [];
-		this.postSessionMessage(
-			{
-				id: `question-${toolUseId}`,
-				type: 'question',
-				requestId: toolUseId,
-				questions,
-				resolved: true,
-				timestamp: timestamp || new Date().toISOString(),
-			},
-			sessionId,
-		);
 	}
 
 	private replayToolUseSubtask(
@@ -1725,6 +1754,10 @@ export class SessionHandler implements WebviewMessageHandler {
 				{
 					id: `question-${toolUseId}`,
 					type: 'question' as const,
+					requestId: toolUseId,
+					questions: Array.isArray(inputData.questions)
+						? (inputData.questions as import('../../common/schemas').QuestionInfo[])
+						: [],
 					resolved: true,
 					answers,
 					timestamp: data.timestamp || new Date().toISOString(),
@@ -2354,6 +2387,13 @@ export class SessionHandler implements WebviewMessageHandler {
 			undefined,
 			undefined,
 			this.context.getSessionAutoAccept?.(sessionId) ?? false,
+		);
+		const config = this.buildBaseConfig();
+		void this.restoreSessionRuntimeStateFromServer(sessionId, config).catch(error =>
+			logger.warn('[SessionHandler] Failed to sync session runtime state', { sessionId, error }),
+		);
+		void this.restoreSessionDiffFromServer(sessionId, config).catch(error =>
+			logger.warn('[SessionHandler] Failed to sync session diff', { sessionId, error }),
 		);
 	}
 

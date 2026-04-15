@@ -13,7 +13,6 @@ import type {
 	CommitInfo,
 	ConversationMessage,
 	ExtensionMessage,
-	SessionAccessPayload,
 	SessionDeleteMessagesAfterPayload,
 	SessionEventMessage,
 	SessionEventPayload,
@@ -106,6 +105,9 @@ export interface ChatSession {
 	availableMcpServers?: string[];
 	/** Per-session auto-accept permissions toggle. */
 	autoAccept?: boolean;
+	todos: import('../../common').SessionTodoItem[];
+	pendingPermissions: import('../../common').SessionPermissionRequest[];
+	pendingQuestions: import('../../common').SessionQuestionRequest[];
 }
 
 export interface ChatState {
@@ -224,6 +226,7 @@ export interface ChatActions {
 	// Per-session auto-accept permissions
 	setSessionAutoAccept: (autoAccept: boolean, sessionId?: string) => void;
 	getSessionAutoAccept: (sessionId?: string) => boolean;
+	removePendingQuestion: (requestId: string, sessionId?: string) => void;
 }
 
 // =============================================================================
@@ -266,7 +269,6 @@ function mergeOrAddMessage(messages: Message[], incoming: Message): void {
 
 	const existing = messages[existingIdx];
 	const preserveSubtaskType = existing.type === 'subtask' && incoming.type === 'tool_use';
-	const preserveQuestionType = existing.type === 'question' && incoming.type === 'tool_use';
 
 	// Delta content concatenation
 	if ('isDelta' in incoming && incoming.isDelta && 'content' in existing && 'content' in incoming) {
@@ -275,7 +277,6 @@ function mergeOrAddMessage(messages: Message[], incoming: Message): void {
 		Object.assign(existing, {
 			...incoming,
 			...(preserveSubtaskType ? { type: 'subtask' as const } : {}),
-			...(preserveQuestionType ? { type: 'question' as const } : {}),
 			content: existing.content,
 		});
 		if (preservedStartTime !== undefined && 'startTime' in existing) {
@@ -312,20 +313,8 @@ function mergeOrAddMessage(messages: Message[], incoming: Message): void {
 						| undefined,
 				}
 			: undefined;
-	const preservedQuestionMeta =
-		existing.type === 'question'
-			? {
-					questions: existing.questions,
-					tool: existing.tool,
-					toolUseId: existing.toolUseId,
-					childSessionId: existing.childSessionId,
-					answers: existing.answers,
-				}
-			: undefined;
-
 	Object.assign(existing, incoming, {
 		...(preserveSubtaskType ? { type: 'subtask' as const } : {}),
-		...(preserveQuestionType ? { type: 'question' as const } : {}),
 	});
 
 	if (existing.type === 'subtask' && preservedSubtaskMeta) {
@@ -351,21 +340,6 @@ function mergeOrAddMessage(messages: Message[], incoming: Message): void {
 			ex.childModelId = preservedSubtaskMeta.childModelId;
 		if (!ex.retryInfo && preservedSubtaskMeta.retryInfo)
 			ex.retryInfo = preservedSubtaskMeta.retryInfo;
-	}
-	if (existing.type === 'question' && preservedQuestionMeta) {
-		if (!existing.questions?.length && preservedQuestionMeta.questions?.length) {
-			existing.questions = preservedQuestionMeta.questions;
-		}
-		if (!existing.tool && preservedQuestionMeta.tool) existing.tool = preservedQuestionMeta.tool;
-		if (!existing.toolUseId && preservedQuestionMeta.toolUseId) {
-			existing.toolUseId = preservedQuestionMeta.toolUseId;
-		}
-		if (!existing.childSessionId && preservedQuestionMeta.childSessionId) {
-			existing.childSessionId = preservedQuestionMeta.childSessionId;
-		}
-		if (!existing.answers?.length && preservedQuestionMeta.answers?.length) {
-			existing.answers = preservedQuestionMeta.answers;
-		}
 	}
 	if (preservedStartTime !== undefined && 'startTime' in existing) {
 		(existing as { startTime: number }).startTime = preservedStartTime as number;
@@ -607,17 +581,73 @@ function handleFileDiffEvent(targetSession: ChatSession, payload: SessionEventPa
 	targetSession.cumulativeDiffs = fd.diffs || [];
 }
 
-function handleAccessEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
-	const a = payload as SessionAccessPayload;
-	if (a.action === 'response') {
-		const msg = targetSession.messages.find(
-			m => m.type === 'access_request' && m.requestId === a.requestId,
+function handleTodoEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
+	const todo = payload as import('../../common').SessionTodoPayload;
+	targetSession.todos = todo.todos || [];
+}
+
+function applyCollectionAction<T extends { id: string }>(
+	collection: T[],
+	action: 'set' | 'upsert' | 'remove',
+	payload: { requests?: T[]; request?: T; requestId?: string },
+): T[] {
+	if (action === 'set') return payload.requests || [];
+	if (action === 'upsert' && payload.request) {
+		const req = payload.request;
+		const idx = collection.findIndex(item => item.id === req.id);
+		const newCol = [...collection];
+		if (idx >= 0) {
+			newCol[idx] = req;
+		} else {
+			newCol.push(req);
+		}
+		return newCol;
+	}
+	if (action === 'remove' && payload.requestId) {
+		const reqId = payload.requestId;
+		return collection.filter(item => item.id !== reqId);
+	}
+	return collection;
+}
+
+function handlePermissionEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
+	const permission = payload as import('../../common').SessionPermissionPayload;
+	targetSession.pendingPermissions = applyCollectionAction(
+		targetSession.pendingPermissions,
+		permission.action,
+		permission,
+	);
+}
+
+function handleQuestionEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
+	const question = payload as import('../../common').SessionQuestionPayload;
+	if (question.action === 'remove' && question.requestId) {
+		const resolvedRequest = targetSession.pendingQuestions.find(
+			pending => pending.id === question.requestId,
 		);
-		if (msg && msg.type === 'access_request') {
-			msg.resolved = true;
-			msg.approved = a.approved;
+		if (resolvedRequest) {
+			mergeOrAddMessage(targetSession.messages, {
+				id: `question-${resolvedRequest.id}`,
+				type: 'question',
+				requestId: resolvedRequest.id,
+				questions: resolvedRequest.questions,
+				tool: resolvedRequest.tool,
+				resolved: true,
+				answers: question.answers,
+				timestamp: new Date().toISOString(),
+			} as Message);
 		}
 	}
+	targetSession.pendingQuestions = applyCollectionAction(
+		targetSession.pendingQuestions,
+		question.action,
+		question,
+	);
+}
+
+function handleAccessEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
+	void targetSession;
+	void payload;
 }
 
 function handleMessagesReloadEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
@@ -747,6 +777,15 @@ function dispatchToSession(
 		case 'access':
 			handleAccessEvent(targetSession, payload);
 			break;
+		case 'todo':
+			handleTodoEvent(targetSession, payload);
+			break;
+		case 'permission':
+			handlePermissionEvent(targetSession, payload);
+			break;
+		case 'question':
+			handleQuestionEvent(targetSession, payload);
+			break;
 		case 'messages_reload':
 			handleMessagesReloadEvent(targetSession, payload);
 			break;
@@ -801,6 +840,9 @@ const createEmptySession = (id: string): ChatSession => ({
 	availableTools: [],
 	availableMcpServers: [],
 	autoAccept: false,
+	todos: [],
+	pendingPermissions: [],
+	pendingQuestions: [],
 });
 
 function resolveTargetSessionId(state: ChatState, sessionId?: string): string | undefined {
@@ -1362,5 +1404,10 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 			if (!sid) return false;
 			return state.sessionsById[sid]?.autoAccept ?? false;
 		},
+
+		removePendingQuestion: (requestId, sessionId) =>
+			mutateSession(set, sessionId ?? get().activeSessionId, s => {
+				s.pendingQuestions = s.pendingQuestions.filter(question => question.id !== requestId);
+			}),
 	},
 }));

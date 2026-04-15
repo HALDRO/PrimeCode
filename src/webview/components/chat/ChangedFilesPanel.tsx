@@ -30,7 +30,7 @@ import {
 import { DropdownMenu, IconButton, PathChip, ScrollContainer, Tooltip } from '../ui';
 
 interface TodoItem {
-	id?: string;
+	id: string;
 	content: string;
 	status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
 }

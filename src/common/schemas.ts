@@ -8,6 +8,7 @@
 
 import type { Static } from '@sinclair/typebox';
 import { Type } from '@sinclair/typebox';
+import { Value } from '@sinclair/typebox/value';
 
 // =============================================================================
 // CLI Provider Types
@@ -147,6 +148,198 @@ export const QuestionToolRefSchema = Type.Object({
 	messageID: Type.String(),
 	callID: Type.String(),
 });
+
+const UnknownRecordSchema = Type.Record(Type.String(), Type.Unknown());
+
+export const SessionTodoStatusSchema = Type.Union([
+	Type.Literal('pending'),
+	Type.Literal('in_progress'),
+	Type.Literal('completed'),
+	Type.Literal('cancelled'),
+]);
+export type SessionTodoStatus = Static<typeof SessionTodoStatusSchema>;
+
+export const SessionTodoItemSchema = Type.Object({
+	id: Type.String(),
+	content: Type.String(),
+	status: SessionTodoStatusSchema,
+	priority: Type.String(),
+});
+export type SessionTodoItemSchemaType = Static<typeof SessionTodoItemSchema>;
+
+export const SessionPermissionRequestSchema = Type.Object({
+	id: Type.String(),
+	sessionID: Type.String(),
+	permission: Type.String(),
+	patterns: Type.Array(Type.String()),
+	metadata: UnknownRecordSchema,
+	always: Type.Array(Type.String()),
+	tool: Type.Optional(QuestionToolRefSchema),
+});
+export type SessionPermissionRequestSchemaType = Static<typeof SessionPermissionRequestSchema>;
+
+export const SessionQuestionRequestSchema = Type.Object({
+	id: Type.String(),
+	sessionID: Type.String(),
+	questions: Type.Array(QuestionInfoSchema),
+	tool: Type.Optional(QuestionToolRefSchema),
+});
+export type SessionQuestionRequestSchemaType = Static<typeof SessionQuestionRequestSchema>;
+
+export const PermissionRuntimePayloadSchema = Type.Object({
+	id: Type.Optional(Type.String()),
+	requestId: Type.Optional(Type.String()),
+	sessionID: Type.Optional(Type.String()),
+	permission: Type.Optional(Type.String()),
+	patterns: Type.Optional(Type.Array(Type.String())),
+	metadata: Type.Optional(UnknownRecordSchema),
+	toolInput: Type.Optional(UnknownRecordSchema),
+	input: Type.Optional(UnknownRecordSchema),
+	always: Type.Optional(Type.Array(Type.String())),
+	toolUseId: Type.Optional(Type.String()),
+	toolCallId: Type.Optional(Type.String()),
+	tool: Type.Optional(Type.Union([Type.String(), QuestionToolRefSchema])),
+});
+export type PermissionRuntimePayload = Static<typeof PermissionRuntimePayloadSchema>;
+
+export const QuestionRuntimePayloadSchema = Type.Object({
+	id: Type.Optional(Type.String()),
+	requestId: Type.Optional(Type.String()),
+	sessionID: Type.Optional(Type.String()),
+	questions: Type.Array(QuestionInfoSchema),
+	tool: Type.Optional(QuestionToolRefSchema),
+});
+export type QuestionRuntimePayload = Static<typeof QuestionRuntimePayloadSchema>;
+
+export const SessionUpdatedRuntimePayloadSchema = Type.Object({
+	sessionId: Type.Optional(Type.String()),
+	modelID: Type.Optional(Type.String()),
+	providerID: Type.Optional(Type.String()),
+	status: Type.Optional(
+		Type.Object({
+			type: Type.Optional(Type.String()),
+			attempt: Type.Optional(Type.Number()),
+			message: Type.Optional(Type.String()),
+			next: Type.Optional(Type.Number()),
+		}),
+	),
+	totalStats: Type.Optional(Type.Partial(TotalStatsSchema)),
+});
+export type SessionUpdatedRuntimePayload = Static<typeof SessionUpdatedRuntimePayloadSchema>;
+
+function asObjectRecord(value: unknown): Record<string, unknown> | undefined {
+	return value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
+}
+
+export function asRuntimeRecord(value: unknown): Record<string, unknown> | undefined {
+	return asObjectRecord(value);
+}
+
+export function getStringProp(record: Record<string, unknown>, key: string): string | undefined {
+	const value = record[key];
+	return typeof value === 'string' ? value : undefined;
+}
+
+export function isSessionTodoStatus(value: string): value is SessionTodoStatus {
+	return Value.Check(SessionTodoStatusSchema, value);
+}
+
+export function parseSessionTodoItem(value: unknown): SessionTodoItemSchemaType | undefined {
+	const record = asObjectRecord(value);
+	const id = record ? getStringProp(record, 'id') : undefined;
+	const content = record ? getStringProp(record, 'content') : undefined;
+	const status = record ? getStringProp(record, 'status') : undefined;
+	const priority = record ? getStringProp(record, 'priority') : undefined;
+	if (!id || !content || !status || !priority) return undefined;
+	const parsed = {
+		id,
+		content,
+		status: isSessionTodoStatus(status) ? status : 'pending',
+		priority,
+	};
+	return Value.Check(SessionTodoItemSchema, parsed) ? parsed : undefined;
+}
+
+export function parseSessionPermissionRequest(
+	value: unknown,
+	expectedSessionId?: string,
+): SessionPermissionRequestSchemaType | undefined {
+	if (!Value.Check(SessionPermissionRequestSchema, value)) return undefined;
+	if (expectedSessionId && value.sessionID !== expectedSessionId) return undefined;
+	return value;
+}
+
+export function parseSessionQuestionRequest(
+	value: unknown,
+	expectedSessionId?: string,
+): SessionQuestionRequestSchemaType | undefined {
+	if (!Value.Check(SessionQuestionRequestSchema, value)) return undefined;
+	if (expectedSessionId && value.sessionID !== expectedSessionId) return undefined;
+	return value;
+}
+
+export function mapPermissionRuntimePayloadToRequest(
+	value: unknown,
+	sessionId: string,
+): SessionPermissionRequestSchemaType | undefined {
+	const raw = Value.Cast(PermissionRuntimePayloadSchema, asObjectRecord(value) ?? {});
+	const requestId = raw.requestId ?? raw.id;
+	if (!requestId) return undefined;
+	const permission =
+		typeof raw.tool === 'string' && raw.tool.length > 0
+			? raw.tool
+			: raw.permission && raw.permission.length > 0
+				? raw.permission
+				: 'tool';
+	const toolUseId = raw.toolUseId ?? raw.toolCallId;
+	const metadata = raw.metadata ?? raw.input ?? raw.toolInput ?? {};
+	const request = {
+		id: requestId,
+		sessionID: sessionId,
+		permission,
+		patterns: raw.patterns ?? [],
+		metadata,
+		always: raw.always ?? [],
+		tool:
+			toolUseId && toolUseId.length > 0
+				? {
+						messageID: typeof metadata.messageID === 'string' ? metadata.messageID : requestId,
+						callID: toolUseId,
+					}
+				: typeof raw.tool === 'object' && raw.tool
+					? raw.tool
+					: undefined,
+	};
+	return Value.Check(SessionPermissionRequestSchema, request) ? request : undefined;
+}
+
+export function mapQuestionRuntimePayloadToRequest(
+	value: unknown,
+	sessionId: string,
+	fallbackToolUseId?: string,
+): SessionQuestionRequestSchemaType | undefined {
+	const raw = Value.Cast(QuestionRuntimePayloadSchema, asObjectRecord(value) ?? {});
+	const requestId = raw.requestId ?? raw.id;
+	if (!requestId) return undefined;
+	const request = {
+		id: requestId,
+		sessionID: sessionId,
+		questions: raw.questions,
+		tool:
+			raw.tool ??
+			(fallbackToolUseId
+				? {
+						messageID: requestId,
+						callID: fallbackToolUseId,
+					}
+				: undefined),
+	};
+	return Value.Check(SessionQuestionRequestSchema, request) ? request : undefined;
+}
+
+export function parseSessionUpdatedRuntimePayload(value: unknown): SessionUpdatedRuntimePayload {
+	return Value.Cast(SessionUpdatedRuntimePayloadSchema, asObjectRecord(value) ?? {});
+}
 
 /** Shape of the SSE question.asked payload after validation. */
 export const QuestionRequestSchema = Type.Object({

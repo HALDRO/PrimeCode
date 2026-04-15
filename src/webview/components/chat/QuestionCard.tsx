@@ -8,17 +8,15 @@
 
 import type React from 'react';
 import { useCallback, useRef, useState } from 'react';
+import type { QuestionMessageData, SessionQuestionRequest } from '../../../common/protocol';
 import { cn } from '../../lib/cn';
-import { useChatActions } from '../../store';
 import type { Message } from '../../store/chatStore';
 import { useSessionMessage } from '../../utils/vscode';
 import { CheckIcon, ChevronDownIcon, CloseIcon, HelpCircleIcon } from '../icons';
 import { ChevronIcon } from '../icons/CustomIcons';
 
-type QuestionMessage = Extract<Message, { type: 'question' }>;
-
 interface QuestionCardProps {
-	message: QuestionMessage;
+	request: SessionQuestionRequest | QuestionMessageData | Extract<Message, { type: 'question' }>;
 }
 
 /* ------------------------------------------------------------------ */
@@ -107,20 +105,27 @@ const StepDots: React.FC<{ total: number; current: number; onDotClick: (i: numbe
 		<div className="flex items-center gap-1">
 			{Array.from({ length: total }, (_, i) => {
 				const dotKey = `step-dot-${String(i)}`;
+				const isActive = i === current;
+				const isCompleted = i < current;
 				return (
 					<button
 						key={dotKey}
 						type="button"
 						onClick={() => onDotClick(i)}
 						className={cn(
-							'w-1.5 h-1.5 rounded-full transition-all duration-200',
+							'w-3 h-3 rounded-full transition-all duration-200 border border-transparent',
 							'focus:outline-none',
-							i === current
-								? 'bg-[var(--vscode-focusBorder)] scale-125'
-								: i < current
-									? 'bg-vscode-foreground/40'
-									: 'bg-vscode-foreground/15',
+							isActive ? 'scale-125' : 'hover:scale-110',
 						)}
+						style={{
+							backgroundColor: isActive
+								? 'var(--vscode-focusBorder)'
+								: isCompleted
+									? 'var(--vscode-foreground)'
+									: 'var(--vscode-descriptionForeground)',
+							opacity: isActive ? 1 : isCompleted ? 0.85 : 0.75,
+							borderColor: isActive ? 'var(--vscode-focusBorder)' : 'var(--vscode-contrastBorder)',
+						}}
 						aria-label={`Step ${i + 1}`}
 					/>
 				);
@@ -133,94 +138,91 @@ const StepDots: React.FC<{ total: number; current: number; onDotClick: (i: numbe
 /*  Main component                                                    */
 /* ------------------------------------------------------------------ */
 
-export const QuestionCard: React.FC<QuestionCardProps> = ({ message }) => {
-	const { requestId, questions = [], resolved, answers: savedAnswers, id } = message;
+export const QuestionCard: React.FC<QuestionCardProps> = ({ request }) => {
+	const requestId = 'requestId' in request ? request.requestId : request.id;
+	const questions = request.questions ?? [];
+	const resolved = 'resolved' in request ? Boolean(request.resolved) : false;
+	const savedAnswers = 'answers' in request ? request.answers : undefined;
 	const { postSessionMessage } = useSessionMessage();
-	const { updateMessage } = useChatActions();
 	const inputRef = useRef<HTMLInputElement>(null);
 
 	const isCarousel = questions.length > 1;
 	const [step, setStep] = useState(0);
 	const [expanded, setExpanded] = useState(!resolved);
 
-	const [selections, setSelections] = useState<Set<string>[]>(() =>
-		questions.map(() => new Set<string>()),
+	const [selections, setSelections] = useState<string[][]>(() =>
+		questions.map((question, index) => {
+			const answerParts = savedAnswers?.[index] ?? [];
+			const optionLabels = new Set(question.options.map(option => option.label));
+			return answerParts.filter(answer => optionLabels.has(answer));
+		}),
 	);
-	const [customInputs, setCustomInputs] = useState<string[]>(() => questions.map(() => ''));
+	const [customInputs, setCustomInputs] = useState<string[]>(() =>
+		questions.map((question, index) => {
+			const answerParts = savedAnswers?.[index] ?? [];
+			const optionLabels = new Set(question.options.map(option => option.label));
+			return answerParts.filter(answer => !optionLabels.has(answer)).join(', ');
+		}),
+	);
 
 	const toggleOption = useCallback(
 		(qIdx: number, label: string, multiple: boolean) => {
 			if (resolved) return;
-			setSelections(prev => {
-				const next = [...prev];
-				const set = new Set(next[qIdx]);
-				if (multiple) {
-					if (set.has(label)) set.delete(label);
-					else set.add(label);
-				} else {
-					if (set.has(label)) {
-						set.delete(label);
-					} else {
-						set.clear();
-						set.add(label);
-					}
-				}
-				next[qIdx] = set;
-				return next;
-			});
+			setSelections(prev =>
+				prev.map((selectedArr, i) => {
+					if (i !== qIdx) return selectedArr;
+					if (!multiple) return selectedArr.includes(label) ? [] : [label];
+					return selectedArr.includes(label)
+						? selectedArr.filter(item => item !== label)
+						: [...selectedArr, label];
+				}),
+			);
 		},
 		[resolved],
 	);
 
-	const updateCustomInput = useCallback((qIdx: number, value: string) => {
-		setCustomInputs(prev => {
-			const next = [...prev];
-			next[qIdx] = value;
-			return next;
-		});
-	}, []);
+	const updateCustomInput = useCallback(
+		(qIdx: number, value: string) => {
+			if (resolved) return;
+			setCustomInputs(prev => prev.map((currentValue, i) => (i === qIdx ? value : currentValue)));
+		},
+		[resolved],
+	);
 
 	const handleSubmit = useCallback(() => {
-		const answers = questions.map((_q, i) => {
-			const parts = [...selections[i]];
+		const answers = questions.map((_, i) => {
+			const parts = [...(selections[i] ?? [])];
 			const custom = customInputs[i]?.trim();
 			if (custom) parts.push(custom);
 			return parts;
 		});
 		postSessionMessage({ type: 'questionResponse', requestId, answers });
-		if (id) updateMessage(id, { resolved: true, answers });
-		setExpanded(false);
-	}, [questions, selections, customInputs, requestId, id, postSessionMessage, updateMessage]);
+	}, [questions, selections, customInputs, requestId, postSessionMessage]);
 
 	const handleDismiss = useCallback(() => {
 		postSessionMessage({ type: 'questionReject', requestId });
-		if (id) updateMessage(id, { resolved: true });
-		setExpanded(false);
-	}, [requestId, id, postSessionMessage, updateMessage]);
+	}, [requestId, postSessionMessage]);
 
 	const q = questions[step];
 	if (!q) return null;
 
-	// Build the set of selected labels for the current step
-	const optionLabels = new Set(q.options.map(o => o.label));
-	const stepAnswers = resolved ? (savedAnswers?.[step] ?? []) : [];
-	const resolvedSelections = new Set(stepAnswers.filter(a => optionLabels.has(a)));
-	const customAnswer = stepAnswers.find(a => !optionLabels.has(a)) ?? '';
-
-	const activeSelections = resolved ? resolvedSelections : (selections[step] ?? new Set());
-
-	// Summary text for collapsed resolved header
+	const optionLabels = new Set(q.options.map(option => option.label));
+	const stepAnswers = savedAnswers?.[step] ?? [];
+	const resolvedSelections = stepAnswers.filter(answer => optionLabels.has(answer));
+	const customAnswer = stepAnswers.filter(answer => !optionLabels.has(answer)).join(', ');
+	const activeSelections = resolved ? resolvedSelections : (selections[step] ?? []);
+	const activeCustomInput = resolved ? customAnswer : (customInputs[step] ?? '');
 	const summaryText = resolved
 		? savedAnswers
-				?.map(a => a.join(', '))
+				?.map(answer => answer.join(', '))
 				.filter(Boolean)
 				.join(' · ') || 'Answered'
 		: '';
 
 	const stepHasAnswer =
-		(selections[step]?.size ?? 0) > 0 || (customInputs[step]?.trim().length ?? 0) > 0;
+		(selections[step]?.length ?? 0) > 0 || (customInputs[step]?.trim().length ?? 0) > 0;
 	const isLastStep = step === questions.length - 1;
-	const canSubmit = selections.some(s => s.size > 0) || customInputs.some(c => c.trim());
+	const canSubmit = selections.some(s => s.length > 0) || customInputs.some(c => c.trim());
 
 	const goNext = () => {
 		if (isLastStep) {
@@ -239,7 +241,6 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ message }) => {
 					'bg-(--tool-bg-header) border border-(--tool-border-color) rounded-lg overflow-hidden',
 				)}
 			>
-				{/* Header — clickable to toggle when resolved */}
 				{resolved ? (
 					<button
 						type="button"
@@ -283,7 +284,6 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ message }) => {
 					</div>
 				)}
 
-				{/* Body — visible when expanded (always for active, toggle for resolved) */}
 				{expanded && (
 					<div className="px-(--tool-content-padding) pb-2">
 						{resolved && isCarousel && (
@@ -305,75 +305,61 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ message }) => {
 
 						{q.options.length > 0 && (
 							<div className="flex flex-col gap-1 mb-2">
-								{q.options.map(opt => (
+								{q.options.map((opt: (typeof q.options)[number]) => (
 									<OptionButton
 										key={opt.label}
 										label={opt.label}
 										description={opt.description}
-										selected={activeSelections.has(opt.label)}
+										selected={activeSelections.includes(opt.label)}
 										multiple={!!q.multiple}
 										recommended={opt.recommended}
-										disabled={!!resolved}
+										disabled={resolved}
 										onClick={() => toggleOption(step, opt.label, !!q.multiple)}
 									/>
 								))}
 							</div>
 						)}
 
-						{/* "Other" input — read-only when resolved, editable when active */}
-						{resolved ? (
-							customAnswer ? (
-								<div
-									className={cn(
-										'w-full text-sm pl-2.5 py-1.5 rounded-md',
-										'bg-vscode-input-background border border-(--tool-border-color)',
-										'text-vscode-foreground opacity-60',
-									)}
-								>
-									{customAnswer}
-								</div>
-							) : null
-						) : (
-							<div className="relative">
-								<input
-									ref={inputRef}
-									type="text"
-									value={customInputs[step] ?? ''}
-									onChange={e => updateCustomInput(step, e.target.value)}
-									onKeyDown={e => {
-										if (e.key === 'Enter') {
-											if (isLastStep && (stepHasAnswer || customInputs[step]?.trim())) {
-												handleSubmit();
-											} else if (!isLastStep) {
-												goNext();
-											}
+						<div className="relative">
+							<input
+								ref={inputRef}
+								type="text"
+								value={activeCustomInput}
+								onChange={e => updateCustomInput(step, e.target.value)}
+								onKeyDown={e => {
+									if (resolved) return;
+									if (e.key === 'Enter') {
+										if (isLastStep && (stepHasAnswer || customInputs[step]?.trim())) {
+											handleSubmit();
+										} else if (!isLastStep) {
+											goNext();
 										}
-									}}
-									placeholder="Other…"
-									className={cn(
-										'w-full text-sm pl-2.5 pr-8 py-1.5 rounded-md',
-										'bg-vscode-input-background border border-(--tool-border-color)',
-										'text-vscode-foreground placeholder:text-vscode-foreground/30',
-										'outline-none focus:border-[var(--vscode-focusBorder)]',
-										'transition-colors duration-150',
-									)}
-								/>
-								{customInputs[step]?.trim() && (
-									<button
-										type="button"
-										onClick={() => updateCustomInput(step, '')}
-										className="absolute right-2 top-1/2 -translate-y-1/2 text-vscode-foreground/30 hover:text-vscode-foreground/60"
-										aria-label="Clear"
-									>
-										<CloseIcon size={12} />
-									</button>
+									}
+								}}
+								placeholder="Other…"
+								readOnly={resolved}
+								className={cn(
+									'w-full text-sm pl-2.5 pr-8 py-1.5 rounded-md',
+									'bg-vscode-input-background border border-(--tool-border-color)',
+									'text-vscode-foreground placeholder:text-vscode-foreground/30',
+									'outline-none focus:border-[var(--vscode-focusBorder)]',
+									'transition-colors duration-150',
 								)}
-							</div>
-						)}
+							/>
+							{!resolved && customInputs[step]?.trim() && (
+								<button
+									type="button"
+									onClick={() => updateCustomInput(step, '')}
+									className="absolute right-2 top-1/2 -translate-y-1/2 text-vscode-foreground/30 hover:text-vscode-foreground/60"
+									aria-label="Clear"
+								>
+									<CloseIcon size={12} />
+								</button>
+							)}
+						</div>
 					</div>
 				)}
 
-				{/* Resolved carousel navigation */}
 				{resolved && expanded && isCarousel && (
 					<div className="flex items-center justify-center gap-2 px-(--tool-content-padding) py-1.5 border-t border-(--tool-border-color)">
 						<button
@@ -414,7 +400,6 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ message }) => {
 					</div>
 				)}
 
-				{/* Footer — only when not resolved and expanded */}
 				{!resolved && expanded && (
 					<div className="flex items-center justify-between px-(--tool-content-padding) py-1.5 border-t border-(--tool-border-color)">
 						<div className="flex items-center gap-1.5">

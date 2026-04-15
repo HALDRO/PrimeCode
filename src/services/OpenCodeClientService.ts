@@ -7,6 +7,11 @@
 import type { Model as ModelV2, OpencodeClient } from '@opencode-ai/sdk/v2/client';
 import * as vscode from 'vscode';
 import { normalizeProxyBaseUrl } from '../common';
+import {
+	parseSessionPermissionRequest,
+	parseSessionQuestionRequest,
+	parseSessionTodoItem,
+} from '../common/schemas';
 
 interface OpenCodeModelConfig {
 	name: string;
@@ -100,6 +105,18 @@ interface AvailableProvider {
 }
 
 export class OpenCodeClientService {
+	private async fetchRuntimeCollection(
+		baseUrl: string,
+		directory: string,
+		path: 'permission' | 'question',
+	): Promise<unknown[]> {
+		const response = await fetch(`${baseUrl}/${path}`, {
+			headers: { 'x-opencode-directory': directory },
+		});
+		if (!response.ok) return [];
+		return (await response.json()) as unknown[];
+	}
+
 	private async readProjectConfig(workspaceRoot: string): Promise<OpenCodeJsonConfig> {
 		const configPath = vscode.Uri.file(`${workspaceRoot}/opencode.json`);
 		try {
@@ -147,28 +164,71 @@ export class OpenCodeClientService {
 				seenIds.add(p.id);
 				return true;
 			})
-			.map(p => ({
-				id: p.id,
-				name: p.name || p.id,
-				isCustom: customProviderIds.has(p.id),
-				source:
-					p.source === 'env' || p.source === 'api' || p.source === 'config' || p.source === 'custom'
-						? p.source
-						: undefined,
-				models: Object.values(p.models).map(m => {
-					// Cast to full ModelV2 type to access `variants` field.
-					const model = m as unknown as ModelV2;
-					const variantKeys = model.variants ? Object.keys(model.variants) : undefined;
-					return {
-						id: m.id,
-						name: m.name || m.id,
-						reasoning: m.reasoning,
-						limit: m.limit ? { context: m.limit.context, output: m.limit.output } : undefined,
-						variants: variantKeys && variantKeys.length > 0 ? variantKeys : undefined,
-					};
-				}),
-			}))
+			.map(p => {
+				const rawSource = (p as Record<string, unknown>).source;
+				const source: OpenCodeProvider['source'] =
+					rawSource === 'env' ||
+					rawSource === 'api' ||
+					rawSource === 'config' ||
+					rawSource === 'custom'
+						? rawSource
+						: undefined;
+				return {
+					id: p.id,
+					name: p.name || p.id,
+					isCustom: customProviderIds.has(p.id),
+					source,
+					models: Object.values(p.models).map(m => {
+						// Cast to full ModelV2 type to access `variants` field.
+						const model = m as unknown as ModelV2;
+						const variantKeys = model.variants ? Object.keys(model.variants) : undefined;
+						return {
+							id: m.id,
+							name: m.name || m.id,
+							reasoning: m.reasoning,
+							limit: m.limit ? { context: m.limit.context, output: m.limit.output } : undefined,
+							variants: variantKeys && variantKeys.length > 0 ? variantKeys : undefined,
+						};
+					}),
+				};
+			})
 			.filter(p => p.id.length > 0);
+	}
+
+	async getSessionTodos(
+		client: OpencodeClient,
+		sessionId: string,
+		workspaceRoot: string,
+	): Promise<import('../common').SessionTodoItem[]> {
+		const result = await client.session.todo({ sessionID: sessionId, directory: workspaceRoot });
+		return ((result.data as unknown[]) || []).flatMap(value => {
+			const todo = parseSessionTodoItem(value);
+			return todo ? [todo] : [];
+		});
+	}
+
+	async getSessionPermissions(
+		baseUrl: string,
+		directory: string,
+		sessionId: string,
+	): Promise<import('../common').SessionPermissionRequest[]> {
+		const result = await this.fetchRuntimeCollection(baseUrl, directory, 'permission');
+		return result.flatMap(value => {
+			const request = parseSessionPermissionRequest(value, sessionId);
+			return request ? [request] : [];
+		});
+	}
+
+	async getSessionQuestions(
+		baseUrl: string,
+		directory: string,
+		sessionId: string,
+	): Promise<import('../common').SessionQuestionRequest[]> {
+		const result = await this.fetchRuntimeCollection(baseUrl, directory, 'question');
+		return result.flatMap(value => {
+			const request = parseSessionQuestionRequest(value, sessionId);
+			return request ? [request] : [];
+		});
 	}
 
 	async getAvailableProviders(client: OpencodeClient): Promise<AvailableProvider[]> {

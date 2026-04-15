@@ -5,7 +5,6 @@
  */
 
 import { useCallback } from 'react';
-import { useChatActions } from '../store';
 import { useSessionMessage } from '../utils/vscode';
 
 type AccessResponseType = 'once' | 'always' | 'reject';
@@ -27,7 +26,6 @@ interface UseAccessResponseOptions {
  */
 export function useAccessResponse({ requestId, tool, messageId }: UseAccessResponseOptions) {
 	const { postSessionMessage } = useSessionMessage();
-	const { updateMessage } = useChatActions();
 
 	return useCallback(
 		(isApproved: boolean, alwaysAllow = false) => {
@@ -45,12 +43,8 @@ export function useAccessResponse({ requestId, tool, messageId }: UseAccessRespo
 				alwaysAllow,
 				response,
 			});
-
-			// Optimistically resolve to hide the gate immediately
-			if (messageId) {
-				updateMessage(messageId, { resolved: true, approved: isApproved });
-			}
+			void messageId;
 		},
-		[requestId, tool, messageId, postSessionMessage, updateMessage],
+		[requestId, tool, messageId, postSessionMessage],
 	);
 }

@@ -542,7 +542,7 @@ export const MessageItem = React.memo<{
 				// All access requests are rendered inline inside the related ToolCard.
 				return null;
 			case 'question':
-				return <QuestionCard message={item as Extract<Message, { type: 'question' }>} />;
+				return <QuestionCard request={item as Extract<Message, { type: 'question' }>} />;
 			case 'subtask':
 				return <SubtaskItem message={item} ctx={ctx} />;
 			case 'assistant': {

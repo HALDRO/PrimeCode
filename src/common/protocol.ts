@@ -58,7 +58,10 @@ export type SessionEventType =
 	| 'terminal'
 	| 'turn_tokens'
 	| 'subtask_transcript'
-	| 'file_diff';
+	| 'file_diff'
+	| 'todo'
+	| 'permission'
+	| 'question';
 
 export type SessionStatus = 'idle' | 'busy' | 'error' | 'retrying';
 
@@ -447,6 +450,60 @@ export type { QuestionInfo } from './schemas';
 
 export type QuestionAnswer = string[];
 
+export interface SessionTodoItem {
+	id: string;
+	content: string;
+	status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
+	priority: 'high' | 'medium' | 'low' | string;
+}
+
+export interface SessionPermissionRequest {
+	id: string;
+	sessionID: string;
+	permission: string;
+	patterns: string[];
+	metadata: Record<string, unknown>;
+	always: string[];
+	tool?: {
+		messageID: string;
+		callID: string;
+	};
+}
+
+export interface SessionQuestionRequest {
+	id: string;
+	sessionID: string;
+	questions: QuestionInfo[];
+	tool?: {
+		messageID: string;
+		callID: string;
+	};
+}
+
+export interface SessionTodoPayload {
+	eventType: 'todo';
+	todos: SessionTodoItem[];
+}
+
+export interface SessionPermissionPayload {
+	eventType: 'permission';
+	action: 'set' | 'upsert' | 'remove';
+	requests?: SessionPermissionRequest[];
+	request?: SessionPermissionRequest;
+	requestId?: string;
+	response?: 'once' | 'always' | 'reject';
+}
+
+export interface SessionQuestionPayload {
+	eventType: 'question';
+	action: 'set' | 'upsert' | 'remove';
+	requests?: SessionQuestionRequest[];
+	request?: SessionQuestionRequest;
+	requestId?: string;
+	answers?: QuestionAnswer[];
+	rejected?: boolean;
+}
+
 export type SessionEventPayload =
 	| SessionMessagePayload
 	| SessionStatusPayload
@@ -463,7 +520,10 @@ export type SessionEventPayload =
 	| SessionTerminalPayload
 	| SessionTurnTokensPayload
 	| SubtaskTranscriptPayload
-	| SessionFileDiffPayload;
+	| SessionFileDiffPayload
+	| SessionTodoPayload
+	| SessionPermissionPayload
+	| SessionQuestionPayload;
 
 export interface SessionEventMessage {
 	type: 'session_event';

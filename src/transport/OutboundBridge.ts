@@ -151,6 +151,47 @@ export class OutboundBridge {
 	// =========================================================================
 
 	public readonly session = {
+		permissionUpdate: (
+			sessionId: string,
+			action: 'set' | 'upsert' | 'remove',
+			data: {
+				requests?: import('../common').SessionPermissionRequest[];
+				request?: import('../common').SessionPermissionRequest;
+				requestId?: string;
+				response?: 'once' | 'always' | 'reject';
+			},
+		): void => {
+			this.send({
+				type: 'session_event',
+				targetId: sessionId,
+				eventType: 'permission',
+				payload: { eventType: 'permission', action, ...data },
+				timestamp: Date.now(),
+				sessionId,
+			} satisfies SessionEventMessage);
+		},
+
+		questionUpdate: (
+			sessionId: string,
+			action: 'set' | 'upsert' | 'remove',
+			data: {
+				requests?: import('../common').SessionQuestionRequest[];
+				request?: import('../common').SessionQuestionRequest;
+				requestId?: string;
+				answers?: import('../common').QuestionAnswer[];
+				rejected?: boolean;
+			},
+		): void => {
+			this.send({
+				type: 'session_event',
+				targetId: sessionId,
+				eventType: 'question',
+				payload: { eventType: 'question', action, ...data },
+				timestamp: Date.now(),
+				sessionId,
+			} satisfies SessionEventMessage);
+		},
+
 		/** Post a session message (assistant, user, tool_use, tool_result, etc.) */
 		message: (
 			targetId: string,
@@ -286,6 +327,62 @@ export class OutboundBridge {
 				timestamp: Date.now(),
 				sessionId,
 			} satisfies SessionEventMessage);
+		},
+
+		todo: (sessionId: string, todos: import('../common').SessionTodoItem[]): void => {
+			this.send({
+				type: 'session_event',
+				targetId: sessionId,
+				eventType: 'todo',
+				payload: { eventType: 'todo', todos },
+				timestamp: Date.now(),
+				sessionId,
+			} satisfies SessionEventMessage);
+		},
+
+		permissionSet: (
+			sessionId: string,
+			requests: import('../common').SessionPermissionRequest[],
+		): void => {
+			this.session.permissionUpdate(sessionId, 'set', { requests });
+		},
+
+		permissionUpsert: (
+			sessionId: string,
+			request: import('../common').SessionPermissionRequest,
+		): void => {
+			this.session.permissionUpdate(sessionId, 'upsert', { request });
+		},
+
+		permissionRemove: (
+			sessionId: string,
+			requestId: string,
+			response?: 'once' | 'always' | 'reject',
+		): void => {
+			this.session.permissionUpdate(sessionId, 'remove', { requestId, response });
+		},
+
+		questionSet: (
+			sessionId: string,
+			requests: import('../common').SessionQuestionRequest[],
+		): void => {
+			this.session.questionUpdate(sessionId, 'set', { requests });
+		},
+
+		questionUpsert: (
+			sessionId: string,
+			request: import('../common').SessionQuestionRequest,
+		): void => {
+			this.session.questionUpdate(sessionId, 'upsert', { request });
+		},
+
+		questionRemove: (
+			sessionId: string,
+			requestId: string,
+			answers?: import('../common').QuestionAnswer[],
+			rejected?: boolean,
+		): void => {
+			this.session.questionUpdate(sessionId, 'remove', { requestId, answers, rejected });
 		},
 
 		/** Post an access response event. */

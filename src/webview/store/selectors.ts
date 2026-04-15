@@ -5,6 +5,7 @@
  * Uses stable empty-array refs (EMPTY_MESSAGES, etc.) to prevent infinite re-renders with useShallow.
  */
 
+import { useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { parseModelId } from '../../common';
 import {
@@ -26,6 +27,8 @@ const EMPTY_COMMITS: CommitInfo[] = [];
 const EMPTY_CHANGED_FILES: ChangedFile[] = [];
 const EMPTY_CUMULATIVE_DIFFS: ChatSession['cumulativeDiffs'] = [];
 const EMPTY_NOTIFICATIONS: TransientNotification[] = [];
+const EMPTY_PERMISSIONS: import('../../common').SessionPermissionRequest[] = [];
+const EMPTY_QUESTIONS: import('../../common').SessionQuestionRequest[] = [];
 
 function getActiveSession(state: ChatState): ChatSession | undefined {
 	const sid = state.activeSessionId;
@@ -201,61 +204,35 @@ export const useChangedFilesState = () =>
 		})),
 	);
 
-/** Lightweight boolean check — does the session have any todos?
- * Memoized by messages ref to avoid O(N) scan on every store change (e.g. keystrokes). */
-const hasTodosCache = { messages: null as Message[] | null, result: false };
+/** Lightweight boolean check — does the session have any canonical todos? */
+const hasTodosCache = {
+	todos: null as ChatState['sessionsById'][string]['todos'] | null,
+	result: false,
+};
 export const useHasTodos = () =>
 	useChatStore((state: ChatState) => {
-		const messages = getActiveSession(state)?.messages ?? EMPTY_MESSAGES;
-		if (messages === hasTodosCache.messages) return hasTodosCache.result;
-		hasTodosCache.messages = messages;
-		let result = false;
-		for (let i = messages.length - 1; i >= 0; i--) {
-			const msg = messages[i];
-			if (
-				msg.type === 'tool_use' &&
-				'toolName' in msg &&
-				msg.toolName?.toLowerCase() === 'todowrite' &&
-				'rawInput' in msg &&
-				msg.rawInput
-			) {
-				const todos = (msg.rawInput as { todos?: unknown }).todos;
-				if (Array.isArray(todos) && todos.length > 0) {
-					result = true;
-					break;
-				}
-			}
-		}
+		const todos = getActiveSession(state)?.todos ?? null;
+		if (todos === hasTodosCache.todos) return hasTodosCache.result;
+		hasTodosCache.todos = todos;
+		const result = Array.isArray(todos) && todos.length > 0;
 		hasTodosCache.result = result;
 		return result;
 	});
 
-/** Select only todo-related data from active session messages */
+/** Select canonical todo state from the active session */
 export const useTodoState = () =>
+	useChatStore(useShallow((state: ChatState) => getActiveSession(state)?.todos ?? null));
+
+export const usePendingPermissions = () =>
 	useChatStore(
-		useShallow((state: ChatState) => {
-			const messages = getActiveSession(state)?.messages ?? EMPTY_MESSAGES;
-			for (let i = messages.length - 1; i >= 0; i--) {
-				const msg = messages[i];
-				if (
-					msg.type === 'tool_use' &&
-					'toolName' in msg &&
-					msg.toolName?.toLowerCase() === 'todowrite' &&
-					'rawInput' in msg &&
-					msg.rawInput
-				) {
-					const todos = (msg.rawInput as { todos?: unknown }).todos;
-					if (Array.isArray(todos)) {
-						return todos as Array<{
-							id?: string;
-							content: string;
-							status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
-						}>;
-					}
-				}
-			}
-			return null;
-		}),
+		useShallow(
+			(state: ChatState) => getActiveSession(state)?.pendingPermissions ?? EMPTY_PERMISSIONS,
+		),
+	);
+
+export const usePendingQuestions = () =>
+	useChatStore(
+		useShallow((state: ChatState) => getActiveSession(state)?.pendingQuestions ?? EMPTY_QUESTIONS),
 	);
 
 // ============================================
@@ -271,21 +248,33 @@ export const useToolResultByToolId = (toolUseId: string | undefined) =>
 			| undefined;
 	});
 
-export const useAccessRequestByToolUseId = (toolUseId: string | undefined) =>
-	useChatStore((state: ChatState) => {
+export const useAccessRequestByToolUseId = (toolUseId: string | undefined) => {
+	const pending = useChatStore((state: ChatState) => {
 		if (!toolUseId) return undefined;
-		const messages = getActiveSession(state)?.messages ?? EMPTY_MESSAGES;
-		for (let i = messages.length - 1; i >= 0; i--) {
-			const message = messages[i];
-			if (message.type === 'access_request' && message.toolUseId === toolUseId) {
-				return message as Extract<
-					ChatState['sessionsById'][string]['messages'][number],
-					{ type: 'access_request' }
-				>;
-			}
-		}
-		return undefined;
+		return getActiveSession(state)?.pendingPermissions.find(
+			request => request.tool?.callID === toolUseId,
+		);
 	});
+
+	return useMemo(() => {
+		if (!pending) return undefined;
+		return {
+			id: `access-${pending.id}`,
+			type: 'access_request' as const,
+			requestId: pending.id,
+			tool: pending.permission,
+			input: pending.metadata,
+			pattern: pending.patterns[0],
+			toolUseId: pending.tool?.callID,
+			resolved: false,
+			metadata: pending.metadata,
+			timestamp:
+				typeof pending.metadata?.timestamp === 'string'
+					? pending.metadata.timestamp
+					: new Date().toISOString(),
+		} as Extract<ChatState['sessionsById'][string]['messages'][number], { type: 'access_request' }>;
+	}, [pending]);
+};
 
 /**
  * Find the first unresolved access_request related to a subtask.
@@ -293,23 +282,7 @@ export const useAccessRequestByToolUseId = (toolUseId: string | undefined) =>
  *  1. toolUseId — permission on the `task` tool itself (before child session exists)
  *  2. childSessionId — permission from inside the running child session
  */
-export const useSubtaskAccessRequest = (toolUseId: string | undefined) =>
-	useChatStore((state: ChatState) => {
-		if (!toolUseId) return undefined;
-		const messages = getActiveSession(state)?.messages ?? EMPTY_MESSAGES;
-		for (let i = messages.length - 1; i >= 0; i--) {
-			const m = messages[i];
-			if (m.type !== 'access_request' || m.resolved) continue;
-			// Match by toolUseId (permission on the task tool or routed from child)
-			if (m.toolUseId === toolUseId) {
-				return m as Extract<
-					ChatState['sessionsById'][string]['messages'][number],
-					{ type: 'access_request' }
-				>;
-			}
-		}
-		return undefined;
-	});
+export const useSubtaskAccessRequest = useAccessRequestByToolUseId;
 
 // ============================================
 // UI Store Selectors

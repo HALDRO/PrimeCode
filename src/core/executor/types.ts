@@ -123,8 +123,34 @@ export interface PermissionEventData {
 export interface QuestionEventData {
 	id: string;
 	requestId: string;
+	sessionID?: string;
 	questions: import('../../common/schemas').QuestionInfo[];
 	tool?: { messageID: string; callID: string };
+}
+
+export interface TodoItemEventData {
+	id: string;
+	content: string;
+	status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
+	priority: 'high' | 'medium' | 'low' | string;
+}
+
+export interface TodoEventData {
+	sessionID: string;
+	todos: TodoItemEventData[];
+}
+
+export interface PermissionReplyEventData {
+	sessionID: string;
+	requestID: string;
+	reply?: 'once' | 'always' | 'reject';
+}
+
+export interface QuestionReplyEventData {
+	sessionID: string;
+	requestID: string;
+	answers?: string[][];
+	rejected?: boolean;
 }
 
 export interface SessionUpdatedEventData {
@@ -193,6 +219,9 @@ export type CLIEvent =
 	| (CLIEventBase & { type: 'server_reconnected'; data: ServerReconnectedEventData })
 	| (CLIEventBase & { type: 'permission'; data: PermissionEventData })
 	| (CLIEventBase & { type: 'question'; data: QuestionEventData })
+	| (CLIEventBase & { type: 'todo'; data: TodoEventData })
+	| (CLIEventBase & { type: 'permission_replied'; data: PermissionReplyEventData })
+	| (CLIEventBase & { type: 'question_replied'; data: QuestionReplyEventData })
 	| (CLIEventBase & { type: 'session_updated'; data: SessionUpdatedEventData })
 	| (CLIEventBase & { type: 'session_created'; data: SessionCreatedEventData })
 	| (CLIEventBase & { type: 'turn_tokens'; data: TurnTokensEventData })

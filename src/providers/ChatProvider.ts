@@ -1,4 +1,8 @@
 import * as vscode from 'vscode';
+import {
+	mapPermissionRuntimePayloadToRequest,
+	mapQuestionRuntimePayloadToRequest,
+} from '../common';
 import { PERMISSION_CATEGORIES, type PermissionCategory } from '../common/permissions';
 import type { WebviewCommand } from '../common/protocol';
 import {
@@ -799,6 +803,48 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		// Determine if this event belongs to a known child session
 		const isChildSession = this.sessionGraph.isChild(targetSessionId);
 
+		if (event.type === 'permission') {
+			this.handlePermissionRuntimeEvent(event, targetSessionId);
+			return;
+		}
+
+		if (event.type === 'question') {
+			this.handleQuestionRuntimeEvent(event, targetSessionId);
+			return;
+		}
+
+		if (event.type === 'todo') {
+			this.bridge.session.todo(targetSessionId, event.data.todos);
+			return;
+		}
+
+		if (event.type === 'permission_replied') {
+			const reply = event.data;
+			const replyTargetSessionId = this.sessionGraph.isChild(targetSessionId)
+				? (this.sessionGraph.getParent(targetSessionId) ?? targetSessionId)
+				: targetSessionId;
+			if (reply.requestID) {
+				this.bridge.session.permissionRemove(replyTargetSessionId, reply.requestID, reply.reply);
+			}
+			return;
+		}
+
+		if (event.type === 'question_replied') {
+			const reply = event.data;
+			const replyTargetSessionId = this.sessionGraph.isChild(targetSessionId)
+				? (this.sessionGraph.getParent(targetSessionId) ?? targetSessionId)
+				: targetSessionId;
+			if (reply.requestID) {
+				this.bridge.session.questionRemove(
+					replyTargetSessionId,
+					reply.requestID,
+					reply.answers,
+					reply.rejected,
+				);
+			}
+			return;
+		}
+
 		switch (event.type) {
 			case 'normalized_log': {
 				break;
@@ -1011,173 +1057,79 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				}
 				break;
 			}
-			case 'permission': {
-				const e = event.data as Record<string, unknown>;
-				const requestId =
-					(typeof e.id === 'string' ? (e.id as string) : undefined) ??
-					(typeof e.requestId === 'string' ? (e.requestId as string) : undefined);
-				if (!requestId) {
-					break;
-				}
-
-				// If this permission comes from a child session, route it to the parent
-				// so the user actually sees the dialog (child session UI is not visible).
-				// CRITICAL: Do NOT fall back to activeSessionId — it changes on tab switch.
-				// If graph has no parent, fall back to targetSessionId itself (the child).
-				const isChildPermission = this.sessionGraph.isChild(targetSessionId);
-				const permissionTargetSessionId = isChildPermission
-					? (this.sessionGraph.getParent(targetSessionId) ?? targetSessionId)
-					: targetSessionId;
-
-				const toolUseId =
-					(typeof e.toolUseId === 'string' ? (e.toolUseId as string) : undefined) ??
-					(typeof e.toolCallId === 'string' ? (e.toolCallId as string) : undefined);
-
-				const tool =
-					(typeof e.tool === 'string' ? (e.tool as string) : undefined) ??
-					(typeof e.permission === 'string' ? (e.permission as string) : undefined) ??
-					'tool';
-
-				const input =
-					(e.input as Record<string, unknown> | undefined) ??
-					(e.toolInput as Record<string, unknown> | undefined) ??
-					{};
-
-				const patterns = Array.isArray(e.patterns) ? (e.patterns as string[]) : undefined;
-				const metadata = e.metadata as Record<string, unknown> | undefined;
-
-				// Helper: post a resolved access_request so ToolCard can show the diff,
-				// then send the access response event to the webview.
-				const autoRespond = (approved: boolean, alwaysAllow?: boolean) => {
-					// Always create the access_request message (with metadata/diff)
-					// so chat diff rendering can find it via useAccessRequestByToolUseId.
-					this.sessionHandler.postSessionMessage(
-						{
-							id: `access-${requestId}`,
-							type: 'access_request',
-							requestId,
-							tool,
-							toolUseId,
-							input,
-							pattern: patterns?.[0],
-							resolved: true,
-							approved,
-							timestamp: new Date().toISOString(),
-							metadata,
-							...(isChildPermission ? { childSessionId: targetSessionId } : {}),
-						},
-						permissionTargetSessionId,
-					);
-					void this.cli
-						.respondToPermission({ requestId, approved, alwaysAllow })
-						.catch(error => logger.error('[ChatProvider] auto-response failed:', error));
-					this.bridge.session.accessResponse(permissionTargetSessionId, {
-						requestId,
-						approved,
-						...(alwaysAllow ? { alwaysAllow } : {}),
-					});
-				};
-
-				// Auto-approve everything if yoloMode or autoApprove is enabled in settings.
-				const isYolo = Boolean(this.settings.get('access.yoloMode'));
-				const isAutoApprove = Boolean(this.settings.get('access.autoApprove'));
-				const isAutoAccept = this.toolHandler.isAutoAccept(permissionTargetSessionId);
-				logger.debug('[ChatProvider] Permission check', {
-					tool,
-					requestId,
-					isYolo,
-					isAutoApprove,
-					isAutoAccept,
-					isChildPermission,
-				});
-				if (isYolo || isAutoApprove || isAutoAccept) {
-					logger.debug('[ChatProvider] Auto-approve via yolo/autoApprove/autoAccept');
-					autoRespond(true);
-					break;
-				}
-
-				const alwaysAllowByTool = this.toolHandler.getAlwaysAllowByTool();
-
-				// Auto-approve if user previously marked this tool as always-allow.
-				if (alwaysAllowByTool[tool]) {
-					logger.debug('[ChatProvider] Auto-approve via alwaysAllowByTool', { tool });
-					autoRespond(true, true);
-					break;
-				}
-
-				// Auto-approve/deny based on permission policies.
-				// OpenCode sends the category name directly in the `permission` field
-				// (e.g. "edit", "bash", "webfetch") — no mapping needed.
-				const policies = this.toolHandler.getPermissionPolicies();
-				const policyCategory = PERMISSION_CATEGORIES.includes(tool as PermissionCategory)
-					? (tool as PermissionCategory)
-					: undefined;
-				const policyValue = policyCategory ? policies[policyCategory] : undefined;
-				logger.debug('[ChatProvider] Policy resolution', {
-					tool,
-					policyCategory,
-					policyValue,
-				});
-
-				if (policyValue === 'allow' || policyValue === 'deny') {
-					logger.debug('[ChatProvider] Auto-respond via policy', { policyValue });
-					autoRespond(policyValue === 'allow');
-					break;
-				}
-
-				// Fall through: show the permission dialog in the webview.
-				// Use permissionTargetSessionId so child session permissions
-				// are shown in the parent session (which the user is viewing).
-				this.sessionHandler.postSessionMessage(
-					{
-						id: `access-${requestId}`,
-						type: 'access_request',
-						requestId,
-						tool,
-						toolUseId,
-						input,
-						pattern: patterns?.[0],
-						resolved: false,
-						timestamp: new Date().toISOString(),
-						metadata,
-						...(isChildPermission ? { childSessionId: targetSessionId } : {}),
-					},
-					permissionTargetSessionId,
-				);
-				break;
-			}
-
-			case 'question': {
-				// event.data is already typed as QuestionEventData via discriminated CLIEvent union.
-				const q = event.data;
-				const isChildQuestion = this.sessionGraph.isChild(targetSessionId);
-				const questionTargetSessionId = isChildQuestion
-					? (this.sessionGraph.getParent(targetSessionId) ?? targetSessionId)
-					: targetSessionId;
-				const childToolUseId = isChildQuestion
-					? this.subtaskManager.getToolUseId(targetSessionId)
-					: undefined;
-				this.sessionHandler.postSessionMessage(
-					{
-						id: `question-${q.requestId}`,
-						type: 'question',
-						requestId: q.requestId,
-						questions: q.questions,
-						tool: q.tool,
-						...(isChildQuestion
-							? { childSessionId: targetSessionId, toolUseId: childToolUseId }
-							: {}),
-						resolved: false,
-						timestamp: new Date().toISOString(),
-					},
-					questionTargetSessionId,
-				);
-				break;
-			}
-
 			default:
 				break;
 		}
+	}
+
+	private handlePermissionRuntimeEvent(event: CLIEvent, targetSessionId: string): void {
+		const isChildPermission = this.sessionGraph.isChild(targetSessionId);
+		const permissionTargetSessionId = isChildPermission
+			? (this.sessionGraph.getParent(targetSessionId) ?? targetSessionId)
+			: targetSessionId;
+		const request = mapPermissionRuntimePayloadToRequest(event.data, permissionTargetSessionId);
+		if (!request) return;
+
+		this.bridge.session.permissionUpsert(permissionTargetSessionId, request);
+		const requestId = request.id;
+		const tool = request.permission;
+
+		const autoRespond = (approved: boolean, alwaysAllow?: boolean) => {
+			void this.cli
+				.respondToPermission({ requestId, approved, alwaysAllow })
+				.catch(error => logger.error('[ChatProvider] auto-response failed:', error));
+			this.bridge.session.permissionRemove(
+				permissionTargetSessionId,
+				requestId,
+				approved ? (alwaysAllow ? 'always' : 'once') : 'reject',
+			);
+			this.bridge.session.accessResponse(permissionTargetSessionId, {
+				requestId,
+				approved,
+				...(alwaysAllow ? { alwaysAllow } : {}),
+			});
+		};
+
+		const isYolo = Boolean(this.settings.get('access.yoloMode'));
+		const isAutoApprove = Boolean(this.settings.get('access.autoApprove'));
+		const isAutoAccept = this.toolHandler.isAutoAccept(permissionTargetSessionId);
+		if (isYolo || isAutoApprove || isAutoAccept) {
+			autoRespond(true);
+			return;
+		}
+
+		const alwaysAllowByTool = this.toolHandler.getAlwaysAllowByTool();
+		if (alwaysAllowByTool[tool]) {
+			autoRespond(true, true);
+			return;
+		}
+
+		const policies = this.toolHandler.getPermissionPolicies();
+		const policyCategory = PERMISSION_CATEGORIES.includes(tool as PermissionCategory)
+			? (tool as PermissionCategory)
+			: undefined;
+		const policyValue = policyCategory ? policies[policyCategory] : undefined;
+		if (policyValue === 'allow' || policyValue === 'deny') {
+			autoRespond(policyValue === 'allow');
+		}
+	}
+
+	private handleQuestionRuntimeEvent(event: CLIEvent, targetSessionId: string): void {
+		const isChildQuestion = this.sessionGraph.isChild(targetSessionId);
+		const questionTargetSessionId = isChildQuestion
+			? (this.sessionGraph.getParent(targetSessionId) ?? targetSessionId)
+			: targetSessionId;
+		const childToolUseId = isChildQuestion
+			? this.subtaskManager.getToolUseId(targetSessionId)
+			: undefined;
+		const request = mapQuestionRuntimePayloadToRequest(
+			event.data,
+			questionTargetSessionId,
+			childToolUseId,
+		);
+		if (!request) return;
+
+		this.bridge.session.questionUpsert(questionTargetSessionId, request);
 	}
 
 	private handleToolUse(event: CLIEvent, targetSessionId: string, isChildSession: boolean): void {
