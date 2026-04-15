@@ -3,7 +3,7 @@
  * @description Collapsible panel showing files modified by AI with diff stats.
  *              Header layout mirrors FileRow structure for perfect alignment.
  *              Also displays current Todo list status when available.
- *              Session-specific data (changedFiles, totalStats) now comes from chatStore.
+ *              Session-specific changed files and todo state come from chatStore.
  *              Copy operations read directly from chatStore + navigator.clipboard.
  *              OPTIMIZED: Todo display extracted to separate component to isolate rerenders.
  */
@@ -27,14 +27,7 @@ import {
 	TodoPendingIcon,
 	TodoProgressIcon,
 } from '../icons';
-import {
-	DropdownMenu,
-	IconButton,
-	PathChip,
-	ScrollContainer,
-	SessionStatsDisplay,
-	Tooltip,
-} from '../ui';
+import { DropdownMenu, IconButton, PathChip, ScrollContainer, Tooltip } from '../ui';
 
 interface TodoItem {
 	id?: string;
@@ -350,28 +343,6 @@ const FileRow = React.memo<{
 ));
 FileRow.displayName = 'FileRow';
 
-/**
- * Standalone stats panel — always visible when no changed files.
- * TodoSection pinned to the left, session stats centered.
- */
-const StandaloneStatsPanel: React.FC = React.memo(() => (
-	<div className="w-full box-border relative bg-transparent">
-		<div className="bg-(--panel-header-bg) rounded-t-lg border border-(--panel-header-border) border-b-0 @container/panel">
-			<div className="relative flex items-center h-(--tool-header-height) px-(--tool-header-padding) text-(--changed-files-font-size) font-(family-name:--vscode-font-family)">
-				{/* Left-pinned todo counter */}
-				<div className="shrink-0">
-					<TodoSection />
-				</div>
-				{/* Centered session stats — fill remaining space */}
-				<div className="flex-1 min-w-0">
-					<SessionStatsDisplay mode="footer" className="border-0 h-auto px-0" />
-				</div>
-			</div>
-		</div>
-	</div>
-));
-StandaloneStatsPanel.displayName = 'StandaloneStatsPanel';
-
 export const ChangedFilesPanel: React.FC = React.memo(() => {
 	const { changedFiles, cumulativeDiffs } = useChangedFilesState();
 	const hasCumulative = cumulativeDiffs.length > 0;
@@ -382,12 +353,12 @@ export const ChangedFilesPanel: React.FC = React.memo(() => {
 		? cumulativeDiffs.some(d => d.additions > 0 || d.deletions > 0)
 		: changedFiles.length > 0;
 
-	// When no changed files — always show SessionStatsDisplay
+	// When no changed files, keep the area above the input empty.
 	if (!hasFiles) {
-		return <StandaloneStatsPanel />;
+		return null;
 	}
 
-	// When changed files exist — show the full ChangedFilesPanel (stats inside expanded)
+	// When changed files exist — show the full ChangedFilesPanel.
 	return <ChangedFilesPanelContent />;
 });
 ChangedFilesPanel.displayName = 'ChangedFilesPanel';
@@ -440,7 +411,9 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 		}
 
 		if (hasCumulative) {
-			// Override ALL file stats with cumulative diffs (authoritative git-level data)
+			// Override stats only for files that are already associated with this session.
+			// Do not introduce files from session.diff alone: snapshot-level diffs can
+			// include unrelated workspace edits that happened outside the assistant flow.
 			for (const [filePath, entry] of fileMap) {
 				const cumulative = cumulativeMap.get(filePath);
 				if (cumulative) {
@@ -453,25 +426,11 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 					entry.linesRemoved = 0;
 				}
 			}
-
-			// Also add files that are ONLY in cumulativeDiffs (not yet in changedFiles)
-			for (const d of cumulativeDiffs) {
-				if (!fileMap.has(d.file) && (d.additions > 0 || d.deletions > 0)) {
-					fileMap.set(d.file, {
-						filePath: d.file,
-						fileName: d.file.split(/[/\\]/).pop() || d.file,
-						linesAdded: d.additions,
-						linesRemoved: d.deletions,
-						toolUseId: '',
-						timestamp: Date.now(),
-					});
-				}
-			}
 		}
 
 		// Filter out files with zero additions and zero deletions (reverted edits)
 		return Array.from(fileMap.values()).filter(f => f.linesAdded > 0 || f.linesRemoved > 0);
-	}, [changedFiles, cumulativeMap, cumulativeDiffs, hasCumulative]);
+	}, [changedFiles, cumulativeMap, hasCumulative]);
 
 	// Header totals: always derived from groupedFiles so they match the per-file rows exactly.
 	// Previously this was computed separately from cumulativeDiffs, which could include files
@@ -566,6 +525,9 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 
 	// Always render - TodoSection will handle its own visibility
 	// This prevents ChangedFilesPanel from subscribing to messages
+	if (groupedFiles.length === 0) {
+		return null;
+	}
 
 	return (
 		<div className="w-full box-border relative bg-transparent">
@@ -687,14 +649,8 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 								/>
 							))}
 						</ScrollContainer>
-						<SessionStatsDisplay
-							mode="footer"
-							className="border-t border-(--panel-header-border)"
-						/>
 					</div>
 				)}
-
-				{/* Stats shown only when expanded */}
 			</div>
 		</div>
 	);

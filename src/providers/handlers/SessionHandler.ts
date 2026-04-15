@@ -626,6 +626,11 @@ export class SessionHandler implements WebviewMessageHandler {
 					childModelIdMap,
 				});
 			}
+
+			// Official OpenCode keeps session diff as separate session-scoped data,
+			// not as part of the regular message history. Restore it explicitly after
+			// replaying the session timeline so the webview gets the current diff state.
+			await this.restoreSessionDiffFromServer(sessionId, config);
 		} finally {
 			this.context.bridge.flushCollected();
 		}
@@ -1398,6 +1403,45 @@ export class SessionHandler implements WebviewMessageHandler {
 		}
 	}
 
+	private async restoreSessionDiffFromServer(
+		sessionId: string,
+		config: { provider: 'opencode'; workspaceRoot: string },
+	): Promise<void> {
+		const sdkClient = this.context.cli.getSdkClient?.();
+		if (!sdkClient) {
+			return;
+		}
+
+		try {
+			const { data, error } = await sdkClient.session.diff({
+				sessionID: sessionId,
+				directory: config.workspaceRoot,
+			});
+			if (error) {
+				logger.warn('[SessionHandler] Failed to fetch session diff during restore', {
+					sessionId,
+					error,
+				});
+				return;
+			}
+
+			this.context.bridge.session.fileDiffUpdated(
+				sessionId,
+				(data || []).map(entry => ({
+					file: entry.file,
+					additions: entry.additions || 0,
+					deletions: entry.deletions || 0,
+					status: entry.status as 'added' | 'deleted' | 'modified' | undefined,
+				})),
+			);
+		} catch (error) {
+			logger.warn('[SessionHandler] Session diff restore request failed', {
+				sessionId,
+				error,
+			});
+		}
+	}
+
 	private replayNormalizedLog(
 		data: CLIEvent['data'],
 		sessionId: string,
@@ -1604,6 +1648,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			content?: unknown;
 			input?: unknown;
 			is_error?: boolean;
+			metadata?: unknown;
 			timestamp?: string;
 		};
 		const toolName = data.tool || 'unknown';
@@ -1624,6 +1669,34 @@ export class SessionHandler implements WebviewMessageHandler {
 				event.normalizedEntry,
 			);
 			return;
+		}
+
+		if (resolveToolName(toolName) === 'apply_patch') {
+			const metadata =
+				data.metadata && typeof data.metadata === 'object'
+					? (data.metadata as Record<string, unknown>)
+					: undefined;
+			const metaFiles = metadata?.files;
+			if (Array.isArray(metaFiles) && metaFiles.length > 0) {
+				for (const entry of metaFiles) {
+					if (!entry || typeof entry !== 'object') continue;
+					const file = entry as Record<string, unknown>;
+					const filePath =
+						(typeof file.filePath === 'string' && file.filePath) ||
+						(typeof file.relativePath === 'string' && file.relativePath) ||
+						(typeof file.path === 'string' && file.path) ||
+						'';
+					if (!filePath) continue;
+
+					this.context.bridge.session.fileChanged(sessionId, {
+						filePath,
+						fileName: filePath.split(/[/\\]/).pop() || filePath,
+						linesAdded: typeof file.additions === 'number' ? file.additions : 0,
+						linesRemoved: typeof file.deletions === 'number' ? file.deletions : 0,
+						toolUseId,
+					});
+				}
+			}
 		}
 
 		this.postSessionMessage(
