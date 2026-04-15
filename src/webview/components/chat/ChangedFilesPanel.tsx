@@ -291,6 +291,13 @@ const TodoSection: React.FC = React.memo(() => {
 });
 TodoSection.displayName = 'TodoSection';
 
+function formatDiffCount(value: number, kind: 'added' | 'removed'): string {
+	if (value <= 0) {
+		return '0';
+	}
+	return kind === 'added' ? `+${value}` : `-${value}`;
+}
+
 const FileRow = React.memo<{
 	file: ChangedFile;
 	onOpenDiff: () => void;
@@ -303,10 +310,10 @@ const FileRow = React.memo<{
 
 		{/* Stats - min-width for alignment, right-aligned text */}
 		<span className="text-success opacity-90 whitespace-nowrap text-right min-w-8">
-			+{file.linesAdded}
+			{formatDiffCount(file.linesAdded, 'added')}
 		</span>
 		<span className="text-error opacity-90 whitespace-nowrap text-left min-w-8 ml-(--gap-4)">
-			-{file.linesRemoved}
+			{formatDiffCount(file.linesRemoved, 'removed')}
 		</span>
 
 		<div className="flex-1 min-w-0">
@@ -566,10 +573,10 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 								<ChevronIcon expanded={expanded} size={10} />
 							</span>
 							<span className="text-success whitespace-nowrap text-right min-w-8">
-								+{totalAdded}
+								{formatDiffCount(totalAdded, 'added')}
 							</span>
 							<span className="text-error whitespace-nowrap text-left min-w-8 ml-(--gap-4)">
-								-{totalRemoved}
+								{formatDiffCount(totalRemoved, 'removed')}
 							</span>
 							<span className="flex items-center gap-(--gap-1) text-sm text-vscode-foreground opacity-90">
 								<FileIcon size={12} />

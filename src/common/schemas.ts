@@ -228,6 +228,29 @@ export const ConversationMessageSchema = Type.Union([
 		content: Type.String(),
 		model: Type.Optional(Type.String()),
 		agent: Type.Optional(Type.String()),
+		summary: Type.Optional(
+			Type.Object({
+				title: Type.Optional(Type.String()),
+				diffs: Type.Optional(
+					Type.Array(
+						Type.Object({
+							file: Type.String(),
+							before: Type.Optional(Type.String()),
+							after: Type.Optional(Type.String()),
+							additions: Type.Number(),
+							deletions: Type.Number(),
+							status: Type.Optional(
+								Type.Union([
+									Type.Literal('added'),
+									Type.Literal('deleted'),
+									Type.Literal('modified'),
+								]),
+							),
+						}),
+					),
+				),
+			}),
+		),
 		attachments: Type.Optional(MessageAttachmentsSchema),
 	}),
 	Type.Object({

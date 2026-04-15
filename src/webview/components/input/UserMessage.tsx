@@ -179,8 +179,12 @@ const MessageStats = React.memo<{
 			tooltip: `${fileChanges.files} file${fileChanges.files > 1 ? 's' : ''} changed`,
 			value: (
 				<>
-					<span className="text-(--changed-files-added)">+{fileChanges.added}</span>
-					<span className="text-(--changed-files-removed)">-{fileChanges.removed}</span>
+					{fileChanges.added > 0 && (
+						<span className="text-(--changed-files-added)">+{fileChanges.added}</span>
+					)}
+					{fileChanges.removed > 0 && (
+						<span className="text-(--changed-files-removed)">-{fileChanges.removed}</span>
+					)}
 				</>
 			),
 		});

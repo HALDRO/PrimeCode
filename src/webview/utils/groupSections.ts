@@ -181,7 +181,7 @@ export const groupMessagesIntoSections = (
 function computeSectionStats(
 	section: MessageSection,
 	rawResponses: Message[],
-	changedFilesMap: Map<string, ChangedFile[]>,
+	_changedFilesMap: Map<string, ChangedFile[]>,
 	isLast: boolean,
 	turnTokens: Record<
 		string,
@@ -199,53 +199,28 @@ function computeSectionStats(
 		}
 	}
 
-	// File changes: iterate tool_use messages and look up per-edit stats (O(1) per lookup).
-	// Per-turn stats use ONLY per-edit changedFiles entries matched by toolUseId.
-	// Cumulative diffs (session.diff) are NOT used here — they represent the full
-	// session diff (original→current) and would cause double-counting across turns.
+	// File changes: use userMessage.summary.diffs from OpenCode history.
+	// This matches the official OpenCode UI for turn-level change summaries.
 	let fileChanges: SectionStats['fileChanges'] = null;
+	const summaryDiffs = (
+		section.userMessage as Message & {
+			summary?: { diffs?: Array<{ file: string; additions: number; deletions: number }> };
+		}
+	).summary?.diffs;
 
-	if (changedFilesMap.size > 0) {
-		const perFileStats = new Map<string, { added: number; removed: number }>();
-
-		const collectFiles = (toolUseId: string) => {
-			const files = changedFilesMap.get(toolUseId);
-			if (!files) return;
-			for (const file of files) {
-				const existing = perFileStats.get(file.filePath);
-				if (existing) {
-					existing.added += file.linesAdded;
-					existing.removed += file.linesRemoved;
-				} else {
-					perFileStats.set(file.filePath, {
-						added: file.linesAdded,
-						removed: file.linesRemoved,
-					});
-				}
-			}
-		};
-
-		for (const msg of rawResponses) {
-			if (msg.type === 'tool_use' && 'toolUseId' in msg) {
-				collectFiles(msg.toolUseId);
-			}
-			if (msg.type === 'subtask' && msg.transcript) {
-				for (const child of msg.transcript) {
-					if (child.type === 'tool_use' && 'toolUseId' in child) {
-						collectFiles((child as { toolUseId: string }).toolUseId);
-					}
-				}
+	if (Array.isArray(summaryDiffs) && summaryDiffs.length > 0) {
+		let added = 0;
+		let removed = 0;
+		const files = new Set<string>();
+		for (const diff of summaryDiffs) {
+			added += diff.additions || 0;
+			removed += diff.deletions || 0;
+			if ((diff.additions || 0) > 0 || (diff.deletions || 0) > 0) {
+				if (typeof diff.file === 'string' && diff.file) files.add(diff.file);
 			}
 		}
-
-		if (perFileStats.size > 0) {
-			let added = 0;
-			let removed = 0;
-			for (const [, editStats] of perFileStats) {
-				added += editStats.added;
-				removed += editStats.removed;
-			}
-			fileChanges = { added, removed, files: perFileStats.size };
+		if (added > 0 || removed > 0) {
+			fileChanges = { added, removed, files: files.size };
 		}
 	}
 

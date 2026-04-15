@@ -159,7 +159,8 @@ const MessageSectionComponent = React.memo<MessageSectionProps>(
 		const messageItemCtx = useMemo(() => buildMessageItemCtx(sessionId), [sessionId]);
 
 		return (
-			<section className="relative pb-(--gap-4)">
+			<section className="relative pb-(--message-gap)">
+				{!section.stats.isFirst && <div style={{ height: 40 }} />}
 				<div
 					className="sticky top-0 z-40 px-(--layout-padding-x)"
 					style={{ backgroundColor: 'var(--surface-base)' }}
