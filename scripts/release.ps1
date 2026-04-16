@@ -78,7 +78,7 @@ try {
     }
 
     # --- 1. Git status ---
-    Write-Host "[1/8] Checking git status..." -ForegroundColor Cyan
+    Write-Host "[1/10] Checking git status..." -ForegroundColor Cyan
     $gitStatus = @(git status --porcelain)
     $allowedDirtyPaths = @("scripts/release.ps1")
     $blockingStatus = @(
@@ -99,7 +99,7 @@ try {
     Write-Host "  Branch: $branch" -ForegroundColor DarkGray
 
     # --- 2. Вычисляем версию ---
-    Write-Host "`n[2/8] Calculating version..." -ForegroundColor Cyan
+    Write-Host "`n[2/10] Calculating version..." -ForegroundColor Cyan
     switch ($Version) {
         "patch" { $newVersion = $patchVersion }
         "minor" { $newVersion = $minorVersion }
@@ -122,7 +122,7 @@ try {
     }
 
     # --- 3. Lint ---
-    Write-Host "`n[3/8] Running lint..." -ForegroundColor Cyan
+    Write-Host "`n[3/10] Running lint..." -ForegroundColor Cyan
     Write-Host "  Using existing installed dependencies..." -ForegroundColor DarkGray
     npm run lint:biome
     if ($LASTEXITCODE -ne 0) {
@@ -135,21 +135,44 @@ try {
         exit 1
     }
 
-    # --- 4. Tests ---
-    Write-Host "`n[4/8] Running tests..." -ForegroundColor Cyan
+    # --- 4. Build ---
+    Write-Host "`n[4/9] Running build..." -ForegroundColor Cyan
+    npm run build
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: Build failed!" -ForegroundColor Red
+        exit 1
+    }
+
+    # --- 5. Package smoke check ---
+    Write-Host "`n[5/10] Running VSIX package check..." -ForegroundColor Cyan
+    $packageSmokePath = Join-Path $ProjectRoot "primecode-release-smoke.vsix"
+    if (Test-Path $packageSmokePath) {
+        Remove-Item $packageSmokePath -Force
+    }
+    npx @vscode/vsce package --no-dependencies --out $packageSmokePath
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: VSIX packaging failed!" -ForegroundColor Red
+        exit 1
+    }
+    if (Test-Path $packageSmokePath) {
+        Remove-Item $packageSmokePath -Force
+    }
+
+    # --- 6. Tests ---
+    Write-Host "`n[6/10] Running tests..." -ForegroundColor Cyan
     npm test
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: Tests failed!" -ForegroundColor Red
         exit 1
     }
 
-    # --- 5. Bump version ---
-    Write-Host "`n[5/8] Bumping version..." -ForegroundColor Cyan
+    # --- 7. Bump version ---
+    Write-Host "`n[7/10] Bumping version..." -ForegroundColor Cyan
     $content = Get-Content "package.json" -Raw
     $content = $content -replace "`"version`": `"$currentVersion`"", "`"version`": `"$newVersion`""
     Set-Content "package.json" -Value $content -NoNewline
 
-    # --- 6. Подтверждение ---
+    # --- 8. Подтверждение ---
     Write-Host ""
     Write-Host "  Ready to release v$newVersion" -ForegroundColor White
     Write-Host "  Branch: $branch" -ForegroundColor DarkGray
@@ -162,17 +185,17 @@ try {
         exit 0
     }
 
-    # --- 7. Commit + tag + push ---
-    Write-Host "`n[6/8] Creating commit and tag..." -ForegroundColor Cyan
+    # --- 9. Commit + tag + push ---
+    Write-Host "`n[8/10] Creating commit and tag..." -ForegroundColor Cyan
     git add package.json
     git commit -m "release: v$newVersion"
     git tag "v$newVersion"
 
-    Write-Host "`n[7/8] Pushing..." -ForegroundColor Cyan
+    Write-Host "`n[9/10] Pushing..." -ForegroundColor Cyan
     git push origin $branch
     git push origin "v$newVersion"
 
-    # --- 8. Ожидание CI ---
+    # --- 10. Ожидание CI ---
     if ($NoWait) {
         Write-Host "`n========================================" -ForegroundColor Green
         Write-Host "  v$newVersion pushed! CI skipped (--NoWait)" -ForegroundColor Green
@@ -181,7 +204,7 @@ try {
         exit 0
     }
 
-    Write-Host "`n[8/8] Waiting for CI..." -ForegroundColor Cyan
+    Write-Host "`n[10/10] Waiting for CI..." -ForegroundColor Cyan
     Write-Host "  Monitoring GitHub Actions (timeout: 10 min)" -ForegroundColor DarkGray
 
     $maxWait = 600  # 10 минут
