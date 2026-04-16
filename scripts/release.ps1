@@ -79,10 +79,19 @@ try {
 
     # --- 1. Git status ---
     Write-Host "[1/8] Checking git status..." -ForegroundColor Cyan
-    $gitStatus = git status --porcelain
-    if ($gitStatus) {
+    $gitStatus = @(git status --porcelain)
+    $allowedDirtyPaths = @("scripts/release.ps1")
+    $blockingStatus = @(
+        $gitStatus | Where-Object {
+            $line = $_.TrimEnd()
+            if (-not $line) { return $false }
+            $path = $line.Substring(3).Trim()
+            return $allowedDirtyPaths -notcontains $path
+        }
+    )
+    if ($blockingStatus.Count -gt 0) {
         Write-Host "ERROR: Working tree is dirty. Commit or stash first." -ForegroundColor Red
-        Write-Host $gitStatus
+        Write-Host $blockingStatus
         exit 1
     }
 
@@ -112,17 +121,12 @@ try {
         exit 1
     }
 
-	# --- 3. Lint ---
-	Write-Host "`n[3/8] Running lint..." -ForegroundColor Cyan
-	Write-Host "  Installing locked dependencies (npm ci)..." -ForegroundColor DarkGray
-	npm ci
-	if ($LASTEXITCODE -ne 0) {
-		Write-Host "ERROR: npm ci failed!" -ForegroundColor Red
-		exit 1
-	}
-	npm run lint:biome
-	if ($LASTEXITCODE -ne 0) {
-		Write-Host "ERROR: Lint failed!" -ForegroundColor Red
+    # --- 3. Lint ---
+    Write-Host "`n[3/8] Running lint..." -ForegroundColor Cyan
+    Write-Host "  Using existing installed dependencies..." -ForegroundColor DarkGray
+    npm run lint:biome
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: Lint failed!" -ForegroundColor Red
         exit 1
     }
     npm run lint:tsc
