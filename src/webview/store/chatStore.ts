@@ -355,6 +355,51 @@ function upsertSubtaskMessage(targetSession: ChatSession, incoming: SubtaskMessa
 	};
 }
 
+function removeProjectedMessage(targetSession: ChatSession, message: RenderMessage): void {
+	if (message.kind === 'user' || message.kind === 'subtask') {
+		delete targetSession.userMessagesById[message.id];
+		delete targetSession.subtasksById[message.id];
+		delete targetSession.runtimeMessagePartsById[message.id];
+		delete targetSession.turnTokens[message.id];
+		targetSession.runtimeMessageRecords = targetSession.runtimeMessageRecords.filter(
+			record => record.id !== message.id,
+		);
+		return;
+	}
+
+	if (message.kind === 'assistant' || message.kind === 'thinking') {
+		for (const [messageId, parts] of Object.entries(targetSession.runtimeMessagePartsById)) {
+			const nextParts = parts.filter(part => part.id !== message.partId);
+			if (nextParts.length === parts.length) continue;
+			if (nextParts.length === 0) {
+				delete targetSession.runtimeMessagePartsById[messageId];
+				targetSession.runtimeMessageRecords = targetSession.runtimeMessageRecords.filter(
+					record => record.id !== messageId,
+				);
+			} else {
+				targetSession.runtimeMessagePartsById[messageId] = nextParts;
+			}
+			break;
+		}
+		return;
+	}
+
+	if (message.kind === 'tool_use') {
+		for (const [messageId, parts] of Object.entries(targetSession.runtimeMessagePartsById)) {
+			const nextParts = parts.filter(part => part.callId !== message.toolUseId);
+			if (nextParts.length === parts.length) continue;
+			if (nextParts.length === 0) {
+				delete targetSession.runtimeMessagePartsById[messageId];
+				targetSession.runtimeMessageRecords = targetSession.runtimeMessageRecords.filter(
+					record => record.id !== messageId,
+				);
+			} else {
+				targetSession.runtimeMessagePartsById[messageId] = nextParts;
+			}
+		}
+	}
+}
+
 // =============================================================================
 // Dispatch event handlers — extracted to reduce cognitive complexity of dispatch()
 // =============================================================================
@@ -1224,15 +1269,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 					const removed = projected.slice(idx + 1);
 					for (const msg of removed) {
 						if (!msg.id) continue;
-
-						// Clean up all underlying stores
-						delete s.userMessagesById[msg.id];
-						delete s.subtasksById[msg.id];
-						delete s.runtimeMessagePartsById[msg.id];
-						delete s.turnTokens[msg.id];
-
-						// Remove from runtime message records array
-						s.runtimeMessageRecords = s.runtimeMessageRecords.filter(m => m.id !== msg.id);
+						removeProjectedMessage(s, msg);
 					}
 					s.revertedFromMessageId = null;
 				}
@@ -1260,8 +1297,14 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 		clearRevertedMessages: sessionId =>
 			mutateSession(set, sessionId ?? get().activeSessionId, s => {
 				if (!s.revertedFromMessageId) return;
-				const idx = projectRuntimeMessages(s).findIndex(m => m.id === s.revertedFromMessageId);
+				const projected = projectRuntimeMessages(s);
+				const idx = projected.findIndex(m => m.id === s.revertedFromMessageId);
 				if (idx !== -1) {
+					const removed = projected.slice(idx);
+					for (const msg of removed) {
+						if (!msg.id) continue;
+						removeProjectedMessage(s, msg);
+					}
 					s.revertedFromMessageId = null;
 				} else {
 					s.revertedFromMessageId = null;

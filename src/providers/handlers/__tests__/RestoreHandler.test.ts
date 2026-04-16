@@ -28,9 +28,7 @@ interface MockContext {
 		getOpenCodeServerInfo: ReturnType<typeof vi.fn>;
 	};
 	bridge: {
-		session: {
-			restore: ReturnType<typeof vi.fn>;
-		};
+		emit: ReturnType<typeof vi.fn>;
 	};
 	sessionState: {
 		activeSessionId: string | undefined;
@@ -52,10 +50,7 @@ function createMockContext(overrides: Partial<MockContext> = {}): MockContext & 
 			...overrides.cli,
 		},
 		bridge: {
-			session: {
-				restore: vi.fn(),
-				...overrides.bridge?.session,
-			},
+			emit: vi.fn(),
 			...overrides.bridge,
 		},
 		sessionState: {
@@ -208,7 +203,7 @@ describe('RestoreHandler', () => {
 				data: { commitId: 'cp-1' },
 			} as any);
 
-			expect(ctx.bridge.emit).toHaveBeenCalledWith('session-1', {
+			expect(ctx.bridge.emit).toHaveBeenCalledWith('session-1', 'restore', {
 				action: 'success',
 				canUnrevert: true,
 				revertedFromMessageId: 'ui-msg-1',
@@ -224,7 +219,7 @@ describe('RestoreHandler', () => {
 				data: { commitId: 'cp-1' },
 			} as any);
 
-			expect(ctx.bridge.emit).toHaveBeenCalledWith('session-1', {
+			expect(ctx.bridge.emit).toHaveBeenCalledWith('session-1', 'restore', {
 				action: 'error',
 				message: expect.stringContaining('Server down'),
 			});
@@ -254,7 +249,7 @@ describe('RestoreHandler', () => {
 
 			// Single atomic notification — no more race between two events
 			expect(ctx.bridge.emit).toHaveBeenCalledTimes(1);
-			expect(ctx.bridge.emit).toHaveBeenCalledWith('session-1', {
+			expect(ctx.bridge.emit).toHaveBeenCalledWith('session-1', 'restore', {
 				action: 'unrevert_available',
 				available: false,
 			});
@@ -265,7 +260,7 @@ describe('RestoreHandler', () => {
 
 			await handler.handleMessage({ type: 'unrevert' } as any);
 
-			expect(ctx.bridge.emit).toHaveBeenCalledWith('session-1', {
+			expect(ctx.bridge.emit).toHaveBeenCalledWith('session-1', 'restore', {
 				action: 'error',
 				message: expect.stringContaining('Unrevert failed'),
 			});

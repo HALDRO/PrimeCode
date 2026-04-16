@@ -42,6 +42,13 @@ const isGroupableTool = (msg: RenderMessage, mcpServerNames: string[]): boolean 
 		return false;
 	}
 
+	// Completed/error updates can arrive as separate synthetic entries for a tool
+	// that already started earlier in the same turn. Treat them as groupable so a
+	// late result from a heavy tool does not split a lightweight tool batch.
+	if (msg.status === 'completed' || msg.status === 'error') {
+		return true;
+	}
+
 	const toolName = msg.toolName || '';
 
 	if (isMcpTool(toolName, mcpServerNames)) {
@@ -51,8 +58,15 @@ const isGroupableTool = (msg: RenderMessage, mcpServerNames: string[]): boolean 
 	return !isNonGroupableTool(toolName);
 };
 
-const getToolUseCount = (msgs: RenderMessage[]): number =>
-	msgs.reduce((count, msg) => count + (msg.kind === 'tool_use' ? 1 : 0), 0);
+const getToolUseCount = (msgs: RenderMessage[]): number => {
+	const uniqueToolUseIds = new Set<string>();
+	for (const msg of msgs) {
+		if (msg.kind !== 'tool_use') continue;
+		if (!msg.toolUseId) continue;
+		uniqueToolUseIds.add(msg.toolUseId);
+	}
+	return uniqueToolUseIds.size;
+};
 
 /** Whether a message can act as a bridge between two tool groups */
 export const isBridgeMessage = (msg: RenderMessage): boolean => {

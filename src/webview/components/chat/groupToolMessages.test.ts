@@ -575,9 +575,15 @@ describe('groupToolMessages', () => {
 			const groups = grouped.filter(item => Array.isArray(item));
 			expect(groups).toHaveLength(1);
 
-			// The single group should contain all 7 tool_use messages (4 read + 2 grep + 1 read)
-			const toolUseCount = (groups[0] as Message[]).filter(m => m.type === 'tool_use').length;
-			expect(toolUseCount).toBe(7);
+			// The single group should contain 8 unique tool executions: the late bash
+			// completion is still present in the group, but crucially it no longer
+			// splits the lightweight tool batch into two groups.
+			const toolUseCount = new Set(
+				(groups[0] as Message[])
+					.filter(m => m.type === 'tool_use')
+					.map(m => (m as Extract<Message, { type: 'tool_use' }>).toolUseId),
+			).size;
+			expect(toolUseCount).toBe(8);
 		});
 
 		it('should collapse a trailing grouped tools item after streaming completes', () => {

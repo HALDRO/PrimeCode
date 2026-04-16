@@ -45,6 +45,7 @@ const hiddenMsg = (id: string): RenderMessage =>
 		partId: id,
 		timestamp: new Date().toISOString(),
 		content: 'hidden',
+		hidden: true,
 	}) as RenderMessage;
 
 const toolUseMsg = (id: string): RenderMessage =>
@@ -323,11 +324,25 @@ describe('groupMessagesIntoSections', () => {
 			const t2 = '2024-01-01T00:01:00.000Z';
 			const t3 = '2024-01-01T00:02:00.000Z';
 			const msgs = [
-				{ type: 'user', id: 'u1', timestamp: t1, content: 'hi' } as Message,
-				{ type: 'assistant', id: 'a1', timestamp: t1, content: 'reply' } as Message,
-				{ type: 'user', id: 'u2', timestamp: t2, content: 'hi2' } as Message,
-				{ type: 'assistant', id: 'a2', timestamp: t2, content: 'reply2' } as Message,
-				{ type: 'user', id: 'u3', timestamp: t3, content: 'hi3' } as Message,
+				{ kind: 'user', type: 'user', id: 'u1', timestamp: t1, content: 'hi' } as Message,
+				{
+					kind: 'assistant',
+					type: 'assistant',
+					id: 'a1',
+					partId: 'a1',
+					timestamp: t1,
+					content: 'reply',
+				} as Message,
+				{ kind: 'user', type: 'user', id: 'u2', timestamp: t2, content: 'hi2' } as Message,
+				{
+					kind: 'assistant',
+					type: 'assistant',
+					id: 'a2',
+					partId: 'a2',
+					timestamp: t2,
+					content: 'reply2',
+				} as Message,
+				{ kind: 'user', type: 'user', id: 'u3', timestamp: t3, content: 'hi3' } as Message,
 			];
 			const result = groupMessagesIntoSections(msgs, [], null);
 
@@ -341,9 +356,23 @@ describe('groupMessagesIntoSections', () => {
 			const tAsst1 = '2024-01-01T00:00:05.000Z';
 			const tAsst2 = '2024-01-01T00:00:10.000Z';
 			const msgs = [
-				{ type: 'user', id: 'u1', timestamp: tUser, content: 'hi' } as Message,
-				{ type: 'assistant', id: 'a1', timestamp: tAsst1, content: 'r1' } as Message,
-				{ type: 'assistant', id: 'a2', timestamp: tAsst2, content: 'r2' } as Message,
+				{ kind: 'user', type: 'user', id: 'u1', timestamp: tUser, content: 'hi' } as Message,
+				{
+					kind: 'assistant',
+					type: 'assistant',
+					id: 'a1',
+					partId: 'a1',
+					timestamp: tAsst1,
+					content: 'r1',
+				} as Message,
+				{
+					kind: 'assistant',
+					type: 'assistant',
+					id: 'a2',
+					partId: 'a2',
+					timestamp: tAsst2,
+					content: 'r2',
+				} as Message,
 			];
 			const result = groupMessagesIntoSections(msgs, [], null);
 
@@ -361,18 +390,24 @@ describe('groupMessagesIntoSections', () => {
 			const msgs = [
 				userMsg('u1'),
 				{
+					kind: 'tool_use',
 					type: 'tool_use',
 					id: 't1',
 					timestamp: new Date().toISOString(),
 					toolName: 'write',
 					toolUseId: 'tu-1',
+					toolInput: '{}',
+					rawInput: {},
 				} as Message,
 				{
+					kind: 'tool_use',
 					type: 'tool_use',
 					id: 't2',
 					timestamp: new Date().toISOString(),
 					toolName: 'write',
 					toolUseId: 'tu-2',
+					toolInput: '{}',
+					rawInput: {},
 				} as Message,
 				assistantMsg('a1'),
 			];
@@ -428,8 +463,10 @@ describe('groupMessagesIntoSections', () => {
 			const msgs = [
 				userMsg('u1'),
 				{
+					kind: 'assistant',
 					type: 'assistant',
 					id: 'a1',
+					partId: 'a1',
 					timestamp: new Date().toISOString(),
 					content: 'reply',
 				} as Message,

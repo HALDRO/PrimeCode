@@ -6,7 +6,12 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { SessionRestorePayload } from '../../../common/protocol';
-import { type UserMessage, useChatStore } from '../chatStore';
+import {
+	type RuntimeMessagePart,
+	type RuntimeMessageRecord,
+	type UserMessage,
+	useChatStore,
+} from '../chatStore';
 import { projectRuntimeMessages } from '../selectors';
 
 // ---------------------------------------------------------------------------
@@ -29,7 +34,39 @@ function createSession(id: string, messages: UserMessage[] = []) {
 	const { actions } = useChatStore.getState();
 	actions.handleSessionCreated(id);
 	if (messages.length > 0) {
-		actions.setSessionMessages(id, messages);
+		const baseTime = Date.UTC(2024, 0, 1, 0, 0, 0);
+		const normalizedMessages = messages.map((message, index) => ({
+			...message,
+			timestamp: new Date(baseTime + index * 1000).toISOString(),
+		}));
+		actions.setSessionMessages(id, normalizedMessages);
+		normalizedMessages.forEach((message, index) => {
+			const createdAt = baseTime + index * 1000 + 1;
+			const assistantRecord: RuntimeMessageRecord = {
+				id: `assistant-${message.id}`,
+				sessionId: id,
+				role: 'assistant',
+				parentId: message.id,
+				createdAt,
+			};
+			const assistantPart: RuntimeMessagePart = {
+				id: `assistant-part-${message.id}`,
+				messageId: assistantRecord.id,
+				sessionId: id,
+				type: 'text',
+				text: `reply-${message.id}`,
+				createdAt,
+				completedAt: createdAt,
+			};
+			actions.dispatch(id, 'message_record', {
+				eventType: 'message_record',
+				message: assistantRecord,
+			});
+			actions.dispatch(id, 'message_part', {
+				eventType: 'message_part',
+				part: assistantPart,
+			});
+		});
 	}
 }
 
@@ -316,7 +353,7 @@ describe('chatStore revert/unrevert state', () => {
 			const rendered = projectRuntimeMessages(session);
 			expect(rendered).toHaveLength(2);
 			expect(rendered[0].id).toBe('u1');
-			expect(rendered[1].id).toBe('a1');
+			expect(rendered[1].id).toBe('msg-assistant-part-u1');
 		});
 
 		it('should do nothing when no revertedFromMessageId', () => {
@@ -353,7 +390,7 @@ describe('chatStore revert/unrevert state', () => {
 			const session = getSession('s1');
 			const rendered = projectRuntimeMessages(session);
 			expect(rendered).toHaveLength(3);
-			expect(rendered.map(m => m.id)).toEqual(['u1', 'a1', 'u2']);
+			expect(rendered.map(m => m.id)).toEqual(['u1', 'msg-assistant-part-u1', 'u2']);
 		});
 
 		it('should clear revertedFromMessageId', () => {

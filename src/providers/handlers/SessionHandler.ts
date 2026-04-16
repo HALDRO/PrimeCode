@@ -2946,6 +2946,8 @@ export class SessionHandler implements WebviewMessageHandler {
 			info: {
 				id: string;
 				role: string;
+				parentID?: string;
+				time?: { created?: number; completed?: number };
 				tokens?: {
 					input?: number;
 					output?: number;
@@ -2975,6 +2977,44 @@ export class SessionHandler implements WebviewMessageHandler {
 				durationMs?: number;
 			}
 		>();
+
+		for (const entry of entries) {
+			if (entry.info.role !== 'assistant') continue;
+			const parentID = entry.info.parentID;
+			const tokens = entry.info.tokens;
+			if (!parentID || !tokens) continue;
+			const normalizedInput = Math.max(0, tokens.input ?? 0);
+			const normalizedOutput = Math.max(0, tokens.output ?? 0);
+			const normalizedReasoning = Math.max(0, tokens.reasoning ?? 0);
+			const normalizedCacheRead = Math.max(0, tokens.cache?.read ?? 0);
+
+			const totalTokens =
+				typeof tokens.total === 'number' && tokens.total > 0
+					? tokens.total
+					: normalizedInput + normalizedOutput + normalizedReasoning + normalizedCacheRead;
+			if (totalTokens <= 0) continue;
+
+			const existing = result.get(parentID);
+			const created = entry.info.time?.created;
+			const completed = entry.info.time?.completed;
+			const durationMs =
+				typeof created === 'number' && typeof completed === 'number' && completed >= created
+					? completed - created
+					: 0;
+
+			result.set(parentID, {
+				inputTokens: normalizedInput || existing?.inputTokens || 0,
+				outputTokens: normalizedOutput + normalizedReasoning || existing?.outputTokens || 0,
+				totalTokens,
+				cacheReadTokens: normalizedCacheRead || existing?.cacheReadTokens || 0,
+				durationMs: (existing?.durationMs ?? 0) + durationMs,
+			});
+		}
+
+		if (result.size > 0) {
+			return result;
+		}
+
 		let lastUserMessageId: string | undefined;
 		for (const ev of history) {
 			if (ev.type === 'normalized_log' && (ev.data as { role?: string }).role === 'user') {
@@ -2997,34 +3037,6 @@ export class SessionHandler implements WebviewMessageHandler {
 					...(typeof d.durationMs === 'number' ? { durationMs: d.durationMs } : {}),
 				});
 			}
-		}
-
-		let cumulativeTotal = 0;
-		let cumulativeInput = 0;
-		let cumulativeOutput = 0;
-		let cumulativeCacheRead = 0;
-		let currentUserId: string | undefined;
-		for (const entry of entries) {
-			if (entry.info.role === 'user') {
-				currentUserId = entry.info.id;
-				continue;
-			}
-			if (entry.info.role !== 'assistant') continue;
-			const tokens = entry.info.tokens;
-			if (!tokens) continue;
-			const total = (tokens.input ?? 0) + (tokens.output ?? 0) + (tokens.cache?.read ?? 0);
-			if (total <= 0) continue;
-			cumulativeTotal += total;
-			cumulativeInput += tokens.input ?? 0;
-			cumulativeOutput += tokens.output ?? 0;
-			cumulativeCacheRead += tokens.cache?.read ?? 0;
-			if (!currentUserId || result.has(currentUserId)) continue;
-			result.set(currentUserId, {
-				inputTokens: cumulativeInput,
-				outputTokens: cumulativeOutput,
-				totalTokens: cumulativeTotal,
-				cacheReadTokens: cumulativeCacheRead,
-			});
 		}
 
 		return result;

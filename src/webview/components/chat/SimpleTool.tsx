@@ -437,12 +437,25 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 
 			if (isRead) {
 				const isFolder = /[\\/]$/.test(meta);
+				const startLine = typeof readOffset === 'number' && readOffset > 0 ? readOffset : undefined;
+				const endLine =
+					startLine !== undefined && typeof readLimit === 'number' && readLimit > 0
+						? startLine + readLimit - 1
+						: undefined;
 				return (
 					<PathChip
 						path={meta}
 						isFolder={isFolder}
 						onClick={
-							!isFolder ? () => postMessage({ type: 'openFile', filePath: meta }) : undefined
+							!isFolder
+								? () =>
+										postMessage({
+											type: 'openFile',
+											filePath: meta,
+											...(startLine !== undefined ? { startLine } : {}),
+											...(endLine !== undefined ? { endLine } : {}),
+										})
+								: undefined
 						}
 						title={meta}
 						className="max-w-full min-w-0 shrink animate-content-reveal"
@@ -468,7 +481,7 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 					className="max-w-full min-w-0 shrink animate-content-reveal"
 				/>
 			);
-		}, [isListDir, isRead, meta, metaDisplay, postMessage]);
+		}, [isListDir, isRead, meta, metaDisplay, postMessage, readLimit, readOffset]);
 
 		// For TaskResult, prefer the result text from the actionType over the raw content prop
 		const taskResultText = useMemo(
