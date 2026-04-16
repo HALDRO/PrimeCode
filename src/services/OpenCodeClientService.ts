@@ -93,7 +93,6 @@ interface OpenCodeProviderModel {
 interface OpenCodeProvider {
 	id: string;
 	name: string;
-	isCustom: boolean;
 	source?: 'env' | 'api' | 'config' | 'custom';
 	models: OpenCodeProviderModel[];
 }
@@ -103,6 +102,41 @@ interface AvailableProvider {
 	name: string;
 	env: string[];
 	models: OpenCodeProviderModel[];
+}
+
+type ProviderListModel = {
+	id: string;
+	name?: string;
+	limit?: {
+		context?: number;
+		output?: number;
+	};
+	variants?: Record<string, unknown>;
+	reasoning?: boolean;
+	capabilities?: {
+		reasoning?: boolean;
+	};
+};
+
+function toProviderModel(model: ProviderListModel | ModelV2): OpenCodeProviderModel {
+	const modelRecord = model as Record<string, unknown>;
+	const capabilitiesRecord =
+		modelRecord.capabilities && typeof modelRecord.capabilities === 'object'
+			? (modelRecord.capabilities as Record<string, unknown>)
+			: undefined;
+	const variantKeys = model.variants ? Object.keys(model.variants) : undefined;
+	const legacyReasoning = 'reasoning' in model ? model.reasoning : undefined;
+	const reasoning =
+		typeof capabilitiesRecord?.reasoning === 'boolean'
+			? capabilitiesRecord.reasoning
+			: Boolean(legacyReasoning);
+	return {
+		id: model.id,
+		name: model.name || model.id,
+		reasoning,
+		limit: model.limit ? { context: model.limit.context, output: model.limit.output } : undefined,
+		variants: variantKeys && variantKeys.length > 0 ? variantKeys : undefined,
+	};
 }
 
 export class OpenCodeClientService {
@@ -130,30 +164,12 @@ export class OpenCodeClientService {
 
 	async getConnectedProviders(
 		client: OpencodeClient,
-		workspaceRoot?: string,
+		_workspaceRoot?: string,
 	): Promise<OpenCodeProvider[]> {
 		const { data } = await client.provider.list();
 		if (!data) throw new Error('OpenCode /provider returned no data');
 
 		const connectedSet = new Set(data.connected ?? []);
-
-		// Read project config to identify custom OpenAI-compatible providers.
-		// These should appear in CUSTOM ENDPOINTS, not in the standard PROVIDERS section.
-		const customProviderIds = new Set<string>();
-		if (workspaceRoot) {
-			try {
-				const config = await this.readProjectConfig(workspaceRoot);
-				if (config.provider) {
-					for (const [id, provider] of Object.entries(config.provider)) {
-						if (provider.npm === '@ai-sdk/openai-compatible') {
-							customProviderIds.add(id);
-						}
-					}
-				}
-			} catch {
-				// Ignore config read errors — fall back to isCustom: false
-			}
-		}
 
 		// Deduplicate by provider ID — CLI may return duplicate entries
 		// when opencode.json and server state overlap
@@ -177,20 +193,8 @@ export class OpenCodeClientService {
 				return {
 					id: p.id,
 					name: p.name || p.id,
-					isCustom: customProviderIds.has(p.id),
 					source,
-					models: Object.values(p.models).map(m => {
-						// Cast to full ModelV2 type to access `variants` field.
-						const model = m as unknown as ModelV2;
-						const variantKeys = model.variants ? Object.keys(model.variants) : undefined;
-						return {
-							id: m.id,
-							name: m.name || m.id,
-							reasoning: m.reasoning,
-							limit: m.limit ? { context: m.limit.context, output: m.limit.output } : undefined,
-							variants: variantKeys && variantKeys.length > 0 ? variantKeys : undefined,
-						};
-					}),
+					models: Object.values(p.models).map(model => toProviderModel(model)),
 				};
 			})
 			.filter(p => p.id.length > 0);
@@ -253,17 +257,7 @@ export class OpenCodeClientService {
 				id: p.id,
 				name: p.name || p.id,
 				env: p.env ?? [],
-				models: Object.values(p.models).map(m => {
-					const model = m as unknown as ModelV2;
-					const variantKeys = model.variants ? Object.keys(model.variants) : undefined;
-					return {
-						id: m.id,
-						name: m.name || m.id,
-						reasoning: m.reasoning,
-						limit: m.limit ? { context: m.limit.context, output: m.limit.output } : undefined,
-						variants: variantKeys && variantKeys.length > 0 ? variantKeys : undefined,
-					};
-				}),
+				models: Object.values(p.models).map(model => toProviderModel(model)),
 			}))
 			.filter(p => p.id.length > 0);
 	}

@@ -428,8 +428,6 @@ export const ConversationMessageSchema = Type.Union([
 					Type.Array(
 						Type.Object({
 							file: Type.String(),
-							before: Type.Optional(Type.String()),
-							after: Type.Optional(Type.String()),
 							additions: Type.Number(),
 							deletions: Type.Number(),
 							status: Type.Optional(
@@ -689,7 +687,6 @@ const OpenCodeModelDataSchema = Type.Object({
 export const OpenCodeProviderDataSchema = Type.Object({
 	id: Type.String(),
 	name: Type.String(),
-	isCustom: Type.Optional(Type.Boolean()),
 	source: Type.Optional(
 		Type.Union([
 			Type.Literal('env'),

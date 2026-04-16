@@ -33,7 +33,6 @@ interface ProviderItemData {
 	id: string;
 	name: string;
 	connected: boolean;
-	isCustom?: boolean;
 	source?: OpenCodeProviderData['source'];
 	env?: string[];
 	models?: Array<{
@@ -190,17 +189,16 @@ export const ProviderManager: React.FC = () => {
 		return undefined;
 	}, [providerAuthState, setProviderAuthState, postMessage]);
 
-	// Connected providers list (OpenCode CLI providers, excluding proxy endpoint and custom providers)
+	// Connected providers list (OpenCode CLI providers, excluding proxy endpoint providers)
 	const connectedProviders: ProviderItemData[] = useMemo(() => {
 		if (!isOpenCodeCLI) return [];
 
 		return opencodeProviders
-			.filter(p => !isProxyEndpointProviderId(p.id) && !p.isCustom)
+			.filter(p => !isProxyEndpointProviderId(p.id))
 			.map(p => ({
 				id: p.id,
 				name: p.name,
 				connected: true,
-				isCustom: p.isCustom,
 				source: p.source,
 				models: p.models,
 			}));
@@ -410,9 +408,7 @@ export const ProviderManager: React.FC = () => {
 					const modelCount = provider.models?.length ?? 0;
 					const enabledCount = getEnabledCountForProvider(provider.id);
 
-					const badge = (
-						<>{provider.isCustom && <SettingsBadge variant="blue">custom</SettingsBadge>}</>
-					);
+					const badge = <></>;
 
 					return (
 						<ExpandableRow

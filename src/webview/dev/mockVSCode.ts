@@ -369,7 +369,6 @@ const mockVSCodeApi: VSCodeApi = {
 					{
 						id: 'anthropic',
 						name: 'Anthropic',
-						isCustom: false,
 						models: [
 							{
 								id: 'claude-opus-4-5',
@@ -388,7 +387,6 @@ const mockVSCodeApi: VSCodeApi = {
 					{
 						id: 'google',
 						name: 'Google AI',
-						isCustom: false,
 						models: [
 							{
 								id: 'gemini-2.0-flash',

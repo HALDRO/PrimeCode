@@ -1406,8 +1406,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 												diffs: Array.isArray(info.summary.diffs)
 													? info.summary.diffs.map(diff => ({
 															file: diff.file,
-															before: diff.before,
-															after: diff.after,
 															additions: diff.additions,
 															deletions: diff.deletions,
 															status: diff.status,

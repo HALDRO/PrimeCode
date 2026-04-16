@@ -112,11 +112,17 @@ try {
         exit 1
     }
 
-    # --- 3. Lint ---
-    Write-Host "`n[3/8] Running lint..." -ForegroundColor Cyan
-    npm run lint:biome
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "ERROR: Lint failed!" -ForegroundColor Red
+	# --- 3. Lint ---
+	Write-Host "`n[3/8] Running lint..." -ForegroundColor Cyan
+	Write-Host "  Installing locked dependencies (npm ci)..." -ForegroundColor DarkGray
+	npm ci
+	if ($LASTEXITCODE -ne 0) {
+		Write-Host "ERROR: npm ci failed!" -ForegroundColor Red
+		exit 1
+	}
+	npm run lint:biome
+	if ($LASTEXITCODE -ne 0) {
+		Write-Host "ERROR: Lint failed!" -ForegroundColor Red
         exit 1
     }
     npm run lint:tsc
