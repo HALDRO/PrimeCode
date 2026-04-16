@@ -9,18 +9,10 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { WebviewCommand } from '../../common/protocol';
 import { getWorkspacePath, searchWorkspaceFiles } from '../../services/fileSearch';
-import type { ResourceType } from '../../services/ResourceService';
 import { logger } from '../../utils/logger';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
 const GITHUB_REPO = 'HALDRO/PrimeCode';
-
-// Resource type lookup — replaces ternary chain
-const RESOURCE_TYPE_MAP: Record<string, ResourceType> = {
-	openCommandFile: 'commands',
-	openSkillFile: 'skills',
-	openSubagentFile: 'subagents',
-};
 
 export class UtilityHandler implements WebviewMessageHandler {
 	constructor(private readonly context: HandlerContext) {}
@@ -92,30 +84,31 @@ export class UtilityHandler implements WebviewMessageHandler {
 	// ─── Agent Resource Files ───────────────────────────────────────────
 
 	private async handleOpenResourceFile(msg: WebviewCommand): Promise<void> {
-		const root = vscode.workspace.workspaceFolders?.[0]?.uri;
-		const name = (msg as { name: string }).name;
-		if (!root || !name) return;
-
-		const resourceType = RESOURCE_TYPE_MAP[msg.type];
-		if (!resourceType) return;
-
-		const items = await this.context.services.resources.getAll(resourceType);
-		const relativePath = items.find(i => i.name === name)?.path;
-		if (!relativePath) {
-			logger.warn(`[UtilityHandler] Resource not found: ${msg.type} name=${name}`);
+		const filePath = (msg as { filePath?: string }).filePath?.trim();
+		if (!filePath) {
+			logger.warn(`[UtilityHandler] Missing resource path: ${msg.type}`);
 			return;
 		}
 
-		// Path traversal guard: ensure resolved path stays within workspace root
-		const fileUri = vscode.Uri.joinPath(root, relativePath);
-		const rootFsPath = root.fsPath.replace(/\\/g, '/');
-		const fileFsPath = fileUri.fsPath.replace(/\\/g, '/');
-		if (!fileFsPath.startsWith(rootFsPath)) {
-			logger.warn(`[UtilityHandler] Path traversal blocked: ${relativePath}`);
-			return;
-		}
-
+		const fileUri = this.resolveResourceUri(filePath);
 		await vscode.window.showTextDocument(fileUri);
+	}
+
+	private resolveResourceUri(resourcePath: string): vscode.Uri {
+		if (/^file:\/\//i.test(resourcePath)) {
+			return vscode.Uri.parse(resourcePath);
+		}
+
+		if (path.isAbsolute(resourcePath)) {
+			return vscode.Uri.file(resourcePath);
+		}
+
+		const workspaceRoot = this.context.settings.getWorkspaceRoot();
+		if (!workspaceRoot) {
+			return vscode.Uri.file(resourcePath);
+		}
+
+		return vscode.Uri.file(path.join(workspaceRoot, resourcePath));
 	}
 
 	// ─── Git Stage ──────────────────────────────────────────────────────

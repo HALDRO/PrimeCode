@@ -23,7 +23,7 @@ import { useUIStore } from '../../store/uiStore';
 import { proxyEventSource } from '../../utils/proxyEventSource';
 import { useVSCode } from '../../utils/vscode';
 import { CloseIcon, HistoryIcon, MessageIcon, PlusIcon, SettingsIcon } from '../icons';
-import { Button } from '../ui';
+import { Button, ScrollContainer } from '../ui';
 import { HistoryDropdown } from './HistoryDropdown';
 
 /**
@@ -425,16 +425,24 @@ export const Header: React.FC = React.memo(() => {
 .header-tab-processing { animation: headerTabProcessing 1.5s ease-in-out infinite; }`}</style>
 			<header className="z-50 relative flex justify-between items-center select-none px-(--layout-padding-x) min-h-(--header-height) gap-(--gap-0-5)">
 				{/* Left side - Chat Tabs (Icons only) */}
-				<div className="flex items-center h-full overflow-hidden flex-1">
-					<div className="flex items-center h-full max-w-full overflow-x-auto scrollbar-thin-x gap-(--gap-0-5)">
-						{sessions.map((session, index) => (
-							<SessionTab key={session.id} sessionId={session.id} index={index} />
-						))}
-					</div>
+				<div className="flex items-center h-full overflow-hidden flex-1 min-w-0">
+					<ScrollContainer
+						orientation="horizontal"
+						autoHide="scroll"
+						thumbWidth={4}
+						autoHideDelay={800}
+						className="h-full"
+					>
+						<div className="flex items-center h-full max-w-full min-w-fit gap-(--gap-0-5)">
+							{sessions.map((session, index) => (
+								<SessionTab key={session.id} sessionId={session.id} index={index} />
+							))}
+						</div>
+					</ScrollContainer>
 				</div>
 
 				{/* Right side - Order: Status, New (Plus), History, Settings */}
-				<div className="flex items-center gap-(--header-gap)">
+				<div className="flex items-center gap-(--header-gap) shrink-0">
 					{/* Connection Status Button */}
 					<div className="relative">
 						<button

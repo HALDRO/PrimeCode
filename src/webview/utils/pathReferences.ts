@@ -1,6 +1,7 @@
 const CODE_KEYWORDS = /^(import|export|from|require|const|let|var|function|class|interface|type)\b/;
 const LINE_SUFFIX = /:(\d+)(?:-(\d+))?$/;
 const EXTENSION_SUFFIX = /\.([a-zA-Z][a-zA-Z\d]{0,9})$/;
+const FILE_URI_PREFIX = 'file://';
 
 const FILE_PATH_SOURCE =
 	'(?:' +
@@ -10,11 +11,13 @@ const FILE_PATH_SOURCE =
 	')';
 
 const FILE_REFERENCE_IN_TEXT = new RegExp(
-	String.raw`${FILE_PATH_SOURCE}(?::(\d+)(?:-(\d+))?)?(?=[)\]\s,;!?'"\x60]|$)`,
+	String.raw`(?:${FILE_PATH_SOURCE}|file:\/\/[^\s)\],;!?'"\x60]+)(?::(\d+)(?:-(\d+))?)?(?=[)\]\s,;!?'"\x60]|$)`,
 	'g',
 );
 
-const EXACT_FILE_REFERENCE = new RegExp(String.raw`^${FILE_PATH_SOURCE}(?::(\d+)(?:-(\d+))?)?$`);
+const EXACT_FILE_REFERENCE = new RegExp(
+	String.raw`^(?:${FILE_PATH_SOURCE}|file:\/\/\S+?)(?::(\d+)(?:-(\d+))?)?$`,
+);
 
 const BARE_FILENAME_EXTENSIONS = new Set([
 	'c',
@@ -130,6 +133,17 @@ const parseReference = (rawText: string): ParsedPathReference | null => {
 	if (!EXACT_FILE_REFERENCE.test(text)) return null;
 
 	const lineData = parseLineData(text);
+	if (lineData.filePath.startsWith(FILE_URI_PREFIX)) {
+		const uriExtension = lineData.filePath.match(EXTENSION_SUFFIX);
+		if (!uriExtension) return null;
+		return buildParsedReference(
+			lineData.filePath,
+			text,
+			lineData.hasLineInfo ? lineData.startLine : undefined,
+			lineData.hasLineInfo ? lineData.endLine : undefined,
+		);
+	}
+
 	const extensionMatch = lineData.filePath.match(EXTENSION_SUFFIX);
 	if (!extensionMatch) return null;
 

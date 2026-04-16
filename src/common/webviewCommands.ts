@@ -165,7 +165,7 @@ export interface DeleteSkillCommand {
 
 export interface OpenSkillFileCommand {
 	type: 'openSkillFile';
-	name: string;
+	filePath: string;
 }
 
 export interface CreateCommandCommand {
@@ -182,7 +182,7 @@ export interface DeleteCommandCommand {
 
 export interface OpenCommandFileCommand {
 	type: 'openCommandFile';
-	name: string;
+	filePath: string;
 }
 
 export type CreateSubagentCommand = SubagentCommandFields;
@@ -194,7 +194,7 @@ export interface DeleteSubagentCommand {
 
 export interface OpenSubagentFileCommand {
 	type: 'openSubagentFile';
-	name: string;
+	filePath: string;
 }
 
 export interface AddPluginCommand {

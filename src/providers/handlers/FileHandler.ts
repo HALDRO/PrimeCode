@@ -5,6 +5,23 @@ import type { HandlerContext, WebviewMessageHandler } from './types';
 export class FileHandler implements WebviewMessageHandler {
 	constructor(private context: HandlerContext) {}
 
+	private resolveFileUri(filePath: string): vscode.Uri {
+		const trimmed = filePath.trim();
+		if (/^file:\/\//i.test(trimmed)) {
+			return vscode.Uri.parse(trimmed);
+		}
+
+		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		const isAbsolute =
+			process.platform === 'win32'
+				? /^[a-zA-Z]:\\/.test(trimmed) || /^[a-zA-Z]:\//.test(trimmed)
+				: trimmed.startsWith('/');
+
+		const absolutePath =
+			!isAbsolute && root ? vscode.Uri.joinPath(vscode.Uri.file(root), trimmed).fsPath : trimmed;
+		return vscode.Uri.file(absolutePath);
+	}
+
 	async handleMessage(msg: WebviewCommand): Promise<void> {
 		switch (msg.type) {
 			case 'openFile':
@@ -27,19 +44,9 @@ export class FileHandler implements WebviewMessageHandler {
 
 	private async onOpenFile(msg: CommandOf<'openFile'>): Promise<void> {
 		const { filePath, line, startLine, endLine } = msg;
-
-		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-		const isAbsolute =
-			process.platform === 'win32'
-				? /^[a-zA-Z]:\\/.test(filePath) || /^[a-zA-Z]:\//.test(filePath)
-				: filePath.startsWith('/');
-
-		const absolutePath =
-			!isAbsolute && root ? vscode.Uri.joinPath(vscode.Uri.file(root), filePath).fsPath : filePath;
-
 		let uri: vscode.Uri;
 		try {
-			uri = vscode.Uri.file(absolutePath);
+			uri = this.resolveFileUri(filePath);
 		} catch {
 			uri = vscode.Uri.file(filePath);
 		}
@@ -81,15 +88,8 @@ export class FileHandler implements WebviewMessageHandler {
 
 	private async onOpenFileDiff(msg: CommandOf<'openFileDiff'>): Promise<void> {
 		const { filePath, oldContent, newContent } = msg;
-
-		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-		const isAbsolute =
-			process.platform === 'win32'
-				? /^[a-zA-Z]:\\/.test(filePath) || /^[a-zA-Z]:\//.test(filePath)
-				: filePath.startsWith('/');
-
-		const absolutePath =
-			!isAbsolute && root ? vscode.Uri.joinPath(vscode.Uri.file(root), filePath).fsPath : filePath;
+		const fileUri = this.resolveFileUri(filePath);
+		const absolutePath = fileUri.fsPath;
 
 		// If we have old/new content, show an in-memory diff directly
 		if (oldContent !== undefined || newContent !== undefined) {

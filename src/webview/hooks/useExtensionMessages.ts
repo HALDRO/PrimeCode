@@ -86,10 +86,12 @@ export function useExtensionMessages(): void {
 
 		if (!didSendInitialRequests.current) {
 			didSendInitialRequests.current = true;
-			// Request initial data from extension
-			// syncAll is triggered by the extension itself after OpenCode server starts
-			// (or deferred until the webview is ready), so we only need webviewDidLaunch here.
+			// Request initial data only after the webview listener is installed.
+			// Some extension bootstrap messages can be posted before the webview JS is
+			// fully listening, so we explicitly re-request syncAll here to avoid stale
+			// defaults like a false Disconnected indicator.
 			vscode.postMessage({ type: 'webviewDidLaunch' });
+			vscode.postMessage({ type: 'syncAll' });
 			vscode.postMessage({ type: 'checkExtensionVersion' });
 		}
 

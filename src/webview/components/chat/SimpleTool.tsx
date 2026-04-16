@@ -2,6 +2,7 @@ import React, { type ReactNode, useEffect, useId, useMemo, useRef, useState } fr
 import type { NormalizedEntry } from '../../../common/normalizedTypes';
 import { TOOL_CARD_EXPANDED_MAX_HEIGHT } from '../../constants';
 import { cn } from '../../lib/cn';
+import { useSettingsStore } from '../../store';
 import { formatDuration, formatToolName } from '../../utils/format';
 import { Markdown } from '../../utils/markdown';
 import { useVSCode } from '../../utils/vscode';
@@ -273,6 +274,25 @@ const getLeafName = (value: string) => {
 	return parts[parts.length - 1] || trimmed;
 };
 
+const getObjectInput = (value: unknown): Record<string, unknown> | null =>
+	typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null;
+
+const getInputString = (
+	input: Record<string, unknown> | null,
+	...keys: string[]
+): string | undefined => {
+	for (const key of keys) {
+		const value = input?.[key];
+		if (typeof value === 'string' && value.trim()) return value;
+	}
+	return undefined;
+};
+
+const getSkillMeta = (input: Record<string, unknown> | null) => ({
+	name: getInputString(input, 'name'),
+	path: getInputString(input, 'location', 'filePath', 'file_path', 'path'),
+});
+
 interface InlineToolLineProps {
 	toolName: string;
 	rawInput: unknown;
@@ -294,6 +314,7 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 		showCollapseOverlay,
 	}) => {
 		const { postMessage } = useVSCode();
+		const availableSkills = useSettingsStore(state => state.skills.items);
 		const toolLower = toolName.toLowerCase();
 		const action =
 			normalizedEntry?.entryType &&
@@ -306,6 +327,8 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 			label,
 			meta,
 			metaDisplay,
+			skillName,
+			skillPath,
 			isListDir,
 			isTodoWrite,
 			isRead,
@@ -337,6 +360,9 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 
 			let label = formatToolName(toolName);
 			let meta = '';
+			let skillName: string | undefined;
+			let skillPath: string | undefined;
+			const input = getObjectInput(rawInput);
 
 			let readOffset: number | undefined;
 			let readLimit: number | undefined;
@@ -371,48 +397,34 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 				} else if (action.type === 'TodoManagement') {
 					label = 'Todo';
 				} else if (action.type === 'Tool' && action.toolName === 'skill') {
-					const args =
-						'arguments' in action && typeof action.arguments === 'object'
-							? (action.arguments as Record<string, unknown>)
-							: null;
-					const skillName = (args?.name as string) || (rawInput as { name?: string })?.name;
-					label = skillName ? `Skill: ${skillName}` : 'Skill';
+					({ name: skillName, path: skillPath } = getSkillMeta(input));
+					label = 'Skill';
+					meta = skillPath || skillName || '';
 				} else if (action.type === 'Tool' && action.toolName === 'list') {
 					label = 'Listed';
-					const args =
-						'arguments' in action && typeof action.arguments === 'object'
-							? (action.arguments as Record<string, unknown>)
-							: null;
-					meta = (args?.path as string) || (rawInput as { path?: string })?.path || '';
+					meta = getInputString(input, 'path') || '';
 				}
 			} else {
 				if (isSkill) {
-					const skillName = (rawInput as { name?: string })?.name;
-					label = skillName ? `Skill: ${skillName}` : 'Skill';
+					({ name: skillName, path: skillPath } = getSkillMeta(input));
+					label = 'Skill';
+					meta = skillPath || skillName || '';
 				} else if (isLs) {
 					label = 'Listed';
-					meta = (rawInput as { path?: string })?.path || '';
+					meta = getInputString(input, 'path') || '';
 				} else if (isRead) {
 					label = 'Read';
-					const ri = rawInput as {
-						path?: string;
-						file_path?: string;
-						filePath?: string;
-						offset?: number;
-						limit?: number;
-					};
-					meta = ri?.path || ri?.file_path || ri?.filePath || '';
-					readOffset = typeof ri?.offset === 'number' ? ri.offset : undefined;
-					readLimit = typeof ri?.limit === 'number' ? ri.limit : undefined;
+					meta = getInputString(input, 'path', 'file_path', 'filePath') || '';
+					readOffset = typeof input?.offset === 'number' ? input.offset : undefined;
+					readLimit = typeof input?.limit === 'number' ? input.limit : undefined;
 				} else if (isTodo) {
 					label = 'Todo';
 				} else if (toolLower === 'grep') {
 					label = 'Grep';
-					meta = (rawInput as { pattern?: string })?.pattern || '';
+					meta = getInputString(input, 'pattern') || '';
 				} else if (toolLower === 'glob') {
 					label = 'Glob';
-					const i = rawInput as { glob_pattern?: string; pattern?: string };
-					meta = i?.glob_pattern || i?.pattern || '';
+					meta = getInputString(input, 'glob_pattern', 'pattern') || '';
 				}
 			}
 
@@ -421,10 +433,16 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 				metaDisplay = getLeafName(meta);
 			}
 
+			const resolvedSkillPath =
+				skillPath ||
+				(skillName ? availableSkills.find(skill => skill.name === skillName)?.path : undefined);
+
 			return {
 				label,
-				meta,
+				meta: isSkill ? resolvedSkillPath || skillName || meta : meta,
 				metaDisplay,
+				skillName,
+				skillPath: resolvedSkillPath,
 				isListDir: isLs,
 				isTodoWrite: isTodo,
 				isRead,
@@ -434,10 +452,28 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 				readOffset,
 				readLimit,
 			};
-		}, [action, rawInput, toolLower, toolName]);
+		}, [action, availableSkills, rawInput, toolLower, toolName]);
 
 		const metaNode = useMemo(() => {
 			if (!meta) return undefined;
+
+			if (isSkill) {
+				if (!skillPath && !skillName) return undefined;
+				const skillTargetPath = skillPath || skillName || meta;
+				const displayName = skillName || metaDisplay || 'Skill';
+				return (
+					<PathChip
+						path={skillTargetPath}
+						label={displayName}
+						iconName={skillPath || `${displayName}.md`}
+						onClick={
+							skillPath ? () => postMessage({ type: 'openFile', filePath: skillPath }) : undefined
+						}
+						title={skillPath || skillName || meta}
+						className="max-w-full min-w-0 shrink animate-content-reveal"
+					/>
+				);
+			}
 
 			if (isRead) {
 				const isFolder = /[\\/]$/.test(meta);
@@ -485,7 +521,18 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 					className="max-w-full min-w-0 shrink animate-content-reveal"
 				/>
 			);
-		}, [isListDir, isRead, meta, metaDisplay, postMessage, readLimit, readOffset]);
+		}, [
+			isListDir,
+			isRead,
+			isSkill,
+			meta,
+			metaDisplay,
+			postMessage,
+			readLimit,
+			readOffset,
+			skillName,
+			skillPath,
+		]);
 
 		// For TaskResult, prefer the result text from the actionType over the raw content prop
 		const taskResultText = useMemo(

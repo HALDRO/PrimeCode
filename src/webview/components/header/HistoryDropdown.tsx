@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
 	type ConversationIndexEntry,
 	useActiveSessionId,
+	useChatStore,
 	useHistoryDropdownState,
 } from '../../store';
 import { useUIActions } from '../../store/uiStore';
@@ -71,12 +72,17 @@ export const HistoryDropdown: React.FC = () => {
 	const { postMessage } = useVSCode();
 	const { conversationList, setShowHistoryDropdown } = useHistoryDropdownState();
 	const activeSessionId = useActiveSessionId();
+	const sessionOrder = useChatStore(state => state.sessionOrder);
 	const { showConfirmDialog } = useUIActions();
 	const [isLoading, setIsLoading] = useState(true);
 	const [editingId, setEditingId] = useState<string | null>(null);
 	const [editValue, setEditValue] = useState('');
 	const [hoveredId, setHoveredId] = useState<string | null>(null);
 	const inputRef = useRef<HTMLInputElement>(null);
+
+	const openSessionNumbers = useMemo(() => {
+		return new Map(sessionOrder.map((sessionId, index) => [sessionId, index + 1]));
+	}, [sessionOrder]);
 
 	const onClose = useCallback(() => {
 		setShowHistoryDropdown(false);
@@ -206,6 +212,7 @@ export const HistoryDropdown: React.FC = () => {
 		const isEditing = editingId === item.id;
 		const isHovered = hoveredId === item.id;
 		const isActive = item.id === activeSessionId;
+		const openSessionNumber = openSessionNumbers.get(item.id);
 
 		return (
 			<div
@@ -230,10 +237,15 @@ export const HistoryDropdown: React.FC = () => {
 					/>
 				) : (
 					<>
-						{isActive && (
-							<span className="w-1.5 h-1.5 rounded-full bg-vscode-focusBorder shrink-0" />
-						)}
 						<span className="opacity-50 flex shrink-0">{item.icon}</span>
+						{openSessionNumber ? (
+							<span
+								className={`inline-flex min-w-5 h-5 items-center justify-center rounded-md px-1 text-xs font-medium shrink-0 ${isActive ? 'bg-vscode-focusBorder/15 text-vscode-focusBorder' : 'bg-(--alpha-8) text-vscode-descriptionForeground'}`}
+								title={`Open in header as chat ${openSessionNumber}`}
+							>
+								{openSessionNumber}
+							</span>
+						) : null}
 						<span
 							className={`overflow-hidden text-ellipsis whitespace-nowrap ${isActive ? 'text-vscode-focusBorder' : 'text-vscode-foreground'}`}
 						>

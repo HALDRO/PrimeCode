@@ -46,7 +46,7 @@ export const SkillsTab: React.FC = () => {
 	};
 
 	const handleDeleteSkill = (name: string) => postMessage({ type: 'deleteSkill', name });
-	const handleOpenSkill = (name: string) => postMessage({ type: 'openSkillFile', name });
+	const handleOpenSkill = (filePath: string) => postMessage({ type: 'openSkillFile', filePath });
 
 	return (
 		<>
@@ -145,7 +145,7 @@ export const SkillsTab: React.FC = () => {
 								<Tooltip content="Edit file" position="top" delay={200}>
 									<button
 										type="button"
-										onClick={() => handleOpenSkill(skill.name)}
+										onClick={() => handleOpenSkill(skill.path)}
 										className="p-1 rounded hover:bg-vscode-list-hoverBackground text-vscode-descriptionForeground hover:text-vscode-foreground transition-colors"
 									>
 										<EditIcon size={12} />

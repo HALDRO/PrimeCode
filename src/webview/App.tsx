@@ -172,6 +172,30 @@ const MessageSectionComponent = React.memo<MessageSectionProps>(
 						isRevertPoint={section.isRevertPoint}
 						stats={section.stats}
 					/>
+					<div
+						aria-hidden="true"
+						className="pointer-events-none absolute z-50 overflow-hidden"
+						style={{
+							left: '13px',
+							right: '13px',
+							bottom: -15,
+							height: 15,
+							borderBottomLeftRadius: '10px',
+							borderBottomRightRadius: '10px',
+						}}
+					>
+						<div
+							className="absolute left-0 right-0"
+							style={{
+								top: '-3px',
+								height: 18,
+								background:
+									'linear-gradient(to bottom, color-mix(in srgb, var(--surface-base) 72%, transparent) 0%, color-mix(in srgb, var(--surface-base) 42%, transparent) 28%, color-mix(in srgb, var(--surface-base) 16%, transparent) 62%, rgba(0, 0, 0, 0) 100%)',
+								filter: 'blur(5px)',
+								opacity: 0.78,
+							}}
+						/>
+					</div>
 				</div>
 				<div
 					className="px-(--content-padding-x)"

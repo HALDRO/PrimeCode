@@ -339,6 +339,19 @@ function upsertUserMessage(targetSession: ChatSession, incoming: UserMessage): v
 	};
 }
 
+function syncSessionModelFromUserMessages(targetSession: ChatSession): void {
+	const lastUserWithModel = projectRuntimeMessages(targetSession)
+		.reverse()
+		.find(
+			(message): message is RenderUserMessage & { model: string } =>
+				message.kind === 'user' &&
+				typeof message.model === 'string' &&
+				message.model.trim().length > 0,
+		);
+	if (!lastUserWithModel?.model) return;
+	targetSession.model = lastUserWithModel.model;
+}
+
 function upsertSubtaskMessage(targetSession: ChatSession, incoming: SubtaskMessage): void {
 	if (!incoming.id) return;
 	const existing = targetSession.subtasksById[incoming.id];
@@ -415,6 +428,9 @@ function handleUserMessageEvent(targetSession: ChatSession, payload: SessionEven
 		timestamp: messageTimestamp,
 	};
 	upsertUserMessage(targetSession, message);
+	if (message.model?.trim()) {
+		targetSession.model = message.model;
+	}
 	if (message.agent) {
 		targetSession.agent = message.agent === 'build' ? undefined : message.agent;
 	}
@@ -774,6 +790,7 @@ function handleMessagesReloadEvent(targetSession: ChatSession, payload: SessionE
 			upsertSubtaskMessage(targetSession, message as SubtaskMessage);
 		}
 	}
+	syncSessionModelFromUserMessages(targetSession);
 }
 
 function handleDeleteMessagesAfterEvent(
@@ -1517,6 +1534,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 					.reverse()
 					.find((m): m is StoredMessage & { type: 'user'; agent?: string } => m.type === 'user');
 				s.agent = lastUserWithAgent?.agent;
+				syncSessionModelFromUserMessages(s);
 			}),
 
 		deleteMessagesAfterMessageId: (sessionId, messageId) =>

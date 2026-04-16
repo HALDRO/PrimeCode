@@ -50,8 +50,8 @@ export const CommandsTab: React.FC = () => {
 		postMessage({ type: 'deleteCommand', name });
 	};
 
-	const handleOpen = (name: string) => {
-		postMessage({ type: 'openCommandFile', name });
+	const handleOpen = (filePath: string) => {
+		postMessage({ type: 'openCommandFile', filePath });
 	};
 
 	return (
@@ -154,7 +154,7 @@ export const CommandsTab: React.FC = () => {
 								<Tooltip content="Edit file" position="top" delay={200}>
 									<button
 										type="button"
-										onClick={() => handleOpen(cmd.name)}
+										onClick={() => handleOpen(cmd.path)}
 										className="p-1 rounded hover:bg-vscode-list-hoverBackground text-vscode-descriptionForeground hover:text-vscode-foreground transition-colors"
 									>
 										<EditIcon size={12} />

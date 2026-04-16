@@ -74,7 +74,7 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({
 	return (
 		<div className="h-(--input-toolbar-height) flex items-center justify-between pl-(--gap-2) pr-0 box-border shrink-0">
 			{/* Left Toolbar */}
-			<div className="flex items-center gap-(--gap-0-5) z-5 min-w-0 overflow-hidden">
+			<div className="flex items-center gap-(--gap-0-5) z-5 min-w-0 overflow-hidden leading-none [&_svg]:block [&_svg]:shrink-0">
 				{/* Agent button: click toggles build↔plan, chevron opens dropdown only if custom agents exist */}
 				<div className="relative shrink-0 flex items-center">
 					<Button
@@ -148,7 +148,7 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({
 			</div>
 
 			{/* Right Toolbar */}
-			<div className="flex items-center gap-0 pr-0 shrink-0">
+			<div className="flex items-center gap-0 pr-0 shrink-0 leading-none [&_svg]:block [&_svg]:shrink-0">
 				{/* Improve prompt */}
 				<div className="relative">
 					<IconButton

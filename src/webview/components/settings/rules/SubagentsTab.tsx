@@ -356,7 +356,7 @@ export const SubagentsTab: React.FC = () => {
 								<Tooltip content="Edit file" position="top" delay={200}>
 									<button
 										type="button"
-										onClick={() => postMessage({ type: 'openSubagentFile', name: sa.name })}
+										onClick={() => postMessage({ type: 'openSubagentFile', filePath: sa.path })}
 										className="p-1 rounded hover:bg-vscode-list-hoverBackground text-vscode-descriptionForeground hover:text-vscode-foreground transition-colors"
 									>
 										<EditIcon size={12} />

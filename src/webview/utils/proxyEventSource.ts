@@ -82,6 +82,15 @@ function ensureListener() {
 				clearRetryTimer(sub);
 				sub.onMessage(data);
 			}
+		} else if (message?.type === 'sseOpen') {
+			const { id } = message.data;
+			const sub = activeSubscriptions.get(id);
+			if (sub) {
+				sub.hasConnected = true;
+				sub.retryCount = 0;
+				clearRetryTimer(sub);
+				sub.onMessage('');
+			}
 		} else if (message?.type === 'sseError') {
 			const { id, error } = message.data;
 			const sub = activeSubscriptions.get(id);

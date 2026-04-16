@@ -12,7 +12,7 @@ import { cn } from '../../lib/cn';
 import { Tooltip, type TooltipPosition } from './Tooltip';
 
 const buttonVariants = cva(
-	'inline-flex items-center justify-center gap-(--gap-1-5) font-medium rounded cursor-pointer transition-colors duration-200 select-none border border-transparent font-(family-name:--vscode-font-family) focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder disabled:opacity-50 disabled:cursor-not-allowed',
+	'inline-flex items-center justify-center gap-(--gap-1-5) font-medium leading-none rounded cursor-pointer transition-colors duration-200 select-none border border-transparent font-(family-name:--vscode-font-family) focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder disabled:opacity-50 disabled:cursor-not-allowed [&_svg]:block [&_svg]:shrink-0',
 	{
 		variants: {
 			variant: {
@@ -138,7 +138,7 @@ export const IconButton: React.FC<IconButtonProps> = ({
 	const sizeValue = typeof size === 'number' ? `${size}px` : ICON_BUTTON_SIZE_VARS[size];
 
 	const classes = cn(
-		'inline-flex items-center justify-center rounded cursor-pointer transition-all duration-150 bg-(--surface-raised) border-none p-0',
+		'inline-flex items-center justify-center leading-none rounded cursor-pointer transition-all duration-150 bg-(--surface-raised) border-none p-0 [&_svg]:block [&_svg]:shrink-0',
 		danger
 			? 'text-error hover:bg-white/10'
 			: 'text-vscode-icon-foreground hover:bg-white/10 hover:text-vscode-foreground',

@@ -1584,6 +1584,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		}
 
 		const config = this.buildSendConfig(uiModel);
+		const restoreTargetId = explicitSessionId || this.context.sessionState.activeSessionId;
 
 		// Per-message agent override takes precedence over the global opencode.agent setting.
 		if (agent) {
@@ -1596,7 +1597,11 @@ export class SessionHandler implements WebviewMessageHandler {
 			const selectedModel = config.model.trim();
 			const parsed = parseModelId(selectedModel);
 			if (!parsed) {
-				this.postModelError(
+				this.restoreFailedSendDraft(
+					restoreTargetId,
+					text,
+					attachments,
+					agent,
 					`Invalid model selection: "${selectedModel}". Expected format "provider/model". Please choose another model.`,
 				);
 				return;
@@ -1611,7 +1616,11 @@ export class SessionHandler implements WebviewMessageHandler {
 					const provider = providers.find(p => p.id === parsed.providerId);
 					const exists = provider?.models?.some(m => m.id === parsed.modelId) ?? false;
 					if (!exists) {
-						this.postModelError(
+						this.restoreFailedSendDraft(
+							restoreTargetId,
+							text,
+							attachments,
+							agent,
 							`Model "${selectedModel}" is unavailable. Please reconnect the provider or choose another model.`,
 						);
 						return;
@@ -1751,19 +1760,17 @@ export class SessionHandler implements WebviewMessageHandler {
 			await this.context.cli.spawnFollowUp(text, activeId, config, attachments);
 		} catch (error) {
 			logger.error('[SessionHandler] Failed to spawn CLI:', error);
+			this.restoreFailedSendDraft(
+				activeId,
+				text,
+				attachments,
+				agent,
+				error instanceof Error ? error.message : 'Failed to start CLI',
+			);
 
 			if (activeId) {
 				this.context.sessionState.startedSessions.delete(activeId);
 				this.sessionTotalsByUiSession.delete(activeId);
-
-				this.context.bridge.emit(activeId, 'notification', {
-					notification: {
-						id: `error-${Date.now()}`,
-						type: 'error',
-						content: error instanceof Error ? error.message : 'Failed to start CLI',
-						timestamp: new Date().toISOString(),
-					},
-				});
 				this.context.bridge.emit(activeId, 'status', {
 					status: 'error',
 					statusText: 'Failed to start',
@@ -2958,9 +2965,15 @@ export class SessionHandler implements WebviewMessageHandler {
 	 * Post a model error notification to the webview and abort the send.
 	 * Uses the active session if available, otherwise broadcasts without a session.
 	 */
-	private postModelError(content: string): void {
-		const sessionId = this.context.sessionState.activeSessionId;
+	private restoreFailedSendDraft(
+		sessionId: string | undefined,
+		text: string,
+		attachments: CommandOf<'sendMessage'>['attachments'] | undefined,
+		agent: string | undefined,
+		content: string,
+	): void {
 		if (sessionId) {
+			this.context.bridge.queue.update('cancelled', sessionId, [], text, attachments, agent);
 			this.context.bridge.emit(sessionId, 'notification', {
 				notification: {
 					id: `error-${Date.now()}`,

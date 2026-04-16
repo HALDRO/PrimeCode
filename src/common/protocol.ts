@@ -847,6 +847,7 @@ export type ServerInfoMessage = BaseExtensionMessage<
 >;
 
 export type SseEventMessage = BaseExtensionMessage<'sseEvent', { id: string; data: string }>;
+export type SseOpenMessage = BaseExtensionMessage<'sseOpen', { id: string }>;
 export type SseErrorMessage = BaseExtensionMessage<'sseError', { id: string; error: string }>;
 export type SseClosedMessage = BaseExtensionMessage<'sseClosed', { id: string }>;
 
@@ -913,6 +914,7 @@ export type ExtensionMessage =
 	| OpenCodeCustomProviderResultMessage
 	| OpenCodeDisconnectResultMessage
 	| RemoveOpenCodeProviderMessage
+	| SseOpenMessage
 	| AvailableProvidersMessage
 	| ProxyProviderSavingMessage
 	| ProxyProviderSavedMessage
@@ -1306,7 +1308,7 @@ export interface DeleteSkillCommand {
 }
 export interface OpenSkillFileCommand {
 	type: 'openSkillFile';
-	name: string;
+	filePath: string;
 }
 
 export interface CreateCommandCommand {
@@ -1321,7 +1323,7 @@ export interface DeleteCommandCommand {
 }
 export interface OpenCommandFileCommand {
 	type: 'openCommandFile';
-	name: string;
+	filePath: string;
 }
 
 export type CreateSubagentCommand = SubagentCommandFields;
@@ -1331,7 +1333,7 @@ export interface DeleteSubagentCommand {
 }
 export interface OpenSubagentFileCommand {
 	type: 'openSubagentFile';
-	name: string;
+	filePath: string;
 }
 
 export interface AddPluginCommand {

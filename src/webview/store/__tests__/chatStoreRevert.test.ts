@@ -211,6 +211,54 @@ describe('chatStore revert/unrevert state', () => {
 	});
 
 	// =========================================================================
+	// handleExtensionMessage — messageQueue cancelled
+	// =========================================================================
+
+	describe('handleExtensionMessage — messageQueue cancelled', () => {
+		it('should restore cancelled text, attachments, and agent to the draft', () => {
+			createSession('s1');
+			useChatStore.getState().actions.updateSession({ input: 'existing draft' }, 's1');
+
+			useChatStore.getState().actions.handleExtensionMessage({
+				type: 'messageQueue',
+				data: {
+					action: 'cancelled',
+					sessionId: 's1',
+					queue: [],
+					cancelledText: 'lost prompt',
+					cancelledAttachments: {
+						files: ['src/foo.ts'],
+						codeSnippets: [
+							{
+								filePath: 'src/foo.ts',
+								startLine: 1,
+								endLine: 3,
+								content: 'const x = 1;',
+							},
+						],
+					},
+					cancelledAgent: 'build',
+				},
+			});
+
+			const session = getSession('s1');
+			expect(session.input).toBe('existing draft\n\nlost prompt');
+			expect(session.draftAttachments).toEqual({
+				files: ['src/foo.ts'],
+				codeSnippets: [
+					{
+						filePath: 'src/foo.ts',
+						startLine: 1,
+						endLine: 3,
+						content: 'const x = 1;',
+					},
+				],
+			});
+			expect(session.draftAgent).toBe('build');
+		});
+	});
+
+	// =========================================================================
 	// handleRestoreEvent — 'add_commit'
 	// =========================================================================
 

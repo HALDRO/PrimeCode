@@ -38,7 +38,7 @@ interface StatsDisplayProps {
 
 const CONTAINER_CLASSES: Record<NonNullable<StatsDisplayProps['mode']>, string> = {
 	message:
-		'flex items-end justify-end gap-(--gap-3) text-sm px-(--gap-3) pt-(--gap-1) pb-(--gap-0-5) mt-auto',
+		'flex items-center justify-end gap-(--gap-3) text-sm px-(--gap-3) h-(--input-toolbar-height) mt-auto',
 	panel: 'flex items-center gap-(--gap-3) text-(--changed-files-font-size)',
 	footer:
 		'flex items-center justify-center gap-(--gap-3) h-(--tool-header-height) px-(--gap-3) text-(--changed-files-font-size) font-(family-name:--vscode-font-family)',
@@ -47,10 +47,10 @@ const CONTAINER_CLASSES: Record<NonNullable<StatsDisplayProps['mode']>, string> 
 
 const VARIANT_CLASSES: Record<string, string> = {
 	default:
-		'flex items-end gap-(--gap-1) text-sm leading-none text-vscode-foreground opacity-90 min-w-0',
-	success: 'flex items-end gap-(--gap-1) text-sm leading-none text-success opacity-100 min-w-0',
-	added: 'flex items-end gap-(--gap-1) text-sm leading-none text-success opacity-100 min-w-0',
-	removed: 'flex items-end gap-(--gap-1) text-sm leading-none text-error opacity-100 min-w-0',
+		'flex items-center gap-(--gap-1) text-sm leading-none text-vscode-foreground opacity-90 min-w-0',
+	success: 'flex items-center gap-(--gap-1) text-sm leading-none text-success opacity-100 min-w-0',
+	added: 'flex items-center gap-(--gap-1) text-sm leading-none text-success opacity-100 min-w-0',
+	removed: 'flex items-center gap-(--gap-1) text-sm leading-none text-error opacity-100 min-w-0',
 };
 
 const StatItemRenderer: React.FC<{ item: StatItem }> = ({ item }) => {

@@ -16,13 +16,14 @@ function useScrollThumb(
 		autoHide: string;
 		autoHideDelay: number;
 		minThumbHeight: number;
+		orientation: 'vertical' | 'horizontal';
 	},
 ) {
-	const { autoHide, autoHideDelay, minThumbHeight } = config;
+	const { autoHide, autoHideDelay, minThumbHeight, orientation } = config;
 	const trackRef = useRef<HTMLDivElement>(null);
 	const rafRef = useRef(0);
 	const hideTimerRef = useRef(0);
-	const dragRef = useRef<{ startY: number; startScrollTop: number } | null>(null);
+	const dragRef = useRef<{ startPointerOffset: number; startScrollOffset: number } | null>(null);
 
 	const [visible, setVisible] = useState(autoHide === 'never');
 	const [hovered, setHovered] = useState(false);
@@ -32,17 +33,19 @@ function useScrollThumb(
 	const updateThumb = useCallback(() => {
 		const el = scrollerRef.current;
 		if (!el) return;
-		const { scrollTop, scrollHeight, clientHeight } = el;
-		if (scrollHeight <= clientHeight) {
+		const viewportSize = orientation === 'horizontal' ? el.clientWidth : el.clientHeight;
+		const scrollSize = orientation === 'horizontal' ? el.scrollWidth : el.scrollHeight;
+		const scrollOffset = orientation === 'horizontal' ? el.scrollLeft : el.scrollTop;
+		if (scrollSize <= viewportSize) {
 			setThumbState({ top: 0, height: 0, show: false });
 			return;
 		}
-		const ratio = clientHeight / scrollHeight;
-		const thumbH = Math.max(ratio * clientHeight, minThumbHeight);
-		const maxTop = clientHeight - thumbH;
-		const scrollRatio = scrollTop / (scrollHeight - clientHeight);
+		const ratio = viewportSize / scrollSize;
+		const thumbH = Math.max(ratio * viewportSize, minThumbHeight);
+		const maxTop = viewportSize - thumbH;
+		const scrollRatio = scrollOffset / (scrollSize - viewportSize);
 		setThumbState({ top: scrollRatio * maxTop, height: thumbH, show: true });
-	}, [scrollerRef, minThumbHeight]);
+	}, [scrollerRef, minThumbHeight, orientation]);
 
 	const showAndScheduleHide = useCallback(() => {
 		if (autoHide === 'never') return;
@@ -92,11 +95,14 @@ function useScrollThumb(
 			e.stopPropagation();
 			const el = scrollerRef.current;
 			if (!el) return;
-			dragRef.current = { startY: e.clientY, startScrollTop: el.scrollTop };
+			dragRef.current = {
+				startPointerOffset: orientation === 'horizontal' ? e.clientX : e.clientY,
+				startScrollOffset: orientation === 'horizontal' ? el.scrollLeft : el.scrollTop,
+			};
 			setDragging(true);
 			(e.target as HTMLElement).setPointerCapture(e.pointerId);
 		},
-		[scrollerRef],
+		[scrollerRef, orientation],
 	);
 
 	const onPointerMove = useCallback(
@@ -104,15 +110,23 @@ function useScrollThumb(
 			if (!dragRef.current) return;
 			const el = scrollerRef.current;
 			if (!el) return;
-			const { scrollHeight, clientHeight } = el;
+			const viewportSize = orientation === 'horizontal' ? el.clientWidth : el.clientHeight;
+			const scrollSize = orientation === 'horizontal' ? el.scrollWidth : el.scrollHeight;
 			const thumbH = thumbState.height || minThumbHeight;
-			const trackH = clientHeight - thumbH;
+			const trackH = viewportSize - thumbH;
 			if (trackH <= 0) return;
-			const deltaY = e.clientY - dragRef.current.startY;
-			const scrollDelta = (deltaY / trackH) * (scrollHeight - clientHeight);
-			el.scrollTop = dragRef.current.startScrollTop + scrollDelta;
+			const delta =
+				orientation === 'horizontal'
+					? e.clientX - dragRef.current.startPointerOffset
+					: e.clientY - dragRef.current.startPointerOffset;
+			const scrollDelta = (delta / trackH) * (scrollSize - viewportSize);
+			if (orientation === 'horizontal') {
+				el.scrollLeft = dragRef.current.startScrollOffset + scrollDelta;
+			} else {
+				el.scrollTop = dragRef.current.startScrollOffset + scrollDelta;
+			}
 		},
-		[scrollerRef, thumbState.height, minThumbHeight],
+		[scrollerRef, thumbState.height, minThumbHeight, orientation],
 	);
 
 	const onPointerUp = useCallback((e: React.PointerEvent) => {
@@ -127,11 +141,17 @@ function useScrollThumb(
 			const el = scrollerRef.current;
 			if (!el || !trackRef.current) return;
 			const rect = trackRef.current.getBoundingClientRect();
-			const clickY = e.clientY - rect.top;
-			const { scrollHeight, clientHeight } = el;
-			el.scrollTop = (clickY / clientHeight) * (scrollHeight - clientHeight);
+			const clickY = orientation === 'horizontal' ? e.clientX - rect.left : e.clientY - rect.top;
+			const viewportSize = orientation === 'horizontal' ? el.clientWidth : el.clientHeight;
+			const scrollSize = orientation === 'horizontal' ? el.scrollWidth : el.scrollHeight;
+			const nextOffset = (clickY / viewportSize) * (scrollSize - viewportSize);
+			if (orientation === 'horizontal') {
+				el.scrollLeft = nextOffset;
+			} else {
+				el.scrollTop = nextOffset;
+			}
 		},
-		[scrollerRef],
+		[scrollerRef, orientation],
 	);
 
 	const opacity = dragging || hovered ? 0.7 : visible || autoHide === 'never' ? 0.4 : 0;
@@ -158,10 +178,12 @@ function ThumbUI({
 	thumb,
 	thumbWidth,
 	scrollerRef,
+	orientation,
 }: {
 	thumb: ReturnType<typeof useScrollThumb>;
 	thumbWidth: number;
 	scrollerRef: React.RefObject<HTMLDivElement | null>;
+	orientation: 'vertical' | 'horizontal';
 }) {
 	if (!thumb.thumbState.show) return null;
 	const activeWidth = thumb.hovered || thumb.dragging ? thumbWidth + 2 : thumbWidth;
@@ -171,7 +193,12 @@ function ThumbUI({
 			onClick={thumb.onTrackClick}
 			onWheel={e => {
 				const el = scrollerRef.current;
-				if (el) el.scrollTop += e.deltaY;
+				if (!el) return;
+				if (orientation === 'horizontal') {
+					el.scrollLeft += Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+					return;
+				}
+				el.scrollTop += e.deltaY;
 			}}
 			onMouseEnter={() => {
 				thumb.setHovered(true);
@@ -183,10 +210,12 @@ function ThumbUI({
 			}}
 			style={{
 				position: 'absolute',
-				top: 0,
-				right: 0,
-				width: `${thumbWidth + 4}px`,
-				height: '100%',
+				top: orientation === 'horizontal' ? 'auto' : 0,
+				right: orientation === 'horizontal' ? 0 : 0,
+				bottom: orientation === 'horizontal' ? 0 : 'auto',
+				left: orientation === 'horizontal' ? 0 : 'auto',
+				width: orientation === 'horizontal' ? '100%' : `${thumbWidth + 4}px`,
+				height: orientation === 'horizontal' ? `${thumbWidth + 4}px` : '100%',
 				zIndex: 50,
 				cursor: 'default',
 				pointerEvents: 'auto',
@@ -199,10 +228,12 @@ function ThumbUI({
 				onPointerCancel={thumb.onPointerUp}
 				style={{
 					position: 'absolute',
-					right: 1,
-					top: thumb.thumbState.top,
-					width: `${activeWidth}px`,
-					height: `${thumb.thumbState.height}px`,
+					right: orientation === 'horizontal' ? 'auto' : 1,
+					top: orientation === 'horizontal' ? 1 : thumb.thumbState.top,
+					left: orientation === 'horizontal' ? thumb.thumbState.top : 'auto',
+					width: orientation === 'horizontal' ? `${thumb.thumbState.height}px` : `${activeWidth}px`,
+					height:
+						orientation === 'horizontal' ? `${activeWidth}px` : `${thumb.thumbState.height}px`,
 					borderRadius: `${activeWidth / 2}px`,
 					backgroundColor: 'color-mix(in srgb, var(--vscode-editor-foreground) 30%, transparent)',
 					opacity: thumb.opacity,
@@ -222,6 +253,7 @@ interface ScrollThumbProps {
 	thumbWidth?: number;
 	minThumbHeight?: number;
 	autoHideDelay?: number;
+	orientation?: 'vertical' | 'horizontal';
 }
 
 export const ScrollThumb: React.FC<ScrollThumbProps> = ({
@@ -230,9 +262,22 @@ export const ScrollThumb: React.FC<ScrollThumbProps> = ({
 	thumbWidth = 4,
 	minThumbHeight = 24,
 	autoHideDelay = 1200,
+	orientation = 'vertical',
 }) => {
-	const thumb = useScrollThumb(scrollerRef, { autoHide, autoHideDelay, minThumbHeight });
-	return <ThumbUI thumb={thumb} thumbWidth={thumbWidth} scrollerRef={scrollerRef} />;
+	const thumb = useScrollThumb(scrollerRef, {
+		autoHide,
+		autoHideDelay,
+		minThumbHeight,
+		orientation,
+	});
+	return (
+		<ThumbUI
+			thumb={thumb}
+			thumbWidth={thumbWidth}
+			scrollerRef={scrollerRef}
+			orientation={orientation}
+		/>
+	);
 };
 
 // ── ScrollContainer (full wrapper with scroller + thumb) ───────────
@@ -245,6 +290,7 @@ interface ScrollContainerProps {
 	thumbWidth?: number;
 	minThumbHeight?: number;
 	autoHideDelay?: number;
+	orientation?: 'vertical' | 'horizontal';
 }
 
 export const ScrollContainer = React.forwardRef<HTMLDivElement, ScrollContainerProps>(
@@ -257,6 +303,7 @@ export const ScrollContainer = React.forwardRef<HTMLDivElement, ScrollContainerP
 			thumbWidth = 4,
 			minThumbHeight = 24,
 			autoHideDelay = 1200,
+			orientation = 'vertical',
 		},
 		forwardedRef,
 	) => {
@@ -271,7 +318,12 @@ export const ScrollContainer = React.forwardRef<HTMLDivElement, ScrollContainerP
 			[forwardedRef],
 		);
 
-		const thumb = useScrollThumb(scrollerRef, { autoHide, autoHideDelay, minThumbHeight });
+		const thumb = useScrollThumb(scrollerRef, {
+			autoHide,
+			autoHideDelay,
+			minThumbHeight,
+			orientation,
+		});
 
 		return (
 			<div
@@ -285,14 +337,19 @@ export const ScrollContainer = React.forwardRef<HTMLDivElement, ScrollContainerP
 					ref={handleScrollerRef}
 					className="flex-1 min-h-0"
 					style={{
-						overflowX: 'hidden',
-						overflowY: 'auto',
+						overflowX: orientation === 'horizontal' ? 'auto' : 'hidden',
+						overflowY: orientation === 'horizontal' ? 'hidden' : 'auto',
 						scrollbarWidth: 'none' as const,
 					}}
 				>
 					{children}
 				</div>
-				<ThumbUI thumb={thumb} thumbWidth={thumbWidth} scrollerRef={scrollerRef} />
+				<ThumbUI
+					thumb={thumb}
+					thumbWidth={thumbWidth}
+					scrollerRef={scrollerRef}
+					orientation={orientation}
+				/>
 			</div>
 		);
 	},

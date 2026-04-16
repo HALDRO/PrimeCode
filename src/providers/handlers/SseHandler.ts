@@ -88,6 +88,8 @@ export class SseHandler implements WebviewMessageHandler {
 					return;
 				}
 
+				this.context.bridge.data('sseOpen', { id });
+
 				const reader = res.body.getReader();
 				const decoder = new TextDecoder();
 				let buffer = '';

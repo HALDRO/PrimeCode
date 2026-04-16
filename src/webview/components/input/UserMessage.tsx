@@ -221,8 +221,8 @@ const MessageStats = React.memo<{
 
 	return (
 		<div className="flex items-center justify-between w-full gap-(--gap-2)">
-			<StatsDisplay mode="message" items={leftItems} className="min-w-0 shrink" />
-			<StatsDisplay mode="message" items={rightItems} className="shrink-0" />
+			<StatsDisplay mode="message" items={leftItems} className="min-w-0 shrink !px-0 !pt-0 !pb-0" />
+			<StatsDisplay mode="message" items={rightItems} className="shrink-0 !px-0 !pt-0 !pb-0" />
 		</div>
 	);
 });
@@ -543,41 +543,9 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 		const showUnrevert = isRevertPoint && unrevertAvailable;
 		const showRestore = restoreCommit && !isRevertPoint;
 
-		const [_isSticky, setIsSticky] = useState(false);
-		const containerRef = useRef<HTMLDivElement>(null);
-
-		// Use IntersectionObserver instead of per-instance scroll listeners.
-		// A scroll listener on every UserMessage causes N forced reflows
-		// (getBoundingClientRect) per scroll frame. IntersectionObserver is
-		// async and batched by the browser — zero main-thread cost during scroll.
-		useEffect(() => {
-			const el = containerRef.current;
-			if (!el) return;
-
-			// A 1px-tall sentinel at the top of the scroll container.
-			// When the sticky header reaches the top and the sentinel goes
-			// out of view, we know the element is "stuck".
-			const observer = new IntersectionObserver(
-				([entry]) => {
-					// isIntersecting=false means the element's top edge has
-					// reached (or passed) the scroll container's top — it's stuck.
-					setIsSticky(!entry.isIntersecting);
-				},
-				{
-					root: null,
-					// Trigger when the very top pixel leaves the viewport
-					threshold: 1.0,
-					rootMargin: '0px 0px 0px 0px',
-				},
-			);
-
-			observer.observe(el);
-			return () => observer.disconnect();
-		}, []);
-
 		if (isEditing) {
 			return (
-				<div ref={editContainerRef} className="w-full mb-(--message-gap) px-0">
+				<div ref={editContainerRef} className="w-full mb-(--message-gap)">
 					<ChatInput
 						value={editText}
 						onChange={setEditText}
@@ -591,88 +559,89 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 						initialFiles={attachedFiles}
 						initialCodeSnippets={attachedSnippets}
 						initialImages={attachedImages}
-						className="px-0"
 					/>
 				</div>
 			);
 		}
 
 		return (
-			<div className="w-full mb-(--message-gap) px-0" ref={containerRef}>
+			<div className="w-full mb-(--message-gap) px-0">
 				<div
 					className={cn(
 						'flex flex-col relative w-full bg-(--input-bg) border border-(--input-border) rounded-(--input-radius) overflow-hidden transition-all duration-150 ease-out',
 					)}
 				>
-					{/* Restore/Unrevert buttons in top-right corner - mutually exclusive */}
-					{(showRestore || showUnrevert) && (
-						<div className="absolute top-1 right-1.5 flex items-center gap-1 z-10">
-							{showUnrevert && <UnrevertButton onUnrevert={handleUnrevert} />}
-							{showRestore && (
-								<RestoreButton restoreCommit={restoreCommit} onRestore={handleRestore} />
-							)}
-						</div>
-					)}
-					<button
-						type="button"
-						onClick={() => message.id && setEditingMessageId(message.id)}
-						className={cn(
-							'w-full bg-transparent border-none text-left font-(family-name:--vscode-font-family) text-vscode-foreground',
-							'p-(--gap-3)_(--gap-6)_(--gap-1)_(--gap-6)',
-							showRestore || showUnrevert ? 'pr-20' : '',
-							'cursor-pointer',
+					<div className="flex-1 min-w-0 flex flex-col relative">
+						{/* Restore/Unrevert buttons in top-right corner - mutually exclusive */}
+						{(showRestore || showUnrevert) && (
+							<div className="absolute top-1 right-1.5 flex items-center gap-1 z-10">
+								{showUnrevert && <UnrevertButton onUnrevert={handleUnrevert} />}
+								{showRestore && (
+									<RestoreButton restoreCommit={restoreCommit} onRestore={handleRestore} />
+								)}
+							</div>
 						)}
-					>
-						<div className="px-(--gap-3) py-(--gap-1-5)">
-							{(attachedFiles.length > 0 ||
-								attachedSnippets.length > 0 ||
-								attachedImages.length > 0) && (
-								<div className="mb-(--gap-2)">
-									<AttachmentsBar
-										images={attachedImages.map(img => ({
-											id: img.id,
-											name: img.name,
-											dataUrl: img.dataUrl,
-											path: img.path,
-										}))}
-										files={attachedFiles}
-										codeSnippets={attachedSnippets.map(s => ({
-											id: `${s.filePath}:${s.startLine}-${s.endLine}`,
-											filePath: s.filePath,
-											startLine: s.startLine,
-											endLine: s.endLine,
-											content: s.content,
-										}))}
-										onOpenFile={(path, startLine, endLine) => {
-											postMessage({ type: 'openFile', filePath: path, startLine, endLine });
-										}}
-										inline
-										maxRows={2}
+						<button
+							type="button"
+							onClick={() => message.id && setEditingMessageId(message.id)}
+							className={cn(
+								'w-full bg-transparent border-none text-left font-(family-name:--vscode-font-family) text-vscode-foreground',
+								'p-(--gap-3)_(--gap-6)_(--gap-1)_(--gap-6)',
+								showRestore || showUnrevert ? 'pr-20' : '',
+								'cursor-pointer',
+							)}
+						>
+							<div className="px-(--gap-3) py-(--gap-1-5)">
+								{(attachedFiles.length > 0 ||
+									attachedSnippets.length > 0 ||
+									attachedImages.length > 0) && (
+									<div className="mb-(--gap-2)">
+										<AttachmentsBar
+											images={attachedImages.map(img => ({
+												id: img.id,
+												name: img.name,
+												dataUrl: img.dataUrl,
+												path: img.path,
+											}))}
+											files={attachedFiles}
+											codeSnippets={attachedSnippets.map(s => ({
+												id: `${s.filePath}:${s.startLine}-${s.endLine}`,
+												filePath: s.filePath,
+												startLine: s.startLine,
+												endLine: s.endLine,
+												content: s.content,
+											}))}
+											onOpenFile={(path, startLine, endLine) => {
+												postMessage({ type: 'openFile', filePath: path, startLine, endLine });
+											}}
+											inline
+											maxRows={2}
+										/>
+									</div>
+								)}
+								<div
+									ref={contentRef}
+									className={cn(
+										'text-(length:--font-size-base) leading-tight wrap-break-word overflow-anywhere whitespace-pre-wrap overflow-hidden line-clamp-3',
+									)}
+								>
+									<MessageTextWithCommands
+										text={messageText}
+										validCommands={validCommands}
+										validSubagents={validSubagents}
 									/>
 								</div>
-							)}
-							<div
-								ref={contentRef}
-								className={cn(
-									'text-(length:--font-size-base) leading-tight wrap-break-word overflow-anywhere whitespace-pre-wrap overflow-hidden line-clamp-3',
-								)}
-							>
-								<MessageTextWithCommands
-									text={messageText}
-									validCommands={validCommands}
-									validSubagents={validSubagents}
-								/>
 							</div>
+						</button>
+						<div className="flex items-center text-sm pl-(--gap-2) pr-0 pb-(--gap-0-5) bg-(--input-bg)">
+							<MessageStats
+								fileChanges={fileChangesStats}
+								tokenCount={tokenStats}
+								timestamp={message.timestamp}
+								processingTime={processingTime}
+								modelName={getModelDisplayName(message.model || activeModelID || '')}
+							/>
 						</div>
-					</button>
-					<div className="flex items-center text-sm px-1.5 pb-0.5 bg-(--input-bg) pt-1">
-						<MessageStats
-							fileChanges={fileChangesStats}
-							tokenCount={tokenStats}
-							timestamp={message.timestamp}
-							processingTime={processingTime}
-							modelName={getModelDisplayName(message.model || activeModelID || '')}
-						/>
 					</div>
 				</div>
 			</div>
