@@ -2,23 +2,20 @@
  * @file OutboundBridge
  * @description Typed facade for all Extension → Webview messages.
  *              Replaces raw `view.postMessage({...})` calls scattered across handlers
- *              with a single, type-safe API surface. Handlers call `bridge.session.status()`
+ *              with a single, type-safe API surface. Handlers call `bridge.emit()`
  *              instead of manually assembling SessionEventMessage objects.
  *
  *              This is the ONLY place that touches `view.postMessage()`.
  */
 
 import type {
-	CommitInfo,
 	PermissionPolicies,
 	SessionEventMessage,
+	SessionEventPayload,
+	SessionEventType,
 	SessionLifecycleMessage,
-	SessionMessageData,
-	SessionMessageUpdate,
-	SessionRestorePayload,
-	SessionStatus,
-	TotalStats,
 } from '../common';
+import type { NormalizedEntry } from '../common/normalizedTypes';
 import type { IView } from '../core/contracts';
 import { logger } from '../utils/logger';
 
@@ -150,320 +147,22 @@ export class OutboundBridge {
 	// Session Events — typed helpers
 	// =========================================================================
 
-	public readonly session = {
-		permissionUpdate: (
-			sessionId: string,
-			action: 'set' | 'upsert' | 'remove',
-			data: {
-				requests?: import('../common').SessionPermissionRequest[];
-				request?: import('../common').SessionPermissionRequest;
-				requestId?: string;
-				response?: 'once' | 'always' | 'reject';
-			},
-		): void => {
-			this.send({
-				type: 'session_event',
-				targetId: sessionId,
-				eventType: 'permission',
-				payload: { eventType: 'permission', action, ...data },
-				timestamp: Date.now(),
-				sessionId,
-			} satisfies SessionEventMessage);
-		},
-
-		questionUpdate: (
-			sessionId: string,
-			action: 'set' | 'upsert' | 'remove',
-			data: {
-				requests?: import('../common').SessionQuestionRequest[];
-				request?: import('../common').SessionQuestionRequest;
-				requestId?: string;
-				answers?: import('../common').QuestionAnswer[];
-				rejected?: boolean;
-			},
-		): void => {
-			this.send({
-				type: 'session_event',
-				targetId: sessionId,
-				eventType: 'question',
-				payload: { eventType: 'question', action, ...data },
-				timestamp: Date.now(),
-				sessionId,
-			} satisfies SessionEventMessage);
-		},
-
-		/** Post a session message (assistant, user, tool_use, tool_result, etc.) */
-		message: (
-			targetId: string,
-			message: SessionMessageData | SessionMessageUpdate,
-			sessionId?: string,
-		): void => {
-			const sid = sessionId ?? targetId;
-			this.send({
-				type: 'session_event',
-				targetId,
-				eventType: 'message',
-				payload: { eventType: 'message', message: message as SessionMessageData },
-				timestamp: Date.now(),
-				sessionId: sid,
-				normalizedEntry: message.normalizedEntry,
-			} satisfies SessionEventMessage);
-		},
-
-		/** Post session status (idle / busy / error / retrying). */
-		status: (
-			sessionId: string,
-			status: SessionStatus,
-			statusText?: string,
-			retryInfo?: { attempt: number; message: string; nextRetryAt?: string },
-			toolActivity?: {
-				toolName: string;
-				label: string;
-				filePath?: string;
-				toolUseId?: string;
-			} | null,
-		): void => {
-			this.send({
-				type: 'session_event',
-				targetId: sessionId,
-				eventType: 'status',
-				payload: {
-					eventType: 'status',
-					status,
-					statusText,
-					...(retryInfo ? { retryInfo } : {}),
-					...(toolActivity !== undefined ? { toolActivity } : {}),
-				},
-				timestamp: Date.now(),
-				sessionId,
-			} satisfies SessionEventMessage);
-		},
-
-		/** Post aggregated token / model stats. */
-		stats: (
-			sessionId: string,
-			payload: { totalStats?: Partial<TotalStats>; modelID?: string; providerID?: string },
-		): void => {
-			this.send({
-				type: 'session_event',
-				targetId: sessionId,
-				eventType: 'stats',
-				payload: { eventType: 'stats', ...payload },
-				timestamp: Date.now(),
-				sessionId,
-			} satisfies SessionEventMessage);
-		},
-
-		/** Mark a part (assistant message, thinking block, tool) as complete. */
-		complete: (sessionId: string, partId: string, toolUseId?: string): void => {
-			this.send({
-				type: 'session_event',
-				targetId: sessionId,
-				eventType: 'complete',
-				payload: { eventType: 'complete', partId, toolUseId },
-				timestamp: Date.now(),
-				sessionId,
-			} satisfies SessionEventMessage);
-		},
-
-		/** Post per-turn token usage. */
-		turnTokens: (
-			sessionId: string,
-			data: {
-				inputTokens: number;
-				outputTokens: number;
-				totalTokens: number;
-				cacheReadTokens: number;
-				durationMs?: number;
-				userMessageId?: string;
-			},
-		): void => {
-			this.send({
-				type: 'session_event',
-				targetId: sessionId,
-				eventType: 'turn_tokens',
-				payload: { eventType: 'turn_tokens', ...data },
-				timestamp: Date.now(),
-				sessionId,
-			} satisfies SessionEventMessage);
-		},
-
-		/** Post a file change event. */
-		fileChanged: (
-			sessionId: string,
-			data: {
-				filePath: string;
-				fileName: string;
-				linesAdded: number;
-				linesRemoved: number;
-				toolUseId?: string;
-			},
-		): void => {
-			this.send({
-				type: 'session_event',
-				targetId: sessionId,
-				eventType: 'file',
-				payload: { eventType: 'file', action: 'changed', ...data },
-				timestamp: Date.now(),
-				sessionId,
-			} satisfies SessionEventMessage);
-		},
-
-		/** Post cumulative file diff stats from CLI session.diff event. */
-		fileDiffUpdated: (
-			sessionId: string,
-			diffs: Array<{
-				file: string;
-				additions: number;
-				deletions: number;
-				status?: 'added' | 'deleted' | 'modified';
-			}>,
-		): void => {
-			this.send({
-				type: 'session_event',
-				targetId: sessionId,
-				eventType: 'file_diff',
-				payload: { eventType: 'file_diff', diffs },
-				timestamp: Date.now(),
-				sessionId,
-			} satisfies SessionEventMessage);
-		},
-
-		todo: (sessionId: string, todos: import('../common').SessionTodoItem[]): void => {
-			this.send({
-				type: 'session_event',
-				targetId: sessionId,
-				eventType: 'todo',
-				payload: { eventType: 'todo', todos },
-				timestamp: Date.now(),
-				sessionId,
-			} satisfies SessionEventMessage);
-		},
-
-		permissionSet: (
-			sessionId: string,
-			requests: import('../common').SessionPermissionRequest[],
-		): void => {
-			this.session.permissionUpdate(sessionId, 'set', { requests });
-		},
-
-		permissionUpsert: (
-			sessionId: string,
-			request: import('../common').SessionPermissionRequest,
-		): void => {
-			this.session.permissionUpdate(sessionId, 'upsert', { request });
-		},
-
-		permissionRemove: (
-			sessionId: string,
-			requestId: string,
-			response?: 'once' | 'always' | 'reject',
-		): void => {
-			this.session.permissionUpdate(sessionId, 'remove', { requestId, response });
-		},
-
-		questionSet: (
-			sessionId: string,
-			requests: import('../common').SessionQuestionRequest[],
-		): void => {
-			this.session.questionUpdate(sessionId, 'set', { requests });
-		},
-
-		questionUpsert: (
-			sessionId: string,
-			request: import('../common').SessionQuestionRequest,
-		): void => {
-			this.session.questionUpdate(sessionId, 'upsert', { request });
-		},
-
-		questionRemove: (
-			sessionId: string,
-			requestId: string,
-			answers?: import('../common').QuestionAnswer[],
-			rejected?: boolean,
-		): void => {
-			this.session.questionUpdate(sessionId, 'remove', { requestId, answers, rejected });
-		},
-
-		/** Post an access response event. */
-		accessResponse: (
-			sessionId: string,
-			data: { requestId: string; approved: boolean; alwaysAllow?: boolean },
-		): void => {
-			this.send({
-				type: 'session_event',
-				targetId: sessionId,
-				eventType: 'access',
-				payload: { eventType: 'access', action: 'response', ...data },
-				timestamp: Date.now(),
-				sessionId,
-			} satisfies SessionEventMessage);
-		},
-
-		/** Append a child message to a subtask's transcript in the parent session. */
-		subtaskTranscript: (
-			parentSessionId: string,
-			subtaskId: string,
-			childMessage: SessionMessageData,
-		): void => {
-			this.send({
-				type: 'session_event',
-				targetId: parentSessionId,
-				eventType: 'subtask_transcript',
-				payload: {
-					eventType: 'subtask_transcript',
-					subtaskId,
-					childMessage,
-				},
-				timestamp: Date.now(),
-				sessionId: parentSessionId,
-			} satisfies SessionEventMessage);
-		},
-
-		/** Post session info (tools, mcp servers, runtime toggles). */
-		info: (
-			sessionId: string,
-			tools?: string[],
-			mcpServers?: string[],
-			autoAccept?: boolean,
-		): void => {
-			this.send({
-				type: 'session_event',
-				targetId: sessionId,
-				eventType: 'session_info',
-				payload: {
-					eventType: 'session_info',
-					data: { sessionId, tools, mcpServers, autoAccept },
-				},
-				timestamp: Date.now(),
-				sessionId,
-			} satisfies SessionEventMessage);
-		},
-
-		/** Post a restore event (checkpoint add, success, error, unrevert). */
-		restore: (
-			sessionId: string,
-			payload: {
-				action: SessionRestorePayload['action'];
-				commit?: CommitInfo;
-				commits?: CommitInfo[];
-				message?: string;
-				canUnrevert?: boolean;
-				available?: boolean;
-				text?: string;
-				revertedFromMessageId?: string;
-			},
-		): void => {
-			this.send({
-				type: 'session_event',
-				targetId: sessionId,
-				eventType: 'restore',
-				payload: { eventType: 'restore', ...payload },
-				timestamp: Date.now(),
-				sessionId,
-			} satisfies SessionEventMessage);
-		},
-	};
+	public emit<T extends SessionEventType>(
+		targetId: string,
+		eventType: T,
+		payloadData: Omit<Extract<SessionEventPayload, { eventType: T }>, 'eventType'>,
+		options?: { sessionId?: string; normalizedEntry?: NormalizedEntry },
+	): void {
+		this.send({
+			type: 'session_event',
+			targetId,
+			eventType,
+			payload: { eventType, ...payloadData } as SessionEventPayload,
+			timestamp: Date.now(),
+			sessionId: options?.sessionId ?? targetId,
+			...(options?.normalizedEntry ? { normalizedEntry: options.normalizedEntry } : {}),
+		} satisfies SessionEventMessage);
+	}
 
 	// =========================================================================
 	// Session Lifecycle

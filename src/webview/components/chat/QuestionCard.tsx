@@ -8,15 +8,14 @@
 
 import type React from 'react';
 import { useCallback, useRef, useState } from 'react';
-import type { QuestionMessageData, SessionQuestionRequest } from '../../../common/protocol';
+import type { QuestionInfo, SessionQuestionRequest } from '../../../common';
 import { cn } from '../../lib/cn';
-import type { Message } from '../../store/chatStore';
 import { useSessionMessage } from '../../utils/vscode';
 import { CheckIcon, ChevronDownIcon, CloseIcon, HelpCircleIcon } from '../icons';
 import { ChevronIcon } from '../icons/CustomIcons';
 
 interface QuestionCardProps {
-	request: SessionQuestionRequest | QuestionMessageData | Extract<Message, { type: 'question' }>;
+	request: SessionQuestionRequest;
 }
 
 /* ------------------------------------------------------------------ */
@@ -142,7 +141,9 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ request }) => {
 	const requestId = 'requestId' in request ? request.requestId : request.id;
 	const questions = request.questions ?? [];
 	const resolved = 'resolved' in request ? Boolean(request.resolved) : false;
-	const savedAnswers = 'answers' in request ? request.answers : undefined;
+	const savedAnswers = ('answers' in request ? request.answers : undefined) as
+		| string[][]
+		| undefined;
 	const { postSessionMessage } = useSessionMessage();
 	const inputRef = useRef<HTMLInputElement>(null);
 
@@ -151,14 +152,14 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ request }) => {
 	const [expanded, setExpanded] = useState(!resolved);
 
 	const [selections, setSelections] = useState<string[][]>(() =>
-		questions.map((question, index) => {
+		questions.map((question: QuestionInfo, index: number) => {
 			const answerParts = savedAnswers?.[index] ?? [];
 			const optionLabels = new Set(question.options.map(option => option.label));
 			return answerParts.filter(answer => optionLabels.has(answer));
 		}),
 	);
 	const [customInputs, setCustomInputs] = useState<string[]>(() =>
-		questions.map((question, index) => {
+		questions.map((question: QuestionInfo, index: number) => {
 			const answerParts = savedAnswers?.[index] ?? [];
 			const optionLabels = new Set(question.options.map(option => option.label));
 			return answerParts.filter(answer => !optionLabels.has(answer)).join(', ');
@@ -190,17 +191,17 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ request }) => {
 	);
 
 	const handleSubmit = useCallback(() => {
-		const answers = questions.map((_, i) => {
+		const answers = questions.map((_: QuestionInfo, i: number) => {
 			const parts = [...(selections[i] ?? [])];
 			const custom = customInputs[i]?.trim();
 			if (custom) parts.push(custom);
 			return parts;
 		});
-		postSessionMessage({ type: 'questionResponse', requestId, answers });
+		postSessionMessage({ type: 'questionResponse', requestId: String(requestId), answers });
 	}, [questions, selections, customInputs, requestId, postSessionMessage]);
 
 	const handleDismiss = useCallback(() => {
-		postSessionMessage({ type: 'questionReject', requestId });
+		postSessionMessage({ type: 'questionReject', requestId: String(requestId) });
 	}, [requestId, postSessionMessage]);
 
 	const q = questions[step];

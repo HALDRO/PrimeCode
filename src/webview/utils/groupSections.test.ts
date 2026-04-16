@@ -10,35 +10,54 @@ vi.mock('../components/chat/SimpleTool', () => ({
 	groupToolMessages: (msgs: unknown[]) => msgs,
 }));
 
-import type { ChangedFile, Message } from '../store';
+import type { ChangedFile, RenderMessage } from '../store';
 import { groupMessagesIntoSections } from './groupSections';
+
+type Message = RenderMessage;
 
 // --- Helpers ---
 
-const userMsg = (id: string, content = 'hello'): Message =>
-	({ type: 'user', id, timestamp: new Date().toISOString(), content }) as Message;
-
-const assistantMsg = (id: string, content = 'reply'): Message =>
-	({ type: 'assistant', id, timestamp: new Date().toISOString(), content }) as Message;
-
-const hiddenMsg = (id: string): Message =>
+const userMsg = (id: string, content = 'hello'): RenderMessage =>
 	({
-		type: 'assistant',
+		kind: 'user',
+		message: undefined as never,
+		type: 'user',
 		id,
 		timestamp: new Date().toISOString(),
-		content: 'hidden',
-		hidden: true,
-	}) as Message;
+		content,
+	}) as RenderMessage;
 
-const toolUseMsg = (id: string): Message =>
+const assistantMsg = (id: string, content = 'reply'): RenderMessage =>
 	({
+		kind: 'assistant',
+		type: 'assistant',
+		id,
+		partId: id,
+		timestamp: new Date().toISOString(),
+		content,
+	}) as RenderMessage;
+
+const hiddenMsg = (id: string): RenderMessage =>
+	({
+		kind: 'assistant',
+		type: 'assistant',
+		id,
+		partId: id,
+		timestamp: new Date().toISOString(),
+		content: 'hidden',
+	}) as RenderMessage;
+
+const toolUseMsg = (id: string): RenderMessage =>
+	({
+		kind: 'tool_use',
 		type: 'tool_use',
 		id,
 		timestamp: new Date().toISOString(),
 		toolName: 'test',
 		toolUseId: `tu-${id}`,
-		hidden: false,
-	}) as Message;
+		toolInput: '{}',
+		rawInput: {},
+	}) as RenderMessage;
 
 // --- Tests ---
 

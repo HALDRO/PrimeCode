@@ -11,7 +11,6 @@ import { produce } from 'immer';
 import { create } from 'zustand';
 import type {
 	CommitInfo,
-	ConversationMessage,
 	ExtensionMessage,
 	SessionDeleteMessagesAfterPayload,
 	SessionEventMessage,
@@ -19,23 +18,26 @@ import type {
 	SessionEventType,
 	SessionFilePayload,
 	SessionLifecycleMessage,
-	SessionMessagePayload,
+	SessionMessagePartPayload,
+	SessionMessageRecordPayload,
 	SessionMessageRemovedPayload,
 	SessionMessagesReloadPayload,
+	SessionNotificationPayload,
 	SessionRestorePayload,
 	SessionStatsPayload,
 	SessionStatusPayload,
+	SessionSubtaskPayload,
 	SessionTurnTokensPayload,
-	SubtaskMessage,
-	SubtaskTranscriptPayload,
+	SessionUserMessagePayload,
 	TotalStats,
 } from '../../common';
 import { generateId } from '../../common';
 import type { NormalizedEntry } from '../../common/normalizedTypes';
 import type { QueuedMessageData } from '../../common/protocol';
+import { projectRuntimeMessages } from './selectors';
 import { useUIStore } from './uiStore';
 
-export type { CommitInfo, ConversationMessage, SubtaskMessage, TotalStats };
+export type { CommitInfo, TotalStats };
 
 // =============================================================================
 // Types
@@ -50,10 +52,102 @@ export interface ChangedFile {
 	timestamp: number;
 }
 
-export type Message = ConversationMessage & { normalizedEntry?: NormalizedEntry };
+export interface TokenUsage {
+	input: number;
+	output: number;
+	total?: number;
+	cacheRead?: number;
+	durationMs?: number;
+}
 
-type MessageInput = Partial<ConversationMessage> & {
-	type: ConversationMessage['type'];
+export type RuntimeMessageRecord = SessionMessageRecordPayload['message'];
+export type RuntimeMessagePart = SessionMessagePartPayload['part'];
+export type UserMessage = Omit<SessionUserMessagePayload['message'], 'id' | 'timestamp'> & {
+	id: string;
+	timestamp: string;
+	type: 'user';
+};
+
+export type SubtaskMessage = Omit<SessionSubtaskPayload['subtask'], 'id' | 'timestamp'> & {
+	id: string;
+	timestamp: string;
+	type: 'subtask';
+};
+
+/** Only user messages and subtasks — assistant/tool content lives in runtimeParts. */
+export type StoredMessage = UserMessage | SubtaskMessage;
+
+export type RenderUserMessage = Omit<UserMessage, 'id'> & { id: string; kind: 'user' };
+
+export type RenderSubtaskMessage = Omit<SubtaskMessage, 'id'> & {
+	id: string;
+	kind: 'subtask';
+};
+
+export interface RenderAssistantMessage {
+	kind: 'assistant';
+	id: string;
+	type: 'assistant';
+	content: string;
+	partId: string;
+	isStreaming?: boolean;
+	timestamp: string;
+	agent?: string;
+	normalizedEntry?: NormalizedEntry;
+}
+
+export interface RenderThinkingMessage {
+	kind: 'thinking';
+	id: string;
+	type: 'thinking';
+	content: string;
+	partId: string;
+	isStreaming?: boolean;
+	startTime?: number;
+	durationMs?: number;
+	timestamp: string;
+}
+
+export interface RenderToolUseMessage {
+	kind: 'tool_use';
+	id: string;
+	type: 'tool_use';
+	toolName: string;
+	toolUseId: string;
+	toolInput: string;
+	rawInput: Record<string, unknown>;
+	streamingOutput?: string;
+	isRunning?: boolean;
+	status?: 'pending' | 'running' | 'completed' | 'error';
+	title?: string;
+	resultContent?: string;
+	metadata?: Record<string, unknown>;
+	timestamp: string;
+	normalizedEntry?: NormalizedEntry;
+	filePath?: string;
+}
+
+export interface ToolResultView {
+	id: string;
+	type: 'tool_result';
+	toolUseId: string;
+	toolName: string;
+	content: string;
+	isError: boolean;
+	title?: string;
+	metadata?: Record<string, unknown>;
+	timestamp?: string;
+}
+
+export type RenderMessage =
+	| RenderUserMessage
+	| RenderSubtaskMessage
+	| RenderAssistantMessage
+	| RenderThinkingMessage
+	| RenderToolUseMessage;
+
+type MessageInput = Partial<StoredMessage> & {
+	type: StoredMessage['type'];
 };
 
 export interface ChatSession {
@@ -66,7 +160,10 @@ export interface ChatSession {
 	activeModelID?: string;
 	/** Provider ID reported by the backend for the current/last request. */
 	activeProviderID?: string;
-	messages: Message[];
+	userMessagesById: Record<string, UserMessage>;
+	subtasksById: Record<string, SubtaskMessage>;
+	runtimeMessageRecords: RuntimeMessageRecord[];
+	runtimeMessagePartsById: Record<string, RuntimeMessagePart[]>;
 	input: string;
 	status: string;
 	streamingToolId: string | null;
@@ -89,10 +186,7 @@ export interface ChatSession {
 	unrevertAvailable: boolean;
 	revertedFromMessageId: string | null;
 	totalStats: TotalStats;
-	turnTokens: Record<
-		string,
-		{ input: number; output: number; total: number; cacheRead: number; durationMs?: number }
-	>;
+	turnTokens: Record<string, TokenUsage>;
 	/** Queued messages waiting to be sent when generation completes. */
 	queuedMessages: QueuedMessageData[];
 	/** Draft attachments restored from a cancelled queued message. */
@@ -149,7 +243,7 @@ export interface ChatActions {
 
 	addMessage: (msg: MessageInput, sessionId?: string) => void;
 	clearMessages: (sessionId?: string) => void;
-	updateMessage: (id: string, updates: Partial<Message>, sessionId?: string) => void;
+	updateMessage: (id: string, updates: Partial<StoredMessage>, sessionId?: string) => void;
 	/** Deletes all messages AFTER the given id, keeping the message itself. */
 	deleteMessagesAfterId: (id: string, sessionId?: string) => void;
 	removeMessageByPartId: (partId: string, sessionId?: string) => void;
@@ -163,18 +257,8 @@ export interface ChatActions {
 
 	// Per-session UI state — universal setter + convenience wrappers
 	updateSession: (updates: Partial<ChatSession>, sessionId?: string) => void;
-	setProcessing: (isProcessing: boolean, sessionId?: string) => void;
-	setAutoRetrying: (
-		isRetrying: boolean,
-		retryInfo?: { attempt: number; message: string; nextRetryAt?: string },
-		sessionId?: string,
-	) => void;
-	setLoading: (isLoading: boolean, sessionId?: string) => void;
-	setInput: (input: string, sessionId?: string) => void;
 	appendInput: (text: string, sessionId?: string) => void;
 	clearDraftState: (sessionId?: string) => void;
-	setStatus: (status: string, sessionId?: string) => void;
-	setStreamingToolId: (toolId: string | null, sessionId?: string) => void;
 
 	// Session lifecycle
 	handleSessionCreated: (sessionId: string) => void;
@@ -214,17 +298,14 @@ export interface ChatActions {
 	togglePromptVersion: () => void;
 
 	// Bulk message operations (for extension message handlers)
-	setSessionMessages: (sessionId: string, messages: Message[]) => void;
+	setSessionMessages: (sessionId: string, messages: StoredMessage[]) => void;
 	deleteMessagesAfterMessageId: (sessionId: string, messageId: string) => void;
 
 	// Per-session model selection
-	setSessionAgent: (agent: string | undefined, sessionId?: string) => void;
 	getSessionAgent: (sessionId?: string) => string | undefined;
-	setSessionModel: (model: string | undefined, sessionId?: string) => void;
 	getSessionModel: (sessionId?: string) => string | undefined;
 
 	// Per-session auto-accept permissions
-	setSessionAutoAccept: (autoAccept: boolean, sessionId?: string) => void;
 	getSessionAutoAccept: (sessionId?: string) => boolean;
 	removePendingQuestion: (requestId: string, sessionId?: string) => void;
 }
@@ -250,141 +331,57 @@ export const DEFAULT_TOTAL_STATS: TotalStats = {
 	totalOutputTokens: 0,
 };
 
-/**
- * Merge an incoming message into an array (by id or partId), handling delta
- * content concatenation and subtask-meta preservation.  Mutates `messages` in place (Immer-safe).
- */
-function mergeOrAddMessage(messages: Message[], incoming: Message): void {
-	const existingIdx = messages.findIndex(m => {
-		if (m.id === incoming.id) return true;
-		const mPartId = 'partId' in m ? m.partId : undefined;
-		const msgPartId = 'partId' in incoming ? incoming.partId : undefined;
-		return msgPartId !== undefined && mPartId === msgPartId && m.type === incoming.type;
-	});
+function upsertUserMessage(targetSession: ChatSession, incoming: UserMessage): void {
+	if (!incoming.id) return;
+	targetSession.userMessagesById[incoming.id] = {
+		...(targetSession.userMessagesById[incoming.id] || {}),
+		...incoming,
+	};
+}
 
-	if (existingIdx === -1) {
-		messages.push(incoming);
-		return;
-	}
-
-	const existing = messages[existingIdx];
-	const preserveSubtaskType = existing.type === 'subtask' && incoming.type === 'tool_use';
-
-	// Delta content concatenation
-	if ('isDelta' in incoming && incoming.isDelta && 'content' in existing && 'content' in incoming) {
-		existing.content = (existing.content || '') + (incoming.content || '');
-		const preservedStartTime = 'startTime' in existing ? existing.startTime : undefined;
-		Object.assign(existing, {
-			...incoming,
-			...(preserveSubtaskType ? { type: 'subtask' as const } : {}),
-			content: existing.content,
-		});
-		if (preservedStartTime !== undefined && 'startTime' in existing) {
-			(existing as { startTime: number }).startTime = preservedStartTime as number;
-		}
-		return;
-	}
-
-	// Non-delta merge — preserve startTime and subtask meta
-	const preservedStartTime = 'startTime' in existing ? existing.startTime : undefined;
-	const preservedSubtaskMeta =
-		existing.type === 'subtask'
-			? {
-					description: existing.description,
-					prompt: existing.prompt,
-					agent: existing.agent,
-					normalizedEntry: existing.normalizedEntry,
-					startTime: existing.startTime,
-					transcript: existing.transcript,
-					durationMs: existing.durationMs,
-					command: (existing as Record<string, unknown>).command as string | undefined,
-					childTokens: (existing as Record<string, unknown>).childTokens as
-						| {
-								input: number;
-								output: number;
-								total: number;
-								cacheRead?: number;
-								durationMs?: number;
-						  }
-						| undefined,
-					childModelId: (existing as Record<string, unknown>).childModelId as string | undefined,
-					retryInfo: (existing as Record<string, unknown>).retryInfo as
-						| { attempt: number; message: string; nextRetryAt?: string }
-						| undefined,
-				}
-			: undefined;
-	Object.assign(existing, incoming, {
-		...(preserveSubtaskType ? { type: 'subtask' as const } : {}),
-	});
-
-	if (existing.type === 'subtask' && preservedSubtaskMeta) {
-		if (!existing.description && preservedSubtaskMeta.description)
-			existing.description = preservedSubtaskMeta.description;
-		if (!existing.prompt && preservedSubtaskMeta.prompt)
-			existing.prompt = preservedSubtaskMeta.prompt;
-		if (!existing.agent && preservedSubtaskMeta.agent) existing.agent = preservedSubtaskMeta.agent;
-		if (!existing.normalizedEntry && preservedSubtaskMeta.normalizedEntry) {
-			existing.normalizedEntry = preservedSubtaskMeta.normalizedEntry;
-		}
-		if (!existing.startTime && preservedSubtaskMeta.startTime)
-			existing.startTime = preservedSubtaskMeta.startTime;
-		if (!existing.transcript && preservedSubtaskMeta.transcript)
-			existing.transcript = preservedSubtaskMeta.transcript;
-		if (!existing.durationMs && preservedSubtaskMeta.durationMs)
-			existing.durationMs = preservedSubtaskMeta.durationMs;
-		const ex = existing as Record<string, unknown>;
-		if (!ex.command && preservedSubtaskMeta.command) ex.command = preservedSubtaskMeta.command;
-		if (!ex.childTokens && preservedSubtaskMeta.childTokens)
-			ex.childTokens = preservedSubtaskMeta.childTokens;
-		if (!ex.childModelId && preservedSubtaskMeta.childModelId)
-			ex.childModelId = preservedSubtaskMeta.childModelId;
-		if (!ex.retryInfo && preservedSubtaskMeta.retryInfo)
-			ex.retryInfo = preservedSubtaskMeta.retryInfo;
-	}
-	if (preservedStartTime !== undefined && 'startTime' in existing) {
-		(existing as { startTime: number }).startTime = preservedStartTime as number;
-	}
+function upsertSubtaskMessage(targetSession: ChatSession, incoming: SubtaskMessage): void {
+	if (!incoming.id) return;
+	const existing = targetSession.subtasksById[incoming.id];
+	targetSession.subtasksById[incoming.id] = {
+		...(existing || {}),
+		...incoming,
+		id: incoming.id,
+		type: 'subtask',
+		agent: incoming.agent || existing?.agent || 'subagent',
+		prompt: incoming.prompt || existing?.prompt || '',
+		description: incoming.description || existing?.description || 'Subtask',
+		status: incoming.status || existing?.status || 'running',
+		timestamp: incoming.timestamp || existing?.timestamp || new Date().toISOString(),
+	};
 }
 
 // =============================================================================
 // Dispatch event handlers — extracted to reduce cognitive complexity of dispatch()
 // =============================================================================
 
-function handleMessageEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
-	const msgData = (payload as SessionMessagePayload).message;
-
-	const message: Message = {
+function handleUserMessageEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
+	const msgData = (payload as SessionUserMessagePayload).message;
+	const message: UserMessage = {
+		type: 'user',
 		...msgData,
 		id: msgData.id || generateId('msg'),
 		timestamp: msgData.timestamp || new Date().toISOString(),
-	} as Message;
-
-	// Notification-like messages are transient UI overlays — they are NOT stored
-	// in chat history. The side-effect (pushNotification) is handled by the caller
-	// OUTSIDE of Immer produce to keep this function pure.
-	if (
-		message.type === 'error' ||
-		message.type === 'interrupted' ||
-		message.type === 'system_notice'
-	) {
-		return;
+	};
+	upsertUserMessage(targetSession, message);
+	if (message.agent) {
+		targetSession.agent = message.agent === 'build' ? undefined : message.agent;
 	}
+}
 
-	mergeOrAddMessage(targetSession.messages, message);
-
-	// Sync session agent from incoming user messages (e.g. CLI plan_exit injects
-	// a synthetic user message with agent: "build" to switch modes).
-	// This mirrors official OpenCode behavior: local.agent.set(msg.agent).
-	if (message.type === 'user' && 'agent' in message && (message as { agent?: string }).agent) {
-		const incomingAgent = (message as { agent?: string }).agent;
-		// "build" is the default — store as undefined to match AgentDropdown convention
-		targetSession.agent = incomingAgent === 'build' ? undefined : incomingAgent;
-	}
-
-	// Clear retry info on success
-	if (message.type === 'assistant') {
-		targetSession.retryInfo = null;
-	}
+function handleSubtaskEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
+	const subtaskData = (payload as SessionSubtaskPayload).subtask;
+	const subtask: SubtaskMessage = {
+		type: 'subtask',
+		...subtaskData,
+		id: subtaskData.id || generateId('subtask'),
+		timestamp: subtaskData.timestamp || new Date().toISOString(),
+	};
+	upsertSubtaskMessage(targetSession, subtask);
 }
 
 function handleStatusEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
@@ -437,9 +434,10 @@ function handleStatsEvent(targetSession: ChatSession, payload: SessionEventPaylo
 		targetSession.activeModelID = s.modelID;
 		// Stamp modelID on the last user message so it's preserved per-message
 		// and doesn't change when the user switches models later.
-		const lastUserMsg = targetSession.messages.findLast(m => m.type === 'user');
-		if (lastUserMsg && lastUserMsg.type === 'user' && !lastUserMsg.model) {
-			(lastUserMsg as { model?: string }).model = s.modelID;
+		const lastUserMsg = projectRuntimeMessages(targetSession).findLast(m => m.kind === 'user');
+		if (lastUserMsg?.id && !lastUserMsg.model) {
+			const storedUser = targetSession.userMessagesById[lastUserMsg.id];
+			if (storedUser && !storedUser.model) storedUser.model = s.modelID;
 		}
 	}
 	if (s.providerID) targetSession.activeProviderID = s.providerID;
@@ -448,7 +446,8 @@ function handleStatsEvent(targetSession: ChatSession, payload: SessionEventPaylo
 function handleTurnTokensEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
 	const t = payload as SessionTurnTokensPayload;
 	// Use explicit userMessageId from history replay, or fall back to last user message
-	const turnMsgId = t.userMessageId || targetSession.messages.findLast(m => m.type === 'user')?.id;
+	const turnMsgId =
+		t.userMessageId || projectRuntimeMessages(targetSession).findLast(m => m.kind === 'user')?.id;
 
 	if (turnMsgId) {
 		const existing = targetSession.turnTokens[turnMsgId];
@@ -467,33 +466,29 @@ function handleTurnTokensEvent(targetSession: ChatSession, payload: SessionEvent
 }
 
 function handleCompleteEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
-	const completePartId = (payload as { partId?: string }).partId;
-	targetSession.messages.forEach(m => {
-		if ('partId' in m && m.partId === completePartId) {
-			if (m.type === 'thinking') {
-				m.isStreaming = false;
-				if (m.startTime) {
-					const startTime =
-						typeof m.startTime === 'number' ? m.startTime : new Date(m.startTime).getTime();
-					if (Number.isFinite(startTime) && startTime > 0) {
-						m.durationMs = Date.now() - startTime;
-					}
-				}
-			} else if (m.type === 'assistant') {
-				m.isStreaming = false;
-			}
+	const complete = payload as import('../../common').SessionCompletePayload;
+	const completePartId = complete.partId;
+	const completedAt = complete.completedAt;
+
+	for (const parts of Object.values(targetSession.runtimeMessagePartsById)) {
+		for (const part of parts) {
+			if (part.id !== completePartId) continue;
+			part.completedAt = completedAt ?? part.completedAt ?? Date.now();
+			part.state = {
+				...(part.state || {}),
+				status: part.state?.status === 'error' ? 'error' : 'completed',
+			};
 		}
-	});
+	}
+
 	// Mark completed subtasks in a second pass.
-	for (const msg of targetSession.messages) {
-		if (msg.type !== 'subtask') continue;
-		const partId = (msg as Record<string, unknown>).partId as string | undefined;
+	for (const msg of projectRuntimeMessages(targetSession)) {
+		if (msg.kind !== 'subtask' || !msg.id) continue;
+		const partId = (targetSession.subtasksById[msg.id] as { partId?: string } | undefined)?.partId;
 		if (partId !== completePartId) continue;
-		msg.status = msg.status === 'running' ? 'completed' : msg.status;
-		if (!msg.durationMs && msg.startTime) {
-			const start = new Date(msg.startTime).getTime();
-			if (start > 0) msg.durationMs = Date.now() - start;
-		}
+		const stored = targetSession.subtasksById[msg.id];
+		if (!stored || stored.type !== 'subtask') continue;
+		stored.status = stored.status === 'running' ? 'completed' : stored.status;
 	}
 }
 
@@ -581,6 +576,84 @@ function handleFileDiffEvent(targetSession: ChatSession, payload: SessionEventPa
 	targetSession.cumulativeDiffs = fd.diffs || [];
 }
 
+function handleMessageRecordEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
+	const evt = payload as import('../../common').SessionMessageRecordPayload;
+	const existingIdx = targetSession.runtimeMessageRecords.findIndex(m => m.id === evt.message.id);
+	if (existingIdx >= 0) {
+		targetSession.runtimeMessageRecords[existingIdx] = {
+			...targetSession.runtimeMessageRecords[existingIdx],
+			...evt.message,
+		};
+	} else targetSession.runtimeMessageRecords.push(evt.message);
+	if (targetSession.runtimeMessageRecords.length > 1) {
+		targetSession.runtimeMessageRecords.sort(
+			(a, b) => (a.createdAt || 0) - (b.createdAt || 0) || a.id.localeCompare(b.id),
+		);
+	}
+}
+
+function handleMessageRecordRemovedEvent(
+	targetSession: ChatSession,
+	payload: SessionEventPayload,
+): void {
+	const evt = payload as import('../../common').SessionMessageRecordRemovedPayload;
+	targetSession.runtimeMessageRecords = targetSession.runtimeMessageRecords.filter(
+		m => m.id !== evt.messageId,
+	);
+	delete targetSession.runtimeMessagePartsById[evt.messageId];
+}
+
+function _handleMessagePartEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
+	const evt = payload as import('../../common').SessionMessagePartPayload;
+	const list = targetSession.runtimeMessagePartsById[evt.part.messageId] || [];
+	const idx = list.findIndex(p => p.id === evt.part.id);
+	if (idx >= 0) {
+		const existing = list[idx];
+		const nextPart = {
+			...existing,
+			...evt.part,
+			state: {
+				...(existing.state || {}),
+				...(evt.part.state || {}),
+			},
+		};
+		list[idx] = nextPart;
+	} else {
+		const nextPart = { ...evt.part };
+		list.push(nextPart);
+	}
+	targetSession.runtimeMessagePartsById[evt.part.messageId] = list;
+}
+
+function handleMessagePartDeltaEvent(
+	targetSession: ChatSession,
+	payload: SessionEventPayload,
+): void {
+	const evt = payload as import('../../common').SessionMessagePartDeltaPayload;
+	const list = targetSession.runtimeMessagePartsById[evt.messageId];
+	if (!list) return;
+	const part = list.find(p => p.id === evt.partId);
+	if (!part) return;
+	const field = evt.field as keyof RuntimeMessagePart;
+	const existing = typeof part[field] === 'string' ? (part[field] as string) : '';
+	if (evt.delta && existing.endsWith(evt.delta)) {
+		return;
+	}
+	(part as unknown as Record<string, unknown>)[field] = existing + evt.delta;
+}
+
+function handleMessagePartRemovedEvent(
+	targetSession: ChatSession,
+	payload: SessionEventPayload,
+): void {
+	const evt = payload as import('../../common').SessionMessagePartRemovedPayload;
+	const list = targetSession.runtimeMessagePartsById[evt.messageId];
+	if (!list) return;
+	const next = list.filter(p => p.id !== evt.partId);
+	if (next.length === 0) delete targetSession.runtimeMessagePartsById[evt.messageId];
+	else targetSession.runtimeMessagePartsById[evt.messageId] = next;
+}
+
 function handleTodoEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
 	const todo = payload as import('../../common').SessionTodoPayload;
 	targetSession.todos = todo.todos || [];
@@ -621,23 +694,6 @@ function handlePermissionEvent(targetSession: ChatSession, payload: SessionEvent
 
 function handleQuestionEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
 	const question = payload as import('../../common').SessionQuestionPayload;
-	if (question.action === 'remove' && question.requestId) {
-		const resolvedRequest = targetSession.pendingQuestions.find(
-			pending => pending.id === question.requestId,
-		);
-		if (resolvedRequest) {
-			mergeOrAddMessage(targetSession.messages, {
-				id: `question-${resolvedRequest.id}`,
-				type: 'question',
-				requestId: resolvedRequest.id,
-				questions: resolvedRequest.questions,
-				tool: resolvedRequest.tool,
-				resolved: true,
-				answers: question.answers,
-				timestamp: new Date().toISOString(),
-			} as Message);
-		}
-	}
 	targetSession.pendingQuestions = applyCollectionAction(
 		targetSession.pendingQuestions,
 		question.action,
@@ -645,18 +701,27 @@ function handleQuestionEvent(targetSession: ChatSession, payload: SessionEventPa
 	);
 }
 
-function handleAccessEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
-	void targetSession;
-	void payload;
-}
-
 function handleMessagesReloadEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
 	const r = payload as SessionMessagesReloadPayload;
-	targetSession.messages = (r.messages || []).map(m => ({
-		...m,
-		id: m.id || generateId('msg'),
-		timestamp: m.timestamp || new Date().toISOString(),
-	})) as Message[];
+	targetSession.runtimeMessageRecords = [];
+	targetSession.runtimeMessagePartsById = {};
+	targetSession.userMessagesById = {};
+	targetSession.subtasksById = {};
+	const displayMessages = (r.messages || [])
+		.map(m => ({
+			...m,
+			id: m.id || generateId('msg'),
+			timestamp: m.timestamp || new Date().toISOString(),
+		}))
+		.map(m =>
+			'content' in m ? { type: 'user' as const, ...m } : { type: 'subtask' as const, ...m },
+		);
+	for (const message of displayMessages) {
+		if (message.type === 'user') upsertUserMessage(targetSession, message as UserMessage);
+		else if (message.type === 'subtask') {
+			upsertSubtaskMessage(targetSession, message as SubtaskMessage);
+		}
+	}
 }
 
 function handleDeleteMessagesAfterEvent(
@@ -665,7 +730,7 @@ function handleDeleteMessagesAfterEvent(
 ): void {
 	const d = payload as SessionDeleteMessagesAfterPayload;
 	if (d.messageId) {
-		const idx = targetSession.messages.findIndex(m => m.id === d.messageId);
+		const idx = projectRuntimeMessages(targetSession).findIndex(m => m.id === d.messageId);
 		if (idx !== -1) {
 			// Don't delete messages — just mark them as reverted so they can be
 			// restored on unrevert. The UI will dim everything after this ID.
@@ -676,32 +741,30 @@ function handleDeleteMessagesAfterEvent(
 
 function handleMessageRemovedEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
 	const rm = payload as SessionMessageRemovedPayload;
-	if (rm.partId || rm.messageId) {
-		targetSession.messages = targetSession.messages.filter(m => {
-			const mPartId = 'partId' in m ? m.partId : undefined;
-			return mPartId !== rm.partId && m.id !== rm.messageId;
-		});
+	if (rm.messageId) {
+		targetSession.runtimeMessageRecords = targetSession.runtimeMessageRecords.filter(
+			m => m.id !== rm.messageId,
+		);
+		delete targetSession.runtimeMessagePartsById[rm.messageId];
 	}
-}
-
-function handleSubtaskTranscriptEvent(
-	targetSession: ChatSession,
-	payload: SessionEventPayload,
-): void {
-	const tp = payload as SubtaskTranscriptPayload;
-	const subtaskMsg = targetSession.messages.find(
-		m => m.type === 'subtask' && m.id === tp.subtaskId,
-	);
-	if (subtaskMsg && subtaskMsg.type === 'subtask') {
-		if (!subtaskMsg.transcript) {
-			subtaskMsg.transcript = [];
+	if (rm.partId) {
+		for (const messageId of Object.keys(targetSession.runtimeMessagePartsById)) {
+			targetSession.runtimeMessagePartsById[messageId] = targetSession.runtimeMessagePartsById[
+				messageId
+			].filter(part => part.id !== rm.partId);
+			if (targetSession.runtimeMessagePartsById[messageId].length === 0) {
+				delete targetSession.runtimeMessagePartsById[messageId];
+			}
 		}
-		const childMsg = {
-			...tp.childMessage,
-			id: tp.childMessage.id || generateId('child'),
-			timestamp: tp.childMessage.timestamp || new Date().toISOString(),
-		} as Message;
-		mergeOrAddMessage(subtaskMsg.transcript, childMsg);
+	}
+	if (rm.partId || rm.messageId) {
+		if (rm.messageId) delete targetSession.userMessagesById[rm.messageId];
+		for (const [subtaskId, subtask] of Object.entries(targetSession.subtasksById)) {
+			const partId = (subtask as { partId?: string }).partId;
+			if (subtaskId === rm.messageId || partId === rm.partId) {
+				delete targetSession.subtasksById[subtaskId];
+			}
+		}
 	}
 }
 
@@ -720,8 +783,8 @@ function extractNotification(
 	timestamp: string;
 	autoDismissMs: number;
 } | null {
-	if (eventType !== 'message') return null;
-	const msgData = (payload as SessionMessagePayload).message;
+	if (eventType !== 'notification') return null;
+	const msgData = (payload as SessionNotificationPayload).notification;
 	if (
 		msgData.type !== 'error' &&
 		msgData.type !== 'interrupted' &&
@@ -740,6 +803,31 @@ function extractNotification(
 	};
 }
 
+const DISPATCH_HANDLERS: Partial<
+	Record<SessionEventType, (session: ChatSession, payload: SessionEventPayload) => void>
+> = {
+	user_message: handleUserMessageEvent,
+	subtask: handleSubtaskEvent,
+	message_record: handleMessageRecordEvent,
+	message_record_removed: handleMessageRecordRemovedEvent,
+	message_part: _handleMessagePartEvent,
+	message_part_delta: handleMessagePartDeltaEvent,
+	message_part_removed: handleMessagePartRemovedEvent,
+	status: handleStatusEvent,
+	stats: handleStatsEvent,
+	turn_tokens: handleTurnTokensEvent,
+	complete: handleCompleteEvent,
+	restore: handleRestoreEvent,
+	file: handleFileEvent,
+	file_diff: handleFileDiffEvent,
+	todo: handleTodoEvent,
+	permission: handlePermissionEvent,
+	question: handleQuestionEvent,
+	messages_reload: handleMessagesReloadEvent,
+	delete_messages_after: handleDeleteMessagesAfterEvent,
+	message_removed: handleMessageRemovedEvent,
+};
+
 /**
  * Route an event to the correct handler for a session. Pure function (Immer-safe).
  * Used by both single `dispatch` and `session_event_batch` to avoid duplication.
@@ -749,68 +837,19 @@ function dispatchToSession(
 	eventType: SessionEventType,
 	payload: SessionEventPayload,
 ): void {
-	switch (eventType) {
-		case 'message':
-			handleMessageEvent(targetSession, payload);
-			break;
-		case 'status':
-			handleStatusEvent(targetSession, payload);
-			break;
-		case 'stats':
-			handleStatsEvent(targetSession, payload);
-			break;
-		case 'turn_tokens':
-			handleTurnTokensEvent(targetSession, payload);
-			break;
-		case 'complete':
-			handleCompleteEvent(targetSession, payload);
-			break;
-		case 'restore':
-			handleRestoreEvent(targetSession, payload);
-			break;
-		case 'file':
-			handleFileEvent(targetSession, payload);
-			break;
-		case 'file_diff':
-			handleFileDiffEvent(targetSession, payload);
-			break;
-		case 'access':
-			handleAccessEvent(targetSession, payload);
-			break;
-		case 'todo':
-			handleTodoEvent(targetSession, payload);
-			break;
-		case 'permission':
-			handlePermissionEvent(targetSession, payload);
-			break;
-		case 'question':
-			handleQuestionEvent(targetSession, payload);
-			break;
-		case 'messages_reload':
-			handleMessagesReloadEvent(targetSession, payload);
-			break;
-		case 'delete_messages_after':
-			handleDeleteMessagesAfterEvent(targetSession, payload);
-			break;
-		case 'message_removed':
-			handleMessageRemovedEvent(targetSession, payload);
-			break;
-		case 'terminal':
-			// Terminal notifications are transient UI overlays; ignore in chat history.
-			break;
-		case 'subtask_transcript':
-			handleSubtaskTranscriptEvent(targetSession, payload);
-			break;
-		case 'session_info': {
-			const info = payload as {
-				data?: { tools?: string[]; mcpServers?: string[]; autoAccept?: boolean };
-			};
-			if (info.data?.tools) targetSession.availableTools = info.data.tools;
-			if (info.data?.mcpServers) targetSession.availableMcpServers = info.data.mcpServers;
-			if (typeof info.data?.autoAccept === 'boolean') {
-				targetSession.autoAccept = info.data.autoAccept;
-			}
-			break;
+	const handler = DISPATCH_HANDLERS[eventType];
+	if (handler) {
+		handler(targetSession, payload);
+		return;
+	}
+	if (eventType === 'session_info') {
+		const info = payload as {
+			data?: { tools?: string[]; mcpServers?: string[]; autoAccept?: boolean };
+		};
+		if (info.data?.tools) targetSession.availableTools = info.data.tools;
+		if (info.data?.mcpServers) targetSession.availableMcpServers = info.data.mcpServers;
+		if (typeof info.data?.autoAccept === 'boolean') {
+			targetSession.autoAccept = info.data.autoAccept;
 		}
 	}
 }
@@ -819,7 +858,10 @@ const createEmptySession = (id: string): ChatSession => ({
 	id,
 	agent: undefined,
 	model: undefined,
-	messages: [],
+	userMessagesById: {},
+	subtasksById: {},
+	runtimeMessageRecords: [],
+	runtimeMessagePartsById: {},
 	input: '',
 	status: 'Ready',
 	streamingToolId: null,
@@ -910,11 +952,14 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 							if (lifecycle.data?.messages) {
 								actions.setSessionMessages(
 									lifecycle.sessionId,
-									lifecycle.data.messages as Message[],
+									lifecycle.data.messages as StoredMessage[],
 								);
 							}
 							if (lifecycle.data?.isProcessing !== undefined) {
-								actions.setProcessing(lifecycle.data.isProcessing, lifecycle.sessionId);
+								actions.updateSession(
+									{ isProcessing: lifecycle.data.isProcessing },
+									lifecycle.sessionId,
+								);
 							}
 							if (lifecycle.data?.totalStats) {
 								actions.setTotalStats(lifecycle.data.totalStats, lifecycle.sessionId);
@@ -986,7 +1031,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 					});
 					const actions = state.actions;
 					actions.setImprovingPrompt(false, null);
-					actions.setInput(improvedText);
+					actions.updateSession({ input: improvedText });
 				}
 				return;
 			}
@@ -1117,30 +1162,15 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 						typeof msgInput.timestamp === 'string'
 							? msgInput.timestamp
 							: new Date(msgInput.timestamp || Date.now()).toISOString(),
-				} as Message;
-				const idx = s.messages.findIndex(m => m.id === message.id);
-				if (idx !== -1) {
-					Object.assign(s.messages[idx], message);
-				} else {
-					s.messages.push(message);
+				} as StoredMessage;
+				if (message.type === 'user') upsertUserMessage(s, message as UserMessage);
+				if (message.type === 'subtask') {
+					upsertSubtaskMessage(s, message as SubtaskMessage);
 				}
 			}),
 
 		updateSession: (updates, sessionId) =>
 			mutateSession(set, sessionId ?? get().activeSessionId, s => Object.assign(s, updates)),
-
-		setProcessing: (isProcessing, sessionId) =>
-			get().actions.updateSession({ isProcessing }, sessionId),
-
-		setAutoRetrying: (isRetrying, retryInfo, sessionId) =>
-			get().actions.updateSession(
-				{ isAutoRetrying: isRetrying, retryInfo: isRetrying && retryInfo ? retryInfo : null },
-				sessionId,
-			),
-
-		setLoading: (isLoading, sessionId) => get().actions.updateSession({ isLoading }, sessionId),
-
-		setInput: (input, sessionId) => get().actions.updateSession({ input }, sessionId),
 
 		appendInput: (text, sessionId) =>
 			mutateSession(set, sessionId ?? get().activeSessionId, s => {
@@ -1153,21 +1183,19 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 				s.draftAgent = undefined;
 			}),
 
-		setStatus: (status, sessionId) => get().actions.updateSession({ status }, sessionId),
-
-		setStreamingToolId: (toolId, sessionId) =>
-			get().actions.updateSession({ streamingToolId: toolId }, sessionId),
-
 		clearMessages: sessionId =>
 			mutateSession(set, sessionId ?? get().activeSessionId, s => {
-				s.messages = [];
+				s.userMessagesById = {};
+				s.subtasksById = {};
+				s.runtimeMessageRecords = [];
+				s.runtimeMessagePartsById = {};
 				s.turnTokens = {};
 			}),
 
 		updateMessage: (id, updates, sessionId) =>
 			mutateSession(set, sessionId ?? get().activeSessionId, s => {
-				const msg = s.messages.find(m => m.id === id);
-				if (msg) Object.assign(msg, updates);
+				if (s.userMessagesById[id]) Object.assign(s.userMessagesById[id], updates);
+				if (s.subtasksById[id]) Object.assign(s.subtasksById[id], updates);
 			}),
 
 		setEditingMessageId: id => set({ editingMessageId: id }),
@@ -1190,31 +1218,38 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
 		deleteMessagesAfterId: (id, sessionId) =>
 			mutateSession(set, sessionId ?? get().activeSessionId, s => {
-				const idx = s.messages.findIndex(m => m.id === id);
+				const projected = projectRuntimeMessages(s);
+				const idx = projected.findIndex(m => m.id === id);
 				if (idx !== -1) {
-					// Clean up turnTokens for removed user messages
-					const removed = s.messages.slice(idx + 1);
+					const removed = projected.slice(idx + 1);
 					for (const msg of removed) {
-						if (msg.type === 'user' && msg.id) {
-							delete s.turnTokens[msg.id];
-						}
+						if (!msg.id) continue;
+
+						// Clean up all underlying stores
+						delete s.userMessagesById[msg.id];
+						delete s.subtasksById[msg.id];
+						delete s.runtimeMessagePartsById[msg.id];
+						delete s.turnTokens[msg.id];
+
+						// Remove from runtime message records array
+						s.runtimeMessageRecords = s.runtimeMessageRecords.filter(m => m.id !== msg.id);
 					}
-					// Keep the message itself, delete everything AFTER it
-					s.messages = s.messages.slice(0, idx + 1);
-					// Also clear any revertedFromMessageId since we are actively editing
 					s.revertedFromMessageId = null;
 				}
 			}),
 
 		removeMessageByPartId: (partId, sessionId) =>
 			mutateSession(set, sessionId ?? get().activeSessionId, s => {
-				s.messages = s.messages.filter(m => {
-					if (m.id === partId) return false;
-					const mPartId = 'partId' in m ? m.partId : undefined;
-					if (mPartId === partId) return false;
-					const mToolUseId = 'toolUseId' in m ? m.toolUseId : undefined;
-					return mToolUseId !== partId;
-				});
+				for (const messageId of Object.keys(s.runtimeMessagePartsById)) {
+					const next = s.runtimeMessagePartsById[messageId].filter(part => part.id !== partId);
+					if (next.length === 0) delete s.runtimeMessagePartsById[messageId];
+					else s.runtimeMessagePartsById[messageId] = next;
+				}
+				delete s.userMessagesById[partId];
+				for (const [subtaskId, subtask] of Object.entries(s.subtasksById)) {
+					const subtaskPartId = (subtask as { partId?: string }).partId;
+					if (subtaskPartId === partId || subtaskId === partId) delete s.subtasksById[subtaskId];
+				}
 			}),
 
 		markRevertedFromMessageId: (id, sessionId) =>
@@ -1225,9 +1260,9 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 		clearRevertedMessages: sessionId =>
 			mutateSession(set, sessionId ?? get().activeSessionId, s => {
 				if (!s.revertedFromMessageId) return;
-				const idx = s.messages.findIndex(m => m.id === s.revertedFromMessageId);
+				const idx = projectRuntimeMessages(s).findIndex(m => m.id === s.revertedFromMessageId);
 				if (idx !== -1) {
-					s.messages = s.messages.slice(0, idx);
+					s.revertedFromMessageId = null;
 				} else {
 					s.revertedFromMessageId = null;
 				}
@@ -1321,7 +1356,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
 		startSubtask: (subtask, sessionId) =>
 			mutateSession(set, sessionId, s => {
-				if (!s.messages.some(m => m.id === subtask.id)) s.messages.push(subtask);
+				upsertSubtaskMessage(s, subtask as SubtaskMessage);
 			}),
 
 		updateSubtask: (subtaskId, status, result, sessionId) => {
@@ -1330,15 +1365,10 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 					// Use explicit sessionId when provided (avoids O(N) scan over all sessions)
 					const sid = sessionId && state.sessionsById[sessionId] ? sessionId : undefined;
 					if (!sid) return;
-					const msg = state.sessionsById[sid].messages.find(m => m.id === subtaskId);
+					const msg = state.sessionsById[sid].subtasksById[subtaskId];
 					if (!msg || msg.type !== 'subtask') return;
 					msg.status = status;
 					msg.result = result;
-					if (!msg.durationMs && msg.startTime) {
-						const start =
-							typeof msg.startTime === 'number' ? msg.startTime : new Date(msg.startTime).getTime();
-						if (start > 0) msg.durationMs = Date.now() - start;
-					}
 					state.sessionsById[sid].lastActive = Date.now();
 				}),
 			);
@@ -1357,27 +1387,33 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 			if (state.promptVersions) {
 				const { original, improved, showingImproved } = state.promptVersions;
 				const next = !showingImproved;
-				state.actions.setInput(next ? improved : original);
+				state.actions.updateSession({ input: next ? improved : original });
 				set({ promptVersions: { original, improved, showingImproved: next } });
 			}
 		},
 
 		setSessionMessages: (sessionId, messages) =>
 			mutateSession(set, sessionId, s => {
-				s.messages = messages;
-				const lastUserWithAgent = [...messages]
+				const displayMessages = messages.filter(m => m.type === 'user' || m.type === 'subtask');
+				s.userMessagesById = {};
+				s.subtasksById = {};
+				for (const message of displayMessages) {
+					if (message.type === 'user') upsertUserMessage(s, message as UserMessage);
+					if (message.type === 'subtask') {
+						upsertSubtaskMessage(s, message as SubtaskMessage);
+					}
+				}
+				const lastUserWithAgent = [...displayMessages]
 					.reverse()
-					.find((m): m is Message & { type: 'user'; agent?: string } => m.type === 'user');
+					.find((m): m is StoredMessage & { type: 'user'; agent?: string } => m.type === 'user');
 				s.agent = lastUserWithAgent?.agent;
 			}),
 
 		deleteMessagesAfterMessageId: (sessionId, messageId) =>
 			mutateSession(set, sessionId, s => {
-				const idx = s.messages.findIndex(m => m.id === messageId);
-				if (idx !== -1) s.messages = s.messages.slice(0, idx + 1);
+				const idx = projectRuntimeMessages(s).findIndex(m => m.id === messageId);
+				if (idx !== -1) s.revertedFromMessageId = messageId;
 			}),
-
-		setSessionAgent: (agent, sessionId) => get().actions.updateSession({ agent }, sessionId),
 
 		getSessionAgent: (sessionId): string | undefined => {
 			const state = get();
@@ -1386,17 +1422,12 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 			return state.sessionsById[sid]?.agent;
 		},
 
-		setSessionModel: (model, sessionId) => get().actions.updateSession({ model }, sessionId),
-
 		getSessionModel: (sessionId): string | undefined => {
 			const state = get();
 			const sid = resolveTargetSessionId(state, sessionId);
 			if (!sid) return undefined;
 			return state.sessionsById[sid]?.model;
 		},
-
-		setSessionAutoAccept: (autoAccept, sessionId) =>
-			get().actions.updateSession({ autoAccept }, sessionId),
 
 		getSessionAutoAccept: (sessionId): boolean => {
 			const state = get();

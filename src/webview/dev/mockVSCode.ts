@@ -62,16 +62,16 @@ function dispatchSessionEvent(
 	);
 }
 
+function dispatchNotification(targetId: string, notification: Record<string, unknown>): void {
+	dispatchSessionEvent(targetId, 'notification', { notification });
+}
+
 function dispatchSessionLifecycle(
 	action: 'created' | 'closed' | 'switched' | 'cleared',
 	sessionId: string,
 	data?: Record<string, unknown>,
 ): void {
 	window.postMessage({ type: 'session_lifecycle', action, sessionId, data }, '*');
-}
-
-function dispatchMessage(targetId: string, message: Record<string, unknown>): void {
-	dispatchSessionEvent(targetId, 'message', { message });
 }
 
 function dispatchStatus(
@@ -181,17 +181,18 @@ const mockVSCodeApi: VSCodeApi = {
 			const userContent =
 				msg.text || (msg.data?.text as string) || (msg.data?.message as string) || 'Follow-up';
 			const uid = createId('user');
+			const assistantId = createId('assistant');
+			const assistantPartId = createId('part');
 			runScenario(
 				[
 					{
 						type: 'session_event',
 						targetId: mockActiveSessionId,
-						eventType: 'message',
+						eventType: 'user_message',
 						payload: {
-							eventType: 'message',
+							eventType: 'user_message',
 							message: {
 								id: uid,
-								type: 'user',
 								content: userContent,
 								timestamp: new Date().toISOString(),
 							},
@@ -202,14 +203,34 @@ const mockVSCodeApi: VSCodeApi = {
 					{
 						type: 'session_event',
 						targetId: mockActiveSessionId,
-						eventType: 'message',
+						eventType: 'message_record',
 						payload: {
-							eventType: 'message',
+							eventType: 'message_record',
 							message: {
-								id: createId('a'),
-								type: 'assistant',
-								content: `Echo: "${userContent.slice(0, 80)}"`,
-								timestamp: new Date().toISOString(),
+								id: assistantId,
+								sessionId: mockActiveSessionId,
+								role: 'assistant',
+								parentId: uid,
+								createdAt: Date.now(),
+							},
+						},
+						timestamp: Date.now(),
+						delay: 250,
+					},
+					{
+						type: 'session_event',
+						targetId: mockActiveSessionId,
+						eventType: 'message_part',
+						payload: {
+							eventType: 'message_part',
+							part: {
+								id: assistantPartId,
+								messageId: assistantId,
+								sessionId: mockActiveSessionId,
+								type: 'text',
+								text: `Echo: "${userContent.slice(0, 80)}"`,
+								createdAt: Date.now(),
+								completedAt: Date.now(),
 							},
 						},
 						timestamp: Date.now(),
@@ -222,7 +243,7 @@ const mockVSCodeApi: VSCodeApi = {
 			isScenarioRunning = false;
 			clearAllMockTimers();
 			dispatchStatus(mockActiveSessionId, 'idle', 'Stopped');
-			dispatchMessage(mockActiveSessionId, {
+			dispatchNotification(mockActiveSessionId, {
 				type: 'interrupted',
 				content: 'Stopped by user',
 				id: createId('int'),

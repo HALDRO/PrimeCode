@@ -67,7 +67,7 @@ export const LiveMessageStats = React.memo<LiveMessageStatsProps>(
 	({ messageId, isProcessing, stats, messageTimestamp }) => {
 		// Live subscriptions — isolated here
 		const liveTurnTokens = useMessageTurnTokens(messageId);
-		const liveElapsed = useElapsedTimer(isProcessing);
+		const liveElapsed = useElapsedTimer(isProcessing, messageTimestamp);
 
 		const tokenCount = liveTurnTokens?.total ?? stats.tokenCount;
 
@@ -120,18 +120,15 @@ LiveMessageStats.displayName = 'LiveMessageStats';
 function getDurationText(
 	liveDurationMs: number | undefined,
 	statsDurationMs: number | undefined,
-	nextUserMessageTs: number | undefined,
-	lastResponseTs: number | undefined,
-	messageTimestamp: string,
+	_nextUserMessageTs: number | undefined,
+	_lastResponseTs: number | undefined,
+	_messageTimestamp: string,
 	isProcessing: boolean,
 	liveElapsed: number,
 ): string | null {
 	if (liveDurationMs && liveDurationMs > 0) return formatDuration(liveDurationMs);
 	if (statsDurationMs && statsDurationMs > 0) return formatDuration(statsDurationMs);
 
-	const ts = new Date(messageTimestamp).getTime();
-	if (nextUserMessageTs) return formatDuration(nextUserMessageTs - ts);
-	if (lastResponseTs) return formatDuration(lastResponseTs - ts);
 	if (isProcessing && liveElapsed > 0) return formatDuration(liveElapsed);
 
 	return null;

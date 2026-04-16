@@ -3,7 +3,7 @@
  * @description Encapsulates all subtask lifecycle logic previously scattered across ChatProvider:
  * - Deferred child session linking (pending tool IDs → child session resolution)
  * - Token accumulation per subtask
- * - Parent transcript routing resolution
+ * - Parent/child routing resolution for subtask UI updates
  *
  * ChatProvider delegates to this class instead of managing 7+ Maps/Sets directly.
  *

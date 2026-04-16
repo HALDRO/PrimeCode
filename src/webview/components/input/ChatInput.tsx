@@ -101,17 +101,22 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 			handlePaste,
 		} = useFileAttachments({ initialFiles, initialCodeSnippets, initialImages });
 
-		const controller = useChatInputController({
-			controlledValue,
-			controlledOnChange,
-			controlledOnSend,
-			attachments: {
+		const attachments = useMemo(
+			() => ({
 				files: attachedFiles,
 				images: attachedImages,
 				codeSnippets,
 				clearAll,
 				addFile,
-			},
+			}),
+			[attachedFiles, attachedImages, codeSnippets, clearAll, addFile],
+		);
+
+		const controller = useChatInputController({
+			controlledValue,
+			controlledOnChange,
+			controlledOnSend,
+			attachments,
 		});
 
 		const dropdowns = useDropdownTriggers();

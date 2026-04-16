@@ -33,6 +33,7 @@ import {
 } from '../../common/schemas';
 import { logger } from '../../utils/logger';
 import { LogNormalizer } from './LogNormalizer';
+import { mapSdkMessageToRecord, mapSdkPartToPayload } from './OpenCodeEventMapper';
 import type { CLIConfig, CLIEvent, CLIExecutor } from './types';
 
 // =============================================================================
@@ -57,6 +58,7 @@ type OpenCodeSessionStatus = SdkSessionStatus | { type: 'other'; raw?: unknown }
 type OpenCodePart =
 	| {
 			type: 'text' | 'reasoning';
+			id?: string;
 			messageID?: string;
 			text?: string;
 			sessionID?: string;
@@ -64,6 +66,7 @@ type OpenCodePart =
 	  }
 	| {
 			type: 'tool';
+			id?: string;
 			messageID?: string;
 			callID?: string;
 			tool?: string;
@@ -109,6 +112,31 @@ function isAssistantMessage(info: Message): info is AssistantInfo {
 function getTokenTotal(tokens: AssistantInfo['tokens']): number {
 	const runtimeTotal = Reflect.get(tokens as object, 'total');
 	return typeof runtimeTotal === 'number' ? runtimeTotal : tokens.input + tokens.output;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+	return value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
+}
+
+function getStringField(
+	record: Record<string, unknown> | undefined,
+	key: string,
+): string | undefined {
+	const value = record?.[key];
+	return typeof value === 'string' ? value : undefined;
+}
+
+function isTaskToolName(name: string): boolean {
+	return name === 'task' || name === 'Task';
+}
+
+function getTaskDescription(input: unknown): string {
+	const record = asRecord(input);
+	return getStringField(record, 'description') ?? getStringField(record, 'prompt') ?? '';
+}
+
+function getMetadataSessionId(metadata: unknown): string | undefined {
+	return getStringField(asRecord(metadata), 'sessionId');
 }
 
 // =============================================================================
@@ -1292,36 +1320,25 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 					const part = this.normalizePart(sdkPart);
 					const partEvents: CLIEvent[] = [];
 
-					if (part.type === 'text' && part.text) {
-						partEvents.push({
-							type: 'message' as const,
-							data: { content: part.text, partId: info.id, isDelta: false, timestamp },
-							sessionId,
-						});
-					} else if (part.type === 'reasoning' && part.text) {
-						// Extract thinking duration from SDK part's time.start/time.end
-						const rawTime = (sdkPart as Record<string, unknown>).time as
-							| { start?: number; end?: number }
-							| undefined;
-						const thinkingDurationMs =
-							rawTime?.start && rawTime?.end && rawTime.end > rawTime.start
-								? rawTime.end - rawTime.start
-								: undefined;
-						partEvents.push({
-							type: 'thinking' as const,
-							data: {
-								content: part.text,
-								partId: info.id,
-								isDelta: false,
-								timestamp,
-								...(thinkingDurationMs ? { durationMs: thinkingDurationMs } : {}),
-							},
-							sessionId,
-						});
-					} else if (part.type === 'tool' && part.callID) {
+					if (part.type === 'tool' && part.callID) {
 						const { callID, tool: name = 'unknown', state } = part;
 						const status = state?.status;
 						const input = (state?.input ?? {}) as Record<string, unknown>;
+						const stateTime = Reflect.get((state ?? {}) as object, 'time');
+						const toolTime =
+							stateTime && typeof stateTime === 'object'
+								? (stateTime as { start?: number; end?: number })
+								: undefined;
+						const toolStartTs =
+							typeof toolTime?.start === 'number'
+								? new Date(toolTime.start).toISOString()
+								: timestamp;
+						const toolEndTs =
+							typeof toolTime?.end === 'number'
+								? new Date(toolTime.end).toISOString()
+								: typeof info.time?.completed === 'number'
+									? new Date(info.time.completed).toISOString()
+									: timestamp;
 
 						// Always emit tool_use for history
 						const normalized = this.logNormalizer.normalizeToolUse(name, input, callID);
@@ -1331,7 +1348,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 								tool: name,
 								input,
 								toolUseId: callID,
-								timestamp,
+								timestamp: toolStartTs,
 							},
 							normalizedEntry: normalized,
 							sessionId,
@@ -1339,13 +1356,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 						// If completed or error, emit tool_result
 						if (status === 'completed' || status === 'error') {
-							const isTask = name === 'task' || name === 'Task';
-							const taskDescription =
-								isTask && typeof input.description === 'string'
-									? input.description
-									: isTask && typeof input.prompt === 'string'
-										? input.prompt
-										: '';
+							const isTask = isTaskToolName(name);
+							const taskDescription = isTask ? getTaskDescription(input) : '';
 							const outputText = typeof state?.output === 'string' ? state.output : '';
 							const resultNormalized = isTask
 								? this.logNormalizer.normalizeTaskResult(
@@ -1362,7 +1374,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 									content: state?.output || '',
 									is_error: status === 'error',
 									tool_use_id: callID,
-									timestamp,
+									timestamp: toolEndTs,
 									title: state?.title,
 									metadata: state?.metadata,
 									input: state?.input,
@@ -2070,6 +2082,27 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	}
 
 	private handleMessageUpdated(info: Message, sessionId?: string): void {
+		const mappedRecord = mapSdkMessageToRecord(info, {
+			agent: isAssistantMessage(info) ? this.messageAgents.get(info.id) : undefined,
+		});
+		this.emit('event', {
+			type: 'message_record',
+			data: {
+				id: info.id,
+				sessionID: info.sessionID,
+				role: info.role,
+				parentID: mappedRecord.parentId,
+				createdAt: info.time?.created,
+				completedAt: mappedRecord.completedAt,
+				modelID: mappedRecord.modelId,
+				providerID: mappedRecord.providerId,
+				agent: mappedRecord.agent,
+				tokens: mappedRecord.tokens,
+				cost: mappedRecord.cost,
+			},
+			sessionId,
+		});
+
 		this.messageRoles.set(info.id, info.role);
 
 		// Track message→session mapping for per-session cleanup
@@ -2255,12 +2288,36 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		sessionId?: string,
 	): void {
 		const part = this.normalizePart(props.part);
-		const delta = (props as { delta?: string }).delta;
 		const sid = part.sessionID ?? sessionId;
+		const partMessageId = 'messageID' in part ? part.messageID : undefined;
+		const partId = typeof props.part.id === 'string' ? props.part.id : partMessageId;
 
-		if (part.type === 'text') this.handleTextPart(part, sid, delta);
-		else if (part.type === 'reasoning') this.handleReasoningPart(part, sid, delta);
-		else if (part.type === 'tool') this.handleToolPart(part, sid);
+		if (partMessageId && partId) {
+			const payloadPart = mapSdkPartToPayload(props.part, partMessageId, sid || '');
+			this.emit('event', {
+				type: 'message_part',
+				data: {
+					id: payloadPart.id,
+					messageID: payloadPart.messageId,
+					sessionID: payloadPart.sessionId,
+					type: payloadPart.type,
+					text: payloadPart.text,
+					callID: payloadPart.callId,
+					tool: payloadPart.toolName,
+					state: payloadPart.state,
+					createdAt: payloadPart.createdAt,
+					completedAt: payloadPart.completedAt,
+					mime: payloadPart.mime,
+					url: payloadPart.url,
+					filename: payloadPart.filename,
+					synthetic: payloadPart.synthetic,
+					auto: payloadPart.auto,
+				},
+				sessionId: sid,
+			});
+		}
+
+		if (part.type === 'tool') this.handleToolPart(part, sid);
 	}
 
 	/**
@@ -2272,82 +2329,22 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	private handlePartDelta(props: EventMessagePartDelta['properties']): void {
 		const { sessionID, messageID, field, delta } = props;
 		if (!delta) return;
+		if (messageID && props.partID) {
+			this.emit('event', {
+				type: 'message_part_delta',
+				data: {
+					messageID,
+					partID: props.partID,
+					field,
+					delta,
+					sessionID,
+				},
+				sessionId: sessionID,
+			});
+		}
 
 		// Skip deltas for user messages
 		if (messageID && this.messageRoles.get(messageID) === 'user') return;
-
-		const agent = messageID ? this.messageAgents.get(messageID) : undefined;
-
-		if (field === 'text') {
-			this.emit('event', {
-				type: 'message',
-				data: {
-					content: delta,
-					partId: messageID,
-					isDelta: true,
-					...(agent ? { agent } : {}),
-				},
-				sessionId: sessionID,
-			});
-		} else if (field === 'reasoning') {
-			this.emit('event', {
-				type: 'thinking',
-				data: { content: delta, partId: messageID, isDelta: true },
-				sessionId: sessionID,
-			});
-		}
-	}
-
-	private handleTextPart(part: OpenCodePart, sessionId?: string, delta?: string): void {
-		if (part.type !== 'text') return;
-		if (part.messageID && this.messageRoles.get(part.messageID) === 'user') return;
-
-		// Resolve agent from the parent message (set in handleMessageUpdated)
-		const agent = part.messageID ? this.messageAgents.get(part.messageID) : undefined;
-
-		if (delta) {
-			this.emit('event', {
-				type: 'message',
-				data: {
-					content: delta,
-					partId: part.messageID,
-					isDelta: true,
-					...(agent ? { agent } : {}),
-				},
-				sessionId,
-			});
-		} else if (part.text) {
-			const entry = this.logNormalizer.normalizeMessage(part.text, 'assistant');
-			const eventBase = {
-				data: {
-					content: part.text,
-					partId: part.messageID,
-					isDelta: false,
-					...(agent ? { agent } : {}),
-				},
-				normalizedEntry: entry,
-				sessionId,
-			};
-			this.emit('event', { type: 'message', ...eventBase });
-			this.emit('event', { type: 'normalized_log', ...eventBase });
-		}
-	}
-
-	private handleReasoningPart(part: OpenCodePart, sessionId?: string, delta?: string): void {
-		if (part.type !== 'reasoning') return;
-		if (delta) {
-			this.emit('event', {
-				type: 'thinking',
-				data: { content: delta, partId: part.messageID, isDelta: true },
-				sessionId,
-			});
-		} else if (part.text) {
-			this.emit('event', {
-				type: 'thinking',
-				data: { content: part.text, partId: part.messageID, isDelta: false },
-				sessionId,
-			});
-		}
 	}
 
 	/** Emit a tool_use event — shared helper to avoid duplication. */
@@ -2399,13 +2396,13 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				this.toolCallStates.set(callID, { completed: false, hasInput: hasInputNow });
 			} else if (status === 'running' && current && !current.completed) {
 				// Intermediate update for a running tool.
-				const meta = state?.metadata as Record<string, unknown> | undefined;
-				const isTask = name === 'task' || name === 'Task';
+				const meta = asRecord(state?.metadata);
+				const isTask = isTaskToolName(name);
 
 				// For task tools: when metadata.sessionId appears (OpenCode CLI calls
 				// ctx.metadata() after Session.create()), re-emit as tool_use so
 				// ChatProvider can extract the child session ID and link it.
-				if (isTask && meta && typeof meta.sessionId === 'string') {
+				if (isTask && getMetadataSessionId(meta)) {
 					this.emitToolUse(callID, name, state, status, sessionId);
 					this.toolCallStates.set(callID, { completed: false, hasInput: hasInputNow });
 				} else if (meta && Object.keys(meta).length > 0) {
@@ -2426,20 +2423,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 		if ((status === 'completed' || status === 'error') && !current?.completed) {
 			this.toolCallStates.set(callID, { completed: true, hasInput: hasInputNow });
-			const isTask = name === 'task' || name === 'Task';
-			const taskInput = isTask ? (state?.input as unknown) : undefined;
-			const taskInputRecord =
-				taskInput && typeof taskInput === 'object'
-					? (taskInput as Record<string, unknown>)
-					: undefined;
-			const description =
-				(isTask && taskInputRecord && typeof taskInputRecord.description === 'string'
-					? taskInputRecord.description
-					: undefined) ??
-				(isTask && taskInputRecord && typeof taskInputRecord.prompt === 'string'
-					? taskInputRecord.prompt
-					: undefined) ??
-				'';
+			const isTask = isTaskToolName(name);
+			const description = isTask ? getTaskDescription(state?.input) : '';
 			const outputText = typeof state?.output === 'string' ? state.output : '';
 
 			const resultNormalized = isTask
@@ -2569,6 +2554,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (raw.type === 'text') {
 			return {
 				type: 'text',
+				id: raw.id,
 				messageID: raw.messageID,
 				text: raw.text,
 				sessionID: raw.sessionID,
@@ -2578,6 +2564,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (raw.type === 'reasoning') {
 			return {
 				type: 'reasoning',
+				id: raw.id,
 				messageID: raw.messageID,
 				text: raw.text,
 				sessionID: raw.sessionID,
@@ -2587,6 +2574,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			const toolPart = raw as ToolPart;
 			return {
 				type: 'tool',
+				id: toolPart.id,
 				messageID: toolPart.messageID,
 				callID: toolPart.callID,
 				tool: toolPart.tool,

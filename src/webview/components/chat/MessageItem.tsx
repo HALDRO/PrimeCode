@@ -10,8 +10,15 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { NormalizedEntry } from '../../../common/normalizedTypes';
 import { useContainerAutoScroll } from '../../hooks/useContainerAutoScroll';
 import { useSubtaskThread } from '../../hooks/useSubtaskChildren';
-import type { Message } from '../../store/chatStore';
-import { useMcpServers, useSubtaskAccessRequest } from '../../store/selectors';
+import {
+	type RenderAssistantMessage,
+	type RenderMessage,
+	type RenderSubtaskMessage,
+	type RenderThinkingMessage,
+	type RenderToolUseMessage,
+	useMcpServers,
+	useSubtaskAccessRequest,
+} from '../../store';
 import { formatNumber, formatToolName } from '../../utils/format';
 import { Markdown } from '../../utils/markdown';
 import {
@@ -28,7 +35,6 @@ import { ScrollThumb } from '../ui/ScrollContainer';
 import { AccessGate } from './AccessGate';
 import { SubtaskGenerationStatus } from './GenerationStatus';
 import { SubtaskTimer } from './LiveStats';
-import { QuestionCard } from './QuestionCard';
 import {
 	InlineToolLine,
 	SimpleTool,
@@ -41,9 +47,10 @@ import { ToolCard, ToolCardMessage } from './ToolCard';
 interface MessageItemContext {
 	totalSections: number;
 	sessionId: string;
+	isNestedSubtaskThread?: boolean;
 }
 
-const subtaskStatusIcon = (status: Extract<Message, { type: 'subtask' }>['status']) => {
+const subtaskStatusIcon = (status: RenderSubtaskMessage['status']) => {
 	switch (status) {
 		case 'running':
 			return <TodoProgressIcon size={14} className="text-warning animate-spin-smooth" />;
@@ -73,11 +80,11 @@ type SubtaskExpandState = 'preview' | 'expanded';
 const SUBTASK_PREVIEW_MAX_HEIGHT = 150;
 
 const SubtaskItem = React.memo<{
-	message: Extract<Message, { type: 'subtask' }>;
+	message: RenderSubtaskMessage;
 	ctx: MessageItemContext;
 }>(({ message, ctx }) => {
 	const [expandState, setExpandState] = useState<SubtaskExpandState>('preview');
-	const [promptExpanded, setPromptExpanded] = useState(false);
+	const [promptExpanded, setPromptExpanded] = useState(message.status === 'running');
 	const mcpServers = useMcpServers();
 	const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
 	const pendingAccess = useSubtaskAccessRequest(message.id);
@@ -90,14 +97,30 @@ const SubtaskItem = React.memo<{
 
 	// Strip trailing assistant message that duplicates the subtask result
 	const groupedChildren = useMemo(() => {
-		if (message.status === 'completed' && message.result && rawGroupedChildren.length > 0) {
-			const last = rawGroupedChildren[rawGroupedChildren.length - 1];
-			if (!Array.isArray(last) && last.type === 'assistant') {
-				return rawGroupedChildren.slice(0, -1);
+		let nextChildren = rawGroupedChildren;
+
+		// The card already renders the task prompt above the child session timeline.
+		// Some child sessions also emit the same prompt as their first visible item
+		// (either as a user echo or as an assistant bridge message). Drop that
+		// duplicate so the subtask timeline starts with real activity.
+		if (message.prompt && nextChildren.length > 0) {
+			const first = nextChildren[0];
+			if (!Array.isArray(first) && (first.kind === 'user' || first.kind === 'assistant')) {
+				const firstContent = ('content' in first ? first.content : '').trim();
+				if (firstContent && firstContent === message.prompt.trim()) {
+					nextChildren = nextChildren.slice(1);
+				}
 			}
 		}
-		return rawGroupedChildren;
-	}, [rawGroupedChildren, message.status, message.result]);
+
+		if (message.status === 'completed' && message.result && nextChildren.length > 0) {
+			const last = nextChildren[nextChildren.length - 1];
+			if (!Array.isArray(last) && last.kind === 'assistant') {
+				return nextChildren.slice(0, -1);
+			}
+		}
+		return nextChildren;
+	}, [rawGroupedChildren, message.status, message.result, message.prompt]);
 
 	// Build TaskResult normalizedEntry from the subtask's own normalizedEntry or result text
 	const taskResultEntry = useMemo((): NormalizedEntry | undefined => {
@@ -130,6 +153,11 @@ const SubtaskItem = React.memo<{
 	}, [message.status, message.result, message.description, message.timestamp, message]);
 
 	const isRunning = message.status === 'running';
+
+	useEffect(() => {
+		setPromptExpanded(message.status === 'running');
+	}, [message.status]);
+
 	const retryInfo = (
 		message as typeof message & {
 			retryInfo?: { message: string; attempt: number; nextRetryAt?: string };
@@ -189,7 +217,7 @@ const SubtaskItem = React.memo<{
 							title={`Input: ${formatNumber(tokenStats.input)} · Output: ${formatNumber(tokenStats.output)}`}
 						>
 							<TokensIcon size={11} />
-							{formatNumber(tokenStats.total)}
+							{formatNumber(tokenStats.total ?? 0)}
 						</span>
 					)}
 					<SubtaskTimer
@@ -247,7 +275,7 @@ const SubtaskItem = React.memo<{
 								<MessageItem
 									key={key}
 									item={child}
-									ctx={ctx}
+									ctx={{ ...ctx, isNestedSubtaskThread: true }}
 									collapseGroupedTools={
 										forceCollapse ||
 										Array.isArray(child) ||
@@ -319,24 +347,14 @@ SubtaskItem.displayName = 'SubtaskItem';
 const TOOL_GROUP_PREVIEW_MAX_HEIGHT = 120;
 
 const SimpleToolGroup = React.memo<{
-	messages: Message[];
+	messages: RenderMessage[];
 	shouldCollapse: boolean;
 }>(({ messages, shouldCollapse }) => {
 	const isLive = (messages as ToolGroup).isLive ?? false;
 	const toolUseMessages = useMemo(
-		() =>
-			messages.filter((m): m is Extract<Message, { type: 'tool_use' }> => m.type === 'tool_use'),
+		() => messages.filter((m): m is RenderToolUseMessage => m.kind === 'tool_use'),
 		[messages],
 	);
-	const localToolResults = useMemo(() => {
-		const results: Record<string, Extract<Message, { type: 'tool_result' }> | undefined> = {};
-		for (const msg of messages) {
-			if (msg.type === 'tool_result' && msg.toolUseId) {
-				results[msg.toolUseId] = msg;
-			}
-		}
-		return results;
-	}, [messages]);
 
 	const toolCountsLabel = useMemo(() => {
 		const counts = new Map<string, number>();
@@ -364,7 +382,7 @@ const SimpleToolGroup = React.memo<{
 	const renderItems = useMemo(
 		() =>
 			messages.filter(
-				m => m.type === 'tool_use' || m.type === 'assistant' || m.type === 'thinking',
+				m => m.kind === 'tool_use' || m.kind === 'assistant' || m.kind === 'thinking',
 			),
 		[messages],
 	);
@@ -448,8 +466,8 @@ const SimpleToolGroup = React.memo<{
 					}
 				>
 					{renderItems.map(msg => {
-						if (msg.type === 'assistant') {
-							const assistantContent = (msg as { content: string }).content || '';
+						if (msg.kind === 'assistant') {
+							const assistantContent = (msg as RenderAssistantMessage).content || '';
 							if (!assistantContent.trim()) return null;
 							return (
 								<div
@@ -459,31 +477,25 @@ const SimpleToolGroup = React.memo<{
 								>
 									<Markdown
 										content={assistantContent}
-										isStreaming={(msg as { isStreaming?: boolean }).isStreaming}
+										isStreaming={(msg as RenderAssistantMessage).isStreaming}
 									/>
 								</div>
 							);
 						}
-						if (msg.type === 'thinking') {
+						if (msg.kind === 'thinking') {
 							return (
 								<ThinkingMessage
 									key={msg.id}
-									content={(msg as Extract<Message, { type: 'thinking' }>).content || ''}
-									durationMs={(msg as Extract<Message, { type: 'thinking' }>).durationMs}
-									isStreaming={(msg as Extract<Message, { type: 'thinking' }>).isStreaming}
-									startTime={(msg as Extract<Message, { type: 'thinking' }>).startTime}
+									content={(msg as RenderThinkingMessage).content || ''}
+									durationMs={(msg as RenderThinkingMessage).durationMs}
+									isStreaming={(msg as RenderThinkingMessage).isStreaming}
+									startTime={(msg as RenderThinkingMessage).startTime}
 								/>
 							);
 						}
 						// tool_use
-						const toolMsg = msg as Extract<Message, { type: 'tool_use' }>;
-						return (
-							<ToolCardMessage
-								key={toolMsg.id}
-								message={toolMsg}
-								toolResult={toolMsg.toolUseId ? localToolResults[toolMsg.toolUseId] : undefined}
-							/>
-						);
+						const toolMsg = msg as RenderToolUseMessage;
+						return <ToolCardMessage key={toolMsg.id} toolUse={toolMsg} />;
 					})}
 				</div>
 				{isLive && (
@@ -518,39 +530,36 @@ const SimpleToolGroup = React.memo<{
 SimpleToolGroup.displayName = 'SimpleToolGroup';
 
 export const MessageItem = React.memo<{
-	item: Message | Message[];
+	item: RenderMessage | RenderMessage[];
 	ctx: MessageItemContext;
 	collapseGroupedTools?: boolean;
 }>(
 	({ item, ctx, collapseGroupedTools = false }) => {
 		if (Array.isArray(item)) {
-			return <SimpleToolGroup messages={item} shouldCollapse={collapseGroupedTools} />;
+			return (
+				<SimpleToolGroup messages={item as RenderMessage[]} shouldCollapse={collapseGroupedTools} />
+			);
 		}
 
-		switch (item.type) {
+		switch (item.kind) {
 			case 'tool_use': {
 				const isCompactTool = item.toolName === 'Summarize Conversation';
 				return (
 					<div
 						className={isCompactTool ? 'my-8 mb-(--tool-block-margin)' : 'mb-(--tool-block-margin)'}
 					>
-						<ToolCardMessage message={item} />
+						<ToolCardMessage toolUse={item} />
 					</div>
 				);
 			}
-			case 'access_request':
-				// All access requests are rendered inline inside the related ToolCard.
-				return null;
-			case 'question':
-				return <QuestionCard request={item as Extract<Message, { type: 'question' }>} />;
 			case 'subtask':
 				return <SubtaskItem message={item} ctx={ctx} />;
 			case 'assistant': {
-				const assistantContent = (item as { content: string }).content || '';
+				const assistantContent = (item as RenderAssistantMessage).content || '';
 				if (!assistantContent.trim()) return null;
 				const assistantAgent = item.agent;
 				const agentBadge =
-					assistantAgent && assistantAgent !== 'build' ? (
+					!ctx.isNestedSubtaskThread && assistantAgent && assistantAgent !== 'build' ? (
 						<span className="inline-flex items-center text-xs font-medium px-1.5 py-0.5 rounded-sm bg-vscode-badge-background text-vscode-badge-foreground mb-1">
 							{assistantAgent.charAt(0).toUpperCase() + assistantAgent.slice(1)}
 						</span>
@@ -563,7 +572,7 @@ export const MessageItem = React.memo<{
 						{agentBadge}
 						<Markdown
 							content={assistantContent}
-							isStreaming={(item as { isStreaming?: boolean }).isStreaming}
+							isStreaming={(item as RenderAssistantMessage).isStreaming}
 						/>
 					</div>
 				);
@@ -571,10 +580,10 @@ export const MessageItem = React.memo<{
 			case 'thinking':
 				return (
 					<ThinkingMessage
-						content={(item as Extract<Message, { type: 'thinking' }>).content || ''}
-						durationMs={(item as Extract<Message, { type: 'thinking' }>).durationMs}
-						isStreaming={(item as Extract<Message, { type: 'thinking' }>).isStreaming}
-						startTime={(item as Extract<Message, { type: 'thinking' }>).startTime}
+						content={(item as RenderThinkingMessage).content || ''}
+						durationMs={(item as RenderThinkingMessage).durationMs}
+						isStreaming={(item as RenderThinkingMessage).isStreaming}
+						startTime={(item as RenderThinkingMessage).startTime}
 					/>
 				);
 			default:

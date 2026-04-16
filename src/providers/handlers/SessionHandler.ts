@@ -2,8 +2,8 @@ import * as vscode from 'vscode';
 import type {
 	ConversationIndexEntry,
 	OpenCodeProviderData,
-	SessionMessageData,
-	SessionMessageUpdate,
+	SessionSubtaskPayload,
+	SessionUserMessagePayload,
 	TotalStats,
 } from '../../common';
 import { generateId, parseModelId } from '../../common';
@@ -16,19 +16,17 @@ import {
 	isFileEditTool,
 	resolveToolName,
 } from '../../common/toolRegistry';
-import {
-	buildTranscript,
-	extractFilePath,
-	mapMessageEvent,
-	mapThinkingEvent,
-	mapToolResultEvent,
-	mapToolUseEvent,
-	mapUserEvent,
-} from '../../core/eventToMessage';
 import { LogNormalizer } from '../../core/executor/LogNormalizer';
+import {
+	mapSdkMessageToRecord,
+	mapSdkPartToPayload,
+} from '../../core/executor/OpenCodeEventMapper';
 import type { CLIConfig, CLIEvent } from '../../core/executor/types';
 import { logger } from '../../utils/logger';
 import type { HandlerContext, WebviewMessageHandler } from './types';
+
+type CanonicalSdkMessage = Parameters<typeof mapSdkMessageToRecord>[0];
+type CanonicalSdkPart = Parameters<typeof mapSdkPartToPayload>[0];
 
 export class SessionHandler implements WebviewMessageHandler {
 	private readonly logNormalizer = new LogNormalizer();
@@ -74,6 +72,13 @@ export class SessionHandler implements WebviewMessageHandler {
 	private readonly sendingLock = new Set<string>();
 
 	constructor(private context: HandlerContext) {}
+
+	private static extractFilePath(input: Record<string, unknown>): string | undefined {
+		if (typeof input.filePath === 'string') return input.filePath;
+		if (typeof input.file_path === 'string') return input.file_path;
+		if (typeof input.path === 'string') return input.path;
+		return undefined;
+	}
 
 	async handleMessage(msg: WebviewCommand): Promise<void> {
 		switch (msg.type) {
@@ -128,63 +133,6 @@ export class SessionHandler implements WebviewMessageHandler {
 		}
 	}
 
-	// =============================================================================
-	// Public Methods for ChatProvider interaction (Event Reflection)
-	// =============================================================================
-
-	public postSessionMessage(
-		message: SessionMessageData | SessionMessageUpdate,
-		sessionId?: string,
-	): void {
-		const targetId = sessionId;
-		if (!targetId) {
-			logger.warn('[SessionHandler] postSessionMessage dropped: no sessionId', {
-				messageType: message.type,
-				messageId: message.id,
-			});
-			return;
-		}
-
-		this.context.bridge.session.message(targetId, message);
-	}
-
-	public postStatus(
-		sessionId: string | undefined,
-		status: import('../../common').SessionStatus,
-		statusText?: string,
-	): void {
-		if (!sessionId) return;
-		this.context.bridge.session.status(sessionId, status, statusText);
-	}
-
-	public postComplete(partId: string, toolUseId?: string, sessionId?: string): void {
-		const targetId = sessionId;
-		if (!targetId) {
-			logger.warn('[SessionHandler] postComplete dropped: no sessionId', { partId });
-			return;
-		}
-		this.context.bridge.session.complete(targetId, partId, toolUseId);
-	}
-
-	public postTurnTokens(
-		data: {
-			inputTokens: number;
-			outputTokens: number;
-			totalTokens: number;
-			cacheReadTokens: number;
-			durationMs?: number;
-			userMessageId?: string;
-		},
-		sessionId?: string,
-	): void {
-		const targetId = sessionId;
-		if (!targetId) {
-			logger.warn('[SessionHandler] postTurnTokens dropped: no sessionId');
-			return;
-		}
-		this.context.bridge.session.turnTokens(targetId, data);
-	}
-
 	public handleSessionUpdatedEvent(data: unknown, eventSessionId?: string): void {
 		const parsed = parseSessionUpdatedRuntimePayload(data);
 
@@ -218,7 +166,10 @@ export class SessionHandler implements WebviewMessageHandler {
 				});
 				return;
 			}
-			this.postStatus(targetSessionId, 'busy', 'Working...');
+			this.context.bridge.emit(targetSessionId, 'status', {
+				status: 'busy',
+				statusText: 'Working...',
+			});
 		} else if (status?.type === 'idle') {
 			// During stop guard, suppress idle too — we already forced idle.
 			if (this.context.sessionState.isStopGuarded(targetSessionId)) {
@@ -227,17 +178,24 @@ export class SessionHandler implements WebviewMessageHandler {
 				});
 				return;
 			}
-			this.postStatus(targetSessionId, 'idle', 'Ready');
+			this.context.bridge.emit(targetSessionId, 'status', {
+				status: 'idle',
+				statusText: 'Ready',
+			});
 
 			// Auto-dequeue: if there's a queued message, send it now.
 			// This is the OpenCode-style "callback resolution" pattern.
 			void this.processQueueOnIdle(targetSessionId);
 		} else if (status?.type === 'retry') {
-			this.context.bridge.session.status(targetSessionId, 'retrying', 'Retrying…', {
-				attempt: typeof status.attempt === 'number' ? status.attempt : 1,
-				message: typeof status.message === 'string' ? status.message : 'Retrying…',
-				nextRetryAt:
-					typeof status.next === 'number' ? new Date(status.next).toISOString() : undefined,
+			this.context.bridge.emit(targetSessionId, 'status', {
+				status: 'retrying',
+				statusText: 'Retrying…',
+				retryInfo: {
+					attempt: typeof status.attempt === 'number' ? status.attempt : 1,
+					message: typeof status.message === 'string' ? status.message : 'Retrying…',
+					nextRetryAt:
+						typeof status.next === 'number' ? new Date(status.next).toISOString() : undefined,
+				},
 			});
 		}
 
@@ -400,16 +358,25 @@ export class SessionHandler implements WebviewMessageHandler {
 			this.replayedSessions.add(activeTab);
 			// Post status matching real backend state
 			if (isActiveTabBusy) {
-				this.postStatus(activeTab, 'busy', 'Working...');
+				this.context.bridge.emit(activeTab, 'status', {
+					status: 'busy',
+					statusText: 'Working...',
+				});
 			} else {
-				this.postStatus(activeTab, 'idle', 'Ready');
+				this.context.bridge.emit(activeTab, 'status', {
+					status: 'idle',
+					statusText: 'Ready',
+				});
 			}
 
 			// Post real status for non-active tabs
 			for (const tabId of tabsToRestore) {
 				if (tabId !== activeTab) {
 					const isBusy = this.context.cli.isSessionActive?.(tabId) ?? false;
-					this.postStatus(tabId, isBusy ? 'busy' : 'idle', isBusy ? 'Working...' : 'Ready');
+					this.context.bridge.emit(tabId, 'status', {
+						status: isBusy ? 'busy' : 'idle',
+						statusText: isBusy ? 'Working...' : 'Ready',
+					});
 				}
 			}
 		} catch (error) {
@@ -446,6 +413,12 @@ export class SessionHandler implements WebviewMessageHandler {
 			revert?: { messageID: string; partID?: string };
 		}>,
 	): Promise<void> {
+		const sdkClient = this.context.cli.getSdkClient?.();
+		if (sdkClient) {
+			await this.restoreSessionFromCanonicalSnapshot(sessionId, config, cachedSessions);
+			return;
+		}
+
 		const graph = this.context.sessionGraph;
 
 		const allSessions = cachedSessions ?? (await this.context.cli.listSessions(config));
@@ -483,7 +456,12 @@ export class SessionHandler implements WebviewMessageHandler {
 		for (const s of childSessionsFromList) allChildIds.add(s.id);
 		const childSessions = [...allChildIds].map(id => {
 			const fromList = childSessionsFromList.find(s => s.id === id);
-			return { id, title: fromList?.title, created: fromList?.created };
+			return {
+				id,
+				title: fromList?.title,
+				created: fromList?.created,
+				lastModified: fromList?.lastModified,
+			};
 		});
 
 		// Register explicit links in SessionGraph
@@ -514,11 +492,13 @@ export class SessionHandler implements WebviewMessageHandler {
 				childHistories.set(id, history);
 
 				if (history.length > 0) {
-					const firstTs = (history[0].data as { timestamp?: string })?.timestamp;
-					const lastTs = (history[history.length - 1].data as { timestamp?: string })?.timestamp;
-					if (firstTs && lastTs) {
-						const duration = new Date(lastTs).getTime() - new Date(firstTs).getTime();
-						if (duration > 0) childDurations.set(id, duration);
+					const childSession = childSessions.find(child => child.id === id);
+					const duration = this.computeChildSessionDuration(history, {
+						fallbackCreatedAt: childSession?.created,
+						fallbackUpdatedAt: childSession?.lastModified,
+					});
+					if (typeof duration === 'number' && duration > 0) {
+						childDurations.set(id, duration);
 					}
 
 					// Aggregate turn_tokens from child history for childTokens on subtask cards
@@ -577,17 +557,13 @@ export class SessionHandler implements WebviewMessageHandler {
 				for (const child of childSessions) {
 					const duration = childDurations.get(child.id);
 					const childTokens = childTokensMap.get(child.id);
-					const childHistory = childHistories.get(child.id) || [];
-					const transcript = this.buildTranscriptFromHistory(childHistory) as unknown[];
-					this.postSessionMessage(
-						{
+					this.context.bridge.emit(sessionId, 'subtask', {
+						subtask: {
 							id: `hist-subtask-${child.id}`,
-							type: 'subtask',
 							agent: 'subagent',
 							prompt: '',
 							description: child.title || 'Subtask',
 							status: 'completed',
-							transcript: transcript as import('../../common/schemas').ConversationMessage[],
 							timestamp: new Date().toISOString(),
 							...(duration ? { durationMs: duration } : {}),
 							...(childTokens ? { childTokens } : {}),
@@ -595,8 +571,7 @@ export class SessionHandler implements WebviewMessageHandler {
 								? { childModelId: childModelIdMap.get(child.id) }
 								: {}),
 						},
-						sessionId,
-					);
+					});
 				}
 			}
 
@@ -655,7 +630,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			}
 
 			if (revertUserMessageId) {
-				this.context.bridge.session.restore(sessionId, {
+				this.context.bridge.emit(sessionId, 'restore', {
 					action: 'success',
 					canUnrevert: true,
 					revertedFromMessageId: revertUserMessageId,
@@ -667,6 +642,517 @@ export class SessionHandler implements WebviewMessageHandler {
 				});
 			}
 		}
+	}
+
+	private async restoreSessionFromCanonicalSnapshot(
+		sessionId: string,
+		config: { provider: 'opencode'; workspaceRoot: string },
+		cachedSessions?: Array<{
+			id: string;
+			title?: string;
+			lastModified?: number;
+			created?: number;
+			parentID?: string;
+			revert?: { messageID: string; partID?: string };
+		}>,
+	): Promise<void> {
+		const sdkClient = this.context.cli.getSdkClient?.();
+		if (!sdkClient) {
+			throw new Error('OpenCode SDK client unavailable for canonical snapshot restore');
+		}
+
+		const allSessions = cachedSessions ?? (await this.context.cli.listSessions(config));
+		const currentSession = allSessions.find(s => s.id === sessionId);
+
+		const parentHistory = await this.context.cli.getHistory(sessionId, config);
+		const explicitLinks = this.extractExplicitTaskLinks(parentHistory, sessionId);
+		const childSessionIds = new Set<string>(explicitLinks.values());
+		for (const child of allSessions.filter(s => s.parentID === sessionId)) {
+			childSessionIds.add(child.id);
+		}
+
+		const { childDurations, childTokensMap, childModelIdMap } = await this.collectChildSessionStats(
+			childSessionIds,
+			allSessions,
+			config,
+		);
+
+		const [messagesResult] = await Promise.all([
+			sdkClient.session.messages({
+				sessionID: sessionId,
+				directory: config.workspaceRoot,
+			}),
+			this.restoreSessionDiffFromServer(sessionId, config),
+			this.restoreSessionRuntimeStateFromServer(sessionId, config),
+		]);
+
+		if (messagesResult.error) {
+			throw new Error(
+				`Failed to fetch canonical session messages: ${JSON.stringify(messagesResult.error)}`,
+			);
+		}
+
+		const entries = messagesResult.data ?? [];
+		const parentTurnTokens = this.buildTurnTokenMap(parentHistory, entries);
+
+		this.context.bridge.startCollect();
+		try {
+			for (const childSessionId of childSessionIds) {
+				const childHistory = await this.context.cli.getHistory(childSessionId, config);
+				const childMessagesResult = await sdkClient.session.messages({
+					sessionID: childSessionId,
+					directory: config.workspaceRoot,
+				});
+
+				if (childMessagesResult.error) {
+					logger.warn(
+						'[SessionHandler] Failed to fetch canonical child session messages, falling back to history replay',
+						{
+							sessionId: childSessionId,
+							error: childMessagesResult.error,
+						},
+					);
+					if (childHistory.length > 0) {
+						this.replayHistoryIntoSession(childSessionId, childHistory, {
+							mode: 'default',
+						});
+					}
+					continue;
+				}
+
+				const childEntries = childMessagesResult.data ?? [];
+				if (childEntries.length > 0) {
+					const canonicalDuration = this.computeCanonicalSessionDuration(childEntries);
+					if (typeof canonicalDuration === 'number' && canonicalDuration > 0) {
+						childDurations.set(childSessionId, canonicalDuration);
+					}
+					const childTurnTokens = this.buildTurnTokenMap(childHistory, childEntries);
+					this.replayCanonicalEntriesIntoSession(childSessionId, childEntries, childTurnTokens, {
+						workspaceSessionId: childSessionId,
+					});
+					continue;
+				}
+
+				if (childHistory.length > 0) {
+					this.replayHistoryIntoSession(childSessionId, childHistory, {
+						mode: 'default',
+					});
+				}
+			}
+
+			this.replayCanonicalEntriesIntoSession(sessionId, entries, parentTurnTokens, {
+				workspaceSessionId: sessionId,
+				explicitLinks,
+				childDurations,
+				childTokensMap,
+				childModelIdMap,
+			});
+		} finally {
+			this.context.bridge.flushCollected();
+		}
+
+		if (currentSession?.revert?.messageID) {
+			this.context.bridge.emit(sessionId, 'restore', {
+				action: 'success',
+				canUnrevert: true,
+				revertedFromMessageId: currentSession.revert.messageID,
+			});
+		}
+	}
+
+	private replayCanonicalEntriesIntoSession(
+		sessionId: string,
+		entries: Array<{ info: CanonicalSdkMessage; parts: CanonicalSdkPart[] }>,
+		turnTokensByUser: Map<
+			string,
+			{
+				inputTokens: number;
+				outputTokens: number;
+				totalTokens: number;
+				cacheReadTokens: number;
+				durationMs?: number;
+			}
+		>,
+		options: {
+			workspaceSessionId: string;
+			explicitLinks?: Map<string, string>;
+			childDurations?: Map<string, number>;
+			childTokensMap?: Map<
+				string,
+				{ input: number; output: number; total: number; cacheRead: number }
+			>;
+			childModelIdMap?: Map<string, string>;
+		},
+	): void {
+		for (const entry of entries) {
+			const info = entry.info;
+			if (info.role === 'user') {
+				const userText = entry.parts
+					.filter(
+						part => part.type === 'text' && !part.synthetic && !('ignored' in part && part.ignored),
+					)
+					.map(part => ('text' in part && typeof part.text === 'string' ? part.text : ''))
+					.join('');
+				const diffs =
+					'summary' in info &&
+					info.summary &&
+					typeof info.summary === 'object' &&
+					'diffs' in info.summary
+						? info.summary.diffs
+						: undefined;
+
+				this.context.bridge.emit(sessionId, 'user_message', {
+					message: {
+						id: info.id,
+						content: userText,
+						timestamp:
+							typeof info.time?.created === 'number'
+								? new Date(info.time.created).toISOString()
+								: new Date().toISOString(),
+						...(info.model?.modelID ? { model: info.model.modelID } : {}),
+						...(typeof info.agent === 'string' ? { agent: info.agent } : {}),
+						...(diffs
+							? {
+									summary: {
+										diffs: diffs.map(diff => ({
+											file: diff.file,
+											additions: diff.additions || 0,
+											deletions: diff.deletions || 0,
+										})),
+									},
+								}
+							: {}),
+					},
+				});
+
+				const turn = turnTokensByUser.get(info.id);
+				if (turn) {
+					this.context.bridge.emit(sessionId, 'turn_tokens', {
+						userMessageId: info.id,
+						inputTokens: turn.inputTokens,
+						outputTokens: turn.outputTokens,
+						totalTokens: turn.totalTokens,
+						cacheReadTokens: turn.cacheReadTokens,
+						...(typeof turn.durationMs === 'number' ? { durationMs: turn.durationMs } : {}),
+					});
+				}
+			}
+
+			this.context.bridge.emit(sessionId, 'message_record', {
+				message: mapSdkMessageToRecord(info),
+			});
+
+			for (const part of entry.parts) {
+				const partTime =
+					'time' in part && part.time && typeof part.time === 'object'
+						? (part.time as { start?: number; end?: number; created?: number })
+						: undefined;
+
+				const canonicalTaskSubtask = this.mapCanonicalTaskPartToSubtask(
+					part,
+					info,
+					partTime,
+					options.workspaceSessionId,
+					options.explicitLinks ?? new Map<string, string>(),
+					options.childDurations ?? new Map<string, number>(),
+					options.childTokensMap ?? new Map(),
+					options.childModelIdMap ?? new Map<string, string>(),
+				);
+				if (canonicalTaskSubtask) {
+					this.context.bridge.emit(sessionId, 'subtask', {
+						subtask: canonicalTaskSubtask,
+					});
+					continue;
+				}
+
+				this.context.bridge.emit(sessionId, 'message_part', {
+					part: mapSdkPartToPayload(part, info.id, sessionId),
+				});
+
+				if (part.type === 'tool' && typeof part.tool === 'string') {
+					const toolState =
+						part.state && typeof part.state === 'object'
+							? (part.state as Record<string, unknown>)
+							: undefined;
+					const toolInput =
+						toolState?.input && typeof toolState.input === 'object'
+							? (toolState.input as Record<string, unknown>)
+							: undefined;
+					const toolUseId = typeof part.callID === 'string' ? part.callID : undefined;
+					const toolName = part.tool;
+
+					if (toolUseId && toolInput) {
+						const filePathFromInput = SessionHandler.extractFilePath(toolInput);
+						if (filePathFromInput && this.isFileEditTool(toolName)) {
+							this.emitFileChangeFromReplay(toolInput, filePathFromInput, toolUseId, sessionId);
+						} else if (!filePathFromInput && resolveToolName(toolName) === 'apply_patch') {
+							const patchPaths = extractPatchFilePaths(toolInput);
+							for (const patchPath of patchPaths) {
+								this.context.bridge.emit(sessionId, 'file', {
+									action: 'changed',
+									filePath: patchPath,
+									fileName: patchPath.split(/[/\\]/).pop() || patchPath,
+									linesAdded: 0,
+									linesRemoved: 0,
+									toolUseId,
+								});
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	private extractExplicitTaskLinks(
+		history: CLIEvent[],
+		parentSessionId: string,
+	): Map<string, string> {
+		const explicitLinks = new Map<string, string>();
+		for (const ev of history) {
+			if (ev.type !== 'tool_result') continue;
+			const d = ev.data as {
+				tool?: string;
+				tool_use_id?: string;
+				metadata?: { sessionId?: string };
+			};
+			if (d.tool === 'task' && d.tool_use_id && d.metadata?.sessionId) {
+				explicitLinks.set(d.tool_use_id, d.metadata.sessionId);
+				this.context.sessionGraph.registerChild(
+					d.metadata.sessionId,
+					parentSessionId,
+					d.tool_use_id,
+				);
+			}
+		}
+		return explicitLinks;
+	}
+
+	private async collectChildSessionStats(
+		childSessionIds: Set<string>,
+		allSessions: Array<{
+			id: string;
+			title?: string;
+			lastModified?: number;
+			created?: number;
+			parentID?: string;
+		}>,
+		config: { provider: 'opencode'; workspaceRoot: string },
+	): Promise<{
+		childDurations: Map<string, number>;
+		childTokensMap: Map<
+			string,
+			{ input: number; output: number; total: number; cacheRead: number }
+		>;
+		childModelIdMap: Map<string, string>;
+	}> {
+		const childDurations = new Map<string, number>();
+		const childTokensMap = new Map<
+			string,
+			{ input: number; output: number; total: number; cacheRead: number }
+		>();
+		const childModelIdMap = new Map<string, string>();
+
+		if (childSessionIds.size === 0) {
+			return { childDurations, childTokensMap, childModelIdMap };
+		}
+
+		const childHistories = await Promise.all(
+			[...childSessionIds].map(async childId => ({
+				id: childId,
+				history: await this.context.cli.getHistory(childId, config),
+			})),
+		);
+
+		for (const { id, history } of childHistories) {
+			if (history.length === 0) continue;
+			const childSession = allSessions.find(session => session.id === id);
+			const duration = this.computeChildSessionDuration(history, {
+				fallbackCreatedAt: childSession?.created,
+				fallbackUpdatedAt: childSession?.lastModified,
+			});
+			if (typeof duration === 'number' && duration > 0) childDurations.set(id, duration);
+
+			let totalInput = 0;
+			let totalOutput = 0;
+			let totalTokens = 0;
+			let totalCacheRead = 0;
+			for (const ev of history) {
+				if (ev.type === 'turn_tokens') {
+					const d = ev.data as {
+						inputTokens?: number;
+						outputTokens?: number;
+						totalTokens?: number;
+						cacheReadTokens?: number;
+					};
+					totalInput += d.inputTokens ?? 0;
+					totalOutput += d.outputTokens ?? 0;
+					totalTokens += d.totalTokens ?? 0;
+					totalCacheRead += d.cacheReadTokens ?? 0;
+				}
+				if (ev.type === 'session_updated') {
+					const rec = ev.data as Record<string, unknown> | undefined;
+					const mid = rec && typeof rec.modelID === 'string' ? rec.modelID : undefined;
+					if (mid) childModelIdMap.set(id, mid);
+				}
+			}
+			if (totalTokens > 0) {
+				childTokensMap.set(id, {
+					input: totalInput,
+					output: totalOutput,
+					total: totalTokens,
+					cacheRead: totalCacheRead,
+				});
+			}
+		}
+
+		return { childDurations, childTokensMap, childModelIdMap };
+	}
+
+	private computeChildSessionDuration(
+		history: CLIEvent[],
+		fallbacks?: { fallbackCreatedAt?: number; fallbackUpdatedAt?: number },
+	): number | undefined {
+		if (
+			typeof fallbacks?.fallbackCreatedAt === 'number' &&
+			typeof fallbacks?.fallbackUpdatedAt === 'number' &&
+			fallbacks.fallbackUpdatedAt > fallbacks.fallbackCreatedAt
+		) {
+			return fallbacks.fallbackUpdatedAt - fallbacks.fallbackCreatedAt;
+		}
+
+		let earliestTs: number | undefined;
+		let latestTs: number | undefined;
+
+		for (const ev of history) {
+			const rawTs = (ev.data as { timestamp?: string | number } | undefined)?.timestamp;
+			const ts =
+				typeof rawTs === 'number'
+					? rawTs
+					: typeof rawTs === 'string'
+						? new Date(rawTs).getTime()
+						: Number.NaN;
+			if (!Number.isFinite(ts) || ts <= 0) continue;
+			earliestTs = earliestTs === undefined ? ts : Math.min(earliestTs, ts);
+			latestTs = latestTs === undefined ? ts : Math.max(latestTs, ts);
+		}
+
+		const start = earliestTs;
+		const end = latestTs;
+		if (typeof start !== 'number' || typeof end !== 'number' || end <= start) {
+			return undefined;
+		}
+		return end - start;
+	}
+
+	private computeCanonicalSessionDuration(
+		entries: Array<{ info: CanonicalSdkMessage; parts: CanonicalSdkPart[] }>,
+	): number | undefined {
+		let earliestTs: number | undefined;
+		let latestTs: number | undefined;
+
+		for (const entry of entries) {
+			const created = entry.info.time?.created;
+			const completed = Reflect.get(entry.info.time as object, 'completed');
+			if (typeof created === 'number' && created > 0) {
+				earliestTs = earliestTs === undefined ? created : Math.min(earliestTs, created);
+				latestTs = latestTs === undefined ? created : Math.max(latestTs, created);
+			}
+			if (typeof completed === 'number' && completed > 0) {
+				latestTs = latestTs === undefined ? completed : Math.max(latestTs, completed);
+			}
+
+			for (const part of entry.parts) {
+				const partTime =
+					'time' in part && part.time && typeof part.time === 'object'
+						? (part.time as { start?: number; end?: number; created?: number })
+						: undefined;
+				for (const ts of [partTime?.created, partTime?.start, partTime?.end]) {
+					if (typeof ts !== 'number' || ts <= 0) continue;
+					earliestTs = earliestTs === undefined ? ts : Math.min(earliestTs, ts);
+					latestTs = latestTs === undefined ? ts : Math.max(latestTs, ts);
+				}
+			}
+		}
+
+		if (typeof earliestTs !== 'number' || typeof latestTs !== 'number' || latestTs <= earliestTs) {
+			return undefined;
+		}
+		return latestTs - earliestTs;
+	}
+
+	private mapCanonicalTaskPartToSubtask(
+		part: {
+			id?: string;
+			callID?: string;
+			tool?: string;
+			state?: unknown;
+		},
+		info: { id: string; time?: { created?: number } },
+		partTime: { start?: number; end?: number; created?: number } | undefined,
+		sessionId: string,
+		explicitLinks: Map<string, string>,
+		childDurations: Map<string, number>,
+		childTokensMap: Map<
+			string,
+			{ input: number; output: number; total: number; cacheRead: number }
+		>,
+		childModelIdMap: Map<string, string>,
+	): SessionSubtaskPayload['subtask'] | undefined {
+		if (part.tool !== 'task') return undefined;
+
+		const taskState =
+			part.state && typeof part.state === 'object' ? (part.state as Record<string, unknown>) : {};
+		const taskInput =
+			taskState.input && typeof taskState.input === 'object'
+				? (taskState.input as Record<string, unknown>)
+				: {};
+		const toolUseId = typeof part.callID === 'string' ? part.callID : part.id || info.id;
+		const childSessionId =
+			taskState.metadata &&
+			typeof taskState.metadata === 'object' &&
+			typeof (taskState.metadata as Record<string, unknown>).sessionId === 'string'
+				? ((taskState.metadata as Record<string, unknown>).sessionId as string)
+				: explicitLinks.get(toolUseId);
+
+		return {
+			id: toolUseId,
+			partId: toolUseId,
+			toolUseId,
+			toolName: part.tool,
+			agent: typeof taskInput.subagent_type === 'string' ? taskInput.subagent_type : 'subagent',
+			prompt: typeof taskInput.prompt === 'string' ? taskInput.prompt : '',
+			description: typeof taskInput.description === 'string' ? taskInput.description : 'Subtask',
+			status:
+				taskState.status === 'completed'
+					? 'completed'
+					: taskState.status === 'error'
+						? 'error'
+						: 'running',
+			...(typeof taskState.output === 'string' ? { result: taskState.output } : {}),
+			parentSessionId: sessionId,
+			...(childSessionId ? { childSessionId } : {}),
+			toolInput: Object.keys(taskInput).length > 0 ? JSON.stringify(taskInput) : '',
+			rawInput: taskInput,
+			isRunning: taskState.status !== 'completed' && taskState.status !== 'error',
+			timestamp:
+				typeof partTime?.start === 'number'
+					? new Date(partTime.start).toISOString()
+					: typeof info.time?.created === 'number'
+						? new Date(info.time.created).toISOString()
+						: new Date().toISOString(),
+			startTime:
+				typeof partTime?.start === 'number' ? new Date(partTime.start).toISOString() : undefined,
+			...(childSessionId && childDurations.get(childSessionId)
+				? { durationMs: childDurations.get(childSessionId) }
+				: {}),
+			...(childSessionId && childTokensMap.get(childSessionId)
+				? { childTokens: childTokensMap.get(childSessionId) }
+				: {}),
+			...(childSessionId && childModelIdMap.get(childSessionId)
+				? { childModelId: childModelIdMap.get(childSessionId) }
+				: {}),
+		};
 	}
 
 	private async onCreateSession(): Promise<void> {
@@ -682,7 +1168,10 @@ export class SessionHandler implements WebviewMessageHandler {
 
 			this.postLifecycle('created', newSessionId);
 			this.postLifecycle('switched', newSessionId, { isProcessing: false });
-			this.postStatus(newSessionId, 'idle', 'Ready');
+			this.context.bridge.emit(newSessionId, 'status', {
+				status: 'idle',
+				statusText: 'Ready',
+			});
 			this.initializeSessionStats(newSessionId);
 			await this.persistAddTab(newSessionId);
 		} catch (error) {
@@ -721,9 +1210,15 @@ export class SessionHandler implements WebviewMessageHandler {
 
 		// Post status matching the real backend state
 		if (isActive) {
-			this.postStatus(sessionId, 'busy', 'Working...');
+			this.context.bridge.emit(sessionId, 'status', {
+				status: 'busy',
+				statusText: 'Working...',
+			});
 		} else {
-			this.postStatus(sessionId, 'idle', 'Ready');
+			this.context.bridge.emit(sessionId, 'status', {
+				status: 'idle',
+				statusText: 'Ready',
+			});
 		}
 
 		this.syncSessionRuntimeState(sessionId);
@@ -761,8 +1256,6 @@ export class SessionHandler implements WebviewMessageHandler {
 		this.context.clearSessionAutoAccept?.(sessionId);
 		// Clean up session graph entries to prevent unbounded Map growth
 		this.context.sessionGraph.clearParent(sessionId);
-		// Clean up pending child message buffers
-		this.context.cleanupPendingChildMessages?.(sessionId);
 
 		// If closing active session, clear backend reference
 		if (this.context.sessionState.activeSessionId === sessionId) {
@@ -1000,7 +1493,9 @@ export class SessionHandler implements WebviewMessageHandler {
 		// Do NOT touch unrelated sessions from other tabs.
 		const sessionsToStop = new Set<string>([targetId]);
 		for (const childId of this.context.sessionGraph.getChildren(targetId)) {
-			sessionsToStop.add(childId);
+			if (this.context.cli.isSessionActive?.(childId)) {
+				sessionsToStop.add(childId);
+			}
 		}
 
 		// Activate per-session stop guard — blocks incoming SSE 'busy' events
@@ -1021,16 +1516,15 @@ export class SessionHandler implements WebviewMessageHandler {
 		}
 
 		// NOW update UI — backend has confirmed the stop.
-		this.postStatus(targetId, 'idle', 'Stopped');
-		this.postSessionMessage(
-			{
+		this.context.bridge.emit(targetId, 'status', { status: 'idle', statusText: 'Stopped' });
+		this.context.bridge.emit(targetId, 'notification', {
+			notification: {
 				id: `interrupted-${Date.now()}`,
 				type: 'interrupted',
 				content: 'Stopped by user',
 				timestamp: new Date().toISOString(),
 			},
-			targetId,
-		);
+		});
 
 		// Also force idle on child sessions (subagents) of the target session only
 		for (const sid of sessionsToStop) {
@@ -1038,20 +1532,27 @@ export class SessionHandler implements WebviewMessageHandler {
 				const toolUseId = this.context.sessionGraph.getEntry(sid)?.taskToolCallId;
 				const parentSessionId = this.context.sessionGraph.getParent(sid);
 				if (toolUseId && parentSessionId) {
-					this.postSessionMessage(
-						{
+					this.context.bridge.emit(parentSessionId, 'subtask', {
+						subtask: {
 							id: toolUseId,
-							type: 'subtask',
+							agent: 'subagent',
+							prompt: '',
+							description: 'Subtask',
 							status: 'cancelled',
 							childSessionId: sid,
 							parentSessionId,
 							timestamp: new Date().toISOString(),
 						},
-						parentSessionId,
-					);
-					this.postComplete(toolUseId, toolUseId, parentSessionId);
+					});
+					this.context.bridge.emit(parentSessionId, 'complete', {
+						partId: toolUseId,
+						toolUseId,
+					});
 				}
-				this.postStatus(sid, 'idle', 'Stopped');
+				this.context.bridge.emit(sid, 'status', {
+					status: 'idle',
+					statusText: 'Stopped',
+				});
 			}
 		}
 	}
@@ -1161,8 +1662,13 @@ export class SessionHandler implements WebviewMessageHandler {
 			if (isOpenCode && (slashCmd === 'compact' || slashCmd === 'summarize')) {
 				// Don't post user message — compact is a system operation
 				logger.info('[SessionHandler] Routing /compact to executeCommand', { sessionId: activeId });
-				this.postStatus(activeId, 'busy', 'Compacting session...');
-				await this.context.cli.executeCommand(text.trim(), [], config, activeId);
+				if (!activeId) throw new Error('No active session after initialization');
+				const activeSessionId = activeId;
+				this.context.bridge.emit(activeSessionId, 'status', {
+					status: 'busy',
+					statusText: 'Compacting session...',
+				});
+				await this.context.cli.executeCommand(text.trim(), [], config, activeSessionId);
 				return;
 			}
 
@@ -1190,18 +1696,21 @@ export class SessionHandler implements WebviewMessageHandler {
 				attachments?.files?.length ||
 				attachments?.codeSnippets?.length ||
 				attachments?.images?.length;
-			this.postSessionMessage(
-				{
-					id: userMessageId,
-					type: 'user' as const,
-					content: text,
-					model: config.model,
-					...(config.agent ? { agent: config.agent } : {}),
-					timestamp: new Date().toISOString(),
-					normalizedEntry: this.logNormalizer.normalizeMessage(text, 'user'),
-					...(hasAttachments ? { attachments } : {}),
-				},
+			this.context.bridge.emit(
 				activeId,
+				'user_message',
+				{
+					message: {
+						id: userMessageId,
+						content: text,
+						model: config.model,
+						...(config.agent ? { agent: config.agent } : {}),
+						timestamp: new Date().toISOString(),
+						normalizedEntry: this.logNormalizer.normalizeMessage(text, 'user'),
+						...(hasAttachments ? { attachments } : {}),
+					},
+				},
+				{ normalizedEntry: this.logNormalizer.normalizeMessage(text, 'user') },
 			);
 
 			// Emit checkpoint so the "Restore to Checkpoint" button appears on this user message
@@ -1214,7 +1723,7 @@ export class SessionHandler implements WebviewMessageHandler {
 				isOpenCode,
 			});
 
-			this.context.bridge.session.restore(activeId, {
+			this.context.bridge.emit(activeId, 'restore', {
 				action: 'add_commit',
 				commit: {
 					id: commitId,
@@ -1225,7 +1734,10 @@ export class SessionHandler implements WebviewMessageHandler {
 				},
 			});
 
-			this.postStatus(activeId, 'busy', 'Working...');
+			this.context.bridge.emit(activeId, 'status', {
+				status: 'busy',
+				statusText: 'Working...',
+			});
 			this.initializeSessionStats(activeId);
 
 			// Pass our client-generated ID to the server so it uses it as the
@@ -1241,17 +1753,18 @@ export class SessionHandler implements WebviewMessageHandler {
 				this.context.sessionState.startedSessions.delete(activeId);
 				this.sessionTotalsByUiSession.delete(activeId);
 
-				this.postSessionMessage(
-					{
+				this.context.bridge.emit(activeId, 'notification', {
+					notification: {
 						id: `error-${Date.now()}`,
 						type: 'error',
 						content: error instanceof Error ? error.message : 'Failed to start CLI',
-						isError: true,
 						timestamp: new Date().toISOString(),
 					},
-					activeId,
-				);
-				this.postStatus(activeId, 'error', 'Failed to start');
+				});
+				this.context.bridge.emit(activeId, 'status', {
+					status: 'error',
+					statusText: 'Failed to start',
+				});
 			}
 		}
 	}
@@ -1334,10 +1847,16 @@ export class SessionHandler implements WebviewMessageHandler {
 			this.replayedSessions.add(sessionId);
 			// Query real status — loaded conversation could theoretically be active
 			const isBusy = this.context.cli.isSessionActive?.(sessionId) ?? false;
-			this.postStatus(sessionId, isBusy ? 'busy' : 'idle', isBusy ? 'Working...' : 'Ready');
+			this.context.bridge.emit(sessionId, 'status', {
+				status: isBusy ? 'busy' : 'idle',
+				statusText: isBusy ? 'Working...' : 'Ready',
+			});
 		} catch (error) {
 			logger.error('[SessionHandler] Failed to load conversation:', error);
-			this.postStatus(sessionId, 'error', 'Failed to load');
+			this.context.bridge.emit(sessionId, 'status', {
+				status: 'error',
+				statusText: 'Failed to load',
+			});
 		}
 	}
 
@@ -1361,20 +1880,8 @@ export class SessionHandler implements WebviewMessageHandler {
 
 		for (const event of history) {
 			switch (event.type) {
-				case 'message':
-					this.postSessionMessage(
-						mapMessageEvent(event.data, {
-							idPrefix: 'hist',
-							normalizedEntry: event.normalizedEntry,
-						}),
-						sessionId,
-					);
-					break;
 				case 'normalized_log':
 					this.replayNormalizedLog(event.data, sessionId, event.normalizedEntry);
-					break;
-				case 'thinking':
-					this.postSessionMessage(mapThinkingEvent(event.data, { idPrefix: 'hist' }), sessionId);
 					break;
 				case 'tool_use':
 					this.replayToolUse(event, sessionId, subtaskMeta, options);
@@ -1383,7 +1890,7 @@ export class SessionHandler implements WebviewMessageHandler {
 					this.replayToolResult(event, sessionId, subtaskMeta, options);
 					break;
 				case 'turn_tokens':
-					this.postTurnTokens(event.data, sessionId);
+					this.context.bridge.emit(sessionId, 'turn_tokens', event.data);
 					break;
 				case 'session_updated':
 					this.handleSessionUpdatedEvent(event.data, sessionId);
@@ -1414,15 +1921,14 @@ export class SessionHandler implements WebviewMessageHandler {
 				return;
 			}
 
-			this.context.bridge.session.fileDiffUpdated(
-				sessionId,
-				(data || []).map(entry => ({
+			this.context.bridge.emit(sessionId, 'file_diff', {
+				diffs: (data || []).map(entry => ({
 					file: entry.file,
 					additions: entry.additions || 0,
 					deletions: entry.deletions || 0,
 					status: entry.status as 'added' | 'deleted' | 'modified' | undefined,
 				})),
-			);
+			});
 		} catch (error) {
 			logger.warn('[SessionHandler] Session diff restore request failed', {
 				sessionId,
@@ -1483,9 +1989,15 @@ export class SessionHandler implements WebviewMessageHandler {
 				safeFetchQuestions(),
 			]);
 
-			this.context.bridge.session.todo(sessionId, todos);
-			this.context.bridge.session.permissionSet(sessionId, permissionResult);
-			this.context.bridge.session.questionSet(sessionId, questionResult);
+			this.context.bridge.emit(sessionId, 'todo', { todos });
+			this.context.bridge.emit(sessionId, 'permission', {
+				action: 'set',
+				requests: permissionResult,
+			});
+			this.context.bridge.emit(sessionId, 'question', {
+				action: 'set',
+				requests: questionResult,
+			});
 		} catch (error) {
 			logger.warn('[SessionHandler] Failed to restore session runtime state', {
 				sessionId,
@@ -1500,8 +2012,43 @@ export class SessionHandler implements WebviewMessageHandler {
 		normalizedEntry?: CLIEvent['normalizedEntry'],
 	): void {
 		if ((data as { role?: string }).role !== 'user') return;
-		const userMsg = mapUserEvent(data as Parameters<typeof mapUserEvent>[0], { normalizedEntry });
-		this.postSessionMessage(userMsg, sessionId);
+		const replayData = data as {
+			content?: string;
+			timestamp?: string;
+			messageId?: string;
+			model?: string;
+			agent?: string;
+			summary?: SessionUserMessagePayload['message']['summary'];
+			attachments?: SessionUserMessagePayload['message']['attachments'];
+		};
+		const userMsg: SessionUserMessagePayload['message'] = {
+			id: replayData.messageId?.trim() || `msg-local-${Math.random().toString(36).slice(2, 9)}`,
+			content: replayData.content || '',
+			timestamp: replayData.timestamp || new Date().toISOString(),
+			...(replayData.model ? { model: replayData.model } : {}),
+			...(replayData.agent ? { agent: replayData.agent } : {}),
+			...(replayData.summary ? { summary: replayData.summary } : {}),
+			...(replayData.attachments ? { attachments: replayData.attachments } : {}),
+			...(normalizedEntry ? { normalizedEntry } : {}),
+		};
+		this.context.bridge.emit(sessionId, 'message_record', {
+			message: {
+				id: userMsg.id,
+				sessionId,
+				role: 'user',
+				createdAt: userMsg.timestamp ? new Date(userMsg.timestamp).getTime() : undefined,
+				...(userMsg.model ? { modelId: userMsg.model } : {}),
+				...(userMsg.agent ? { agent: userMsg.agent } : {}),
+			},
+		});
+		this.context.bridge.emit(
+			sessionId,
+			'user_message',
+			{ message: userMsg },
+			{
+				normalizedEntry,
+			},
+		);
 
 		const replayCommitId = generateId('checkpoint');
 		this.context.registerCheckpoint?.(replayCommitId, {
@@ -1511,7 +2058,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			isOpenCode: true,
 		});
 
-		this.context.bridge.session.restore(sessionId, {
+		this.context.bridge.emit(sessionId, 'restore', {
 			action: 'add_commit',
 			commit: {
 				id: replayCommitId,
@@ -1548,7 +2095,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		const toolName = data.tool || 'unknown';
 		const input = (data.input as Record<string, unknown>) || {};
 		const toolUseId = data.toolUseId || `hist-tool-${Math.random()}`;
-		const filePathFromInput = extractFilePath(input);
+		const filePathFromInput = SessionHandler.extractFilePath(input);
 
 		if (toolName.toLowerCase() === 'question') {
 			return;
@@ -1559,11 +2106,21 @@ export class SessionHandler implements WebviewMessageHandler {
 			return;
 		}
 
-		const toolUseMsg = mapToolUseEvent(data as Parameters<typeof mapToolUseEvent>[0], {
-			idPrefix: 'hist',
-			normalizedEntry: event.normalizedEntry,
+		this.context.bridge.emit(sessionId, 'message_part', {
+			part: {
+				id: toolUseId,
+				messageId: toolUseId,
+				sessionId,
+				type: 'tool',
+				callId: toolUseId,
+				toolName,
+				state: {
+					status: 'running',
+					input,
+				},
+				normalizedEntry: event.normalizedEntry,
+			},
 		});
-		this.postSessionMessage(toolUseMsg, sessionId);
 
 		if (filePathFromInput && this.isFileEditTool(toolName)) {
 			this.emitFileChangeFromReplay(input, filePathFromInput, toolUseId, sessionId);
@@ -1571,7 +2128,8 @@ export class SessionHandler implements WebviewMessageHandler {
 			// apply_patch has no single filePath — extract paths from the patch content
 			const patchPaths = extractPatchFilePaths(input);
 			for (const patchPath of patchPaths) {
-				this.context.bridge.session.fileChanged(sessionId, {
+				this.context.bridge.emit(sessionId, 'file', {
+					action: 'changed',
 					filePath: patchPath,
 					fileName: patchPath.split(/[/\\]/).pop() || patchPath,
 					linesAdded: 0,
@@ -1602,32 +2160,22 @@ export class SessionHandler implements WebviewMessageHandler {
 		const description = typeof input.description === 'string' ? input.description : 'Subtask';
 		subtaskMeta.set(toolUseId, { description, prompt, agent });
 
-		const childHistory = childSessionId ? options.childHistories?.get(childSessionId) : undefined;
-		const transcript = childHistory
-			? (this.buildTranscriptFromHistory(
-					childHistory,
-				) as unknown as import('../../common/schemas').ConversationMessage[])
-			: undefined;
-
-		this.postSessionMessage(
-			{
+		this.context.bridge.emit(sessionId, 'subtask', {
+			subtask: {
 				id: toolUseId,
-				type: 'subtask',
 				agent,
 				prompt,
 				description,
 				...(options.parentSessionId ? { parentSessionId: options.parentSessionId } : {}),
 				...(childSessionId ? { childSessionId } : {}),
 				status: 'running',
-				transcript,
 				timestamp: timestamp || new Date().toISOString(),
-				startTime: timestamp || new Date().toISOString(),
+				startTime: timestamp,
 				...(subtaskDuration ? { durationMs: subtaskDuration } : {}),
 				...(childTokens ? { childTokens } : {}),
 				...(childModelId ? { childModelId } : {}),
 			},
-			sessionId,
-		);
+		});
 	}
 
 	private emitFileChangeFromReplay(
@@ -1656,7 +2204,8 @@ export class SessionHandler implements WebviewMessageHandler {
 							: '';
 		const diffStats = computeDiffLineStats(String(oldContent), String(newContent));
 
-		this.context.bridge.session.fileChanged(sessionId, {
+		this.context.bridge.emit(sessionId, 'file', {
+			action: 'changed',
 			filePath: filePathFromInput,
 			fileName: filePathFromInput.split(/[/\\]/).pop() || filePathFromInput,
 			linesAdded: diffStats.added,
@@ -1684,7 +2233,6 @@ export class SessionHandler implements WebviewMessageHandler {
 		const toolUseId = data.tool_use_id || `hist-tool-${Math.random()}`;
 
 		if (toolName.toLowerCase() === 'question') {
-			this.replayToolResultQuestion(data, toolUseId, sessionId);
 			return;
 		}
 
@@ -1717,7 +2265,8 @@ export class SessionHandler implements WebviewMessageHandler {
 						'';
 					if (!filePath) continue;
 
-					this.context.bridge.session.fileChanged(sessionId, {
+					this.context.bridge.emit(sessionId, 'file', {
+						action: 'changed',
 						filePath,
 						fileName: filePath.split(/[/\\]/).pop() || filePath,
 						linesAdded: typeof file.additions === 'number' ? file.additions : 0,
@@ -1728,92 +2277,28 @@ export class SessionHandler implements WebviewMessageHandler {
 			}
 		}
 
-		this.postSessionMessage(
-			mapToolResultEvent(data as Parameters<typeof mapToolResultEvent>[0], {
-				idPrefix: 'hist',
-				normalizedEntry: event.normalizedEntry,
-			}),
-			sessionId,
-		);
-	}
-
-	private replayToolResultQuestion(
-		data: { content?: unknown; input?: unknown; timestamp?: string },
-		toolUseId: string,
-		sessionId: string,
-	): void {
-		const content = data.content;
-		const inputData = (data.input as Record<string, unknown>) || {};
-		const questionsArr = Array.isArray(inputData.questions)
-			? (inputData.questions as Array<{ question: string; options: Array<{ label: string }> }>)
-			: [];
-		const answers = this.parseQuestionAnswers(content, questionsArr);
-
-		if (answers && answers.length > 0) {
-			this.postSessionMessage(
-				{
-					id: `question-${toolUseId}`,
-					type: 'question' as const,
-					requestId: toolUseId,
-					questions: Array.isArray(inputData.questions)
-						? (inputData.questions as import('../../common/schemas').QuestionInfo[])
-						: [],
-					resolved: true,
-					answers,
-					timestamp: data.timestamp || new Date().toISOString(),
-				},
+		this.context.bridge.emit(sessionId, 'message_part', {
+			part: {
+				id: toolUseId,
+				messageId: toolUseId,
 				sessionId,
-			);
-		}
-	}
-
-	private parseQuestionAnswers(
-		content: unknown,
-		questionsArr: Array<{ question: string; options: Array<{ label: string }> }>,
-	): string[][] | undefined {
-		if (typeof content === 'string') {
-			return this.parseQuestionAnswersFromString(content, questionsArr);
-		}
-		if (Array.isArray(content)) {
-			return content as string[][];
-		}
-		if (content && typeof content === 'object') {
-			const obj = content as Record<string, unknown>;
-			if (Array.isArray(obj.answers)) {
-				return obj.answers as string[][];
-			}
-		}
-		return undefined;
-	}
-
-	private parseQuestionAnswersFromString(
-		content: string,
-		questionsArr: Array<{ question: string; options: Array<{ label: string }> }>,
-	): string[][] | undefined {
-		try {
-			const parsed = JSON.parse(content);
-			if (Array.isArray(parsed)) return parsed as string[][];
-			if (parsed && Array.isArray(parsed.answers)) return parsed.answers as string[][];
-		} catch {
-			const pairRegex = /"([^"]+)"="([^"]+)"/g;
-			const pairs: Array<{ question: string; answer: string }> = [];
-			for (let m = pairRegex.exec(content); m !== null; m = pairRegex.exec(content)) {
-				pairs.push({ question: m[1], answer: m[2] });
-			}
-
-			if (pairs.length > 0 && questionsArr.length > 0) {
-				return questionsArr.map(q => {
-					const pair = pairs.find(p => p.question === q.question);
-					if (!pair) return [];
-					return pair.answer
-						.split(', ')
-						.map(s => s.trim())
-						.filter(Boolean);
-				});
-			}
-			if (content.trim()) return [[content.trim()]];
-		}
-		return undefined;
+				type: 'tool',
+				callId: toolUseId,
+				toolName,
+				state: {
+					status: data.is_error ? 'error' : 'completed',
+					input: data.input,
+					output:
+						typeof data.content === 'string' ? data.content : JSON.stringify(data.content ?? ''),
+					title:
+						typeof (data as { title?: unknown }).title === 'string'
+							? ((data as { title?: string }).title ?? undefined)
+							: undefined,
+					metadata: data.metadata,
+				},
+				normalizedEntry: event.normalizedEntry,
+			},
+		});
 	}
 
 	private replayToolResultSubtask(
@@ -1833,10 +2318,12 @@ export class SessionHandler implements WebviewMessageHandler {
 		const childModelId = childSessionId ? options.childModelIdMap?.get(childSessionId) : undefined;
 		const savedMeta = subtaskMeta.get(toolUseId);
 
-		this.postSessionMessage(
-			{
+		this.context.bridge.emit(sessionId, 'subtask', {
+			subtask: {
 				id: toolUseId,
-				type: 'subtask',
+				agent: savedMeta?.agent || 'subagent',
+				prompt: savedMeta?.prompt || '',
+				description: savedMeta?.description || 'Subtask',
 				status: data.is_error ? 'error' : 'completed',
 				result: String(data.content || ''),
 				...(options.parentSessionId ? { parentSessionId: options.parentSessionId } : {}),
@@ -1848,8 +2335,7 @@ export class SessionHandler implements WebviewMessageHandler {
 				...(savedMeta ?? {}),
 				...(normalizedEntry ? { normalizedEntry } : {}),
 			},
-			sessionId,
-		);
+		});
 	}
 
 	private async onDeleteConversation(msg: CommandOf<'deleteConversation'>): Promise<void> {
@@ -1873,8 +2359,6 @@ export class SessionHandler implements WebviewMessageHandler {
 
 				// Clean up restore/revert state for deleted session
 				this.context.cleanupSessionRestore?.(sessionId);
-				// Clean up pending child message buffers
-				this.context.cleanupPendingChildMessages?.(sessionId);
 
 				const nextActiveSessionId = wasActive ? this.getLastStartedSessionId() : undefined;
 				this.context.sessionState.activeSessionId = nextActiveSessionId;
@@ -1912,7 +2396,6 @@ export class SessionHandler implements WebviewMessageHandler {
 					this.replayedSessions.delete(session.id);
 					this.context.sessionGraph.clearParent(session.id);
 					this.context.cleanupSessionRestore?.(session.id);
-					this.context.cleanupPendingChildMessages?.(session.id);
 					if (this.context.sessionState.activeSessionId === session.id) {
 						this.context.sessionState.activeSessionId = undefined;
 					}
@@ -2311,16 +2794,6 @@ export class SessionHandler implements WebviewMessageHandler {
 		return started[started.length - 1];
 	}
 
-	/**
-	 * Build a transcript array from child session history events.
-	 * Used during replay to inline child messages into the parent subtask card.
-	 */
-	private buildTranscriptFromHistory(
-		history: CLIEvent[],
-	): import('../../common').SessionMessageData[] {
-		return buildTranscript(history, 'child');
-	}
-
 	/** Check if a tool name corresponds to a file-editing operation */
 	private isFileEditTool(toolName: string): boolean {
 		return isFileEditTool(toolName);
@@ -2333,29 +2806,31 @@ export class SessionHandler implements WebviewMessageHandler {
 	private postModelError(content: string): void {
 		const sessionId = this.context.sessionState.activeSessionId;
 		if (sessionId) {
-			this.postSessionMessage(
-				{
+			this.context.bridge.emit(sessionId, 'notification', {
+				notification: {
 					id: `error-${Date.now()}`,
 					type: 'error',
 					content,
-					isError: true,
 					timestamp: new Date().toISOString(),
 				},
-				sessionId,
-			);
+			});
 		} else {
 			// No active session — push directly via bridge so the notification overlay still fires.
 			this.context.bridge.send({
 				type: 'session_event',
+				targetId: '',
 				sessionId: '',
-				eventType: 'message',
-				message: {
-					id: `error-${Date.now()}`,
-					type: 'error',
-					content,
-					isError: true,
-					timestamp: new Date().toISOString(),
+				eventType: 'notification',
+				payload: {
+					eventType: 'notification',
+					notification: {
+						id: `error-${Date.now()}`,
+						type: 'error',
+						content,
+						timestamp: new Date().toISOString(),
+					},
 				},
+				timestamp: Date.now(),
 			});
 		}
 	}
@@ -2382,13 +2857,16 @@ export class SessionHandler implements WebviewMessageHandler {
 	}
 
 	private syncSessionRuntimeState(sessionId: string): void {
-		this.context.bridge.session.info(
-			sessionId,
-			undefined,
-			undefined,
-			this.context.getSessionAutoAccept?.(sessionId) ?? false,
-		);
+		this.context.bridge.emit(sessionId, 'session_info', {
+			data: {
+				sessionId,
+				autoAccept: this.context.getSessionAutoAccept?.(sessionId) ?? false,
+			},
+		});
 		const config = this.buildBaseConfig();
+		void this.restoreSessionCounterStateFromHistory(sessionId, config).catch(error =>
+			logger.warn('[SessionHandler] Failed to sync session counter state', { sessionId, error }),
+		);
 		void this.restoreSessionRuntimeStateFromServer(sessionId, config).catch(error =>
 			logger.warn('[SessionHandler] Failed to sync session runtime state', { sessionId, error }),
 		);
@@ -2401,6 +2879,176 @@ export class SessionHandler implements WebviewMessageHandler {
 		sessionId: string,
 		payload: { totalStats?: Partial<TotalStats>; modelID?: string; providerID?: string },
 	): void {
-		this.context.bridge.session.stats(sessionId, payload);
+		this.context.bridge.emit(sessionId, 'stats', payload);
+	}
+
+	private async restoreSessionCounterStateFromHistory(
+		sessionId: string,
+		config: { provider: 'opencode'; workspaceRoot: string },
+	): Promise<void> {
+		const history = await this.context.cli.getHistory(sessionId, config);
+		const sdkClient = this.context.cli.getSdkClient?.();
+		const entriesResult = sdkClient
+			? await sdkClient.session.messages({ sessionID: sessionId, directory: config.workspaceRoot })
+			: { data: [], error: undefined };
+		const entries = entriesResult.data ?? [];
+		const turnTokensByUser = this.buildTurnTokenMap(history, entriesResult.data ?? []);
+
+		for (const [userMessageId, turn] of turnTokensByUser) {
+			this.context.bridge.emit(sessionId, 'turn_tokens', {
+				userMessageId,
+				inputTokens: turn.inputTokens,
+				outputTokens: turn.outputTokens,
+				totalTokens: turn.totalTokens,
+				cacheReadTokens: turn.cacheReadTokens,
+				...(typeof turn.durationMs === 'number' ? { durationMs: turn.durationMs } : {}),
+			});
+		}
+
+		const assistantEntries = entries.filter(
+			(entry): entry is (typeof entries)[number] => entry.info.role === 'assistant',
+		);
+		const totalDuration = assistantEntries.reduce((sum, entry) => {
+			const created = entry.info.time?.created;
+			const completed = 'completed' in entry.info.time ? entry.info.time.completed : undefined;
+			if (typeof created === 'number' && typeof completed === 'number' && completed >= created) {
+				return sum + (completed - created);
+			}
+			return sum;
+		}, 0);
+		const requestCount = assistantEntries.length;
+		const totalCost = assistantEntries.reduce(
+			(sum, entry) =>
+				sum + ('cost' in entry.info && typeof entry.info.cost === 'number' ? entry.info.cost : 0),
+			0,
+		);
+		const subagentCount = history.reduce((count, ev) => {
+			if (ev.type !== 'tool_result') return count;
+			const data = ev.data as { tool?: string; metadata?: { sessionId?: string } };
+			return data.tool === 'task' && data.metadata?.sessionId ? count + 1 : count;
+		}, 0);
+
+		this.postStats(sessionId, {
+			totalStats: {
+				requestCount,
+				totalDuration,
+				totalCost,
+				subagentCount,
+			},
+		});
+
+		await this.restoreSessionDiffMembershipFromServer(sessionId, config);
+	}
+
+	private buildTurnTokenMap(
+		history: CLIEvent[],
+		entries: Array<{
+			info: {
+				id: string;
+				role: string;
+				tokens?: {
+					input?: number;
+					output?: number;
+					total?: number;
+					reasoning?: number;
+					cache?: { read?: number; write?: number };
+				};
+			};
+		}>,
+	): Map<
+		string,
+		{
+			inputTokens: number;
+			outputTokens: number;
+			totalTokens: number;
+			cacheReadTokens: number;
+			durationMs?: number;
+		}
+	> {
+		const result = new Map<
+			string,
+			{
+				inputTokens: number;
+				outputTokens: number;
+				totalTokens: number;
+				cacheReadTokens: number;
+				durationMs?: number;
+			}
+		>();
+		let lastUserMessageId: string | undefined;
+		for (const ev of history) {
+			if (ev.type === 'normalized_log' && (ev.data as { role?: string }).role === 'user') {
+				lastUserMessageId = (ev.data as { messageId?: string }).messageId || lastUserMessageId;
+				continue;
+			}
+			if (ev.type === 'turn_tokens' && lastUserMessageId) {
+				const d = ev.data as {
+					inputTokens?: number;
+					outputTokens?: number;
+					totalTokens?: number;
+					cacheReadTokens?: number;
+					durationMs?: number;
+				};
+				result.set(lastUserMessageId, {
+					inputTokens: d.inputTokens ?? 0,
+					outputTokens: d.outputTokens ?? 0,
+					totalTokens: d.totalTokens ?? 0,
+					cacheReadTokens: d.cacheReadTokens ?? 0,
+					...(typeof d.durationMs === 'number' ? { durationMs: d.durationMs } : {}),
+				});
+			}
+		}
+
+		let cumulativeTotal = 0;
+		let cumulativeInput = 0;
+		let cumulativeOutput = 0;
+		let cumulativeCacheRead = 0;
+		let currentUserId: string | undefined;
+		for (const entry of entries) {
+			if (entry.info.role === 'user') {
+				currentUserId = entry.info.id;
+				continue;
+			}
+			if (entry.info.role !== 'assistant') continue;
+			const tokens = entry.info.tokens;
+			if (!tokens) continue;
+			const total = (tokens.input ?? 0) + (tokens.output ?? 0) + (tokens.cache?.read ?? 0);
+			if (total <= 0) continue;
+			cumulativeTotal += total;
+			cumulativeInput += tokens.input ?? 0;
+			cumulativeOutput += tokens.output ?? 0;
+			cumulativeCacheRead += tokens.cache?.read ?? 0;
+			if (!currentUserId || result.has(currentUserId)) continue;
+			result.set(currentUserId, {
+				inputTokens: cumulativeInput,
+				outputTokens: cumulativeOutput,
+				totalTokens: cumulativeTotal,
+				cacheReadTokens: cumulativeCacheRead,
+			});
+		}
+
+		return result;
+	}
+
+	private async restoreSessionDiffMembershipFromServer(
+		sessionId: string,
+		config: { provider: 'opencode'; workspaceRoot: string },
+	): Promise<void> {
+		const sdkClient = this.context.cli.getSdkClient?.();
+		if (!sdkClient) return;
+		const { data } = await sdkClient.session.diff({
+			sessionID: sessionId,
+			directory: config.workspaceRoot,
+		});
+		for (const entry of data || []) {
+			this.context.bridge.emit(sessionId, 'file', {
+				action: 'changed',
+				filePath: entry.file,
+				fileName: entry.file.split(/[/\\]/).pop() || entry.file,
+				linesAdded: entry.additions || 0,
+				linesRemoved: entry.deletions || 0,
+				toolUseId: `restore:${entry.file}`,
+			});
+		}
 	}
 }

@@ -16,15 +16,15 @@ import { Button } from '../ui';
 export const AutoAcceptButton: React.FC = React.memo(() => {
 	const autoAccept = useSessionAutoAccept();
 	const activeSessionId = useChatStore(s => s.activeSessionId);
-	const { setSessionAutoAccept } = useChatStore(s => s.actions);
+	const { updateSession } = useChatStore(s => s.actions);
 	const { postMessage } = useVSCode();
 
 	const handleToggle = useCallback(() => {
 		const newValue = !autoAccept;
-		setSessionAutoAccept(newValue);
+		updateSession({ autoAccept: newValue });
 		// Notify extension so it can update permission handling
 		postMessage({ type: 'setAutoAccept', enabled: newValue, sessionId: activeSessionId });
-	}, [activeSessionId, autoAccept, setSessionAutoAccept, postMessage]);
+	}, [activeSessionId, autoAccept, updateSession, postMessage]);
 
 	return (
 		<Button

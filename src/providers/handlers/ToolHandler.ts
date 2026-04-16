@@ -123,8 +123,13 @@ export class ToolHandler implements WebviewMessageHandler {
 		});
 
 		if (targetSessionId) {
-			this.context.bridge.session.permissionRemove(targetSessionId, requestId, response);
-			this.context.bridge.session.accessResponse(targetSessionId, {
+			this.context.bridge.emit(targetSessionId, 'permission', {
+				action: 'remove',
+				requestId,
+				response,
+			});
+			this.context.bridge.emit(targetSessionId, 'access', {
+				action: 'response',
 				requestId,
 				approved,
 				alwaysAllow,
@@ -235,7 +240,9 @@ export class ToolHandler implements WebviewMessageHandler {
 		if (msg.enabled) this.autoAcceptBySession.set(sessionId, true);
 		else this.autoAcceptBySession.delete(sessionId);
 
-		this.context.bridge.session.info(sessionId, undefined, undefined, msg.enabled);
+		this.context.bridge.emit(sessionId, 'session_info', {
+			data: { sessionId, autoAccept: msg.enabled },
+		});
 	}
 
 	private async onCheckCliDiagnostics(): Promise<void> {
@@ -254,7 +261,11 @@ export class ToolHandler implements WebviewMessageHandler {
 		await this.context.cli.respondToQuestion({ requestId, answers });
 
 		if (targetSessionId) {
-			this.context.bridge.session.questionRemove(targetSessionId, requestId, answers);
+			this.context.bridge.emit(targetSessionId, 'question', {
+				action: 'remove',
+				requestId,
+				answers,
+			});
 		}
 	}
 
@@ -269,7 +280,11 @@ export class ToolHandler implements WebviewMessageHandler {
 		await this.context.cli.rejectQuestion(requestId);
 
 		if (targetSessionId) {
-			this.context.bridge.session.questionRemove(targetSessionId, requestId, undefined, true);
+			this.context.bridge.emit(targetSessionId, 'question', {
+				action: 'remove',
+				requestId,
+				rejected: true,
+			});
 		}
 	}
 }

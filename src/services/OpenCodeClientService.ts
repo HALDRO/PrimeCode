@@ -8,6 +8,7 @@ import type { Model as ModelV2, OpencodeClient } from '@opencode-ai/sdk/v2/clien
 import * as vscode from 'vscode';
 import { normalizeProxyBaseUrl } from '../common';
 import {
+	mapQuestionRuntimePayloadToRequest,
 	parseSessionPermissionRequest,
 	parseSessionQuestionRequest,
 	parseSessionTodoItem,
@@ -226,7 +227,9 @@ export class OpenCodeClientService {
 	): Promise<import('../common').SessionQuestionRequest[]> {
 		const result = await this.fetchRuntimeCollection(baseUrl, directory, 'question');
 		return result.flatMap(value => {
-			const request = parseSessionQuestionRequest(value, sessionId);
+			const request =
+				parseSessionQuestionRequest(value, sessionId) ||
+				mapQuestionRuntimePayloadToRequest(value, sessionId);
 			return request ? [request] : [];
 		});
 	}

@@ -11,8 +11,15 @@
 import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { isMcpTool } from '../../constants';
 import { cn } from '../../lib/cn';
-import { useChangedFilesState, useChatActions, useMcpServers, useTodoState } from '../../store';
-import type { ChangedFile, Message } from '../../store/chatStore';
+import {
+	projectRuntimeMessages,
+	type RenderMessage,
+	useChangedFilesState,
+	useChatActions,
+	useMcpServers,
+	useTodoState,
+} from '../../store';
+import type { ChangedFile } from '../../store/chatStore';
 import { useChatStore } from '../../store/chatStore';
 import { useUIActions } from '../../store/uiStore';
 import { useVSCode } from '../../utils/vscode';
@@ -42,54 +49,43 @@ interface CopyMenuItem {
 
 // ─── Copy helpers (shared logic, no duplication) ───
 
-function getActiveMessages(): Message[] | undefined {
+function getActiveMessages(): RenderMessage[] | undefined {
 	const state = useChatStore.getState();
 	const session = state.activeSessionId ? state.sessionsById[state.activeSessionId] : undefined;
-	return session?.messages;
+	return session ? projectRuntimeMessages(session) : undefined;
 }
 
-function findLastUserIndex(msgs: Message[]): number {
+function findLastUserIndex(msgs: RenderMessage[]): number {
 	for (let i = msgs.length - 1; i >= 0; i--) {
-		if (msgs[i].type === 'user') return i;
+		if (msgs[i].kind === 'user') return i;
 	}
 	return -1;
 }
 
-/** Check if a tool_result should be included in copy output (MCP, WebSearch, WebFetch) */
-function isCopyableToolResult(m: Message, mcpServerNames: string[]): boolean {
-	if (m.type !== 'tool_result') return false;
-	const name = (m as { toolName?: string }).toolName?.toLowerCase() ?? '';
+/** Check if a tool_use should be included in copy output (MCP, WebSearch, WebFetch) */
+function isCopyableToolResult(m: RenderMessage, mcpServerNames: string[]): boolean {
+	if (m.kind !== 'tool_use') return false;
+	const name = m.toolName?.toLowerCase() ?? '';
 	if (name === 'websearch' || name === 'webfetch') return true;
-	return isMcpTool((m as { toolName?: string }).toolName, mcpServerNames);
+	return isMcpTool(m.toolName, mcpServerNames);
 }
 
 function formatMessage(
-	m: Message,
+	m: RenderMessage,
 	mode: 'last' | 'all',
 	mcpServerNames: string[],
 ): string | undefined {
-	if (m.type === 'user') return `## User\n${m.content}`;
-	if (m.type === 'assistant' && m.content) {
+	if (m.kind === 'user') return `## User\n${m.content}`;
+	if (m.kind === 'assistant' && m.content) {
 		return mode === 'all' ? `## Assistant\n${m.content}` : m.content;
 	}
-	if (m.type === 'subtask' && m.result) {
+	if (m.kind === 'subtask' && m.result) {
 		return mode === 'all' ? `## Agent: ${m.agent}\n${m.result}` : `[${m.agent}] ${m.result}`;
 	}
-	if (m.type === 'question' && m.resolved && m.answers?.length) {
-		const parts: string[] = [];
-		for (let q = 0; q < m.questions.length; q++) {
-			const answer = m.answers[q]?.join(', ') ?? '';
-			if (answer) {
-				const prefix = mode === 'all' ? '## Question\n' : '';
-				parts.push(`${prefix}Q: ${m.questions[q].question}\nA: ${answer}`);
-			}
-		}
-		return parts.length ? parts.join('\n\n') : undefined;
-	}
-	// Include tool results from MCP, WebSearch, WebFetch
-	if (isCopyableToolResult(m, mcpServerNames)) {
-		const toolName = (m as { toolName?: string }).toolName ?? 'Tool';
-		const content = (m as { content?: string }).content ?? '';
+	// Include completed tool output from MCP, WebSearch, WebFetch
+	if (m.kind === 'tool_use' && isCopyableToolResult(m, mcpServerNames)) {
+		const toolName = m.toolName ?? 'Tool';
+		const content = m.resultContent ?? m.streamingOutput ?? '';
 		if (!content.trim()) return undefined;
 		const prefix = mode === 'all' ? `## ${toolName}\n` : '';
 		return `${prefix}${content}`;
@@ -97,7 +93,11 @@ function formatMessage(
 	return undefined;
 }
 
-function formatMessages(msgs: Message[], mode: 'last' | 'all', mcpServerNames: string[]): string {
+function formatMessages(
+	msgs: RenderMessage[],
+	mode: 'last' | 'all',
+	mcpServerNames: string[],
+): string {
 	const parts: string[] = [];
 	for (const m of msgs) {
 		const text = formatMessage(m, mode, mcpServerNames);
@@ -111,18 +111,18 @@ function formatMessages(msgs: Message[], mode: 'last' | 'all', mcpServerNames: s
  * Uses the same unified diff source as SimpleDiff component (metadata.diff).
  * Falls back to tool_use filePath header when no diff content available.
  */
-function buildPatches(msgs: Message[]): string {
-	// Build a map of toolUseId → tool_result metadata for quick lookup
+function buildPatches(msgs: RenderMessage[]): string {
+	// Build a map of toolUseId → tool metadata for quick lookup
 	const resultMap = new Map<string, Record<string, unknown>>();
 	for (const m of msgs) {
-		if (m.type === 'tool_result' && m.toolUseId && m.metadata) {
+		if (m.kind === 'tool_use' && m.toolUseId && m.metadata) {
 			resultMap.set(m.toolUseId, m.metadata as Record<string, unknown>);
 		}
 	}
 
 	const patches: string[] = [];
 	for (const m of msgs) {
-		if (m.type !== 'tool_use') continue;
+		if (m.kind !== 'tool_use') continue;
 		const meta = resultMap.get(m.toolUseId);
 		if (!meta) continue;
 		// Extract unified diff from metadata — same source as SimpleDiff

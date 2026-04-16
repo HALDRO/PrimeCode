@@ -8,16 +8,21 @@ import type { OverlayScrollbars } from 'overlayscrollbars';
 import { OverlayScrollbarsComponent } from 'overlayscrollbars-react';
 import React, { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
+	ActionType,
 	LspDiagnostic,
 	LspDiagnosticsByFile,
-	NormalizedEntry,
 } from '../../../common/normalizedTypes';
-
-import { getMcpToolDisplayInfo, isMcpTool, isToolMatch } from '../../constants';
+import { buildToolActionType } from '../../../common/normalizedTypes';
+import { getMcpToolDisplayInfo, isFileEditTool, isMcpTool, isToolMatch } from '../../constants';
 import { useElapsedTimer } from '../../hooks/useElapsedTimer';
 import { cn } from '../../lib/cn';
-import { useAccessRequestByToolUseId, useMcpServers, useToolResultByToolId } from '../../store';
-import type { Message as WebviewMessage } from '../../store/chatStore';
+import {
+	type RenderToolUseMessage,
+	type ToolResultView,
+	useAccessRequestByToolUseId,
+	useMcpServers,
+	useToolResultByToolId,
+} from '../../store';
 import { formatDuration, formatToolName } from '../../utils/format';
 import { useVSCode } from '../../utils/vscode';
 import {
@@ -33,6 +38,7 @@ import {
 import { FileTypeIcon } from '../icons/FileTypeIcon';
 import { Button, CollapseOverlay, IconButton, Tooltip } from '../ui';
 import { AccessGate } from './AccessGate';
+import { QuestionCard } from './QuestionCard';
 import {
 	getDiffContentHeight,
 	type ResolvedFileChange,
@@ -65,8 +71,43 @@ const scrollToBottom = (instance: OverlayScrollbars) => {
 	if (viewport) viewport.scrollTop = viewport.scrollHeight;
 };
 
-type ToolUse = Extract<WebviewMessage, { type: 'tool_use' }>;
-type ToolResult = Extract<WebviewMessage, { type: 'tool_result' }>;
+type ToolUse = RenderToolUseMessage;
+type ToolResult = ToolResultView;
+
+type ToolCardCategory = 'inline' | 'mcp' | 'bash' | 'diff' | 'websearch' | 'webfetch' | 'summarize';
+
+const getActionType = (
+	normalizedEntry: ToolUse['normalizedEntry'],
+	toolName: string,
+	rawInput: unknown,
+): ActionType | null => {
+	if (
+		normalizedEntry?.entryType &&
+		typeof normalizedEntry.entryType === 'object' &&
+		'actionType' in normalizedEntry.entryType
+	) {
+		return normalizedEntry.entryType.actionType;
+	}
+	return buildToolActionType(toolName, (rawInput as Record<string, unknown>) ?? {});
+};
+
+const getToolCardCategory = (
+	toolName: string,
+	actionType: ActionType | null,
+	mcpServerNames: string[],
+	hasDiff: boolean,
+	isSummarize: boolean,
+	hasAccessRequest: boolean,
+): ToolCardCategory => {
+	if (hasDiff) return 'diff';
+	if (actionType?.type === 'CommandRun' || isToolMatch(toolName, 'Bash')) return 'bash';
+	if (actionType?.type === 'WebSearch' || toolName.toLowerCase() === 'websearch')
+		return 'websearch';
+	if (actionType?.type === 'WebFetch' || toolName.toLowerCase() === 'webfetch') return 'webfetch';
+	if (isMcpTool(toolName, mcpServerNames)) return 'mcp';
+	if (isSummarize) return 'summarize';
+	return hasAccessRequest ? 'mcp' : 'inline';
+};
 
 const ToolCardLeadingIcon: React.FC<{ children: ReactNode; className?: string }> = ({
 	children,
@@ -171,7 +212,7 @@ export const ToolCard: React.FC<ToolCardProps> = ({
 };
 
 interface ToolCardMessageProps {
-	message: ToolUse;
+	toolUse: ToolUse;
 	toolResult?: ToolResult;
 	defaultExpanded?: boolean;
 }
@@ -396,47 +437,49 @@ const FileEditCard: React.FC<FileEditCardProps> = ({
 };
 
 export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
-	({ message, toolResult: providedToolResult, defaultExpanded }) => {
+	({ toolUse, toolResult: providedToolResult, defaultExpanded }) => {
 		const { postMessage } = useVSCode();
 		const mcpServers = useMcpServers();
 		const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
 
-		const { toolUseId, filePath, rawInput } = message;
-		const toolName = message.toolName ?? '';
+		const { toolUseId, filePath, rawInput } = toolUse;
+		const toolName = toolUse.toolName ?? '';
 		const selectorToolResult = useToolResultByToolId(providedToolResult ? undefined : toolUseId);
-		const toolResult = providedToolResult ?? selectorToolResult;
+		const syntheticToolResult: ToolResult | undefined =
+			providedToolResult ??
+			selectorToolResult ??
+			(toolUse.status === 'completed' || toolUse.status === 'error'
+				? {
+						id: `res-${toolUseId}`,
+						type: 'tool_result',
+						toolUseId,
+						toolName,
+						content: toolUse.resultContent || toolUse.streamingOutput || '',
+						isError: toolUse.status === 'error',
+						title: toolUse.title,
+						metadata: toolUse.metadata,
+						timestamp: toolUse.timestamp,
+					}
+				: undefined);
+		const toolResult = syntheticToolResult;
 		const accessRequest = useAccessRequestByToolUseId(toolUseId);
-		const normalizedEntry = (message as unknown as { normalizedEntry?: NormalizedEntry })
-			.normalizedEntry;
+		const normalizedEntry = toolUse.normalizedEntry;
 
 		const isError = toolResult?.isError ?? false;
 		const content = toolResult?.content || '';
 
-		// --- Logic Simplification: Determine Card Type ---
-		// 1. Check NormalizedEntry
-		let actionType = null;
-		if (
-			normalizedEntry?.entryType &&
-			typeof normalizedEntry.entryType === 'object' &&
-			'actionType' in normalizedEntry.entryType
-		) {
-			actionType = normalizedEntry.entryType.actionType;
-		}
-
-		const isMcp = isMcpTool(toolName, mcpServerNames);
-		const isBash = isToolMatch(toolName, 'Bash') || actionType?.type === 'CommandRun';
+		const actionType = getActionType(normalizedEntry, toolName, rawInput);
 		const isSummarize = toolName === 'Summarize Conversation';
 
 		// Use normalized ActionType for diff/file-edit style tools
-		const isFileEdit = actionType?.type === 'FileEdit';
+		const isFileEdit = actionType?.type === 'FileEdit' || isFileEditTool(toolName);
 		const isApplyPatch = actionType?.type === 'ApplyPatch' || isToolMatch(toolName, 'apply_patch');
 		const isDiffTool = isFileEdit || isApplyPatch;
-		const isWebSearch = actionType?.type === 'WebSearch' || toolName.toLowerCase() === 'websearch';
-		const isWebFetch = actionType?.type === 'WebFetch' || toolName.toLowerCase() === 'webfetch';
+		const isQuestionTool = toolName.toLowerCase() === 'question';
 		// Use metadata from toolResult (final) or from the tool_use message itself
 		// (streaming). tool_streaming events merge metadata into the tool_use message
 		// via mergeOrAddMessage, so we can pick up incremental file data as it arrives.
-		const streamingMetadata = (message as unknown as { metadata?: unknown }).metadata;
+		const streamingMetadata = toolUse.metadata;
 		const effectiveMetadata = toolResult?.metadata ?? streamingMetadata;
 		const fileChanges = useMemo(
 			() =>
@@ -448,9 +491,64 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 				}),
 			[actionType, effectiveMetadata, accessRequest, filePath],
 		);
+		const canRenderDiffCard = isDiffTool && fileChanges.length > 0;
+		const hasAccessRequest = Boolean(accessRequest);
+		const category = getToolCardCategory(
+			toolName,
+			actionType,
+			mcpServerNames,
+			canRenderDiffCard,
+			isSummarize,
+			hasAccessRequest,
+		);
+		const isMcp = category === 'mcp';
+		const isBash = category === 'bash';
+		const isWebSearch = category === 'websearch';
+		const isWebFetch = category === 'webfetch';
+		const resolvedQuestionRequest = useMemo(() => {
+			if (!isQuestionTool) return undefined;
 
-		const isRunning = message.isRunning ?? !toolResult;
-		const liveElapsed = useElapsedTimer(isRunning, message.timestamp);
+			const rawQuestions = (rawInput as { questions?: unknown })?.questions;
+			if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) return undefined;
+
+			const questions = rawQuestions.filter(
+				(question): question is import('../../../common').QuestionInfo =>
+					Boolean(
+						question &&
+							typeof question === 'object' &&
+							'question' in question &&
+							'header' in question &&
+							'options' in question,
+					),
+			);
+			if (questions.length === 0) return undefined;
+
+			const answersRaw = (effectiveMetadata as { answers?: unknown } | undefined)?.answers;
+			const answers = Array.isArray(answersRaw)
+				? answersRaw.filter(
+						(answer): answer is string[] =>
+							Array.isArray(answer) && answer.every(item => typeof item === 'string'),
+					)
+				: undefined;
+
+			return {
+				id: toolUseId,
+				sessionID: '',
+				questions,
+				tool: {
+					messageID: toolUseId,
+					callID: toolUseId,
+				},
+				resolved: true,
+				...(answers ? { answers } : {}),
+			} satisfies import('../../../common').SessionQuestionRequest;
+		}, [effectiveMetadata, isQuestionTool, rawInput, toolUseId]);
+
+		const isRunning =
+			toolUse.status === 'pending' ||
+			toolUse.status === 'running' ||
+			(toolUse.isRunning ?? !toolResult);
+		const liveElapsed = useElapsedTimer(isRunning, toolUse.timestamp);
 		const [expanded, setExpanded] = useState(defaultExpanded ?? false);
 		const [diffExpanded, setDiffExpanded] = useState(defaultExpanded ?? false);
 
@@ -463,16 +561,16 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		// --- All hooks must be called unconditionally, before any early returns ---
 		const meta = useMemo(() => {
 			if (actionType?.type === 'CommandRun') return actionType.command;
+			if (actionType?.type === 'WebSearch') return actionType.query;
+			if (actionType?.type === 'WebFetch') return actionType.url;
 			if (isBash) return (rawInput as { command?: string })?.command || '';
-			if (isWebSearch && actionType?.type === 'WebSearch') return actionType.query;
 			if (isWebSearch) return (rawInput as { query?: string })?.query || '';
-			if (isWebFetch && actionType?.type === 'WebFetch') return actionType.url;
 			if (isWebFetch) return (rawInput as { url?: string })?.url || '';
 			if (isMcp) return rawInput ? JSON.stringify(rawInput) : '';
 			return '';
 		}, [actionType, isBash, isWebSearch, isWebFetch, isMcp, rawInput]);
 
-		const fullText = content || message.streamingOutput || '';
+		const fullText = content || toolUse.streamingOutput || '';
 		const hasBody = fullText.trim().length > 0;
 		const lineCount = useMemo(
 			() => (hasBody ? fullText.split('\n').length : 0),
@@ -485,24 +583,18 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 			scrollToBottom(instance);
 		}, []);
 		useEffect(() => {
-			if (!isRunning || !message.streamingOutput) return;
+			if (!isRunning || !toolUse.streamingOutput) return;
 			const el = streamingViewportRef.current;
 			if (el) el.scrollTop = el.scrollHeight;
-		}, [isRunning, message.streamingOutput]);
+		}, [isRunning, toolUse.streamingOutput]);
 
 		if (!toolName) return null;
 
-		// Inline Card: Default for everything except MCP, Bash, Diff tools, WebSearch, WebFetch, Summarize, and tools with Access Requests
-		const hasAccessRequest = Boolean(accessRequest);
-		if (
-			!isMcp &&
-			!isBash &&
-			!isDiffTool &&
-			!isWebSearch &&
-			!isWebFetch &&
-			!isSummarize &&
-			!hasAccessRequest
-		) {
+		if (resolvedQuestionRequest) {
+			return <QuestionCard request={resolvedQuestionRequest} />;
+		}
+
+		if (category === 'inline') {
 			return (
 				<InlineToolLine
 					toolName={toolName}
@@ -516,8 +608,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		}
 
 		// 1) Diff Card (File Edits / Apply Patch)
-		if (isDiffTool) {
-			if (fileChanges.length === 0) return null;
+		if (canRenderDiffCard) {
 			return (
 				<div className="flex flex-col gap-1">
 					{fileChanges.map((change, i) => (

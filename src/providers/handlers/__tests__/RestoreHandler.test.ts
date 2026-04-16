@@ -154,7 +154,7 @@ describe('RestoreHandler', () => {
 			await handler.handleMessage({ type: 'restoreCommit' } as any);
 
 			expect(ctx.cli.truncateSession).not.toHaveBeenCalled();
-			expect(ctx.bridge.session.restore).not.toHaveBeenCalled();
+			expect(ctx.bridge.emit).not.toHaveBeenCalled();
 		});
 
 		it('should do nothing when commitId is empty string', async () => {
@@ -208,7 +208,7 @@ describe('RestoreHandler', () => {
 				data: { commitId: 'cp-1' },
 			} as any);
 
-			expect(ctx.bridge.session.restore).toHaveBeenCalledWith('session-1', {
+			expect(ctx.bridge.emit).toHaveBeenCalledWith('session-1', {
 				action: 'success',
 				canUnrevert: true,
 				revertedFromMessageId: 'ui-msg-1',
@@ -224,7 +224,7 @@ describe('RestoreHandler', () => {
 				data: { commitId: 'cp-1' },
 			} as any);
 
-			expect(ctx.bridge.session.restore).toHaveBeenCalledWith('session-1', {
+			expect(ctx.bridge.emit).toHaveBeenCalledWith('session-1', {
 				action: 'error',
 				message: expect.stringContaining('Server down'),
 			});
@@ -253,8 +253,8 @@ describe('RestoreHandler', () => {
 			await handler.handleMessage({ type: 'unrevert' } as any);
 
 			// Single atomic notification — no more race between two events
-			expect(ctx.bridge.session.restore).toHaveBeenCalledTimes(1);
-			expect(ctx.bridge.session.restore).toHaveBeenCalledWith('session-1', {
+			expect(ctx.bridge.emit).toHaveBeenCalledTimes(1);
+			expect(ctx.bridge.emit).toHaveBeenCalledWith('session-1', {
 				action: 'unrevert_available',
 				available: false,
 			});
@@ -265,7 +265,7 @@ describe('RestoreHandler', () => {
 
 			await handler.handleMessage({ type: 'unrevert' } as any);
 
-			expect(ctx.bridge.session.restore).toHaveBeenCalledWith('session-1', {
+			expect(ctx.bridge.emit).toHaveBeenCalledWith('session-1', {
 				action: 'error',
 				message: expect.stringContaining('Unrevert failed'),
 			});

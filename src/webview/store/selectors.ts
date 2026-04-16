@@ -5,7 +5,7 @@
  * Uses stable empty-array refs (EMPTY_MESSAGES, etc.) to prevent infinite re-renders with useShallow.
  */
 
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { parseModelId } from '../../common';
 import {
@@ -14,7 +14,11 @@ import {
 	type ChatState,
 	type CommitInfo,
 	DEFAULT_TOTAL_STATS,
-	type Message,
+	type RenderMessage,
+	type RenderSubtaskMessage,
+	type RenderUserMessage,
+	type TokenUsage,
+	type ToolResultView,
 	useChatStore,
 } from './chatStore';
 import { type SettingsState, useSettingsStore } from './settingsStore';
@@ -22,7 +26,7 @@ import type { TransientNotification } from './uiStore';
 import { type UIState, useUIStore } from './uiStore';
 
 // Stable empty array references to prevent infinite re-renders with useShallow
-const EMPTY_MESSAGES: Message[] = [];
+const EMPTY_MESSAGES: RenderMessage[] = [];
 const EMPTY_COMMITS: CommitInfo[] = [];
 const EMPTY_CHANGED_FILES: ChangedFile[] = [];
 const EMPTY_CUMULATIVE_DIFFS: ChatSession['cumulativeDiffs'] = [];
@@ -30,25 +34,234 @@ const EMPTY_NOTIFICATIONS: TransientNotification[] = [];
 const EMPTY_PERMISSIONS: import('../../common').SessionPermissionRequest[] = [];
 const EMPTY_QUESTIONS: import('../../common').SessionQuestionRequest[] = [];
 
+export function projectRuntimeMessages(session: ChatSession | undefined): RenderMessage[] {
+	if (!session) return EMPTY_MESSAGES;
+
+	const runtimeUserMessageIds = new Set(
+		session.runtimeMessageRecords
+			.filter(message => message.role === 'user')
+			.map(message => message.id),
+	);
+
+	const passthrough: RenderMessage[] = [];
+	for (const message of Object.values(session.userMessagesById)) {
+		if (typeof message.id === 'string' && !runtimeUserMessageIds.has(message.id)) {
+			const renderUser: RenderUserMessage = {
+				...message,
+				id: message.id,
+				kind: 'user' as const,
+			};
+			passthrough.push(renderUser);
+		}
+	}
+	for (const message of Object.values(session.subtasksById)) {
+		if (message.id) {
+			const renderSubtask: RenderSubtaskMessage = {
+				...message,
+				id: message.id,
+				kind: 'subtask' as const,
+			};
+			passthrough.push(renderSubtask);
+		}
+	}
+	const userMessagesById = session.userMessagesById;
+
+	const runtimeProjected: RenderMessage[] = [];
+	const seenMessageIds = new Set<string>();
+	const projectParts = (
+		messageId: string,
+		record?: ChatSession['runtimeMessageRecords'][number],
+	): void => {
+		seenMessageIds.add(messageId);
+		const parts = [...(session.runtimeMessagePartsById[messageId] || [])].sort((a, b) => {
+			const aCreated = typeof a.createdAt === 'number' ? a.createdAt : Number.MAX_SAFE_INTEGER;
+			const bCreated = typeof b.createdAt === 'number' ? b.createdAt : Number.MAX_SAFE_INTEGER;
+			if (aCreated !== bCreated) return aCreated - bCreated;
+			return a.id.localeCompare(b.id);
+		});
+		for (const part of parts) {
+			const partCompleted = typeof part.completedAt === 'number';
+			const recordCompleted = typeof record?.completedAt === 'number';
+			const timestamp =
+				typeof part.createdAt === 'number'
+					? new Date(part.createdAt).toISOString()
+					: typeof record?.createdAt === 'number'
+						? new Date(record.createdAt).toISOString()
+						: '1970-01-01T00:00:00.000Z';
+
+			if (part.type === 'text' && part.text && !part.synthetic) {
+				runtimeProjected.push({
+					kind: 'assistant',
+					id: `msg-${part.id}`,
+					type: 'assistant',
+					content: part.text,
+					partId: part.id,
+					isStreaming: record
+						? !recordCompleted
+						: !partCompleted && part.state?.status !== 'completed',
+					timestamp,
+					...(record?.agent ? { agent: record.agent } : {}),
+				});
+				continue;
+			}
+
+			if (part.type === 'reasoning' && part.text) {
+				runtimeProjected.push({
+					kind: 'thinking',
+					id: `thinking-${part.id}`,
+					type: 'thinking',
+					content: part.text,
+					partId: part.id,
+					isStreaming: !partCompleted && part.state?.status !== 'completed',
+					startTime: part.createdAt,
+					durationMs:
+						typeof part.createdAt === 'number' && typeof part.completedAt === 'number'
+							? part.completedAt - part.createdAt
+							: undefined,
+					timestamp,
+				});
+				continue;
+			}
+
+			if (part.type === 'tool' && part.callId) {
+				const isRunning =
+					!partCompleted &&
+					(part.state?.status === 'pending' ||
+						part.state?.status === 'running' ||
+						part.state?.status === undefined);
+				runtimeProjected.push({
+					kind: 'tool_use',
+					id: part.callId,
+					type: 'tool_use',
+					toolName: part.toolName || 'unknown',
+					toolUseId: part.callId,
+					toolInput: JSON.stringify(part.state?.input || {}),
+					rawInput: (part.state?.input as Record<string, unknown>) ?? {},
+					streamingOutput: part.state?.output,
+					isRunning,
+					timestamp,
+					...(part.state?.status ? { status: part.state.status } : {}),
+					...(part.state?.title ? { title: part.state.title } : {}),
+					...(part.state?.output ? { resultContent: part.state.output } : {}),
+					...(part.state?.metadata
+						? { metadata: part.state.metadata as Record<string, unknown> }
+						: {}),
+					...(part.normalizedEntry ? { normalizedEntry: part.normalizedEntry } : {}),
+				});
+			}
+		}
+	};
+
+	for (const record of session.runtimeMessageRecords) {
+		if (record.role === 'user') {
+			const user = userMessagesById[record.id];
+			if (user?.id) {
+				const renderUser = {
+					...user,
+					id: user.id,
+					kind: 'user',
+				} satisfies RenderUserMessage;
+				runtimeProjected.push(renderUser);
+			}
+			seenMessageIds.add(record.id);
+			continue;
+		}
+
+		projectParts(record.id, record);
+	}
+
+	for (const messageId of Object.keys(session.runtimeMessagePartsById)) {
+		if (seenMessageIds.has(messageId)) continue;
+		projectParts(messageId);
+	}
+
+	return [...passthrough, ...runtimeProjected].sort((a, b) => {
+		const timeDiff = new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime();
+		if (timeDiff !== 0) return timeDiff;
+		// Stable fallback when timestamps match
+		return (a.id || '').localeCompare(b.id || '');
+	});
+}
+
 function getActiveSession(state: ChatState): ChatSession | undefined {
 	const sid = state.activeSessionId;
 	if (!sid) return undefined;
 	return state.sessionsById[sid];
 }
 
+export const useSessionContextMetrics = () => {
+	const session = useChatStore((state: ChatState) => getActiveSession(state));
+	const contextLimit = useModelContextWindow();
+
+	return useMemo(() => {
+		if (!session) {
+			return {
+				context: undefined,
+				totalCost: 0,
+			};
+		}
+
+		let lastAssistantWithTokens: ChatSession['runtimeMessageRecords'][number] | undefined;
+		let totalCost = 0;
+		for (const message of session.runtimeMessageRecords) {
+			if (message.role !== 'assistant') continue;
+			if (typeof message.cost === 'number') totalCost += message.cost;
+			const total =
+				typeof message.tokens?.total === 'number'
+					? message.tokens.total
+					: (message.tokens?.input ?? 0) +
+						(message.tokens?.output ?? 0) +
+						(message.tokens?.reasoning ?? 0) +
+						(message.tokens?.cacheRead ?? 0) +
+						(message.tokens?.cacheWrite ?? 0);
+			if (total > 0) lastAssistantWithTokens = message;
+		}
+
+		if (!lastAssistantWithTokens?.tokens) {
+			return { context: undefined, totalCost };
+		}
+
+		const tokens = lastAssistantWithTokens.tokens;
+		const total =
+			typeof tokens.total === 'number'
+				? tokens.total
+				: (tokens.input ?? 0) +
+					(tokens.output ?? 0) +
+					(tokens.reasoning ?? 0) +
+					(tokens.cacheRead ?? 0) +
+					(tokens.cacheWrite ?? 0);
+
+		return {
+			totalCost,
+			context: {
+				limit: contextLimit,
+				input: tokens.input ?? 0,
+				output: tokens.output ?? 0,
+				reasoning: tokens.reasoning ?? 0,
+				cacheRead: tokens.cacheRead ?? 0,
+				cacheWrite: tokens.cacheWrite ?? 0,
+				total,
+				usage: contextLimit > 0 ? Math.min((total / contextLimit) * 100, 100) : null,
+			},
+		};
+	}, [session, contextLimit]);
+};
+
 // ============================================
 // Chat Store Selectors
 // ============================================
 
 /** Select messages array for active session */
-export const useMessages = () =>
-	useChatStore((state: ChatState) => getActiveSession(state)?.messages ?? EMPTY_MESSAGES);
+export const useMessages = () => {
+	const session = useChatStore((state: ChatState) => getActiveSession(state));
+	return useMemo(() => projectRuntimeMessages(session), [session]);
+};
 
 /** Select whether active session has any messages (lightweight — avoids subscribing to full array) */
-export const useHasMessages = () =>
-	useChatStore(
-		(state: ChatState) => (getActiveSession(state)?.messages ?? EMPTY_MESSAGES).length > 0,
-	);
+export const useHasMessages = () => {
+	const session = useChatStore((state: ChatState) => getActiveSession(state));
+	return useMemo(() => projectRuntimeMessages(session).length > 0, [session]);
+};
 
 /** Select processing state for active session */
 export const useIsProcessing = () =>
@@ -85,13 +298,12 @@ export const useEditDraft = (messageId: string | undefined) =>
 	useChatStore((state: ChatState) => (messageId ? state.editDrafts[messageId] : undefined));
 
 /** Select chat input state and setter (active session) */
-export const useChatInputState = () =>
-	useChatStore(
-		useShallow((state: ChatState) => ({
-			input: getActiveSession(state)?.input ?? '',
-			setInput: state.actions.setInput,
-		})),
-	);
+export const useChatInputState = () => {
+	const updateSession = useChatStore((state: ChatState) => state.actions.updateSession);
+	const input = useChatStore((state: ChatState) => getActiveSession(state)?.input ?? '');
+	const setInput = useCallback((value: string) => updateSession({ input: value }), [updateSession]);
+	return { input, setInput };
+};
 
 /** Select only the input string (primitive — no unnecessary re-renders) */
 export const useStoreInput = () =>
@@ -108,32 +320,31 @@ export const useTotalStats = () =>
 
 /** Aggregate subagent token totals from subtask messages in active session.
  * Memoized by messages ref to avoid O(N) scan on every store change. */
-const subagentTotalsCache = { messages: null as Message[] | null, result: 0 };
-export const useSubagentTokenTotals = () =>
-	useChatStore((state: ChatState) => {
-		const messages = getActiveSession(state)?.messages ?? EMPTY_MESSAGES;
+const subagentTotalsCache = { messages: null as RenderMessage[] | null, result: 0 };
+export const useSubagentTokenTotals = () => {
+	const session = useChatStore((state: ChatState) => getActiveSession(state));
+	return useMemo(() => {
+		const messages = projectRuntimeMessages(session);
 		if (messages === subagentTotalsCache.messages) return subagentTotalsCache.result;
 		subagentTotalsCache.messages = messages;
 		let total = 0;
 		for (const msg of messages) {
-			if (msg.type === 'subtask') {
-				const ct = (msg as Record<string, unknown>).childTokens as { total?: number } | undefined;
+			if (msg.kind === 'subtask') {
+				const ct = msg.childTokens;
 				if (ct?.total) total += ct.total;
 			}
 		}
 		subagentTotalsCache.result = total;
 		return total;
-	});
+	}, [session]);
+};
 
 /** Select active model ID reported by the backend */
 export const useActiveModelID = () =>
 	useChatStore((state: ChatState) => getActiveSession(state)?.activeModelID);
 
 /** Select per-turn token data for active session */
-const EMPTY_TURN_TOKENS: Record<
-	string,
-	{ input: number; output: number; total: number; cacheRead: number; durationMs?: number }
-> = {};
+const EMPTY_TURN_TOKENS: Record<string, TokenUsage> = {};
 export const useTurnTokens = () =>
 	useChatStore((state: ChatState) => getActiveSession(state)?.turnTokens ?? EMPTY_TURN_TOKENS);
 
@@ -145,31 +356,26 @@ export const useMessageTurnTokens = (messageId: string | undefined) =>
 	});
 
 /** Whether the last message is an assistant message that is actively streaming */
-export const useIsLastMessageStreaming = () =>
-	useChatStore((state: ChatState) => {
-		const session = getActiveSession(state);
+export const useIsLastMessageStreaming = () => {
+	const session = useChatStore((state: ChatState) => getActiveSession(state));
+	return useMemo(() => {
 		if (!session || !session.isProcessing) return false;
-		const msgs = session.messages;
-		// Walk backwards to find the last assistant message (skip tool_result, access_request, etc.)
+		const msgs = projectRuntimeMessages(session);
 		for (let i = msgs.length - 1; i >= 0; i--) {
 			const msg = msgs[i];
-			if (msg.type === 'assistant') {
-				return !!(msg as { isStreaming?: boolean }).isStreaming;
+			if (msg.kind === 'assistant') {
+				return !!msg.isStreaming;
 			}
-			// Stop searching if we hit a user message — no assistant streaming in this turn
-			if (msg.type === 'user') return false;
+			if (msg.kind === 'user') return false;
 		}
 		return false;
-	});
+	}, [session]);
+};
 
 /** Context usage percentage, rounded to 1% to reduce rerender frequency */
 export const useContextPercentage = () => {
-	const contextLimit = useModelContextWindow();
-	return useChatStore((state: ChatState) => {
-		const stats = getActiveSession(state)?.totalStats ?? DEFAULT_TOTAL_STATS;
-		const contextTokens = stats.contextTokens ?? 0;
-		return Math.min(Math.floor((contextTokens / contextLimit) * 100), 100);
-	});
+	const metrics = useSessionContextMetrics();
+	return Math.floor(metrics.context?.usage ?? 0);
 };
 
 /** Select restore commits for active session */
@@ -239,14 +445,42 @@ export const usePendingQuestions = () =>
 // Tool-specific Selectors (active session)
 // ============================================
 
-export const useToolResultByToolId = (toolUseId: string | undefined) =>
-	useChatStore((state: ChatState) => {
-		if (!toolUseId) return undefined;
-		const messages = getActiveSession(state)?.messages ?? EMPTY_MESSAGES;
-		return messages.find(m => m.type === 'tool_result' && m.toolUseId === toolUseId) as
-			| Extract<ChatState['sessionsById'][string]['messages'][number], { type: 'tool_result' }>
-			| undefined;
-	});
+export const useToolResultByToolId = (toolUseId: string | undefined) => {
+	const session = useChatStore((state: ChatState) => getActiveSession(state));
+
+	return useMemo(() => {
+		if (!session || !toolUseId) return undefined;
+
+		for (const parts of Object.values(session.runtimeMessagePartsById)) {
+			for (const part of parts) {
+				if (part.type !== 'tool' || part.callId !== toolUseId) continue;
+				const status = part.state?.status;
+				if (status !== 'completed' && status !== 'error') continue;
+				return {
+					id: `res-${toolUseId}`,
+					type: 'tool_result' as const,
+					toolUseId,
+					toolName: part.toolName || 'unknown',
+					content: part.state?.output || '',
+					isError: status === 'error',
+					title: part.state?.title,
+					metadata:
+						part.state?.metadata && typeof part.state.metadata === 'object'
+							? (part.state.metadata as Record<string, unknown>)
+							: undefined,
+					timestamp:
+						typeof part.completedAt === 'number'
+							? new Date(part.completedAt).toISOString()
+							: typeof part.createdAt === 'number'
+								? new Date(part.createdAt).toISOString()
+								: undefined,
+				} satisfies ToolResultView;
+			}
+		}
+
+		return undefined;
+	}, [session, toolUseId]);
+};
 
 export const useAccessRequestByToolUseId = (toolUseId: string | undefined) => {
 	const pending = useChatStore((state: ChatState) => {
@@ -267,12 +501,13 @@ export const useAccessRequestByToolUseId = (toolUseId: string | undefined) => {
 			pattern: pending.patterns[0],
 			toolUseId: pending.tool?.callID,
 			resolved: false,
+			approved: false,
 			metadata: pending.metadata,
 			timestamp:
 				typeof pending.metadata?.timestamp === 'string'
 					? pending.metadata.timestamp
 					: new Date().toISOString(),
-		} as Extract<ChatState['sessionsById'][string]['messages'][number], { type: 'access_request' }>;
+		} as const;
 	}, [pending]);
 };
 
@@ -354,6 +589,17 @@ const _chatActions = () => useChatStore.getState().actions;
 export const useModelSelection = () => {
 	const chatActions = _chatActions();
 
+	const setSessionAgent = useCallback(
+		(agent: string | undefined, sessionId?: string) =>
+			chatActions.updateSession({ agent }, sessionId),
+		[chatActions],
+	);
+	const setSessionModel = useCallback(
+		(model: string | undefined, sessionId?: string) =>
+			chatActions.updateSession({ model }, sessionId),
+		[chatActions],
+	);
+
 	return useSettingsStore(
 		useShallow((state: SettingsState) => ({
 			provider: state.provider,
@@ -366,9 +612,9 @@ export const useModelSelection = () => {
 			setModelVariant: state.actions.setModelVariant,
 			setSelectedModel: state.actions.setSelectedModel,
 			getSessionAgent: chatActions.getSessionAgent,
-			setSessionAgent: chatActions.setSessionAgent,
+			setSessionAgent,
 			getSessionModel: chatActions.getSessionModel,
-			setSessionModel: chatActions.setSessionModel,
+			setSessionModel,
 		})),
 	);
 };

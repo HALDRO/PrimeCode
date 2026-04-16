@@ -6,7 +6,7 @@ import { useElapsedTimer } from '../../hooks/useElapsedTimer';
 import { cn } from '../../lib/cn';
 import {
 	type CommitInfo,
-	type Message,
+	type RenderUserMessage,
 	useActiveModelID,
 	useChatActions,
 	useEditDraft,
@@ -28,7 +28,7 @@ import { AttachmentsBar } from './AttachmentsBar';
 import { ChatInput } from './ChatInput';
 
 interface UserMessageProps {
-	message: Message & { type: 'user' };
+	message: RenderUserMessage;
 	/** True when this section is the exact revert point (for Unrevert button placement) */
 	isRevertPoint?: boolean;
 	/** Pre-computed section stats from groupMessagesIntoSections */
@@ -67,7 +67,7 @@ interface MessageAttachments {
 /**
  * Extract attachments from message. Only structured attachments are rendered as pinned resources.
  */
-function getMessageAttachments(message: Message & { type: 'user' }): {
+function getMessageAttachments(message: RenderUserMessage): {
 	files: string[];
 	codeSnippets: CodeSnippetAttachment[];
 	images: ImageAttachment[];
@@ -325,12 +325,6 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 				return formatDuration(stats.durationMs);
 			}
 
-			const messageTimestamp = new Date(message.timestamp).getTime();
-
-			if (stats.nextUserMessageTs) {
-				return formatDuration(stats.nextUserMessageTs - messageTimestamp);
-			}
-
 			// Live timer while processing — must be checked BEFORE lastResponseTs
 			// because during child sessions there are already assistant messages
 			// (e.g. "I'll use the task tool...") which set lastResponseTs,
@@ -339,19 +333,8 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 				return formatDuration(liveElapsed);
 			}
 
-			if (stats.lastResponseTs) {
-				return formatDuration(stats.lastResponseTs - messageTimestamp);
-			}
-
 			return null;
-		}, [
-			stats.durationMs,
-			stats.nextUserMessageTs,
-			stats.lastResponseTs,
-			isProcessingLastMessage,
-			liveElapsed,
-			message.timestamp,
-		]);
+		}, [stats.durationMs, isProcessingLastMessage, liveElapsed]);
 
 		// Parse attachments (prop-based, stable)
 		const {

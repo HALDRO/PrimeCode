@@ -1,92 +1,73 @@
 import { useMemo } from 'react';
-import { groupToolMessages } from '../components/chat/SimpleTool';
-import { type Message, useChatStore } from '../store/chatStore';
+import { type GroupedResponseItem, groupToolMessages } from '../components/chat/toolGrouping';
+import type { RenderMessage, RenderSubtaskMessage, TokenUsage } from '../store';
+import { useChatStore } from '../store/chatStore';
+import { projectRuntimeMessages } from '../store/selectors';
 
 // Stable empty array reference to prevent infinite re-renders
-const EMPTY_MESSAGES: Message[] = [];
-const EMPTY_GROUPED: (Message | Message[])[] = [];
+const EMPTY_MESSAGES: RenderMessage[] = [];
+const EMPTY_GROUPED: GroupedResponseItem[] = [];
 
-interface SubtaskTokenStats {
-	input: number;
-	output: number;
-	total: number;
-}
+type SubtaskTokenStats = Pick<TokenUsage, 'input' | 'output' | 'total'>;
 
-function useSubtaskChildrenInSession(subtaskId: string, sessionId: string): Message[] {
-	const transcript = useChatStore(state => {
-		const msg = state.sessionsById[sessionId]?.messages.find((m: Message) => m.id === subtaskId);
-		if (!msg || msg.type !== 'subtask') return EMPTY_MESSAGES;
-		return msg.transcript?.length ? (msg.transcript as Message[]) : EMPTY_MESSAGES;
-	});
+function useSubtaskChildrenInSession(childSessionId: string | undefined): RenderMessage[] {
+	const childSession = useChatStore(state =>
+		childSessionId ? state.sessionsById[childSessionId] : undefined,
+	);
 
-	return transcript;
+	return useMemo(() => {
+		if (!childSession) return EMPTY_MESSAGES;
+		const projected = projectRuntimeMessages(childSession);
+		return projected.length ? projected : EMPTY_MESSAGES;
+	}, [childSession]);
 }
 
 /**
  * Higher-level hook for UI rendering: returns subtask message, grouped children, and total duration.
- * This keeps UI components from duplicating the “context session vs transcript” logic.
+ * This keeps UI components from duplicating the parent-card vs child-session lookup logic.
  */
 export function useSubtaskThread(
 	subtaskId: string,
 	sessionId: string,
-	mcpServerNames: string[],
+	_mcpServerNames: string[],
 ): {
-	message?: Extract<Message, { type: 'subtask' }>;
-	children: Message[];
-	groupedChildren: (Message | Message[])[];
+	message?: RenderSubtaskMessage;
+	children: RenderMessage[];
+	groupedChildren: GroupedResponseItem[];
 	totalDurationMs: number;
 	tokenStats: SubtaskTokenStats | null;
 	childModelId: string | undefined;
 } {
-	const message = useChatStore(state => {
-		const found = state.sessionsById[sessionId]?.messages.find((m: Message) => m.id === subtaskId);
-		return found && found.type === 'subtask'
-			? (found as Extract<Message, { type: 'subtask' }>)
-			: undefined;
-	});
+	const session = useChatStore(state => state.sessionsById[sessionId]);
 
-	const children = useSubtaskChildrenInSession(subtaskId, sessionId);
+	const message = useMemo(() => {
+		const found = projectRuntimeMessages(session).find(m => m.id === subtaskId);
+		return found && found.kind === 'subtask' ? (found as RenderSubtaskMessage) : undefined;
+	}, [session, subtaskId]);
 
-	const isRunning = message?.status === 'running';
+	const childSessionId = (message as { childSessionId?: string } | undefined)?.childSessionId;
+	const children = useSubtaskChildrenInSession(childSessionId);
 
 	const groupedChildren = useMemo(() => {
 		if (!children.length) return EMPTY_GROUPED;
-		return groupToolMessages(children, mcpServerNames, isRunning);
-	}, [children, mcpServerNames, isRunning]);
+		const isStreaming = message?.status === 'running';
+		const grouped = groupToolMessages(children, _mcpServerNames, isStreaming);
+		return grouped.length ? grouped : EMPTY_GROUPED;
+	}, [children, _mcpServerNames, message?.status]);
 
 	const totalDurationMs = useMemo(() => {
-		if (message?.durationMs && message.durationMs > 0) return message.durationMs;
-		// Sum child durations from transcript
-		let duration = 0;
-		for (const msg of children) {
-			if (msg.type === 'tool_result' || msg.type === 'thinking') {
-				if (msg.durationMs) duration += msg.durationMs;
-			}
-		}
-		if (duration > 0) return duration;
-		// Fallback: compute from startTime and last child timestamp
-		if (message?.startTime && message.status !== 'running' && children.length > 0) {
-			const start = new Date(message.startTime).getTime();
-			if (start > 0) {
-				// Find the last valid timestamp in transcript (skip children without one)
-				for (let i = children.length - 1; i >= 0; i--) {
-					const ts = (children[i] as Record<string, unknown>).timestamp as string | undefined;
-					if (!ts) continue;
-					const end = new Date(ts).getTime();
-					if (end > start) return end - start;
-				}
-			}
-		}
-		return duration;
-	}, [message?.durationMs, message?.startTime, message?.status, children]);
+		return message?.durationMs ?? 0;
+	}, [message?.durationMs]);
 
 	// Read token stats and model ID directly from the subtask message
 	const tokenStats: SubtaskTokenStats | null = useMemo(() => {
 		if (!message?.childTokens) return null;
+		const total = message.childTokens.total;
+		if (typeof total !== 'number') return null;
 		return {
 			input: message.childTokens.input,
 			output: message.childTokens.output,
-			total: message.childTokens.total,
+			total,
 		};
 	}, [message?.childTokens]);
 

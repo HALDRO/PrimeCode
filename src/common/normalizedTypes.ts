@@ -107,3 +107,139 @@ export interface ApplyPatchFile {
 	oldContent?: string;
 	newContent?: string;
 }
+
+import { extractPatchFilePaths, resolveToolName } from './toolRegistry';
+
+const getString = (value: unknown): string => (typeof value === 'string' ? value : '');
+
+const getNumber = (value: unknown): number | undefined =>
+	typeof value === 'number' ? value : undefined;
+
+const getPathFromInput = (input: Record<string, unknown>) =>
+	getString(input.path) || getString(input.file_path) || getString(input.filePath);
+
+const getFirstString = (input: Record<string, unknown>, keys: string[]): string => {
+	for (const key of keys) {
+		const value = input[key];
+		if (typeof value === 'string' && value) return value;
+	}
+	return '';
+};
+
+const getSearchQuery = (input: Record<string, unknown>): string =>
+	getFirstString(input, ['query', 'search_query', 'pattern', 'glob_pattern', 'glob']);
+
+const mapEditChange = (input: Record<string, unknown>): FileChange => {
+	const diff = getString(input.diff);
+	const oldContent = getFirstString(input, ['old_string', 'old_str', 'oldString']);
+	const newContent = getFirstString(input, ['new_string', 'new_str', 'newString']);
+
+	if (diff) return { type: 'Edit', unifiedDiff: diff, hasLineNumbers: false };
+	if (oldContent || newContent) {
+		return { type: 'Replace', oldContent, newContent };
+	}
+	return { type: 'Edit', unifiedDiff: '', hasLineNumbers: false };
+};
+
+const mapTodoItems = (input: Record<string, unknown>): TodoItem[] =>
+	Array.isArray(input.todos)
+		? input.todos.map(todo => {
+				const item = todo as { content?: string; status?: string; priority?: string };
+				return {
+					content: item.content || '',
+					status: item.status || 'pending',
+					priority: item.priority || 'medium',
+				};
+			})
+		: [];
+
+export function buildToolActionType(toolName: string, input: Record<string, unknown>): ActionType {
+	const canonical = resolveToolName(toolName);
+	const path = getPathFromInput(input);
+
+	switch (canonical) {
+		case 'read': {
+			const readOffset = getNumber(input.offset);
+			const readLimit = getNumber(input.limit);
+			return {
+				type: 'FileRead',
+				path,
+				...(readOffset !== undefined && { offset: readOffset }),
+				...(readLimit !== undefined && { limit: readLimit }),
+			};
+		}
+
+		case 'write': {
+			const content = getFirstString(input, ['content', 'contents']);
+			return {
+				type: 'FileEdit',
+				path,
+				changes: [{ type: 'Write', content }],
+			};
+		}
+
+		case 'edit':
+		case 'multiedit':
+		case 'patch': {
+			return { type: 'FileEdit', path, changes: [mapEditChange(input)] };
+		}
+
+		case 'bash':
+			return { type: 'CommandRun', command: getString(input.command) };
+
+		case 'grep':
+			return { type: 'Search', query: getFirstString(input, ['pattern', 'query']) };
+
+		case 'glob':
+			return {
+				type: 'Search',
+				query: getFirstString(input, ['pattern', 'glob_pattern', 'glob', 'query']),
+			};
+
+		case 'list':
+		case 'ls':
+			return { type: 'Tool', toolName: 'list', arguments: input };
+
+		case 'task':
+			return { type: 'TaskCreate', description: getFirstString(input, ['description', 'prompt']) };
+
+		case 'apply_patch': {
+			const files = extractPatchFilePaths(input).map(path => ({
+				path,
+				status: 'update' as const,
+			}));
+			return { type: 'ApplyPatch', files };
+		}
+
+		case 'lsp': {
+			const operation = getString(input.operation) || 'unknown';
+			const lspPath = getFirstString(input, ['filePath', 'file_path']);
+			const line = getNumber(input.line) ?? 0;
+			const character = getNumber(input.character) ?? 0;
+			return {
+				type: 'Tool',
+				toolName: 'lsp',
+				arguments: { operation, filePath: lspPath, line, character },
+			};
+		}
+
+		case 'websearch':
+			return { type: 'WebSearch', query: getFirstString(input, ['query', 'search_query']) };
+
+		case 'codesearch':
+			return { type: 'CodeSearch', query: getFirstString(input, ['query', 'search_query']) };
+
+		case 'skill':
+			return { type: 'Tool', toolName: 'skill', arguments: input };
+
+		case 'todowrite':
+			return { type: 'TodoManagement', operation: 'write', todos: mapTodoItems(input) };
+
+		default:
+			return canonical === 'webfetch'
+				? { type: 'WebFetch', url: getString(input.url) }
+				: canonical === 'search'
+					? { type: 'Search', query: getSearchQuery(input) }
+					: { type: 'Tool', toolName, arguments: input };
+	}
+}

@@ -6,8 +6,8 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { SessionRestorePayload } from '../../../common/protocol';
-import { useChatStore } from '../chatStore';
-import type { Message } from '../index';
+import { type UserMessage, useChatStore } from '../chatStore';
+import { projectRuntimeMessages } from '../selectors';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -25,7 +25,7 @@ function resetStore() {
 	});
 }
 
-function createSession(id: string, messages: Message[] = []) {
+function createSession(id: string, messages: UserMessage[] = []) {
 	const { actions } = useChatStore.getState();
 	actions.handleSessionCreated(id);
 	if (messages.length > 0) {
@@ -43,11 +43,12 @@ function dispatchRestore(sessionId: string, payload: Omit<SessionRestorePayload,
 	actions.dispatch(sessionId, 'restore', fullPayload);
 }
 
-const userMsg = (id: string, content = 'hello'): Message =>
-	({ type: 'user', id, timestamp: new Date().toISOString(), content }) as Message;
-
-const assistantMsg = (id: string, content = 'reply'): Message =>
-	({ type: 'assistant', id, timestamp: new Date().toISOString(), content }) as Message;
+const userMsg = (id: string, content = 'hello'): UserMessage => ({
+	type: 'user',
+	id,
+	timestamp: new Date().toISOString(),
+	content,
+});
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -64,7 +65,7 @@ describe('chatStore revert/unrevert state', () => {
 
 	describe('handleRestoreEvent — success', () => {
 		it('should set unrevertAvailable and revertedFromMessageId on success', () => {
-			createSession('s1', [userMsg('u1'), assistantMsg('a1')]);
+			createSession('s1', [userMsg('u1')]);
 
 			dispatchRestore('s1', {
 				action: 'success',
@@ -78,7 +79,7 @@ describe('chatStore revert/unrevert state', () => {
 		});
 
 		it('should set unrevertAvailable=false on unrevert success', () => {
-			createSession('s1', [userMsg('u1'), assistantMsg('a1')]);
+			createSession('s1', [userMsg('u1')]);
 
 			// Revert
 			dispatchRestore('s1', {
@@ -229,7 +230,7 @@ describe('chatStore revert/unrevert state', () => {
 
 	describe('full revert → unrevert cycle', () => {
 		it('should complete full cycle: revert → dim → unrevert → undim', () => {
-			createSession('s1', [userMsg('u1'), assistantMsg('a1'), userMsg('u2'), assistantMsg('a2')]);
+			createSession('s1', [userMsg('u1'), userMsg('u2')]);
 
 			// Step 1: Revert at u1
 			dispatchRestore('s1', {
@@ -259,8 +260,8 @@ describe('chatStore revert/unrevert state', () => {
 
 	describe('multi-session isolation', () => {
 		it('revert in session A should not affect session B', () => {
-			createSession('sA', [userMsg('uA1'), assistantMsg('aA1')]);
-			createSession('sB', [userMsg('uB1'), assistantMsg('aB1')]);
+			createSession('sA', [userMsg('uA1')]);
+			createSession('sB', [userMsg('uB1')]);
 
 			dispatchRestore('sA', {
 				action: 'success',
@@ -300,7 +301,7 @@ describe('chatStore revert/unrevert state', () => {
 
 	describe('clearRevertedMessages', () => {
 		it('should remove messages after revertedFromMessageId', () => {
-			createSession('s1', [userMsg('u1'), assistantMsg('a1'), userMsg('u2'), assistantMsg('a2')]);
+			createSession('s1', [userMsg('u1'), userMsg('u2')]);
 
 			// Set revert point
 			const { actions } = useChatStore.getState();
@@ -312,18 +313,19 @@ describe('chatStore revert/unrevert state', () => {
 
 			const session = getSession('s1');
 			// Should keep messages before u2 only
-			expect(session.messages).toHaveLength(2);
-			expect(session.messages[0].id).toBe('u1');
-			expect(session.messages[1].id).toBe('a1');
+			const rendered = projectRuntimeMessages(session);
+			expect(rendered).toHaveLength(2);
+			expect(rendered[0].id).toBe('u1');
+			expect(rendered[1].id).toBe('a1');
 		});
 
 		it('should do nothing when no revertedFromMessageId', () => {
-			createSession('s1', [userMsg('u1'), assistantMsg('a1')]);
+			createSession('s1', [userMsg('u1')]);
 
 			const { actions } = useChatStore.getState();
 			actions.clearRevertedMessages('s1');
 
-			expect(getSession('s1').messages).toHaveLength(2);
+			expect(projectRuntimeMessages(getSession('s1'))).toHaveLength(2);
 		});
 
 		it('should clear revertedFromMessageId when messageId not found', () => {
@@ -343,21 +345,15 @@ describe('chatStore revert/unrevert state', () => {
 
 	describe('deleteMessagesAfterId', () => {
 		it('should keep the target message and remove everything after', () => {
-			createSession('s1', [
-				userMsg('u1'),
-				assistantMsg('a1'),
-				userMsg('u2'),
-				assistantMsg('a2'),
-				userMsg('u3'),
-				assistantMsg('a3'),
-			]);
+			createSession('s1', [userMsg('u1'), userMsg('u2'), userMsg('u3')]);
 
 			const { actions } = useChatStore.getState();
 			actions.deleteMessagesAfterId('u2', 's1');
 
 			const session = getSession('s1');
-			expect(session.messages).toHaveLength(3);
-			expect(session.messages.map(m => m.id)).toEqual(['u1', 'a1', 'u2']);
+			const rendered = projectRuntimeMessages(session);
+			expect(rendered).toHaveLength(3);
+			expect(rendered.map(m => m.id)).toEqual(['u1', 'a1', 'u2']);
 		});
 
 		it('should clear revertedFromMessageId', () => {

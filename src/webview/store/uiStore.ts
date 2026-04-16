@@ -10,7 +10,6 @@ import type {
 	ConversationIndexEntry,
 	ExtensionMessage,
 	SessionEventMessage,
-	SessionMessageData,
 	WorkspaceFile,
 } from '../../common';
 import { generateId } from '../../common';
@@ -64,7 +63,7 @@ export type NotificationSeverity = 'critical' | 'error' | 'warning' | 'info';
 
 export interface TransientNotification {
 	id: string;
-	type: SessionMessageData['type'] & ('error' | 'system_notice');
+	type: 'error' | 'system_notice';
 	content: string;
 	reason?: string;
 	severity: NotificationSeverity;
@@ -116,6 +115,34 @@ function inferSeverity(type: TransientNotification['type'], content: string): No
 		return 'warning';
 	}
 	return 'error';
+}
+
+function processNotificationEvent(evt: unknown, actions: UIActions): void {
+	const event = evt as SessionEventMessage;
+	if (event.eventType !== 'notification') return;
+	const msg = (event.payload as { notification?: unknown }).notification as
+		| {
+				type?: unknown;
+				content?: unknown;
+				reason?: unknown;
+				timestamp?: unknown;
+				id?: unknown;
+		  }
+		| undefined;
+	if (!msg) return;
+	const t = msg.type;
+	if (t === 'error' || t === 'system_notice') {
+		const content = typeof msg.content === 'string' ? msg.content : '';
+		if (!content.trim()) return;
+		actions.pushNotification({
+			id: typeof msg.id === 'string' ? msg.id : undefined,
+			type: t,
+			content,
+			reason: typeof msg.reason === 'string' ? msg.reason : undefined,
+			timestamp: typeof msg.timestamp === 'string' ? msg.timestamp : new Date().toISOString(),
+			autoDismissMs: t === 'system_notice' ? 6000 : undefined,
+		});
+	}
 }
 
 export interface UIState {
@@ -291,34 +318,7 @@ export const useUIStore = create<UIState>((set, get) => ({
 					break;
 
 				case 'session_event': {
-					const event = message as unknown as SessionEventMessage;
-					if (event.type !== 'session_event') break;
-					if (event.eventType !== 'message') break;
-					const msg = (event.payload as { eventType?: unknown; message?: unknown }).message as
-						| {
-								type?: unknown;
-								content?: unknown;
-								reason?: unknown;
-								timestamp?: unknown;
-								id?: unknown;
-						  }
-						| undefined;
-					if (!msg) break;
-					const t = msg.type;
-					// Skip 'interrupted' — user-initiated stops are not actionable notifications
-					if (t === 'error' || t === 'system_notice') {
-						const content = typeof msg.content === 'string' ? msg.content : '';
-						if (!content.trim()) break;
-						actions.pushNotification({
-							id: typeof msg.id === 'string' ? msg.id : undefined,
-							type: t,
-							content,
-							reason: typeof msg.reason === 'string' ? msg.reason : undefined,
-							timestamp:
-								typeof msg.timestamp === 'string' ? msg.timestamp : new Date().toISOString(),
-							autoDismissMs: t === 'system_notice' ? 6000 : undefined,
-						});
-					}
+					processNotificationEvent(message, actions);
 					break;
 				}
 
@@ -327,33 +327,7 @@ export const useUIStore = create<UIState>((set, get) => ({
 					const batch = message as unknown as { messages: unknown[] };
 					if (!Array.isArray(batch.messages)) break;
 					for (const evt of batch.messages) {
-						const event = evt as SessionEventMessage;
-						if (event.eventType !== 'message') continue;
-						const msg = (event.payload as { eventType?: unknown; message?: unknown }).message as
-							| {
-									type?: unknown;
-									content?: unknown;
-									reason?: unknown;
-									timestamp?: unknown;
-									id?: unknown;
-							  }
-							| undefined;
-						if (!msg) continue;
-						const t = msg.type;
-						// Skip 'interrupted' — user-initiated stops are not actionable notifications
-						if (t === 'error' || t === 'system_notice') {
-							const content = typeof msg.content === 'string' ? msg.content : '';
-							if (!content.trim()) continue;
-							actions.pushNotification({
-								id: typeof msg.id === 'string' ? msg.id : undefined,
-								type: t,
-								content,
-								reason: typeof msg.reason === 'string' ? msg.reason : undefined,
-								timestamp:
-									typeof msg.timestamp === 'string' ? msg.timestamp : new Date().toISOString(),
-								autoDismissMs: t === 'system_notice' ? 6000 : undefined,
-							});
-						}
+						processNotificationEvent(evt, actions);
 					}
 					break;
 				}

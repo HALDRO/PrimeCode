@@ -84,7 +84,7 @@ export function useChatInputController(
 
 	const storeInput = useStoreInput();
 	const {
-		setInput: setStoreInput,
+		updateSession,
 		clearRevertedMessages,
 		setImprovingPrompt,
 		clearPromptVersions,
@@ -129,10 +129,10 @@ export function useChatInputController(
 			if (isControlled && controlledOnChange) {
 				controlledOnChange(v);
 			} else {
-				setStoreInput(v);
+				updateSession({ input: v });
 			}
 		},
-		[isControlled, controlledOnChange, setStoreInput],
+		[isControlled, controlledOnChange, updateSession],
 	);
 
 	// Use reactive selector so the button re-renders immediately when agent changes.
@@ -251,7 +251,7 @@ export function useChatInputController(
 		});
 
 		clearRevertedMessages();
-		setStoreInput('');
+		updateSession({ input: '' });
 		attachments.clearAll();
 		clearPromptVersions();
 	}, [
@@ -263,7 +263,7 @@ export function useChatInputController(
 		validSessionVariant,
 		postSessionMessage,
 		clearRevertedMessages,
-		setStoreInput,
+		updateSession,
 		clearPromptVersions,
 		getSessionModel,
 		setSessionModel,
@@ -309,12 +309,12 @@ export function useChatInputController(
 	}, [inputValue, isImproving, currentImproveRequestId, postMessage, setImprovingPrompt]);
 
 	// Model display name
-	const modelDisplayName = (() => {
+	const modelDisplayName = useMemo(() => {
 		const effectiveModel = getSessionModel() ?? selectedModel;
 		if (effectiveModel === 'default') return 'Default';
 		const allProxyModels = proxyEndpoints.flatMap(ep => ep.models);
 		return resolveModelDisplayName(effectiveModel, opencodeProviders, allProxyModels);
-	})();
+	}, [getSessionModel, selectedModel, proxyEndpoints, opencodeProviders]);
 
 	return {
 		inputValue,

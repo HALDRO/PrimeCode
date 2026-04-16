@@ -8,7 +8,12 @@
 import type React from 'react';
 import { type CSSProperties, type ReactNode, useMemo } from 'react';
 import { cn } from '../../lib/cn';
-import { useModelContextWindow, useSubagentTokenTotals, useTotalStats } from '../../store';
+import {
+	useModelContextWindow,
+	useSessionContextMetrics,
+	useSubagentTokenTotals,
+	useTotalStats,
+} from '../../store';
 import { formatCost, formatDuration, formatNumber } from '../../utils/format';
 import { BotIcon, HashIcon, TagIcon, TimerIcon, TokensIcon } from '../icons';
 import { Tooltip } from './Tooltip';
@@ -108,12 +113,14 @@ export const SessionStatsDisplay: React.FC<{
 	const totalStats = useTotalStats();
 	const contextLimit = useModelContextWindow();
 	const subagentTokensTotal = useSubagentTokenTotals();
+	const sessionMetrics = useSessionContextMetrics();
 
 	const items = useMemo<StatItem[]>(() => {
 		// Context window usage: total tokens (input + output) from CLI
-		const windowUsed = totalStats.totalTokens ?? 0;
-		const inputTokens = totalStats.contextTokens ?? 0;
-		const cacheRead = totalStats.cacheReadTokens ?? 0;
+		const context = sessionMetrics.context;
+		const windowUsed = context?.total ?? 0;
+		const inputTokens = context?.input ?? 0;
+		const cacheRead = context?.cacheRead ?? 0;
 		const percentage = Math.min((windowUsed / contextLimit) * 100, 100);
 
 		const tokenParts = [`${formatNumber(windowUsed)} / ${formatNumber(contextLimit)}`];
@@ -147,11 +154,11 @@ export const SessionStatsDisplay: React.FC<{
 			});
 		}
 
-		if (totalStats.totalCost > 0) {
+		if (sessionMetrics.totalCost > 0) {
 			result.push({
 				key: 'cost',
 				icon: <TagIcon size={11} />,
-				value: formatCost(totalStats.totalCost),
+				value: formatCost(sessionMetrics.totalCost),
 				tooltip: 'Total cost',
 			});
 		}
@@ -184,7 +191,7 @@ export const SessionStatsDisplay: React.FC<{
 		}
 
 		return result;
-	}, [totalStats, contextLimit, subagentTokensTotal]);
+	}, [totalStats, contextLimit, subagentTokensTotal, sessionMetrics]);
 
 	return (
 		<StatsDisplay

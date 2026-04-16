@@ -9,31 +9,21 @@
 import type React from 'react';
 import { isToolMatch } from '../../constants';
 import { useAccessResponse } from '../../hooks/useAccessResponse';
-import type { Message } from '../../store';
+import { useAccessRequestByToolUseId } from '../../store';
 import { Button, GlowDot } from '../ui';
 
 interface AccessRequestMessageProps {
-	message: Extract<Message, { type: 'access_request' }>;
+	toolUseId: string;
 }
 
-export const AccessRequestMessage: React.FC<AccessRequestMessageProps> = ({ message }) => {
-	const { requestId, tool, pattern, input, resolved, approved, id } = message;
+export const AccessRequestMessage: React.FC<AccessRequestMessageProps> = ({ toolUseId }) => {
+	const message = useAccessRequestByToolUseId(toolUseId);
+	const requestId = message?.requestId ?? '';
+	const tool = message?.tool ?? '';
+	const id = message?.id;
 	const handleResponse = useAccessResponse({ requestId, tool, messageId: id });
-
-	if (resolved) {
-		const dotColor = approved ? 'var(--color-success)' : 'var(--color-error)';
-		const dotGlow = approved ? 'var(--glow-success)' : 'var(--glow-error)';
-
-		return (
-			<div className="flex items-center gap-1.5 mb-0-5 py-px ml-0.5">
-				<GlowDot color={dotColor} glow={dotGlow} />
-				<span className="text-sm leading-none" style={{ color: dotColor }}>
-					{approved ? 'Approved' : 'Denied'}
-				</span>
-				<span className="text-sm leading-none text-vscode-foreground opacity-70">{tool}</span>
-			</div>
-		);
-	}
+	if (!message) return null;
+	const { pattern, input } = message;
 
 	return (
 		<div className="mb-(--tool-block-margin)">

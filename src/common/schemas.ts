@@ -563,7 +563,6 @@ export const ConversationMessageSchema = Type.Union([
 		contextId: Type.Optional(Type.String()),
 		result: Type.Optional(Type.String()),
 		messageID: Type.Optional(Type.String()),
-		transcript: Type.Optional(Type.Array(Type.Any())),
 		startTime: Type.Optional(Type.String()),
 		durationMs: Type.Optional(Type.Number()),
 		childTokens: Type.Optional(
@@ -618,7 +617,6 @@ export const SubtaskMessageSchema = Type.Object({
 	contextId: Type.Optional(Type.String()),
 	result: Type.Optional(Type.String()),
 	messageID: Type.Optional(Type.String()),
-	transcript: Type.Optional(Type.Array(ConversationMessageSchema)),
 	startTime: Type.Optional(Type.String()),
 	durationMs: Type.Optional(Type.Number()),
 	childTokens: Type.Optional(

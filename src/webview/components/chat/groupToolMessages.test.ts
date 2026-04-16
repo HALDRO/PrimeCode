@@ -7,56 +7,75 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { Message } from '../../store/chatStore';
+import type { RenderMessage } from '../../store';
+
+type Message = RenderMessage;
+
 import { groupToolMessages, precomputeCollapseFlags } from './toolGrouping';
 
 // --- Helpers ---
 
-const toolUse = (id: string, toolName = 'read'): Message =>
+const toolUse = (id: string, toolName = 'read'): RenderMessage =>
 	({
+		kind: 'tool_use',
 		type: 'tool_use',
 		id,
 		timestamp: new Date().toISOString(),
 		toolName,
 		toolUseId: `tu-${id}`,
-	}) as Message;
+		toolInput: '{}',
+		rawInput: {},
+	}) as RenderMessage;
 
-const toolResult = (id: string, toolUseId: string, toolName = 'read'): Message =>
+const toolResult = (id: string, toolUseId: string, toolName = 'read'): RenderMessage =>
 	({
-		type: 'tool_result',
+		kind: 'tool_use',
+		type: 'tool_use',
 		id,
 		timestamp: new Date().toISOString(),
 		toolName,
 		toolUseId,
-	}) as Message;
+		toolInput: '{}',
+		rawInput: {},
+		resultContent: 'done',
+		status: 'completed',
+	}) as RenderMessage;
 
-const assistant = (id: string, content = 'Let me continue...'): Message =>
+const assistant = (id: string, content = 'Let me continue...'): RenderMessage =>
 	({
+		kind: 'assistant',
 		type: 'assistant',
 		id,
 		timestamp: new Date().toISOString(),
 		content,
-	}) as Message;
+		partId: id,
+	}) as RenderMessage;
 
-const thinking = (id: string, content = 'Thinking...'): Message =>
+const thinking = (id: string, content = 'Thinking...'): RenderMessage =>
 	({
+		kind: 'thinking',
 		type: 'thinking',
 		id,
 		timestamp: new Date().toISOString(),
 		content,
-	}) as Message;
+		partId: id,
+	}) as RenderMessage;
 
-const heavyTool = (id: string, toolName = 'bash'): Message =>
+const heavyTool = (id: string, toolName = 'bash'): RenderMessage =>
 	({
+		kind: 'tool_use',
 		type: 'tool_use',
 		id,
 		timestamp: new Date().toISOString(),
 		toolName,
 		toolUseId: `tu-${id}`,
-	}) as Message;
+		toolInput: '{}',
+		rawInput: {},
+	}) as RenderMessage;
 
-const subtask = (id: string): Message =>
+const subtask = (id: string): RenderMessage =>
 	({
+		kind: 'subtask',
 		type: 'subtask',
 		id,
 		timestamp: new Date().toISOString(),
@@ -64,8 +83,8 @@ const subtask = (id: string): Message =>
 		prompt: 'Analyze the codebase',
 		description: 'Find and analyze components',
 		status: 'running',
-		transcript: [],
-	}) as unknown as Message;
+		message: undefined as never,
+	}) as unknown as RenderMessage;
 
 const NO_MCP: string[] = [];
 

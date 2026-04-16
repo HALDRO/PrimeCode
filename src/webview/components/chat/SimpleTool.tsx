@@ -178,13 +178,24 @@ export const ThinkingMessage = React.memo<ThinkingMessageProps>(
 		);
 		const [expanded, setExpanded] = useState(defaultExpanded ?? isStreaming ?? false);
 		const wasStreamingRef = useRef(isStreaming);
+		const autoExpandedRef = useRef(Boolean(defaultExpanded ?? isStreaming));
 		const liveElapsed = useElapsedTimer(isStreaming ?? false, startTime);
 
 		useEffect(() => {
 			if (isStreaming) {
 				setExpanded(true);
+				autoExpandedRef.current = true;
 			} else if (wasStreamingRef.current && !isStreaming) {
+				if (autoExpandedRef.current) {
+					setExpanded(false);
+				}
+				autoExpandedRef.current = false;
+			} else if (!isStreaming) {
+				// On restore/replay the component can mount or be reused in an expanded
+				// state without seeing a clean streaming->idle transition. Thinking blocks
+				// should default to collapsed whenever they are not actively streaming.
 				setExpanded(false);
+				autoExpandedRef.current = false;
 			}
 			wasStreamingRef.current = isStreaming;
 		}, [isStreaming]);
@@ -216,7 +227,10 @@ export const ThinkingMessage = React.memo<ThinkingMessageProps>(
 				label="Thinking"
 				meta={combinedMeta}
 				expanded={expanded}
-				onToggle={() => setExpanded(prev => !prev)}
+				onToggle={() => {
+					autoExpandedRef.current = false;
+					setExpanded(prev => !prev);
+				}}
 				className="mb-(--message-gap)"
 			>
 				{content && (
@@ -237,6 +251,7 @@ ThinkingMessage.displayName = 'ThinkingMessage';
 // -----------------------------------------------------------------------------
 
 export {
+	type GroupedResponseItem,
 	groupToolMessages,
 	precomputeCollapseFlags,
 	shouldCollapseGroupedItem,
@@ -276,6 +291,12 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 	}) => {
 		const { postMessage } = useVSCode();
 		const toolLower = toolName.toLowerCase();
+		const action =
+			normalizedEntry?.entryType &&
+			typeof normalizedEntry.entryType === 'object' &&
+			'actionType' in normalizedEntry.entryType
+				? normalizedEntry.entryType.actionType
+				: null;
 
 		const {
 			label,
@@ -290,30 +311,25 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 			readOffset,
 			readLimit,
 		} = useMemo(() => {
-			const action =
-				normalizedEntry?.entryType &&
-				typeof normalizedEntry.entryType === 'object' &&
-				'actionType' in normalizedEntry.entryType
-					? normalizedEntry.entryType.actionType
-					: null;
-
 			const isLs =
 				toolLower === 'list' ||
 				toolLower === 'ls' ||
 				toolLower === 'list_dir' ||
 				toolLower === 'serena_list_dir';
-			const isRead = action?.type === 'FileRead' || toolLower.includes('read');
+			const isRead = action?.type === 'FileRead' || (!action && toolLower.includes('read'));
 			const isTodo = action?.type === 'TodoManagement' || toolLower === 'todowrite';
 			const isTaskResult = action?.type === 'TaskResult';
-			const isSkill = toolLower === 'skill';
+			const isSkill =
+				toolLower === 'skill' || (action?.type === 'Tool' && action.toolName === 'skill');
 			const isSearch =
 				action?.type === 'Search' ||
 				action?.type === 'WebSearch' ||
 				action?.type === 'CodeSearch' ||
-				toolLower === 'grep' ||
-				toolLower === 'glob' ||
-				toolLower === 'websearch' ||
-				toolLower === 'codesearch';
+				(!action &&
+					(toolLower === 'grep' ||
+						toolLower === 'glob' ||
+						toolLower === 'websearch' ||
+						toolLower === 'codesearch'));
 
 			let label = formatToolName(toolName);
 			let meta = '';
@@ -350,14 +366,14 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 					meta = action.description;
 				} else if (action.type === 'TodoManagement') {
 					label = 'Todo';
-				} else if (isSkill) {
+				} else if (action.type === 'Tool' && action.toolName === 'skill') {
 					const args =
 						'arguments' in action && typeof action.arguments === 'object'
 							? (action.arguments as Record<string, unknown>)
 							: null;
 					const skillName = (args?.name as string) || (rawInput as { name?: string })?.name;
 					label = skillName ? `Skill: ${skillName}` : 'Skill';
-				} else if (isLs) {
+				} else if (action.type === 'Tool' && action.toolName === 'list') {
 					label = 'Listed';
 					const args =
 						'arguments' in action && typeof action.arguments === 'object'
@@ -414,7 +430,7 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 				readOffset,
 				readLimit,
 			};
-		}, [normalizedEntry, rawInput, toolLower, toolName]);
+		}, [action, rawInput, toolLower, toolName]);
 
 		const metaNode = useMemo(() => {
 			if (!meta) return undefined;
@@ -455,19 +471,10 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 		}, [isListDir, isRead, meta, metaDisplay, postMessage]);
 
 		// For TaskResult, prefer the result text from the actionType over the raw content prop
-		const taskResultText = useMemo(() => {
-			if (!isTaskResult) return '';
-			const entry = normalizedEntry;
-			if (
-				entry?.entryType &&
-				typeof entry.entryType === 'object' &&
-				'actionType' in entry.entryType &&
-				entry.entryType.actionType.type === 'TaskResult'
-			) {
-				return entry.entryType.actionType.result || '';
-			}
-			return '';
-		}, [isTaskResult, normalizedEntry]);
+		const taskResultText = useMemo(
+			() => (isTaskResult && action?.type === 'TaskResult' ? action.result || '' : ''),
+			[action, isTaskResult],
+		);
 
 		const fullText = isTaskResult ? taskResultText || content || '' : content || '';
 
@@ -509,19 +516,12 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 
 		const todos = useMemo((): Array<{ content: string; status: string }> => {
 			if (!isTodoWrite) return [];
-			if (
-				normalizedEntry?.entryType &&
-				typeof normalizedEntry.entryType === 'object' &&
-				'actionType' in normalizedEntry.entryType
-			) {
-				const action = normalizedEntry.entryType.actionType;
-				if (action.type === 'TodoManagement') return action.todos;
-			}
+			if (action?.type === 'TodoManagement') return action.todos;
 			const rawTodos = (rawInput as { todos?: unknown } | undefined)?.todos;
 			return Array.isArray(rawTodos)
 				? (rawTodos as Array<{ content: string; status: string }>)
 				: [];
-		}, [isTodoWrite, normalizedEntry, rawInput]);
+		}, [action, isTodoWrite, rawInput]);
 
 		const completedCount = todos.filter(t => t.status === 'completed').length;
 		const totalCount = todos.length;

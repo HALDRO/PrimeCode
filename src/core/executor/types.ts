@@ -182,6 +182,70 @@ export interface SessionDiffEventData {
 	diff: SessionDiffFileDiff[];
 }
 
+export interface MessageRecordEventData {
+	id: string;
+	sessionID: string;
+	role: 'user' | 'assistant';
+	parentID?: string;
+	createdAt?: number;
+	completedAt?: number;
+	modelID?: string;
+	providerID?: string;
+	agent?: string;
+	tokens?: {
+		input: number;
+		output: number;
+		reasoning?: number;
+		cacheRead?: number;
+		cacheWrite?: number;
+		total?: number;
+	};
+	cost?: number;
+}
+
+export interface MessageRecordRemovedEventData {
+	messageID: string;
+	sessionID: string;
+}
+
+export interface MessagePartEventData {
+	id: string;
+	messageID: string;
+	sessionID: string;
+	type: 'text' | 'reasoning' | 'tool' | 'file' | 'compaction' | 'other';
+	text?: string;
+	callID?: string;
+	tool?: string;
+	state?: {
+		status?: 'pending' | 'running' | 'completed' | 'error';
+		input?: unknown;
+		output?: string;
+		title?: string;
+		metadata?: unknown;
+	};
+	createdAt?: number;
+	completedAt?: number;
+	mime?: string;
+	url?: string;
+	filename?: string;
+	synthetic?: boolean;
+	auto?: boolean;
+}
+
+export interface MessagePartDeltaEventData {
+	messageID: string;
+	partID: string;
+	field: string;
+	delta: string;
+	sessionID: string;
+}
+
+export interface MessagePartRemovedEventData {
+	messageID: string;
+	partID: string;
+	sessionID: string;
+}
+
 export interface SessionCreatedEventData {
 	sessionID: string;
 	parentID?: string;
@@ -209,8 +273,6 @@ export interface NormalizedLogEventData {
 // -- Discriminated union variants ---------------------------------------------
 
 export type CLIEvent =
-	| (CLIEventBase & { type: 'message'; data: MessageEventData })
-	| (CLIEventBase & { type: 'thinking'; data: ThinkingEventData })
 	| (CLIEventBase & { type: 'tool_use'; data: ToolUseEventData })
 	| (CLIEventBase & { type: 'tool_result'; data: ToolResultEventData })
 	| (CLIEventBase & { type: 'tool_streaming'; data: ToolStreamingEventData })
@@ -226,6 +288,11 @@ export type CLIEvent =
 	| (CLIEventBase & { type: 'session_created'; data: SessionCreatedEventData })
 	| (CLIEventBase & { type: 'turn_tokens'; data: TurnTokensEventData })
 	| (CLIEventBase & { type: 'normalized_log'; data: NormalizedLogEventData })
+	| (CLIEventBase & { type: 'message_record'; data: MessageRecordEventData })
+	| (CLIEventBase & { type: 'message_record_removed'; data: MessageRecordRemovedEventData })
+	| (CLIEventBase & { type: 'message_part'; data: MessagePartEventData })
+	| (CLIEventBase & { type: 'message_part_delta'; data: MessagePartDeltaEventData })
+	| (CLIEventBase & { type: 'message_part_removed'; data: MessagePartRemovedEventData })
 	| (CLIEventBase & { type: 'session_diff'; data: SessionDiffEventData });
 
 export interface CLIExecutor extends EventEmitter {

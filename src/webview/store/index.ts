@@ -7,7 +7,19 @@
 // Base stores (use sparingly - prefer selectors)
 export {
 	type ChatSession,
-	type Message,
+	type RenderAssistantMessage,
+	type RenderMessage,
+	type RenderSubtaskMessage,
+	type RenderThinkingMessage,
+	type RenderToolUseMessage,
+	type RenderUserMessage,
+	type RuntimeMessagePart,
+	type RuntimeMessageRecord,
+	type StoredMessage,
+	type SubtaskMessage,
+	type TokenUsage,
+	type ToolResultView,
+	type UserMessage,
 	useChatStore,
 } from './chatStore';
 // Optimized selectors (preferred)

@@ -6,8 +6,39 @@
  *              so the frontend components stay dumb renderers.
  */
 
-import { groupToolMessages } from '../components/chat/SimpleTool';
-import type { ChangedFile, Message } from '../store';
+import { type GroupedResponseItem, groupToolMessages } from '../components/chat/SimpleTool';
+import type { ChangedFile, RenderMessage, RenderUserMessage, TokenUsage } from '../store';
+
+function groupRenderResponses(
+	responses: RenderMessage[],
+	mcpServerNames: string[],
+	isProcessing = false,
+): GroupedResponseItem[] {
+	const grouped: GroupedResponseItem[] = [];
+	let toolBuffer: RenderMessage[] = [];
+
+	const flushTools = () => {
+		if (toolBuffer.length === 0) return;
+		grouped.push(
+			...(groupToolMessages(toolBuffer, mcpServerNames, isProcessing) as
+				| RenderMessage[]
+				| RenderMessage[][]),
+		);
+		toolBuffer = [];
+	};
+
+	for (const response of responses) {
+		if (response.kind === 'tool_use') {
+			toolBuffer.push(response);
+			continue;
+		}
+		flushTools();
+		grouped.push(response);
+	}
+
+	flushTools();
+	return grouped;
+}
 
 /** Pre-computed stats for a section — eliminates O(n) scans in UserMessage */
 export interface SectionStats {
@@ -29,8 +60,8 @@ export interface SectionStats {
  * Section represents a user message and all subsequent messages until the next user message.
  */
 export interface MessageSection {
-	userMessage: Message & { type: 'user' };
-	responses: (Message | Message[])[];
+	userMessage: RenderUserMessage;
+	responses: GroupedResponseItem[];
 	sectionIndex: number;
 	/** True when this section is at or after the revert point — responses should be dimmed */
 	isReverted: boolean;
@@ -51,14 +82,11 @@ export interface MessageSection {
  * components receive them as props and don't need to scan the store themselves.
  */
 export const groupMessagesIntoSections = (
-	msgs: Message[],
+	msgs: RenderMessage[],
 	mcpServerNames: string[],
 	revertedFromMessageId: string | null,
 	changedFiles: ChangedFile[] = [],
-	turnTokens: Record<
-		string,
-		{ input: number; output: number; total: number; cacheRead: number; durationMs?: number }
-	> = {},
+	turnTokens: Record<string, TokenUsage> = {},
 	isProcessing = false,
 	_cumulativeDiffs: Array<{
 		file: string;
@@ -71,7 +99,7 @@ export const groupMessagesIntoSections = (
 	// Collect sections with their raw (ungrouped) responses
 	const sections: MessageSection[] = [];
 	let currentSection: MessageSection | null = null;
-	let currentResponses: Message[] = [];
+	let currentResponses: RenderMessage[] = [];
 	let sectionIndex = 0;
 	let pastRevertPoint = false;
 
@@ -99,12 +127,12 @@ export const groupMessagesIntoSections = (
 	// messages, assistant messages from fast responses, error messages). These are
 	// stored as "orphan" responses and will be attached to the first user section
 	// so they are never silently dropped.
-	const orphanedMessages: Message[] = [];
+	const orphanedMessages: RenderMessage[] = [];
 
 	for (const msg of visibleMsgs) {
-		if (msg.type === 'user') {
+		if (msg.kind === 'user') {
 			if (currentSection) {
-				currentSection.responses = groupToolMessages(currentResponses, mcpServerNames);
+				currentSection.responses = groupRenderResponses(currentResponses, mcpServerNames);
 				currentSection.stats = computeSectionStats(
 					currentSection,
 					currentResponses,
@@ -120,7 +148,7 @@ export const groupMessagesIntoSections = (
 			if (isThisRevertPoint) pastRevertPoint = true;
 
 			currentSection = {
-				userMessage: msg as Message & { type: 'user' },
+				userMessage: msg as RenderUserMessage,
 				responses: [],
 				sectionIndex: sectionIndex++,
 				isReverted: pastRevertPoint,
@@ -142,7 +170,7 @@ export const groupMessagesIntoSections = (
 	}
 
 	if (currentSection) {
-		currentSection.responses = groupToolMessages(currentResponses, mcpServerNames, isProcessing);
+		currentSection.responses = groupRenderResponses(currentResponses, mcpServerNames, isProcessing);
 		currentSection.stats = computeSectionStats(
 			currentSection,
 			currentResponses,
@@ -177,16 +205,13 @@ export const groupMessagesIntoSections = (
 	return sections;
 };
 
-/** Compute stats for a single section from its raw (flat) responses */
+/** Compute stats for a single section from its raw responses */
 function computeSectionStats(
 	section: MessageSection,
-	rawResponses: Message[],
-	_changedFilesMap: Map<string, ChangedFile[]>,
+	rawResponses: RenderMessage[],
+	changedFilesMap: Map<string, ChangedFile[]>,
 	isLast: boolean,
-	turnTokens: Record<
-		string,
-		{ input: number; output: number; total: number; cacheRead: number; durationMs?: number }
-	> = {},
+	turnTokens: Record<string, TokenUsage> = {},
 ): SectionStats {
 	const userTs = new Date(section.userMessage.timestamp).getTime();
 
@@ -202,11 +227,7 @@ function computeSectionStats(
 	// File changes: use userMessage.summary.diffs from OpenCode history.
 	// This matches the official OpenCode UI for turn-level change summaries.
 	let fileChanges: SectionStats['fileChanges'] = null;
-	const summaryDiffs = (
-		section.userMessage as Message & {
-			summary?: { diffs?: Array<{ file: string; additions: number; deletions: number }> };
-		}
-	).summary?.diffs;
+	const summaryDiffs = section.userMessage.summary?.diffs;
 
 	if (Array.isArray(summaryDiffs) && summaryDiffs.length > 0) {
 		let added = 0;
@@ -222,14 +243,32 @@ function computeSectionStats(
 		if (added > 0 || removed > 0) {
 			fileChanges = { added, removed, files: files.size };
 		}
+	} else {
+		let added = 0;
+		let removed = 0;
+		let files = 0;
+		for (const response of rawResponses) {
+			if (response.kind !== 'tool_use') continue;
+			const changed = changedFilesMap.get(response.toolUseId);
+			if (!changed?.length) continue;
+			files += changed.length;
+			for (const file of changed) {
+				added += file.linesAdded;
+				removed += file.linesRemoved;
+			}
+		}
+		if (added > 0 || removed > 0 || files > 0) {
+			fileChanges = { added, removed, files };
+		}
 	}
 
 	// Token count: only use real per-turn data from the backend. No fallback/heuristic.
 	let tokenCount: number | null = null;
 	const userMsgId = section.userMessage.id;
 	const realTokens = userMsgId ? turnTokens[userMsgId] : undefined;
-	if (realTokens && realTokens.total > 0) {
-		tokenCount = realTokens.total;
+	const totalTokens = realTokens?.total;
+	if (typeof totalTokens === 'number' && totalTokens > 0) {
+		tokenCount = totalTokens;
 	}
 
 	// Duration: prefer real per-turn data from the backend

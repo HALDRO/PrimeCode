@@ -1,12 +1,12 @@
 /**
  * @file toolGrouping — pure logic for grouping consecutive lightweight tool messages
  * @description Extracted from SimpleTool.tsx to separate pure grouping logic from UI components.
- * This module has no React dependencies — it operates on Message arrays only.
+ * This module has no React dependencies — it operates on derived render message arrays only.
  */
 
 import type { NormalizedEntry } from '../../../common/normalizedTypes';
 import { isMcpTool, isNonGroupableTool } from '../../constants';
-import type { Message } from '../../store/chatStore';
+import type { RenderMessage } from '../../store';
 
 // -----------------------------------------------------------------------------
 // Constants
@@ -29,7 +29,7 @@ const MAX_BRIDGE_MESSAGE_LENGTH = 200;
  * and survives array recreation across render cycles, eliminating the
  * expand→collapse→expand flickering caused by lost object identity.
  */
-export interface ToolGroup extends Array<Message> {
+export interface ToolGroup extends Array<RenderMessage> {
 	isLive?: boolean;
 }
 
@@ -37,18 +37,9 @@ export interface ToolGroup extends Array<Message> {
 // Internal helpers
 // -----------------------------------------------------------------------------
 
-const isGroupableTool = (msg: Message, mcpServerNames: string[]): boolean => {
-	if (msg.type !== 'tool_use' && msg.type !== 'tool_result') {
+const isGroupableTool = (msg: RenderMessage, mcpServerNames: string[]): boolean => {
+	if (msg.kind !== 'tool_use') {
 		return false;
-	}
-
-	// tool_result is always groupable: it renders inside its paired ToolCard and
-	// carries no visual weight on its own.  During live streaming, parallel tools
-	// from one CLI step arrive as all tool_use first, then all tool_result.  A
-	// tool_result from a non-groupable tool (e.g. bash) can land between groupable
-	// tool_use messages — treating it as a hard boundary would split the group.
-	if (msg.type === 'tool_result') {
-		return true;
 	}
 
 	const toolName = msg.toolName || '';
@@ -60,13 +51,13 @@ const isGroupableTool = (msg: Message, mcpServerNames: string[]): boolean => {
 	return !isNonGroupableTool(toolName);
 };
 
-const getToolUseCount = (msgs: Message[]): number =>
-	msgs.reduce((count, msg) => count + (msg.type === 'tool_use' ? 1 : 0), 0);
+const getToolUseCount = (msgs: RenderMessage[]): number =>
+	msgs.reduce((count, msg) => count + (msg.kind === 'tool_use' ? 1 : 0), 0);
 
 /** Whether a message can act as a bridge between two tool groups */
-export const isBridgeMessage = (msg: Message): boolean => {
-	if (msg.type === 'thinking') return true;
-	if (msg.type === 'assistant') {
+export const isBridgeMessage = (msg: RenderMessage): boolean => {
+	if (msg.kind === 'thinking') return true;
+	if (msg.kind === 'assistant') {
 		const content = (msg as { content?: string }).content || '';
 		return content.length <= MAX_BRIDGE_MESSAGE_LENGTH;
 	}
@@ -78,8 +69,8 @@ export const isBridgeMessage = (msg: Message): boolean => {
  * Returns the stripped messages so they can be emitted after the group.
  * Bridge messages in the middle of a group (between tool sequences) stay put.
  */
-const stripTrailingBridges = (group: Message[]): Message[] => {
-	const stripped: Message[] = [];
+const stripTrailingBridges = (group: RenderMessage[]): RenderMessage[] => {
+	const stripped: RenderMessage[] = [];
 	while (group.length > 0 && isBridgeMessage(group[group.length - 1])) {
 		const msg = group.pop();
 		if (msg) stripped.unshift(msg);
@@ -105,12 +96,12 @@ const stripTrailingBridges = (group: Message[]): Message[] => {
  * preview mode in SimpleToolGroup.
  */
 export const groupToolMessages = (
-	msgs: Message[],
+	msgs: RenderMessage[],
 	mcpServerNames: string[],
 	isStreaming = false,
-): (Message | Message[])[] => {
-	const result: (Message | Message[])[] = [];
-	let currentToolGroup: Message[] = [];
+): (RenderMessage | RenderMessage[])[] => {
+	const result: (RenderMessage | RenderMessage[])[] = [];
+	let currentToolGroup: RenderMessage[] = [];
 
 	const flushGroup = (reason: 'boundary' | 'final') => {
 		if (currentToolGroup.length === 0) return;
@@ -164,16 +155,16 @@ export const groupToolMessages = (
 // Collapse helpers
 // -----------------------------------------------------------------------------
 
-const shouldTriggerCollapse = (msg: Message): boolean => {
-	if (msg.type === 'assistant' || msg.type === 'thinking') {
+const shouldTriggerCollapse = (msg: RenderMessage): boolean => {
+	if (msg.kind === 'assistant' || msg.kind === 'thinking') {
 		return true;
 	}
 
-	if (msg.type === 'subtask') {
+	if (msg.kind === 'subtask') {
 		return true;
 	}
 
-	if (msg.type === 'tool_use') {
+	if (msg.kind === 'tool_use') {
 		const toolName = msg.toolName || '';
 		if (isNonGroupableTool(toolName)) return true;
 		// TaskResult (via normalizedEntry) should also trigger collapse
@@ -191,7 +182,7 @@ const shouldTriggerCollapse = (msg: Message): boolean => {
 	return false;
 };
 
-type GroupedResponseItem = Message | Message[];
+export type GroupedResponseItem = RenderMessage | RenderMessage[];
 
 const itemTriggersCollapse = (item: GroupedResponseItem): boolean => {
 	if (Array.isArray(item)) {

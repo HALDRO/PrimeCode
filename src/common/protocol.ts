@@ -43,7 +43,11 @@ interface BaseExtensionMessage<T extends string, D = undefined> {
 // =============================================================================
 
 export type SessionEventType =
-	| 'message'
+	| 'message_record'
+	| 'message_record_removed'
+	| 'message_part'
+	| 'message_part_delta'
+	| 'message_part_removed'
 	| 'status'
 	| 'stats'
 	| 'complete'
@@ -57,151 +61,15 @@ export type SessionEventType =
 	| 'auth'
 	| 'terminal'
 	| 'turn_tokens'
-	| 'subtask_transcript'
 	| 'file_diff'
 	| 'todo'
 	| 'permission'
+	| 'user_message'
+	| 'subtask'
+	| 'notification'
 	| 'question';
 
 export type SessionStatus = 'idle' | 'busy' | 'error' | 'retrying';
-
-export type SessionMessageType =
-	| 'user'
-	| 'assistant'
-	| 'thinking'
-	| 'tool_use'
-	| 'tool_result'
-	| 'error'
-	| 'subtask'
-	| 'access_request'
-	| 'system_notice'
-	| 'interrupted'
-	| 'question';
-
-// =============================================================================
-// SessionMessageData — Discriminated Union by `type`
-// =============================================================================
-
-/** Common fields shared by all session message variants. */
-interface SessionMessageBase {
-	id: string;
-	timestamp?: string;
-	normalizedEntry?: import('./normalizedTypes').NormalizedEntry;
-}
-
-export interface UserMessageData extends SessionMessageBase {
-	type: 'user';
-	content: string;
-	model?: string;
-	/** The agent requested for this user turn (e.g. 'plan', 'build'). */
-	agent?: string;
-	summary?: {
-		title?: string;
-		diffs?: Array<{
-			file: string;
-			before?: string;
-			after?: string;
-			additions: number;
-			deletions: number;
-			status?: 'added' | 'deleted' | 'modified';
-		}>;
-	};
-	attachments?: {
-		files?: string[];
-		codeSnippets?: Array<{
-			filePath: string;
-			content: string;
-			startLine?: number;
-			endLine?: number;
-		}>;
-		images?: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
-	};
-}
-
-export interface AssistantMessageData extends SessionMessageBase {
-	type: 'assistant';
-	content: string;
-	partId?: string;
-	hidden?: boolean;
-	contextId?: string;
-	isStreaming?: boolean;
-	isDelta?: boolean;
-	/** The agent that produced this response (e.g. 'build', 'plan'). */
-	agent?: string;
-}
-
-export interface ThinkingMessageData extends SessionMessageBase {
-	type: 'thinking';
-	content?: string;
-	partId?: string;
-	reasoningTokens?: number;
-	startTime?: string | number;
-	durationMs?: number;
-	isStreaming?: boolean;
-	isDelta?: boolean;
-	hidden?: boolean;
-}
-
-export interface ToolUseMessageData extends SessionMessageBase {
-	type: 'tool_use';
-	toolName: string;
-	toolUseId: string;
-	partId?: string;
-	toolInput?: string;
-	rawInput?: Record<string, unknown>;
-	filePath?: string;
-	streamingOutput?: string;
-	isRunning?: boolean;
-	hidden?: boolean;
-	metadata?: Record<string, unknown>;
-	contextId?: string;
-}
-
-export interface ToolResultMessageData extends SessionMessageBase {
-	type: 'tool_result';
-	toolName: string;
-	toolUseId: string;
-	content: string;
-	isError: boolean;
-	partId?: string;
-	estimatedTokens?: number;
-	hidden?: boolean;
-	title?: string;
-	durationMs?: number;
-	attachments?: Array<{
-		id: string;
-		mime: string;
-		filename?: string;
-		url?: string;
-	}>;
-	metadata?: Record<string, unknown>;
-	contextId?: string;
-}
-
-export interface ErrorMessageData extends SessionMessageBase {
-	type: 'error';
-	content: string;
-	isError?: boolean;
-}
-
-export interface InterruptedMessageData extends SessionMessageBase {
-	type: 'interrupted';
-	content: string;
-	reason?: string;
-}
-
-export interface AccessRequestMessageData extends SessionMessageBase {
-	type: 'access_request';
-	requestId: string;
-	tool: string | { messageID: string; callID: string };
-	input: Record<string, unknown>;
-	pattern?: string;
-	toolUseId?: string;
-	resolved?: boolean;
-	approved?: boolean;
-	metadata?: Record<string, unknown>;
-	childSessionId?: string;
-}
 
 export interface SubtaskRetryInfo {
 	attempt: number;
@@ -209,91 +77,158 @@ export interface SubtaskRetryInfo {
 	nextRetryAt?: string;
 }
 
-export interface SubtaskMessageData extends SessionMessageBase {
-	type: 'subtask';
-	agent: string;
-	prompt: string;
-	description: string;
-	parentSessionId?: string;
-	childSessionId?: string;
-	command?: string;
-	status: 'running' | 'completed' | 'error' | 'cancelled';
-	partId?: string;
-	toolUseId?: string;
-	toolName?: string;
-	toolInput?: string;
-	rawInput?: Record<string, unknown>;
-	isRunning?: boolean;
-	isError?: boolean;
-	content?: string;
-	contextId?: string;
-	result?: string;
-	messageID?: string;
-	startTime?: string | number;
-	durationMs?: number;
-	transcript?: import('./schemas').ConversationMessage[];
-	childTokens?: {
-		input: number;
-		output: number;
-		total: number;
-		cacheRead?: number;
-		durationMs?: number;
+export interface SessionUserMessagePayload {
+	eventType: 'user_message';
+	message: {
+		id: string;
+		timestamp?: string;
+		content: string;
+		model?: string;
+		agent?: string;
+		summary?: {
+			title?: string;
+			diffs?: Array<{
+				file: string;
+				before?: string;
+				after?: string;
+				additions: number;
+				deletions: number;
+				status?: 'added' | 'deleted' | 'modified';
+			}>;
+		};
+		attachments?: {
+			files?: string[];
+			codeSnippets?: Array<{
+				filePath: string;
+				content: string;
+				startLine?: number;
+				endLine?: number;
+			}>;
+			images?: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
+		};
+		normalizedEntry?: import('./normalizedTypes').NormalizedEntry;
 	};
-	childModelId?: string;
-	retryInfo?: SubtaskRetryInfo;
 }
 
-export interface SystemNoticeMessageData extends SessionMessageBase {
-	type: 'system_notice';
-	content: string;
+export interface SessionSubtaskPayload {
+	eventType: 'subtask';
+	subtask: {
+		id: string;
+		timestamp?: string;
+		agent: string;
+		prompt: string;
+		description: string;
+		parentSessionId?: string;
+		childSessionId?: string;
+		command?: string;
+		status: 'running' | 'completed' | 'error' | 'cancelled';
+		partId?: string;
+		toolUseId?: string;
+		toolName?: string;
+		toolInput?: string;
+		rawInput?: Record<string, unknown>;
+		isRunning?: boolean;
+		isError?: boolean;
+		content?: string;
+		contextId?: string;
+		result?: string;
+		messageID?: string;
+		startTime?: string | number;
+		durationMs?: number;
+		childTokens?: {
+			input: number;
+			output: number;
+			total: number;
+			cacheRead?: number;
+			durationMs?: number;
+		};
+		childModelId?: string;
+		retryInfo?: SubtaskRetryInfo;
+		normalizedEntry?: import('./normalizedTypes').NormalizedEntry;
+	};
 }
 
-export interface QuestionMessageData extends SessionMessageBase {
-	type: 'question';
-	requestId: string;
-	questions: QuestionInfo[];
-	tool?: string | { messageID: string; callID: string };
-	toolUseId?: string;
-	childSessionId?: string;
-	resolved?: boolean;
-	answers?: QuestionAnswer[];
+export interface SessionNotificationPayload {
+	eventType: 'notification';
+	notification: {
+		id: string;
+		type: 'error' | 'interrupted' | 'system_notice';
+		content: string;
+		timestamp?: string;
+		reason?: string;
+		normalizedEntry?: import('./normalizedTypes').NormalizedEntry;
+	};
 }
 
-/**
- * Discriminated union of all session message types.
- * Use `msg.type` to narrow to a specific variant.
- */
-export type SessionMessageData =
-	| UserMessageData
-	| AssistantMessageData
-	| ThinkingMessageData
-	| ToolUseMessageData
-	| ToolResultMessageData
-	| ErrorMessageData
-	| InterruptedMessageData
-	| AccessRequestMessageData
-	| SubtaskMessageData
-	| SystemNoticeMessageData
-	| QuestionMessageData;
+export interface SessionMessageRecordPayload {
+	eventType: 'message_record';
+	message: {
+		id: string;
+		sessionId: string;
+		role: 'user' | 'assistant';
+		parentId?: string;
+		createdAt?: number;
+		completedAt?: number;
+		modelId?: string;
+		providerId?: string;
+		agent?: string;
+		tokens?: {
+			input: number;
+			output: number;
+			reasoning?: number;
+			cacheRead?: number;
+			cacheWrite?: number;
+			total?: number;
+		};
+		cost?: number;
+	};
+}
 
-/**
- * Partial update keyed by `id` + `type`. Used when merging incremental
- * updates into an existing message (e.g. updating childTokens on a subtask).
- * The webview's `mergeOrAddMessage` applies `Object.assign(existing, update)`.
- */
-export type SessionMessageUpdate = {
-	[K in SessionMessageData['type']]: { id: string; type: K; timestamp?: string } & Partial<
-		Omit<Extract<SessionMessageData, { type: K }>, 'id' | 'type'>
-	>;
-}[SessionMessageData['type']];
+export interface SessionMessageRecordRemovedPayload {
+	eventType: 'message_record_removed';
+	messageId: string;
+}
 
-// =============================================================================
-// Session Event Payloads
-// =============================================================================
+export interface SessionMessagePartPayload {
+	eventType: 'message_part';
+	part: {
+		id: string;
+		messageId: string;
+		sessionId: string;
+		type: 'text' | 'reasoning' | 'tool' | 'file' | 'compaction' | 'other';
+		text?: string;
+		callId?: string;
+		toolName?: string;
+		state?: {
+			status?: 'pending' | 'running' | 'completed' | 'error';
+			input?: unknown;
+			output?: string;
+			title?: string;
+			metadata?: unknown;
+		};
+		createdAt?: number;
+		completedAt?: number;
+		mime?: string;
+		url?: string;
+		filename?: string;
+		synthetic?: boolean;
+		auto?: boolean;
+		normalizedEntry?: import('./normalizedTypes').NormalizedEntry;
+	};
+}
 
-export interface SessionMessagePayload {
-	eventType: 'message';
-	message: SessionMessageData;
+export interface SessionMessagePartDeltaPayload {
+	eventType: 'message_part_delta';
+	messageId: string;
+	partId: string;
+	field: string;
+	delta: string;
+}
+
+export interface SessionMessagePartRemovedPayload {
+	eventType: 'message_part_removed';
+	messageId: string;
+	partId: string;
 }
 
 export interface ToolActivityInfo {
@@ -334,6 +269,7 @@ export interface SessionCompletePayload {
 	toolUseId?: string;
 	removed?: boolean;
 	messageId?: string;
+	completedAt?: number;
 }
 
 export interface SessionRestorePayload {
@@ -386,7 +322,7 @@ export interface SessionAccessPayload {
 
 export interface SessionMessagesReloadPayload {
 	eventType: 'messages_reload';
-	messages: SessionMessageData[];
+	messages: Array<SessionUserMessagePayload['message'] | SessionSubtaskPayload['subtask']>;
 }
 
 export interface SessionDeleteMessagesAfterPayload {
@@ -433,14 +369,6 @@ export interface SessionTurnTokensPayload {
 	userMessageId?: string;
 }
 
-export interface SubtaskTranscriptPayload {
-	eventType: 'subtask_transcript';
-	/** The subtask message ID (toolUseId) in the parent session. */
-	subtaskId: string;
-	/** The child message to append to the subtask's transcript. */
-	childMessage: SessionMessageData;
-}
-
 // =============================================================================
 // Question Event Payload (OpenCode question tool)
 // =============================================================================
@@ -478,6 +406,9 @@ export interface SessionQuestionRequest {
 		messageID: string;
 		callID: string;
 	};
+	resolved?: boolean;
+	answers?: QuestionAnswer[];
+	rejected?: boolean;
 }
 
 export interface SessionTodoPayload {
@@ -505,7 +436,11 @@ export interface SessionQuestionPayload {
 }
 
 export type SessionEventPayload =
-	| SessionMessagePayload
+	| SessionMessageRecordPayload
+	| SessionMessageRecordRemovedPayload
+	| SessionMessagePartPayload
+	| SessionMessagePartDeltaPayload
+	| SessionMessagePartRemovedPayload
 	| SessionStatusPayload
 	| SessionStatsPayload
 	| SessionCompletePayload
@@ -519,10 +454,12 @@ export type SessionEventPayload =
 	| SessionAuthPayload
 	| SessionTerminalPayload
 	| SessionTurnTokensPayload
-	| SubtaskTranscriptPayload
 	| SessionFileDiffPayload
 	| SessionTodoPayload
 	| SessionPermissionPayload
+	| SessionUserMessagePayload
+	| SessionSubtaskPayload
+	| SessionNotificationPayload
 	| SessionQuestionPayload;
 
 export interface SessionEventMessage {
@@ -558,7 +495,7 @@ export interface SessionLifecycleMessage {
 }
 
 // =============================================================================
-// Tool Data Interfaces (used by SessionMessageData)
+// Tool Data Interfaces
 // =============================================================================
 
 export interface ToolUseData {
