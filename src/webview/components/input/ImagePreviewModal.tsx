@@ -37,12 +37,12 @@ export const ImagePreviewModal: React.FC<ImagePreviewModalProps> = ({ dataUrl, n
 
 	return (
 		<div
-			className="fixed inset-0 z-9999 flex items-center justify-center bg-black/(--image-preview-backdrop) animate-fade-in cursor-pointer"
+			className="fixed inset-0 z-9999 flex items-center justify-center bg-black/(--image-preview-backdrop) backdrop-blur-sm animate-fade-in cursor-pointer"
 			onClick={handleBackdropClick}
 		>
 			<div
 				ref={contentRef}
-				className="relative max-w-(--image-preview-max-vw) max-h-(--image-preview-max-vh) cursor-default animate-preview-in-modal"
+				className="relative max-w-(--image-preview-max-vw) max-h-(--image-preview-max-vh) cursor-default animate-preview-in-modal rounded-lg border border-(--alpha-20) bg-(--surface-overlay) shadow-[0_20px_60px_rgba(0,0,0,0.45)] p-2"
 			>
 				<button
 					type="button"
@@ -56,7 +56,7 @@ export const ImagePreviewModal: React.FC<ImagePreviewModalProps> = ({ dataUrl, n
 				<img
 					src={dataUrl}
 					alt={name}
-					className="max-w-(--image-preview-max-vw) max-h-(--image-preview-max-vh) object-contain"
+					className="block max-w-[calc(var(--image-preview-max-vw)-1rem)] max-h-[calc(var(--image-preview-max-vh)-1rem)] object-contain rounded-md border border-(--alpha-10) bg-black/10"
 				/>
 			</div>
 		</div>

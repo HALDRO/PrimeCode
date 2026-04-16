@@ -2,6 +2,8 @@ import * as vscode from 'vscode';
 import type {
 	ConversationIndexEntry,
 	OpenCodeProviderData,
+	SessionEventPayload,
+	SessionEventType,
 	SessionSubtaskPayload,
 	SessionUserMessagePayload,
 	TotalStats,
@@ -27,6 +29,36 @@ import type { HandlerContext, WebviewMessageHandler } from './types';
 
 type CanonicalSdkMessage = Parameters<typeof mapSdkMessageToRecord>[0];
 type CanonicalSdkPart = Parameters<typeof mapSdkPartToPayload>[0];
+type ReplayChildTokens = { input: number; output: number; total: number; cacheRead: number };
+type ReplayTurnTokens = {
+	inputTokens: number;
+	outputTokens: number;
+	totalTokens: number;
+	cacheReadTokens: number;
+	durationMs?: number;
+};
+type ReplayBuildOptions = {
+	mode?: 'default' | 'parent';
+	parentSessionId?: string;
+	childDurations?: Map<string, number>;
+	childHistories?: Map<string, CLIEvent[]>;
+	childTokensMap?: Map<string, ReplayChildTokens>;
+	childModelIdMap?: Map<string, string>;
+};
+
+type SessionReplayAction =
+	| {
+			kind: 'event';
+			targetId: string;
+			eventType: SessionEventType;
+			payload: SessionEventPayload;
+			normalizedEntry?: CLIEvent['normalizedEntry'];
+	  }
+	| {
+			kind: 'session_updated';
+			targetId: string;
+			data: unknown;
+	  };
 
 export class SessionHandler implements WebviewMessageHandler {
 	private readonly logNormalizer = new LogNormalizer();
@@ -78,6 +110,17 @@ export class SessionHandler implements WebviewMessageHandler {
 		if (typeof input.file_path === 'string') return input.file_path;
 		if (typeof input.path === 'string') return input.path;
 		return undefined;
+	}
+
+	private static getFieldValue(
+		obj: Record<string, unknown>,
+		keys: string[],
+		fallback = '',
+	): string {
+		for (const key of keys) {
+			if (typeof obj[key] === 'string') return obj[key] as string;
+		}
+		return fallback;
 	}
 
 	async handleMessage(msg: WebviewCommand): Promise<void> {
@@ -550,14 +593,18 @@ export class SessionHandler implements WebviewMessageHandler {
 		const currentSession = allSessions.find(s => s.id === sessionId);
 		const serverRevert = currentSession?.revert;
 
-		this.context.bridge.startCollect();
-		try {
-			// Surface child sessions as subtask cards if parent history is compacted
-			if (explicitLinks.size === 0 && childSessions.length > 0) {
-				for (const child of childSessions) {
-					const duration = childDurations.get(child.id);
-					const childTokens = childTokensMap.get(child.id);
-					this.context.bridge.emit(sessionId, 'subtask', {
+		const actions: SessionReplayAction[] = [];
+		// Surface child sessions as subtask cards if parent history is compacted
+		if (explicitLinks.size === 0 && childSessions.length > 0) {
+			for (const child of childSessions) {
+				const duration = childDurations.get(child.id);
+				const childTokens = childTokensMap.get(child.id);
+				actions.push({
+					kind: 'event',
+					targetId: sessionId,
+					eventType: 'subtask',
+					payload: {
+						eventType: 'subtask',
 						subtask: {
 							id: `hist-subtask-${child.id}`,
 							agent: 'subagent',
@@ -571,63 +618,45 @@ export class SessionHandler implements WebviewMessageHandler {
 								? { childModelId: childModelIdMap.get(child.id) }
 								: {}),
 						},
-					});
-				}
+					},
+				});
 			}
+		}
 
-			// Replay parent history, using graph for task→child resolution
-			if (parentHistory.length > 0) {
-				logger.info(
-					`[SessionHandler] Replaying ${parentHistory.length} events for session ${sessionId}`,
-				);
-				this.replayHistoryIntoSession(sessionId, parentHistory, {
+		// Replay parent history, using graph for task→child resolution
+		if (parentHistory.length > 0) {
+			logger.info(
+				`[SessionHandler] Replaying ${parentHistory.length} events for session ${sessionId}`,
+			);
+			actions.push(
+				...this.buildHistoryReplayActions(sessionId, parentHistory, {
 					mode: 'parent',
 					parentSessionId: sessionId,
 					childDurations,
 					childHistories,
 					childTokensMap,
 					childModelIdMap,
-				});
-			}
-
-			// Official OpenCode keeps session diff as separate session-scoped data,
-			// not as part of the regular message history. Restore it explicitly after
-			// replaying the session timeline so the webview gets the current diff state.
-			await this.restoreSessionDiffFromServer(sessionId, config);
-			await this.restoreSessionRuntimeStateFromServer(sessionId, config);
-		} finally {
-			this.context.bridge.flushCollected();
+				}),
+			);
 		}
+
+		this.emitReplayActions(actions);
+
+		// Official OpenCode keeps session diff as separate session-scoped data,
+		// not as part of the regular message history. Restore it explicitly after
+		// replaying the session timeline so the webview gets the current diff state.
+		await this.restoreSessionDiffFromServer(sessionId, config);
+		await this.restoreSessionRuntimeStateFromServer(sessionId, config);
 
 		// After replay is flushed, restore revert state using the server's revert field
 		// (source of truth). The CLI session object has a `revert.messageID` that tracks
 		// the exact revert point. This replaces the old workspaceState-based approach
 		// which could become stale and cause phantom UnRevert buttons.
 		if (serverRevert?.messageID) {
-			// The server's revert.messageID is the real message ID. Find the matching
-			// user message in the replayed history to use as the revert point.
-			let revertUserMessageId: string | undefined;
-			for (let i = parentHistory.length - 1; i >= 0; i--) {
-				const ev = parentHistory[i];
-				if (ev.type === 'normalized_log' && (ev.data as { role?: string }).role === 'user') {
-					const evMsgId = (ev.data as { messageId?: string }).messageId;
-					if (evMsgId === serverRevert.messageID) {
-						revertUserMessageId = evMsgId;
-						break;
-					}
-				}
-			}
-
-			// Fallback: if exact match not found, use the last user message
-			if (!revertUserMessageId) {
-				for (let i = parentHistory.length - 1; i >= 0; i--) {
-					const ev = parentHistory[i];
-					if (ev.type === 'normalized_log' && (ev.data as { role?: string }).role === 'user') {
-						revertUserMessageId = (ev.data as { messageId?: string }).messageId;
-						break;
-					}
-				}
-			}
+			const revertUserMessageId = this.findReplayedUserMessageIdInHistory(
+				parentHistory,
+				serverRevert.messageID,
+			);
 
 			if (revertUserMessageId) {
 				this.context.bridge.emit(sessionId, 'restore', {
@@ -640,6 +669,14 @@ export class SessionHandler implements WebviewMessageHandler {
 					revertedFromMessageId: revertUserMessageId,
 					serverRevertMessageId: serverRevert.messageID,
 				});
+			} else {
+				logger.warn(
+					'[SessionHandler] Skipping revert state restore: message not present in replayed history',
+					{
+						sessionId,
+						serverRevertMessageId: serverRevert.messageID,
+					},
+				);
 			}
 		}
 	}
@@ -695,213 +732,173 @@ export class SessionHandler implements WebviewMessageHandler {
 		const entries = messagesResult.data ?? [];
 		const parentTurnTokens = this.buildTurnTokenMap(parentHistory, entries);
 
-		this.context.bridge.startCollect();
-		try {
-			for (const childSessionId of childSessionIds) {
-				const childHistory = await this.context.cli.getHistory(childSessionId, config);
-				const childMessagesResult = await sdkClient.session.messages({
-					sessionID: childSessionId,
-					directory: config.workspaceRoot,
-				});
+		const actions: SessionReplayAction[] = [];
+		for (const childSessionId of childSessionIds) {
+			const childHistory = await this.context.cli.getHistory(childSessionId, config);
+			const childMessagesResult = await sdkClient.session.messages({
+				sessionID: childSessionId,
+				directory: config.workspaceRoot,
+			});
 
-				if (childMessagesResult.error) {
-					logger.warn(
-						'[SessionHandler] Failed to fetch canonical child session messages, falling back to history replay',
-						{
-							sessionId: childSessionId,
-							error: childMessagesResult.error,
-						},
-					);
-					if (childHistory.length > 0) {
-						this.replayHistoryIntoSession(childSessionId, childHistory, {
-							mode: 'default',
-						});
-					}
-					continue;
-				}
-
-				const childEntries = childMessagesResult.data ?? [];
-				if (childEntries.length > 0) {
-					const canonicalDuration = this.computeCanonicalSessionDuration(childEntries);
-					if (typeof canonicalDuration === 'number' && canonicalDuration > 0) {
-						childDurations.set(childSessionId, canonicalDuration);
-					}
-					const childTurnTokens = this.buildTurnTokenMap(childHistory, childEntries);
-					this.replayCanonicalEntriesIntoSession(childSessionId, childEntries, childTurnTokens, {
-						workspaceSessionId: childSessionId,
-					});
-					continue;
-				}
-
+			if (childMessagesResult.error) {
+				logger.warn(
+					'[SessionHandler] Failed to fetch canonical child session messages, falling back to history replay',
+					{
+						sessionId: childSessionId,
+						error: childMessagesResult.error,
+					},
+				);
 				if (childHistory.length > 0) {
-					this.replayHistoryIntoSession(childSessionId, childHistory, {
-						mode: 'default',
-					});
+					actions.push(
+						...this.buildHistoryReplayActions(childSessionId, childHistory, {
+							mode: 'default',
+						}),
+					);
 				}
+				continue;
 			}
 
-			this.replayCanonicalEntriesIntoSession(sessionId, entries, parentTurnTokens, {
+			const childEntries = childMessagesResult.data ?? [];
+			if (childEntries.length > 0) {
+				const canonicalDuration = this.computeCanonicalSessionDuration(childEntries);
+				if (typeof canonicalDuration === 'number' && canonicalDuration > 0) {
+					childDurations.set(childSessionId, canonicalDuration);
+				}
+				const childTurnTokens = this.buildTurnTokenMap(childHistory, childEntries);
+				actions.push(
+					...this.buildCanonicalReplayActions(childSessionId, childEntries, childTurnTokens, {
+						workspaceSessionId: childSessionId,
+					}),
+				);
+				continue;
+			}
+
+			if (childHistory.length > 0) {
+				actions.push(
+					...this.buildHistoryReplayActions(childSessionId, childHistory, {
+						mode: 'default',
+					}),
+				);
+			}
+		}
+
+		actions.push(
+			...this.buildCanonicalReplayActions(sessionId, entries, parentTurnTokens, {
 				workspaceSessionId: sessionId,
 				explicitLinks,
 				childDurations,
 				childTokensMap,
 				childModelIdMap,
-			});
-		} finally {
-			this.context.bridge.flushCollected();
-		}
+			}),
+		);
+		this.emitReplayActions(actions);
 
-		if (currentSession?.revert?.messageID) {
+		if (
+			currentSession?.revert?.messageID &&
+			this.hasCanonicalUserMessage(entries, currentSession.revert.messageID)
+		) {
 			this.context.bridge.emit(sessionId, 'restore', {
 				action: 'success',
 				canUnrevert: true,
 				revertedFromMessageId: currentSession.revert.messageID,
 			});
+		} else if (currentSession?.revert?.messageID) {
+			logger.warn(
+				'[SessionHandler] Skipping canonical revert state restore: message not present in canonical entries',
+				{
+					sessionId,
+					serverRevertMessageId: currentSession.revert.messageID,
+				},
+			);
 		}
 	}
 
-	private replayCanonicalEntriesIntoSession(
-		sessionId: string,
-		entries: Array<{ info: CanonicalSdkMessage; parts: CanonicalSdkPart[] }>,
-		turnTokensByUser: Map<
-			string,
-			{
-				inputTokens: number;
-				outputTokens: number;
-				totalTokens: number;
-				cacheReadTokens: number;
-				durationMs?: number;
-			}
-		>,
-		options: {
-			workspaceSessionId: string;
-			explicitLinks?: Map<string, string>;
-			childDurations?: Map<string, number>;
-			childTokensMap?: Map<
-				string,
-				{ input: number; output: number; total: number; cacheRead: number }
-			>;
-			childModelIdMap?: Map<string, string>;
-		},
-	): void {
-		for (const entry of entries) {
-			const info = entry.info;
-			if (info.role === 'user') {
-				const userText = entry.parts
-					.filter(
-						part => part.type === 'text' && !part.synthetic && !('ignored' in part && part.ignored),
-					)
-					.map(part => ('text' in part && typeof part.text === 'string' ? part.text : ''))
-					.join('');
-				const diffs =
-					'summary' in info &&
-					info.summary &&
-					typeof info.summary === 'object' &&
-					'diffs' in info.summary
-						? info.summary.diffs
-						: undefined;
+	private extractCanonicalUserAttachments(
+		parts: CanonicalSdkPart[],
+	): SessionUserMessagePayload['message']['attachments'] | undefined {
+		const files: string[] = [];
+		const codeSnippets: NonNullable<
+			NonNullable<SessionUserMessagePayload['message']['attachments']>['codeSnippets']
+		> = [];
+		const images: NonNullable<
+			NonNullable<SessionUserMessagePayload['message']['attachments']>['images']
+		> = [];
 
-				this.context.bridge.emit(sessionId, 'user_message', {
-					message: {
-						id: info.id,
-						content: userText,
-						timestamp:
-							typeof info.time?.created === 'number'
-								? new Date(info.time.created).toISOString()
-								: new Date().toISOString(),
-						...(info.model?.modelID ? { model: info.model.modelID } : {}),
-						...(typeof info.agent === 'string' ? { agent: info.agent } : {}),
-						...(diffs
-							? {
-									summary: {
-										diffs: diffs.map(diff => ({
-											file: diff.file,
-											additions: diff.additions || 0,
-											deletions: diff.deletions || 0,
-										})),
-									},
-								}
-							: {}),
-					},
+		for (const part of parts) {
+			if (part.type !== 'file') continue;
+
+			const mime = 'mime' in part && typeof part.mime === 'string' ? part.mime : undefined;
+			const filename =
+				'filename' in part && typeof part.filename === 'string' ? part.filename : 'image';
+			const url = 'url' in part && typeof part.url === 'string' ? part.url : undefined;
+			const source =
+				'source' in part && part.source && typeof part.source === 'object'
+					? part.source
+					: undefined;
+
+			if (mime?.startsWith('image/') && url) {
+				images.push({
+					id: `img-${Math.random().toString(36).slice(2, 9)}`,
+					name: filename,
+					dataUrl: url,
+					...(source && 'path' in source && typeof source.path === 'string'
+						? { path: source.path }
+						: {}),
 				});
-
-				const turn = turnTokensByUser.get(info.id);
-				if (turn) {
-					this.context.bridge.emit(sessionId, 'turn_tokens', {
-						userMessageId: info.id,
-						inputTokens: turn.inputTokens,
-						outputTokens: turn.outputTokens,
-						totalTokens: turn.totalTokens,
-						cacheReadTokens: turn.cacheReadTokens,
-						...(typeof turn.durationMs === 'number' ? { durationMs: turn.durationMs } : {}),
-					});
-				}
+				continue;
 			}
 
-			this.context.bridge.emit(sessionId, 'message_record', {
-				message: mapSdkMessageToRecord(info),
-			});
-
-			for (const part of entry.parts) {
-				const partTime =
-					'time' in part && part.time && typeof part.time === 'object'
-						? (part.time as { start?: number; end?: number; created?: number })
+			if (source && 'path' in source && typeof source.path === 'string') {
+				const sourceText =
+					'text' in source && source.text && typeof source.text === 'object'
+						? source.text
+						: undefined;
+				const startLine =
+					sourceText && 'start' in sourceText && typeof sourceText.start === 'number'
+						? sourceText.start
+						: undefined;
+				const endLine =
+					sourceText && 'end' in sourceText && typeof sourceText.end === 'number'
+						? sourceText.end
+						: undefined;
+				const content =
+					sourceText && 'value' in sourceText && typeof sourceText.value === 'string'
+						? sourceText.value
 						: undefined;
 
-				const canonicalTaskSubtask = this.mapCanonicalTaskPartToSubtask(
-					part,
-					info,
-					partTime,
-					options.workspaceSessionId,
-					options.explicitLinks ?? new Map<string, string>(),
-					options.childDurations ?? new Map<string, number>(),
-					options.childTokensMap ?? new Map(),
-					options.childModelIdMap ?? new Map<string, string>(),
-				);
-				if (canonicalTaskSubtask) {
-					this.context.bridge.emit(sessionId, 'subtask', {
-						subtask: canonicalTaskSubtask,
+				if (typeof startLine === 'number' && typeof endLine === 'number' && content) {
+					codeSnippets.push({
+						filePath: source.path,
+						content,
+						startLine,
+						endLine,
 					});
-					continue;
+				} else {
+					files.push(source.path);
 				}
+				continue;
+			}
 
-				this.context.bridge.emit(sessionId, 'message_part', {
-					part: mapSdkPartToPayload(part, info.id, sessionId),
-				});
-
-				if (part.type === 'tool' && typeof part.tool === 'string') {
-					const toolState =
-						part.state && typeof part.state === 'object'
-							? (part.state as Record<string, unknown>)
-							: undefined;
-					const toolInput =
-						toolState?.input && typeof toolState.input === 'object'
-							? (toolState.input as Record<string, unknown>)
-							: undefined;
-					const toolUseId = typeof part.callID === 'string' ? part.callID : undefined;
-					const toolName = part.tool;
-
-					if (toolUseId && toolInput) {
-						const filePathFromInput = SessionHandler.extractFilePath(toolInput);
-						if (filePathFromInput && this.isFileEditTool(toolName)) {
-							this.emitFileChangeFromReplay(toolInput, filePathFromInput, toolUseId, sessionId);
-						} else if (!filePathFromInput && resolveToolName(toolName) === 'apply_patch') {
-							const patchPaths = extractPatchFilePaths(toolInput);
-							for (const patchPath of patchPaths) {
-								this.context.bridge.emit(sessionId, 'file', {
-									action: 'changed',
-									filePath: patchPath,
-									fileName: patchPath.split(/[/\\]/).pop() || patchPath,
-									linesAdded: 0,
-									linesRemoved: 0,
-									toolUseId,
-								});
-							}
-						}
-					}
+			if (url) {
+				try {
+					const parsed = new URL(url);
+					files.push(decodeURIComponent(parsed.pathname).replace(/^\//, ''));
+				} catch {
+					const filePath = url.startsWith('file://') ? url.replace('file://', '') : url;
+					files.push(decodeURIComponent(filePath));
 				}
 			}
 		}
+
+		if (files.length === 0 && codeSnippets.length === 0 && images.length === 0) {
+			return undefined;
+		}
+
+		return {
+			...(files.length > 0 ? { files } : {}),
+			...(codeSnippets.length > 0 ? { codeSnippets } : {}),
+			...(images.length > 0 ? { images } : {}),
+		};
 	}
 
 	private extractExplicitTaskLinks(
@@ -1267,7 +1264,16 @@ export class SessionHandler implements WebviewMessageHandler {
 	}
 
 	private async onSendMessage(msg: CommandOf<'sendMessage'>): Promise<void> {
-		const { text, model: uiModel, sessionId, messageID, attachments, agent, variant } = msg;
+		const {
+			text,
+			model: uiModel,
+			sessionId,
+			messageID,
+			editMode,
+			attachments,
+			agent,
+			variant,
+		} = msg;
 		const resolvedAgent = agent;
 
 		// Resolve target session
@@ -1299,6 +1305,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			uiModel,
 			sessionId,
 			messageID,
+			editMode,
 			attachments,
 			resolvedAgent,
 			variant,
@@ -1378,6 +1385,7 @@ export class SessionHandler implements WebviewMessageHandler {
 				entry.model,
 				entry.sessionId,
 				undefined,
+				undefined,
 				entry.attachments,
 				entry.agent,
 				entry.variant,
@@ -1413,6 +1421,7 @@ export class SessionHandler implements WebviewMessageHandler {
 				entry.text,
 				entry.model,
 				entry.sessionId,
+				undefined,
 				undefined,
 				entry.attachments,
 				entry.agent,
@@ -1562,6 +1571,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		uiModel?: string,
 		explicitSessionId?: string,
 		messageIdToTruncate?: string,
+		editMode?: 'revert' | 'history_only',
 		attachments?: CommandOf<'sendMessage'>['attachments'],
 		agent?: string,
 		variant?: string,
@@ -1680,10 +1690,17 @@ export class SessionHandler implements WebviewMessageHandler {
 			// have the original message. On restore, both would appear.
 			// By truncating first, the server history is clean before we send.
 			if (isOpenCode && messageIdToTruncate) {
-				logger.info('[SessionHandler] Editing message: revert then resend', {
-					messageId: messageIdToTruncate,
-				});
-				await this.context.cli.truncateSession(activeId, messageIdToTruncate, config);
+				if (editMode === 'history_only') {
+					logger.info('[SessionHandler] Editing message: prune history without workspace revert', {
+						messageId: messageIdToTruncate,
+					});
+					await this.context.cli.deleteSessionMessagesFrom?.(activeId, messageIdToTruncate, config);
+				} else {
+					logger.info('[SessionHandler] Editing message: revert then resend', {
+						messageId: messageIdToTruncate,
+					});
+					await this.context.cli.truncateSession(activeId, messageIdToTruncate, config);
+				}
 			}
 
 			// Post user message and send to CLI.
@@ -1713,26 +1730,12 @@ export class SessionHandler implements WebviewMessageHandler {
 				{ normalizedEntry: this.logNormalizer.normalizeMessage(text, 'user') },
 			);
 
-			// Emit checkpoint so the "Restore to Checkpoint" button appears on this user message
-			const commitId = generateId('checkpoint');
-			// Register on backend so RestoreHandler can resolve commitId → API params
-			this.context.registerCheckpoint?.(commitId, {
-				sessionId: activeId,
-				messageId: userMessageId,
-				associatedMessageId: userMessageId,
+			this.emitCheckpointForUserMessage(
+				activeId,
+				userMessageId,
+				new Date().toISOString(),
 				isOpenCode,
-			});
-
-			this.context.bridge.emit(activeId, 'restore', {
-				action: 'add_commit',
-				commit: {
-					id: commitId,
-					sha: commitId,
-					message: 'Checkpoint before message',
-					timestamp: new Date().toISOString(),
-					associatedMessageId: userMessageId,
-				},
-			});
+			);
 
 			this.context.bridge.emit(activeId, 'status', {
 				status: 'busy',
@@ -1860,43 +1863,527 @@ export class SessionHandler implements WebviewMessageHandler {
 		}
 	}
 
-	private replayHistoryIntoSession(
+	private emitReplayActions(actions: SessionReplayAction[]): void {
+		if (actions.length === 0) return;
+		this.context.bridge.startCollect();
+		try {
+			for (const action of actions) {
+				if (action.kind === 'session_updated') {
+					this.handleSessionUpdatedEvent(action.data, action.targetId);
+					continue;
+				}
+				this.context.bridge.emit(action.targetId, action.eventType, action.payload, {
+					...(action.normalizedEntry ? { normalizedEntry: action.normalizedEntry } : {}),
+				});
+			}
+		} finally {
+			this.context.bridge.flushCollected();
+		}
+	}
+
+	private pushReplayEvent<T extends SessionEventType>(
+		actions: SessionReplayAction[],
+		targetId: string,
+		eventType: T,
+		payload: Extract<SessionEventPayload, { eventType: T }>,
+		normalizedEntry?: CLIEvent['normalizedEntry'],
+	): void {
+		actions.push({
+			kind: 'event',
+			targetId,
+			eventType,
+			payload,
+			...(normalizedEntry ? { normalizedEntry } : {}),
+		});
+	}
+
+	private pushReplaySessionUpdated(
+		actions: SessionReplayAction[],
+		targetId: string,
+		data: unknown,
+	): void {
+		actions.push({ kind: 'session_updated', targetId, data });
+	}
+
+	private pushReplayCheckpoint(
+		actions: SessionReplayAction[],
+		targetId: string,
+		messageId: string,
+		timestamp: string,
+	): void {
+		const commitId = generateId('checkpoint');
+		this.context.registerCheckpoint?.(commitId, {
+			sessionId: targetId,
+			messageId,
+			associatedMessageId: messageId,
+			isOpenCode: true,
+		});
+		this.pushReplayEvent(actions, targetId, 'restore', {
+			eventType: 'restore',
+			action: 'add_commit',
+			commit: {
+				id: commitId,
+				sha: commitId,
+				message: 'Checkpoint before message',
+				timestamp,
+				associatedMessageId: messageId,
+			},
+		});
+	}
+
+	private pushReplayFileActions(
+		actions: SessionReplayAction[],
+		sessionId: string,
+		toolName: string,
+		input: Record<string, unknown>,
+		toolUseId: string,
+		stats?: { added: number; removed: number },
+	): void {
+		const filePath = SessionHandler.extractFilePath(input);
+		if (filePath && this.isFileEditTool(toolName)) {
+			this.pushReplayEvent(actions, sessionId, 'file', {
+				eventType: 'file',
+				action: 'changed',
+				filePath,
+				fileName: filePath.split(/[/\\]/).pop() || filePath,
+				linesAdded: stats?.added ?? 0,
+				linesRemoved: stats?.removed ?? 0,
+				toolUseId,
+			});
+			return;
+		}
+		if (resolveToolName(toolName) !== 'apply_patch') return;
+		for (const patchPath of extractPatchFilePaths(input)) {
+			this.pushReplayEvent(actions, sessionId, 'file', {
+				eventType: 'file',
+				action: 'changed',
+				filePath: patchPath,
+				fileName: patchPath.split(/[/\\]/).pop() || patchPath,
+				linesAdded: 0,
+				linesRemoved: 0,
+				toolUseId,
+			});
+		}
+	}
+
+	private buildCanonicalUserReplayMessage(entry: {
+		info: CanonicalSdkMessage;
+		parts: CanonicalSdkPart[];
+	}): Extract<SessionEventPayload, { eventType: 'user_message' }>['message'] {
+		const { info, parts } = entry;
+		const modelInfo = info as CanonicalSdkMessage & { model?: { modelID?: string } };
+		const attachments = this.extractCanonicalUserAttachments(parts);
+		const diffs =
+			'summary' in info &&
+			info.summary &&
+			typeof info.summary === 'object' &&
+			'diffs' in info.summary
+				? info.summary.diffs
+				: undefined;
+		return {
+			id: info.id,
+			content: parts
+				.filter(
+					part => part.type === 'text' && !part.synthetic && !('ignored' in part && part.ignored),
+				)
+				.map(part => ('text' in part && typeof part.text === 'string' ? part.text : ''))
+				.join(''),
+			timestamp:
+				typeof info.time?.created === 'number'
+					? new Date(info.time.created).toISOString()
+					: new Date().toISOString(),
+			...(modelInfo.model?.modelID ? { model: modelInfo.model.modelID } : {}),
+			...(typeof info.agent === 'string' ? { agent: info.agent } : {}),
+			...(diffs
+				? {
+						summary: {
+							diffs: diffs.map(diff => ({
+								file: diff.file,
+								additions: diff.additions || 0,
+								deletions: diff.deletions || 0,
+							})),
+						},
+					}
+				: {}),
+			...(attachments ? { attachments } : {}),
+		};
+	}
+
+	private buildHistoryNormalizedLogReplayActions(
+		actions: SessionReplayAction[],
+		sessionId: string,
+		event: Extract<CLIEvent, { type: 'normalized_log' }>,
+	): void {
+		const data = event.data as {
+			role?: string;
+			content?: string;
+			timestamp?: string;
+			messageId?: string;
+			model?: string;
+			agent?: string;
+			summary?: SessionUserMessagePayload['message']['summary'];
+			attachments?: SessionUserMessagePayload['message']['attachments'];
+		};
+		if (data.role !== 'user') return;
+		const messageId =
+			data.messageId?.trim() || `msg-local-${Math.random().toString(36).slice(2, 9)}`;
+		const timestamp = data.timestamp || new Date().toISOString();
+		this.pushReplayEvent(actions, sessionId, 'message_record', {
+			eventType: 'message_record',
+			message: {
+				id: messageId,
+				sessionId,
+				role: 'user',
+				createdAt: new Date(timestamp).getTime(),
+				...(data.model ? { modelId: data.model } : {}),
+				...(data.agent ? { agent: data.agent } : {}),
+			},
+		});
+		this.pushReplayEvent(
+			actions,
+			sessionId,
+			'user_message',
+			{
+				eventType: 'user_message',
+				message: {
+					id: messageId,
+					content: data.content || '',
+					timestamp,
+					...(data.model ? { model: data.model } : {}),
+					...(data.agent ? { agent: data.agent } : {}),
+					...(data.summary ? { summary: data.summary } : {}),
+					...(data.attachments ? { attachments: data.attachments } : {}),
+					...(event.normalizedEntry ? { normalizedEntry: event.normalizedEntry } : {}),
+				},
+			},
+			event.normalizedEntry,
+		);
+		this.pushReplayCheckpoint(actions, sessionId, messageId, timestamp);
+	}
+
+	private buildHistoryTaskSubtaskReplayAction(
+		actions: SessionReplayAction[],
+		sessionId: string,
+		toolUseId: string,
+		meta: { description: string; prompt: string; agent: string },
+		options: ReplayBuildOptions,
+		timestamp?: string,
+		result?: string,
+		isError?: boolean,
+		normalizedEntry?: CLIEvent['normalizedEntry'],
+	): void {
+		const childSessionId = this.context.sessionGraph.getChildByTaskId(toolUseId);
+		this.pushReplayEvent(
+			actions,
+			sessionId,
+			'subtask',
+			{
+				eventType: 'subtask',
+				subtask: {
+					id: toolUseId,
+					...meta,
+					...(typeof result === 'string' ? { result } : {}),
+					...(options.parentSessionId ? { parentSessionId: options.parentSessionId } : {}),
+					...(childSessionId ? { childSessionId } : {}),
+					status: isError ? 'error' : result === undefined ? 'running' : 'completed',
+					timestamp: timestamp || new Date().toISOString(),
+					...(result === undefined ? { startTime: timestamp } : {}),
+					...(childSessionId && options.childDurations?.get(childSessionId)
+						? { durationMs: options.childDurations.get(childSessionId) }
+						: {}),
+					...(childSessionId && options.childTokensMap?.get(childSessionId)
+						? { childTokens: options.childTokensMap.get(childSessionId) }
+						: {}),
+					...(childSessionId && options.childModelIdMap?.get(childSessionId)
+						? { childModelId: options.childModelIdMap.get(childSessionId) }
+						: {}),
+					...(normalizedEntry ? { normalizedEntry } : {}),
+				},
+			},
+			normalizedEntry,
+		);
+	}
+
+	private buildHistoryReplayActions(
 		sessionId: string,
 		history: CLIEvent[],
-		options?: {
-			mode?: 'default' | 'parent';
-			parentSessionId?: string;
-			childDurations?: Map<string, number>;
-			childHistories?: Map<string, CLIEvent[]>;
-			childTokensMap?: Map<
-				string,
-				{ input: number; output: number; total: number; cacheRead: number }
-			>;
-			childModelIdMap?: Map<string, string>;
-		},
-	): void {
-		// Track subtask metadata from tool_use so tool_result can carry it forward
+		options: ReplayBuildOptions = {},
+	): SessionReplayAction[] {
+		const actions: SessionReplayAction[] = [];
 		const subtaskMeta = new Map<string, { description: string; prompt: string; agent: string }>();
 
 		for (const event of history) {
 			switch (event.type) {
 				case 'normalized_log':
-					this.replayNormalizedLog(event.data, sessionId, event.normalizedEntry);
-					break;
-				case 'tool_use':
-					this.replayToolUse(event, sessionId, subtaskMeta, options);
-					break;
-				case 'tool_result':
-					this.replayToolResult(event, sessionId, subtaskMeta, options);
+					this.buildHistoryNormalizedLogReplayActions(actions, sessionId, event);
 					break;
 				case 'turn_tokens':
-					this.context.bridge.emit(sessionId, 'turn_tokens', event.data);
+					this.pushReplayEvent(
+						actions,
+						sessionId,
+						'turn_tokens',
+						event.data as Extract<SessionEventPayload, { eventType: 'turn_tokens' }>,
+					);
 					break;
 				case 'session_updated':
-					this.handleSessionUpdatedEvent(event.data, sessionId);
+					this.pushReplaySessionUpdated(actions, sessionId, event.data);
+					break;
+				case 'tool_use': {
+					const data = event.data as {
+						tool?: string;
+						input?: unknown;
+						toolUseId?: string;
+						timestamp?: string;
+					};
+					const toolName = data.tool || 'unknown';
+					if (toolName.toLowerCase() === 'question') break;
+					const input = (data.input as Record<string, unknown>) || {};
+					const toolUseId = data.toolUseId || `hist-tool-${Math.random()}`;
+					if (options.mode === 'parent' && toolName === 'task') {
+						const meta = {
+							agent: typeof input.subagent_type === 'string' ? input.subagent_type : 'subagent',
+							prompt: typeof input.prompt === 'string' ? input.prompt : '',
+							description: typeof input.description === 'string' ? input.description : 'Subtask',
+						};
+						subtaskMeta.set(toolUseId, meta);
+						this.buildHistoryTaskSubtaskReplayAction(
+							actions,
+							sessionId,
+							toolUseId,
+							meta,
+							options,
+							data.timestamp,
+						);
+						break;
+					}
+					this.pushReplayEvent(actions, sessionId, 'message_part', {
+						eventType: 'message_part',
+						part: {
+							id: toolUseId,
+							messageId: toolUseId,
+							sessionId,
+							type: 'tool',
+							callId: toolUseId,
+							toolName,
+							state: { status: 'running', input },
+							...(event.normalizedEntry ? { normalizedEntry: event.normalizedEntry } : {}),
+						},
+					});
+					const oldContent = SessionHandler.getFieldValue(input, [
+						'old_string',
+						'old_str',
+						'oldString',
+					]);
+					const newContent = SessionHandler.getFieldValue(input, [
+						'new_string',
+						'new_str',
+						'newString',
+						'content',
+					]);
+					this.pushReplayFileActions(
+						actions,
+						sessionId,
+						toolName,
+						input,
+						toolUseId,
+						computeDiffLineStats(String(oldContent), String(newContent)),
+					);
+					break;
+				}
+				case 'tool_result': {
+					const data = event.data as {
+						tool?: string;
+						tool_use_id?: string;
+						content?: unknown;
+						input?: unknown;
+						is_error?: boolean;
+						metadata?: unknown;
+						timestamp?: string;
+					};
+					const toolName = data.tool || 'unknown';
+					if (toolName.toLowerCase() === 'question') break;
+					const toolUseId = data.tool_use_id || `hist-tool-${Math.random()}`;
+					if (options.mode === 'parent' && toolName === 'task') {
+						const savedMeta = subtaskMeta.get(toolUseId);
+						this.buildHistoryTaskSubtaskReplayAction(
+							actions,
+							sessionId,
+							toolUseId,
+							{
+								agent: savedMeta?.agent || 'subagent',
+								prompt: savedMeta?.prompt || '',
+								description: savedMeta?.description || 'Subtask',
+							},
+							options,
+							data.timestamp,
+							String(data.content || ''),
+							data.is_error,
+							event.normalizedEntry,
+						);
+						break;
+					}
+					const metadata =
+						resolveToolName(toolName) === 'apply_patch' &&
+						data.metadata &&
+						typeof data.metadata === 'object'
+							? (data.metadata as Record<string, unknown>)
+							: undefined;
+					for (const entry of Array.isArray(metadata?.files) ? metadata.files : []) {
+						if (!entry || typeof entry !== 'object') continue;
+						const file = entry as Record<string, unknown>;
+						const filePath =
+							(typeof file.filePath === 'string' && file.filePath) ||
+							(typeof file.relativePath === 'string' && file.relativePath) ||
+							(typeof file.path === 'string' && file.path) ||
+							'';
+						if (!filePath) continue;
+						this.pushReplayEvent(actions, sessionId, 'file', {
+							eventType: 'file',
+							action: 'changed',
+							filePath,
+							fileName: filePath.split(/[/\\]/).pop() || filePath,
+							linesAdded: typeof file.additions === 'number' ? file.additions : 0,
+							linesRemoved: typeof file.deletions === 'number' ? file.deletions : 0,
+							toolUseId,
+						});
+					}
+					this.pushReplayEvent(actions, sessionId, 'message_part', {
+						eventType: 'message_part',
+						part: {
+							id: toolUseId,
+							messageId: toolUseId,
+							sessionId,
+							type: 'tool',
+							callId: toolUseId,
+							toolName,
+							state: {
+								status: data.is_error ? 'error' : 'completed',
+								input: data.input,
+								output:
+									typeof data.content === 'string'
+										? data.content
+										: JSON.stringify(data.content ?? ''),
+								title:
+									typeof (data as { title?: unknown }).title === 'string'
+										? ((data as { title?: string }).title ?? undefined)
+										: undefined,
+								metadata: data.metadata,
+							},
+							...(event.normalizedEntry ? { normalizedEntry: event.normalizedEntry } : {}),
+						},
+					});
+					break;
+				}
+				default:
 					break;
 			}
 		}
+		return actions;
+	}
+
+	private buildCanonicalReplayActions(
+		sessionId: string,
+		entries: Array<{ info: CanonicalSdkMessage; parts: CanonicalSdkPart[] }>,
+		turnTokensByUser: Map<string, ReplayTurnTokens>,
+		options: {
+			workspaceSessionId: string;
+			explicitLinks?: Map<string, string>;
+			childDurations?: Map<string, number>;
+			childTokensMap?: Map<string, ReplayChildTokens>;
+			childModelIdMap?: Map<string, string>;
+		},
+	): SessionReplayAction[] {
+		const actions: SessionReplayAction[] = [];
+
+		for (const entry of entries) {
+			const info = entry.info;
+			if (info.role === 'user') {
+				const message = this.buildCanonicalUserReplayMessage(entry);
+				this.pushReplayEvent(actions, sessionId, 'user_message', {
+					eventType: 'user_message',
+					message,
+				});
+				const turn = turnTokensByUser.get(info.id);
+				if (turn) {
+					this.pushReplayEvent(actions, sessionId, 'turn_tokens', {
+						eventType: 'turn_tokens',
+						userMessageId: info.id,
+						inputTokens: turn.inputTokens,
+						outputTokens: turn.outputTokens,
+						totalTokens: turn.totalTokens,
+						cacheReadTokens: turn.cacheReadTokens,
+						...(typeof turn.durationMs === 'number' ? { durationMs: turn.durationMs } : {}),
+					});
+				}
+				this.pushReplayCheckpoint(actions, sessionId, info.id, String(message.timestamp));
+			}
+
+			this.pushReplayEvent(actions, sessionId, 'message_record', {
+				eventType: 'message_record',
+				message: mapSdkMessageToRecord(info),
+			});
+
+			for (const part of entry.parts) {
+				const partTime =
+					'time' in part && part.time && typeof part.time === 'object'
+						? (part.time as { start?: number; end?: number; created?: number })
+						: undefined;
+				const subtask = this.mapCanonicalTaskPartToSubtask(
+					part,
+					info,
+					partTime,
+					options.workspaceSessionId,
+					options.explicitLinks ?? new Map<string, string>(),
+					options.childDurations ?? new Map<string, number>(),
+					options.childTokensMap ?? new Map(),
+					options.childModelIdMap ?? new Map<string, string>(),
+				);
+				if (subtask) {
+					this.pushReplayEvent(actions, sessionId, 'subtask', {
+						eventType: 'subtask',
+						subtask,
+					});
+					continue;
+				}
+
+				this.pushReplayEvent(actions, sessionId, 'message_part', {
+					eventType: 'message_part',
+					part: mapSdkPartToPayload(part, info.id, sessionId),
+				});
+				if (part.type !== 'tool' || typeof part.tool !== 'string') continue;
+				const toolState =
+					part.state && typeof part.state === 'object'
+						? (part.state as Record<string, unknown>)
+						: undefined;
+				const toolInput =
+					toolState?.input && typeof toolState.input === 'object'
+						? (toolState.input as Record<string, unknown>)
+						: undefined;
+				const toolUseId = typeof part.callID === 'string' ? part.callID : undefined;
+				if (!toolUseId || !toolInput) continue;
+				const oldContent = SessionHandler.getFieldValue(toolInput, [
+					'old_string',
+					'old_str',
+					'oldString',
+				]);
+				const newContent = SessionHandler.getFieldValue(toolInput, [
+					'new_string',
+					'new_str',
+					'newString',
+					'content',
+				]);
+				this.pushReplayFileActions(
+					actions,
+					sessionId,
+					part.tool,
+					toolInput,
+					toolUseId,
+					computeDiffLineStats(String(oldContent), String(newContent)),
+				);
+			}
+		}
+
+		return actions;
 	}
 
 	private async restoreSessionDiffFromServer(
@@ -2004,338 +2491,6 @@ export class SessionHandler implements WebviewMessageHandler {
 				error,
 			});
 		}
-	}
-
-	private replayNormalizedLog(
-		data: CLIEvent['data'],
-		sessionId: string,
-		normalizedEntry?: CLIEvent['normalizedEntry'],
-	): void {
-		if ((data as { role?: string }).role !== 'user') return;
-		const replayData = data as {
-			content?: string;
-			timestamp?: string;
-			messageId?: string;
-			model?: string;
-			agent?: string;
-			summary?: SessionUserMessagePayload['message']['summary'];
-			attachments?: SessionUserMessagePayload['message']['attachments'];
-		};
-		const userMsg: SessionUserMessagePayload['message'] = {
-			id: replayData.messageId?.trim() || `msg-local-${Math.random().toString(36).slice(2, 9)}`,
-			content: replayData.content || '',
-			timestamp: replayData.timestamp || new Date().toISOString(),
-			...(replayData.model ? { model: replayData.model } : {}),
-			...(replayData.agent ? { agent: replayData.agent } : {}),
-			...(replayData.summary ? { summary: replayData.summary } : {}),
-			...(replayData.attachments ? { attachments: replayData.attachments } : {}),
-			...(normalizedEntry ? { normalizedEntry } : {}),
-		};
-		this.context.bridge.emit(sessionId, 'message_record', {
-			message: {
-				id: userMsg.id,
-				sessionId,
-				role: 'user',
-				createdAt: userMsg.timestamp ? new Date(userMsg.timestamp).getTime() : undefined,
-				...(userMsg.model ? { modelId: userMsg.model } : {}),
-				...(userMsg.agent ? { agent: userMsg.agent } : {}),
-			},
-		});
-		this.context.bridge.emit(
-			sessionId,
-			'user_message',
-			{ message: userMsg },
-			{
-				normalizedEntry,
-			},
-		);
-
-		const replayCommitId = generateId('checkpoint');
-		this.context.registerCheckpoint?.(replayCommitId, {
-			sessionId,
-			messageId: userMsg.id,
-			associatedMessageId: userMsg.id,
-			isOpenCode: true,
-		});
-
-		this.context.bridge.emit(sessionId, 'restore', {
-			action: 'add_commit',
-			commit: {
-				id: replayCommitId,
-				sha: replayCommitId,
-				message: 'Checkpoint before message',
-				timestamp: (data as { timestamp?: string }).timestamp || new Date().toISOString(),
-				associatedMessageId: userMsg.id,
-			},
-		});
-	}
-
-	private replayToolUse(
-		event: CLIEvent,
-		sessionId: string,
-		subtaskMeta: Map<string, { description: string; prompt: string; agent: string }>,
-		options?: {
-			mode?: 'default' | 'parent';
-			parentSessionId?: string;
-			childDurations?: Map<string, number>;
-			childHistories?: Map<string, CLIEvent[]>;
-			childTokensMap?: Map<
-				string,
-				{ input: number; output: number; total: number; cacheRead: number }
-			>;
-			childModelIdMap?: Map<string, string>;
-		},
-	): void {
-		const data = event.data as {
-			tool?: string;
-			input?: unknown;
-			toolUseId?: string;
-			timestamp?: string;
-		};
-		const toolName = data.tool || 'unknown';
-		const input = (data.input as Record<string, unknown>) || {};
-		const toolUseId = data.toolUseId || `hist-tool-${Math.random()}`;
-		const filePathFromInput = SessionHandler.extractFilePath(input);
-
-		if (toolName.toLowerCase() === 'question') {
-			return;
-		}
-
-		if (options?.mode === 'parent' && toolName === 'task') {
-			this.replayToolUseSubtask(input, toolUseId, data.timestamp, sessionId, subtaskMeta, options);
-			return;
-		}
-
-		this.context.bridge.emit(sessionId, 'message_part', {
-			part: {
-				id: toolUseId,
-				messageId: toolUseId,
-				sessionId,
-				type: 'tool',
-				callId: toolUseId,
-				toolName,
-				state: {
-					status: 'running',
-					input,
-				},
-				normalizedEntry: event.normalizedEntry,
-			},
-		});
-
-		if (filePathFromInput && this.isFileEditTool(toolName)) {
-			this.emitFileChangeFromReplay(input, filePathFromInput, toolUseId, sessionId);
-		} else if (!filePathFromInput && resolveToolName(toolName) === 'apply_patch') {
-			// apply_patch has no single filePath — extract paths from the patch content
-			const patchPaths = extractPatchFilePaths(input);
-			for (const patchPath of patchPaths) {
-				this.context.bridge.emit(sessionId, 'file', {
-					action: 'changed',
-					filePath: patchPath,
-					fileName: patchPath.split(/[/\\]/).pop() || patchPath,
-					linesAdded: 0,
-					linesRemoved: 0,
-					toolUseId,
-				});
-			}
-		}
-	}
-
-	private replayToolUseSubtask(
-		input: Record<string, unknown>,
-		toolUseId: string,
-		timestamp: string | undefined,
-		sessionId: string,
-		subtaskMeta: Map<string, { description: string; prompt: string; agent: string }>,
-		options: NonNullable<Parameters<SessionHandler['replayToolUse']>[3]>,
-	): void {
-		const graph = this.context.sessionGraph;
-		const childSessionId = graph.getChildByTaskId(toolUseId);
-		const subtaskDuration = childSessionId
-			? options.childDurations?.get(childSessionId)
-			: undefined;
-		const childTokens = childSessionId ? options.childTokensMap?.get(childSessionId) : undefined;
-		const childModelId = childSessionId ? options.childModelIdMap?.get(childSessionId) : undefined;
-		const agent = typeof input.subagent_type === 'string' ? input.subagent_type : 'subagent';
-		const prompt = typeof input.prompt === 'string' ? input.prompt : '';
-		const description = typeof input.description === 'string' ? input.description : 'Subtask';
-		subtaskMeta.set(toolUseId, { description, prompt, agent });
-
-		this.context.bridge.emit(sessionId, 'subtask', {
-			subtask: {
-				id: toolUseId,
-				agent,
-				prompt,
-				description,
-				...(options.parentSessionId ? { parentSessionId: options.parentSessionId } : {}),
-				...(childSessionId ? { childSessionId } : {}),
-				status: 'running',
-				timestamp: timestamp || new Date().toISOString(),
-				startTime: timestamp,
-				...(subtaskDuration ? { durationMs: subtaskDuration } : {}),
-				...(childTokens ? { childTokens } : {}),
-				...(childModelId ? { childModelId } : {}),
-			},
-		});
-	}
-
-	private emitFileChangeFromReplay(
-		input: Record<string, unknown>,
-		filePathFromInput: string,
-		toolUseId: string,
-		sessionId: string,
-	): void {
-		const oldContent =
-			typeof input.old_string === 'string'
-				? input.old_string
-				: typeof input.old_str === 'string'
-					? input.old_str
-					: typeof input.oldString === 'string'
-						? input.oldString
-						: '';
-		const newContent =
-			typeof input.new_string === 'string'
-				? input.new_string
-				: typeof input.new_str === 'string'
-					? input.new_str
-					: typeof input.newString === 'string'
-						? input.newString
-						: typeof input.content === 'string'
-							? input.content
-							: '';
-		const diffStats = computeDiffLineStats(String(oldContent), String(newContent));
-
-		this.context.bridge.emit(sessionId, 'file', {
-			action: 'changed',
-			filePath: filePathFromInput,
-			fileName: filePathFromInput.split(/[/\\]/).pop() || filePathFromInput,
-			linesAdded: diffStats.added,
-			linesRemoved: diffStats.removed,
-			toolUseId,
-		});
-	}
-
-	private replayToolResult(
-		event: CLIEvent,
-		sessionId: string,
-		subtaskMeta: Map<string, { description: string; prompt: string; agent: string }>,
-		options?: Parameters<SessionHandler['replayToolUse']>[3],
-	): void {
-		const data = event.data as {
-			tool?: string;
-			tool_use_id?: string;
-			content?: unknown;
-			input?: unknown;
-			is_error?: boolean;
-			metadata?: unknown;
-			timestamp?: string;
-		};
-		const toolName = data.tool || 'unknown';
-		const toolUseId = data.tool_use_id || `hist-tool-${Math.random()}`;
-
-		if (toolName.toLowerCase() === 'question') {
-			return;
-		}
-
-		if (options?.mode === 'parent' && toolName === 'task') {
-			this.replayToolResultSubtask(
-				data,
-				toolUseId,
-				sessionId,
-				subtaskMeta,
-				options,
-				event.normalizedEntry,
-			);
-			return;
-		}
-
-		if (resolveToolName(toolName) === 'apply_patch') {
-			const metadata =
-				data.metadata && typeof data.metadata === 'object'
-					? (data.metadata as Record<string, unknown>)
-					: undefined;
-			const metaFiles = metadata?.files;
-			if (Array.isArray(metaFiles) && metaFiles.length > 0) {
-				for (const entry of metaFiles) {
-					if (!entry || typeof entry !== 'object') continue;
-					const file = entry as Record<string, unknown>;
-					const filePath =
-						(typeof file.filePath === 'string' && file.filePath) ||
-						(typeof file.relativePath === 'string' && file.relativePath) ||
-						(typeof file.path === 'string' && file.path) ||
-						'';
-					if (!filePath) continue;
-
-					this.context.bridge.emit(sessionId, 'file', {
-						action: 'changed',
-						filePath,
-						fileName: filePath.split(/[/\\]/).pop() || filePath,
-						linesAdded: typeof file.additions === 'number' ? file.additions : 0,
-						linesRemoved: typeof file.deletions === 'number' ? file.deletions : 0,
-						toolUseId,
-					});
-				}
-			}
-		}
-
-		this.context.bridge.emit(sessionId, 'message_part', {
-			part: {
-				id: toolUseId,
-				messageId: toolUseId,
-				sessionId,
-				type: 'tool',
-				callId: toolUseId,
-				toolName,
-				state: {
-					status: data.is_error ? 'error' : 'completed',
-					input: data.input,
-					output:
-						typeof data.content === 'string' ? data.content : JSON.stringify(data.content ?? ''),
-					title:
-						typeof (data as { title?: unknown }).title === 'string'
-							? ((data as { title?: string }).title ?? undefined)
-							: undefined,
-					metadata: data.metadata,
-				},
-				normalizedEntry: event.normalizedEntry,
-			},
-		});
-	}
-
-	private replayToolResultSubtask(
-		data: { content?: unknown; is_error?: boolean; timestamp?: string },
-		toolUseId: string,
-		sessionId: string,
-		subtaskMeta: Map<string, { description: string; prompt: string; agent: string }>,
-		options: NonNullable<Parameters<SessionHandler['replayToolUse']>[3]>,
-		normalizedEntry?: CLIEvent['normalizedEntry'],
-	): void {
-		const graph = this.context.sessionGraph;
-		const childSessionId = graph.getChildByTaskId(toolUseId);
-		const subtaskDuration = childSessionId
-			? options.childDurations?.get(childSessionId)
-			: undefined;
-		const childTokens = childSessionId ? options.childTokensMap?.get(childSessionId) : undefined;
-		const childModelId = childSessionId ? options.childModelIdMap?.get(childSessionId) : undefined;
-		const savedMeta = subtaskMeta.get(toolUseId);
-
-		this.context.bridge.emit(sessionId, 'subtask', {
-			subtask: {
-				id: toolUseId,
-				agent: savedMeta?.agent || 'subagent',
-				prompt: savedMeta?.prompt || '',
-				description: savedMeta?.description || 'Subtask',
-				status: data.is_error ? 'error' : 'completed',
-				result: String(data.content || ''),
-				...(options.parentSessionId ? { parentSessionId: options.parentSessionId } : {}),
-				...(childSessionId ? { childSessionId } : {}),
-				timestamp: data.timestamp || new Date().toISOString(),
-				...(subtaskDuration ? { durationMs: subtaskDuration } : {}),
-				...(childTokens ? { childTokens } : {}),
-				...(childModelId ? { childModelId } : {}),
-				...(savedMeta ?? {}),
-				...(normalizedEntry ? { normalizedEntry } : {}),
-			},
-		});
 	}
 
 	private async onDeleteConversation(msg: CommandOf<'deleteConversation'>): Promise<void> {
@@ -3040,6 +3195,56 @@ export class SessionHandler implements WebviewMessageHandler {
 		}
 
 		return result;
+	}
+
+	private findReplayedUserMessageIdInHistory(
+		history: CLIEvent[],
+		revertMessageId: string,
+	): string | undefined {
+		for (let i = history.length - 1; i >= 0; i--) {
+			const ev = history[i];
+			if (ev.type !== 'normalized_log' || (ev.data as { role?: string }).role !== 'user') {
+				continue;
+			}
+			const eventMessageId = (ev.data as { messageId?: string }).messageId;
+			if (eventMessageId === revertMessageId) {
+				return eventMessageId;
+			}
+		}
+		return undefined;
+	}
+
+	private hasCanonicalUserMessage(
+		entries: Array<{ info: CanonicalSdkMessage; parts: CanonicalSdkPart[] }>,
+		revertMessageId: string,
+	): boolean {
+		return entries.some(entry => entry.info.role === 'user' && entry.info.id === revertMessageId);
+	}
+
+	private emitCheckpointForUserMessage(
+		sessionId: string,
+		messageId: string,
+		timestamp: string,
+		isOpenCode: boolean,
+	): void {
+		const commitId = generateId('checkpoint');
+		this.context.registerCheckpoint?.(commitId, {
+			sessionId,
+			messageId,
+			associatedMessageId: messageId,
+			isOpenCode,
+		});
+
+		this.context.bridge.emit(sessionId, 'restore', {
+			action: 'add_commit',
+			commit: {
+				id: commitId,
+				sha: commitId,
+				message: 'Checkpoint before message',
+				timestamp,
+				associatedMessageId: messageId,
+			},
+		});
 	}
 
 	private async restoreSessionDiffMembershipFromServer(

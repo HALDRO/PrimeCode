@@ -682,9 +682,31 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		const now = Date.now();
 		this.traceCliEvent(event);
 
+		if (event.type === 'server_reconnected') {
+			return;
+		}
+
 		if (event.type === 'session_updated') {
 			this.handleSessionUpdatedCliEvent(event);
 			this.sessionHandler.handleSessionUpdatedEvent(event.data, event.sessionId);
+			return;
+		}
+
+		if (event.type === 'error' && !event.sessionId) {
+			const activeSessionId = this.sessionState.activeSessionId;
+			if (!activeSessionId) {
+				return;
+			}
+
+			this.bridge.emit(activeSessionId, 'notification', {
+				notification: {
+					id: `error-${now}`,
+					type: 'error',
+					content: event.data.message || 'Unknown error',
+					timestamp: new Date().toISOString(),
+					normalizedEntry: event.normalizedEntry,
+				},
+			});
 			return;
 		}
 

@@ -985,6 +985,7 @@ export interface SendMessageCommand {
 	model?: string;
 	sessionId?: string;
 	messageID?: string;
+	editMode?: 'revert' | 'history_only';
 	/** Agent override for this message (e.g. 'plan', 'build'). */
 	agent?: string;
 	/** Thinking effort variant (e.g. 'high', 'max', 'low'). Sent to CLI as-is. */

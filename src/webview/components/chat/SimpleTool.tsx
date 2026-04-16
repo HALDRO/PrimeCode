@@ -1,5 +1,6 @@
 import React, { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { NormalizedEntry } from '../../../common/normalizedTypes';
+import { TOOL_CARD_EXPANDED_MAX_HEIGHT } from '../../constants';
 import { cn } from '../../lib/cn';
 import { formatDuration, formatToolName } from '../../utils/format';
 import { Markdown } from '../../utils/markdown';
@@ -51,6 +52,7 @@ interface SimpleToolProps {
 	contentClassName?: string;
 	/** Show a CollapseOverlay at the bottom of expanded content. */
 	showCollapseOverlay?: boolean;
+	maxExpandedHeight?: string;
 }
 
 export const SimpleTool: React.FC<SimpleToolProps> = ({
@@ -66,6 +68,7 @@ export const SimpleTool: React.FC<SimpleToolProps> = ({
 	className,
 	contentClassName,
 	showCollapseOverlay = false,
+	maxExpandedHeight = TOOL_CARD_EXPANDED_MAX_HEIGHT,
 }) => {
 	const [uncontrolledExpanded, setUncontrolledExpanded] = useState(defaultExpanded);
 	const contentId = useId();
@@ -139,8 +142,9 @@ export const SimpleTool: React.FC<SimpleToolProps> = ({
 				<div className="relative group">
 					<div
 						id={contentId}
+						style={{ maxHeight: maxExpandedHeight }}
 						className={cn(
-							'pl-3 ml-1 border-l border-(--border-subtle) mt-1 py-1 text-sm overflow-x-auto',
+							'pl-3 ml-1 border-l border-(--border-subtle) mt-1 py-1 text-sm overflow-x-auto overflow-y-auto',
 							contentClassName,
 						)}
 					>

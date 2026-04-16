@@ -84,7 +84,7 @@ const SubtaskItem = React.memo<{
 	ctx: MessageItemContext;
 }>(({ message, ctx }) => {
 	const [expandState, setExpandState] = useState<SubtaskExpandState>('preview');
-	const [promptExpanded, setPromptExpanded] = useState(message.status === 'running');
+	const [promptExpanded, setPromptExpanded] = useState(false);
 	const mcpServers = useMcpServers();
 	const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
 	const pendingAccess = useSubtaskAccessRequest(message.id);
@@ -153,10 +153,6 @@ const SubtaskItem = React.memo<{
 	}, [message.status, message.result, message.description, message.timestamp, message]);
 
 	const isRunning = message.status === 'running';
-
-	useEffect(() => {
-		setPromptExpanded(message.status === 'running');
-	}, [message.status]);
 
 	const retryInfo = (
 		message as typeof message & {

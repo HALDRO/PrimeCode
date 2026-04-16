@@ -424,44 +424,17 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 				},
 			) => {
 				if (shouldRestore && restoreCommit) {
-					// Frontend only sends commitId — backend resolves everything else
 					postMessage({
 						type: 'restoreCommit',
 						data: { commitId: restoreCommit.id },
 					});
 				}
-				// Remove this message AND everything after it from the UI.
-				// The backend will truncate server history to this message (removing it
-				// from the server too), then create a brand new user message with a new ID.
-				// This prevents duplication on session restore: the old message is gone
-				// from both UI and server, replaced by the new one.
-				if (message.id) {
-					chatActions.deleteMessagesAfterId(message.id);
-					// Also remove the message itself — backend generates a fresh one
-					chatActions.removeMessageByPartId(message.id);
-				}
-				// Clear unrevert state - user is sending a new message, unrevert no longer makes sense
-				chatActions.setUnrevertAvailable(false);
 
 				// Use attachments from ChatInput (reflects user's edits: removed files, etc.)
 				// Falls back to original message attachments if not provided
 				const files = currentAttachments?.files ?? attachedFiles;
-				const snippets =
-					currentAttachments?.codeSnippets ??
-					attachedSnippets.map(s => ({
-						filePath: s.filePath,
-						startLine: s.startLine,
-						endLine: s.endLine,
-						content: s.content,
-					}));
-				const images =
-					currentAttachments?.images ??
-					attachedImages.map(img => ({
-						id: img.id,
-						name: img.name,
-						dataUrl: img.dataUrl,
-						path: img.path,
-					}));
+				const snippets = currentAttachments?.codeSnippets ?? attachedSnippets;
+				const images = currentAttachments?.images ?? attachedImages;
 
 				const editAttachments = {
 					files: files.length > 0 ? files : undefined,
@@ -471,12 +444,28 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 				const hasAttachments =
 					editAttachments.files || editAttachments.codeSnippets || editAttachments.images;
 
+				if (message.id) {
+					// Editing from an older message replaces that branch in the active transcript
+					// immediately, regardless of whether the backend path is revert-based or
+					// history-only. The difference between the two modes is server-side file
+					// handling, not whether the old transcript branch should remain visible.
+					chatActions.deleteMessagesAfterId(message.id);
+					chatActions.removeMessageByPartId(message.id);
+					if (shouldRestore) {
+						chatActions.setUnrevertAvailable(false);
+					}
+				}
+
 				postSessionMessage({
 					type: 'sendMessage',
 					text,
 					attachments: hasAttachments ? editAttachments : undefined,
-					// Pass the ID of the message being edited so the backend knows to truncate history
-					messageID: message.id,
+					...(message.id
+						? {
+								messageID: message.id,
+								editMode: shouldRestore ? 'revert' : 'history_only',
+							}
+						: {}),
 				});
 				// Clear the draft — edit was successfully sent
 				if (message.id) {
@@ -514,25 +503,21 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 				if (!text.trim()) {
 					return;
 				}
-				// If unrevert is available, user already did a restore - just send without asking again
-				// If there's a checkpoint but no unrevert, ask if they want to restore files
 				if (restoreCommit && !unrevertAvailable) {
 					showConfirmDialog({
-						title: 'Restore Checkpoint?',
+						title: 'Continue From This Message?',
 						message:
-							'Do you want to restore files to their state before this message? This will undo all file changes made after this checkpoint.',
-						confirmLabel: 'Restore & Send',
-						cancelLabel: 'Send Without Restore',
+							'Submitting from a previous message will clear the messages after it. Choose whether to also revert file changes to the state before this message.',
+						confirmLabel: 'Continue and revert',
+						cancelLabel: 'Continue without reverting',
 						onConfirm: () => doSendUpdate(text, true, currentAttachments),
 						onCancel: () => doSendUpdate(text, false, currentAttachments),
 					});
 				} else {
-					// Either no checkpoint, or user already restored (unrevertAvailable=true)
-					// In both cases, just send without restore
 					doSendUpdate(text, false, currentAttachments);
 				}
 			},
-			[restoreCommit, unrevertAvailable, showConfirmDialog, doSendUpdate],
+			[restoreCommit, unrevertAvailable, doSendUpdate, showConfirmDialog],
 		);
 
 		const handleRestore = useCallback(() => {
@@ -569,9 +554,6 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 			const el = containerRef.current;
 			if (!el) return;
 
-			const scrollParent = el.closest('.os-viewport') as HTMLElement | null;
-			const root = scrollParent || null;
-
 			// A 1px-tall sentinel at the top of the scroll container.
 			// When the sticky header reaches the top and the sentinel goes
 			// out of view, we know the element is "stuck".
@@ -582,7 +564,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 					setIsSticky(!entry.isIntersecting);
 				},
 				{
-					root,
+					root: null,
 					// Trigger when the very top pixel leaves the viewport
 					threshold: 1.0,
 					rootMargin: '0px 0px 0px 0px',
@@ -641,42 +623,46 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 							'cursor-pointer',
 						)}
 					>
-						{/* Message content with inline file badges at the beginning */}
-						<div
-							ref={contentRef}
-							className={cn(
-								'text-(length:--font-size-base) leading-tight wrap-break-word overflow-anywhere whitespace-pre-wrap overflow-hidden line-clamp-3 px-(--gap-3) py-(--gap-1-5)',
-							)}
-						>
+						<div className="px-(--gap-3) py-(--gap-1-5)">
 							{(attachedFiles.length > 0 ||
 								attachedSnippets.length > 0 ||
 								attachedImages.length > 0) && (
-								<AttachmentsBar
-									images={attachedImages.map(img => ({
-										id: img.id,
-										name: img.name,
-										dataUrl: img.dataUrl,
-										path: img.path,
-									}))}
-									files={attachedFiles}
-									codeSnippets={attachedSnippets.map(s => ({
-										id: `${s.filePath}:${s.startLine}-${s.endLine}`,
-										filePath: s.filePath,
-										startLine: s.startLine,
-										endLine: s.endLine,
-										content: s.content,
-									}))}
-									onOpenFile={(path, startLine, endLine) => {
-										postMessage({ type: 'openFile', filePath: path, startLine, endLine });
-									}}
-									inline
-								/>
+								<div className="mb-(--gap-2)">
+									<AttachmentsBar
+										images={attachedImages.map(img => ({
+											id: img.id,
+											name: img.name,
+											dataUrl: img.dataUrl,
+											path: img.path,
+										}))}
+										files={attachedFiles}
+										codeSnippets={attachedSnippets.map(s => ({
+											id: `${s.filePath}:${s.startLine}-${s.endLine}`,
+											filePath: s.filePath,
+											startLine: s.startLine,
+											endLine: s.endLine,
+											content: s.content,
+										}))}
+										onOpenFile={(path, startLine, endLine) => {
+											postMessage({ type: 'openFile', filePath: path, startLine, endLine });
+										}}
+										inline
+										maxRows={2}
+									/>
+								</div>
 							)}
-							<MessageTextWithCommands
-								text={messageText}
-								validCommands={validCommands}
-								validSubagents={validSubagents}
-							/>
+							<div
+								ref={contentRef}
+								className={cn(
+									'text-(length:--font-size-base) leading-tight wrap-break-word overflow-anywhere whitespace-pre-wrap overflow-hidden line-clamp-3',
+								)}
+							>
+								<MessageTextWithCommands
+									text={messageText}
+									validCommands={validCommands}
+									validSubagents={validSubagents}
+								/>
+							</div>
 						</div>
 					</button>
 					<div className="flex items-center text-sm px-1.5 pb-0.5 bg-(--input-bg) pt-1">

@@ -406,11 +406,13 @@ function removeProjectedMessage(targetSession: ChatSession, message: RenderMessa
 
 function handleUserMessageEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
 	const msgData = (payload as SessionUserMessagePayload).message;
+	const messageId = msgData.id ?? '';
+	const messageTimestamp = msgData.timestamp ?? '';
 	const message: UserMessage = {
 		type: 'user',
 		...msgData,
-		id: msgData.id || generateId('msg'),
-		timestamp: msgData.timestamp || new Date().toISOString(),
+		id: messageId,
+		timestamp: messageTimestamp,
 	};
 	upsertUserMessage(targetSession, message);
 	if (message.agent) {
@@ -420,11 +422,13 @@ function handleUserMessageEvent(targetSession: ChatSession, payload: SessionEven
 
 function handleSubtaskEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
 	const subtaskData = (payload as SessionSubtaskPayload).subtask;
+	const subtaskId = subtaskData.id ?? '';
+	const subtaskTimestamp = subtaskData.timestamp ?? '';
 	const subtask: SubtaskMessage = {
 		type: 'subtask',
 		...subtaskData,
-		id: subtaskData.id || generateId('subtask'),
-		timestamp: subtaskData.timestamp || new Date().toISOString(),
+		id: subtaskId,
+		timestamp: subtaskTimestamp,
 	};
 	upsertSubtaskMessage(targetSession, subtask);
 }
@@ -518,7 +522,7 @@ function handleCompleteEvent(targetSession: ChatSession, payload: SessionEventPa
 	for (const parts of Object.values(targetSession.runtimeMessagePartsById)) {
 		for (const part of parts) {
 			if (part.id !== completePartId) continue;
-			part.completedAt = completedAt ?? part.completedAt ?? Date.now();
+			part.completedAt = completedAt ?? part.completedAt;
 			part.state = {
 				...(part.state || {}),
 				status: part.state?.status === 'error' ? 'error' : 'completed',
@@ -587,7 +591,7 @@ function handleFileEvent(targetSession: ChatSession, payload: SessionEventPayloa
 			linesAdded,
 			linesRemoved,
 			toolUseId: f.toolUseId || '',
-			timestamp: Date.now(),
+			timestamp: targetSession.lastActive,
 		};
 
 		// Deduplicate by toolUseId + filePath so multiple edits to the
@@ -645,6 +649,9 @@ function handleMessageRecordRemovedEvent(
 	targetSession.runtimeMessageRecords = targetSession.runtimeMessageRecords.filter(
 		m => m.id !== evt.messageId,
 	);
+	delete targetSession.userMessagesById[evt.messageId];
+	delete targetSession.subtasksById[evt.messageId];
+	delete targetSession.turnTokens[evt.messageId];
 	delete targetSession.runtimeMessagePartsById[evt.messageId];
 }
 
@@ -899,7 +906,7 @@ function dispatchToSession(
 	}
 }
 
-const createEmptySession = (id: string): ChatSession => ({
+const createEmptySession = (id: string, timestamp: number): ChatSession => ({
 	id,
 	agent: undefined,
 	model: undefined,
@@ -915,7 +922,7 @@ const createEmptySession = (id: string): ChatSession => ({
 	retryInfo: null,
 	isLoading: false,
 	toolActivity: null,
-	lastActive: Date.now(),
+	lastActive: timestamp,
 	changedFiles: [],
 	cumulativeDiffs: [],
 	restoreCommits: [],
@@ -936,6 +943,46 @@ function resolveTargetSessionId(state: ChatState, sessionId?: string): string | 
 	return sessionId || state.activeSessionId;
 }
 
+function prepareEventPayload(
+	eventType: SessionEventType,
+	payload: SessionEventPayload,
+	timestamp: number,
+): SessionEventPayload {
+	if (eventType === 'user_message') {
+		const event = payload as SessionUserMessagePayload;
+		return {
+			...event,
+			message: {
+				...event.message,
+				id: event.message.id || generateId('msg'),
+				timestamp: event.message.timestamp || new Date(timestamp).toISOString(),
+			},
+		};
+	}
+
+	if (eventType === 'subtask') {
+		const event = payload as SessionSubtaskPayload;
+		return {
+			...event,
+			subtask: {
+				...event.subtask,
+				id: event.subtask.id || generateId('subtask'),
+				timestamp: event.subtask.timestamp || new Date(timestamp).toISOString(),
+			},
+		};
+	}
+
+	if (eventType === 'complete') {
+		const event = payload as import('../../common').SessionCompletePayload;
+		return {
+			...event,
+			completedAt: event.completedAt ?? timestamp,
+		};
+	}
+
+	return payload;
+}
+
 // =============================================================================
 // Helpers — eliminate per-action boilerplate
 // =============================================================================
@@ -948,13 +995,14 @@ type ZustandSet = (
 function mutateSession(
 	set: ZustandSet,
 	sessionId: string | undefined,
+	timestamp: number,
 	mutator: (session: ChatSession, state: ChatState) => void,
 ): void {
 	set(
 		produce((state: ChatState) => {
 			if (!sessionId || !state.sessionsById[sessionId]) return;
 			mutator(state.sessionsById[sessionId], state);
-			state.sessionsById[sessionId].lastActive = Date.now();
+			state.sessionsById[sessionId].lastActive = timestamp;
 		}),
 	);
 }
@@ -1041,14 +1089,19 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 				}
 				set(
 					produce((state: ChatState) => {
+						const now = Date.now();
 						for (const event of batch.messages) {
 							const targetId = event.targetId;
 							if (!state.sessionsById[targetId]) {
-								state.sessionsById[targetId] = createEmptySession(targetId);
+								state.sessionsById[targetId] = createEmptySession(targetId, now);
 							}
 							const targetSession = state.sessionsById[targetId];
-							targetSession.lastActive = Date.now();
-							dispatchToSession(targetSession, event.eventType, event.payload);
+							targetSession.lastActive = now;
+							dispatchToSession(
+								targetSession,
+								event.eventType,
+								prepareEventPayload(event.eventType, event.payload, now),
+							);
 						}
 					}),
 				);
@@ -1092,7 +1145,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 					useUIStore.getState().actions.pushNotification({
 						type: 'error',
 						content: `Prompt Improve failed\n${error || 'Unknown error'}`,
-						timestamp: new Date().toISOString(),
+						timestamp: new Date(Date.now()).toISOString(),
 						autoDismissMs: 8000,
 					});
 				}
@@ -1160,16 +1213,18 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 				useUIStore.getState().actions.pushNotification(notification);
 			}
 
+			const now = Date.now();
+			const preparedPayload = prepareEventPayload(eventType, payload, now);
 			set(
 				produce((state: ChatState) => {
 					if (!state.sessionsById[targetId]) {
-						state.sessionsById[targetId] = createEmptySession(targetId);
+						state.sessionsById[targetId] = createEmptySession(targetId, now);
 					}
 
 					const targetSession = state.sessionsById[targetId];
-					targetSession.lastActive = Date.now();
+					targetSession.lastActive = now;
 
-					dispatchToSession(targetSession, eventType, payload);
+					dispatchToSession(targetSession, eventType, preparedPayload);
 				}),
 			);
 		},
@@ -1183,30 +1238,37 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 				}
 			}
 
+			const now = Date.now();
 			set(
 				produce((state: ChatState) => {
 					for (const event of events) {
 						const targetId = event.targetId;
 						if (!state.sessionsById[targetId]) {
-							state.sessionsById[targetId] = createEmptySession(targetId);
+							state.sessionsById[targetId] = createEmptySession(targetId, now);
 						}
 						const targetSession = state.sessionsById[targetId];
-						targetSession.lastActive = Date.now();
-						dispatchToSession(targetSession, event.eventType, event.payload);
+						targetSession.lastActive = now;
+						dispatchToSession(
+							targetSession,
+							event.eventType,
+							prepareEventPayload(event.eventType, event.payload, now),
+						);
 					}
 				}),
 			);
 		},
 
 		addMessage: (msgInput, sessionId) =>
-			mutateSession(set, sessionId, s => {
+			mutateSession(set, sessionId, Date.now(), s => {
+				const messageId = msgInput.id || generateId('msg');
+				const messageTimestamp =
+					typeof msgInput.timestamp === 'string'
+						? msgInput.timestamp
+						: new Date(msgInput.timestamp || Date.now()).toISOString();
 				const message = {
 					...msgInput,
-					id: msgInput.id || `msg-${Date.now()}-${Math.random()}`,
-					timestamp:
-						typeof msgInput.timestamp === 'string'
-							? msgInput.timestamp
-							: new Date(msgInput.timestamp || Date.now()).toISOString(),
+					id: messageId,
+					timestamp: messageTimestamp,
 				} as StoredMessage;
 				if (message.type === 'user') upsertUserMessage(s, message as UserMessage);
 				if (message.type === 'subtask') {
@@ -1215,21 +1277,23 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 			}),
 
 		updateSession: (updates, sessionId) =>
-			mutateSession(set, sessionId ?? get().activeSessionId, s => Object.assign(s, updates)),
+			mutateSession(set, sessionId ?? get().activeSessionId, Date.now(), s =>
+				Object.assign(s, updates),
+			),
 
 		appendInput: (text, sessionId) =>
-			mutateSession(set, sessionId ?? get().activeSessionId, s => {
+			mutateSession(set, sessionId ?? get().activeSessionId, Date.now(), s => {
 				s.input += text;
 			}),
 
 		clearDraftState: sessionId =>
-			mutateSession(set, sessionId ?? get().activeSessionId, s => {
+			mutateSession(set, sessionId ?? get().activeSessionId, Date.now(), s => {
 				s.draftAttachments = undefined;
 				s.draftAgent = undefined;
 			}),
 
 		clearMessages: sessionId =>
-			mutateSession(set, sessionId ?? get().activeSessionId, s => {
+			mutateSession(set, sessionId ?? get().activeSessionId, Date.now(), s => {
 				s.userMessagesById = {};
 				s.subtasksById = {};
 				s.runtimeMessageRecords = [];
@@ -1238,7 +1302,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 			}),
 
 		updateMessage: (id, updates, sessionId) =>
-			mutateSession(set, sessionId ?? get().activeSessionId, s => {
+			mutateSession(set, sessionId ?? get().activeSessionId, Date.now(), s => {
 				if (s.userMessagesById[id]) Object.assign(s.userMessagesById[id], updates);
 				if (s.subtasksById[id]) Object.assign(s.subtasksById[id], updates);
 			}),
@@ -1262,7 +1326,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 		clearAllEditDrafts: () => set({ editDrafts: {} }),
 
 		deleteMessagesAfterId: (id, sessionId) =>
-			mutateSession(set, sessionId ?? get().activeSessionId, s => {
+			mutateSession(set, sessionId ?? get().activeSessionId, Date.now(), s => {
 				const projected = projectRuntimeMessages(s);
 				const idx = projected.findIndex(m => m.id === id);
 				if (idx !== -1) {
@@ -1276,7 +1340,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 			}),
 
 		removeMessageByPartId: (partId, sessionId) =>
-			mutateSession(set, sessionId ?? get().activeSessionId, s => {
+			mutateSession(set, sessionId ?? get().activeSessionId, Date.now(), s => {
 				for (const messageId of Object.keys(s.runtimeMessagePartsById)) {
 					const next = s.runtimeMessagePartsById[messageId].filter(part => part.id !== partId);
 					if (next.length === 0) delete s.runtimeMessagePartsById[messageId];
@@ -1290,12 +1354,12 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 			}),
 
 		markRevertedFromMessageId: (id, sessionId) =>
-			mutateSession(set, sessionId ?? get().activeSessionId, s => {
+			mutateSession(set, sessionId ?? get().activeSessionId, Date.now(), s => {
 				s.revertedFromMessageId = id;
 			}),
 
 		clearRevertedMessages: sessionId =>
-			mutateSession(set, sessionId ?? get().activeSessionId, s => {
+			mutateSession(set, sessionId ?? get().activeSessionId, Date.now(), s => {
 				if (!s.revertedFromMessageId) return;
 				const projected = projectRuntimeMessages(s);
 				const idx = projected.findIndex(m => m.id === s.revertedFromMessageId);
@@ -1314,8 +1378,9 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 		handleSessionCreated: sessionId => {
 			set(
 				produce((state: ChatState) => {
+					const now = Date.now();
 					if (!state.sessionsById[sessionId]) {
-						state.sessionsById[sessionId] = createEmptySession(sessionId);
+						state.sessionsById[sessionId] = createEmptySession(sessionId, now);
 						if (!state.sessionOrder.includes(sessionId)) {
 							state.sessionOrder.push(sessionId);
 						}
@@ -1329,8 +1394,9 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 		switchSession: sessionId => {
 			set(
 				produce((state: ChatState) => {
+					const now = Date.now();
 					if (!state.sessionsById[sessionId]) {
-						state.sessionsById[sessionId] = createEmptySession(sessionId);
+						state.sessionsById[sessionId] = createEmptySession(sessionId, now);
 						if (!state.sessionOrder.includes(sessionId)) {
 							state.sessionOrder.push(sessionId);
 						}
@@ -1359,7 +1425,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 		},
 
 		addChangedFile: (file, sessionId) =>
-			mutateSession(set, sessionId ?? get().activeSessionId, s => {
+			mutateSession(set, sessionId ?? get().activeSessionId, Date.now(), s => {
 				const idx = s.changedFiles.findIndex(f => f.toolUseId === file.toolUseId);
 				if (idx !== -1) {
 					s.changedFiles[idx] = { ...s.changedFiles[idx], ...file };
@@ -1369,19 +1435,19 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 			}),
 
 		removeChangedFile: (filePath, sessionId) =>
-			mutateSession(set, sessionId ?? get().activeSessionId, s => {
+			mutateSession(set, sessionId ?? get().activeSessionId, Date.now(), s => {
 				s.changedFiles = s.changedFiles.filter(f => f.filePath !== filePath);
 				s.cumulativeDiffs = s.cumulativeDiffs.filter(d => d.file !== filePath);
 			}),
 
 		clearChangedFiles: sessionId =>
-			mutateSession(set, sessionId ?? get().activeSessionId, s => {
+			mutateSession(set, sessionId ?? get().activeSessionId, Date.now(), s => {
 				s.changedFiles = [];
 				s.cumulativeDiffs = [];
 			}),
 
 		addRestoreCommit: (commit, sessionId) =>
-			mutateSession(set, sessionId, s => {
+			mutateSession(set, sessionId, Date.now(), s => {
 				if (!s.restoreCommits.some(c => c.sha === commit.sha)) s.restoreCommits.push(commit);
 			}),
 
@@ -1395,16 +1461,17 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 			get().actions.updateSession({ unrevertAvailable: available }, sessionId),
 
 		setTotalStats: (stats, sessionId) =>
-			mutateSession(set, sessionId, s => Object.assign(s.totalStats, stats)),
+			mutateSession(set, sessionId, Date.now(), s => Object.assign(s.totalStats, stats)),
 
 		startSubtask: (subtask, sessionId) =>
-			mutateSession(set, sessionId, s => {
+			mutateSession(set, sessionId, Date.now(), s => {
 				upsertSubtaskMessage(s, subtask as SubtaskMessage);
 			}),
 
 		updateSubtask: (subtaskId, status, result, sessionId) => {
 			set(
 				produce((state: ChatState) => {
+					const now = Date.now();
 					// Use explicit sessionId when provided (avoids O(N) scan over all sessions)
 					const sid = sessionId && state.sessionsById[sessionId] ? sessionId : undefined;
 					if (!sid) return;
@@ -1412,7 +1479,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 					if (!msg || msg.type !== 'subtask') return;
 					msg.status = status;
 					msg.result = result;
-					state.sessionsById[sid].lastActive = Date.now();
+					state.sessionsById[sid].lastActive = now;
 				}),
 			);
 		},
@@ -1436,7 +1503,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 		},
 
 		setSessionMessages: (sessionId, messages) =>
-			mutateSession(set, sessionId, s => {
+			mutateSession(set, sessionId, Date.now(), s => {
 				const displayMessages = messages.filter(m => m.type === 'user' || m.type === 'subtask');
 				s.userMessagesById = {};
 				s.subtasksById = {};
@@ -1453,7 +1520,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 			}),
 
 		deleteMessagesAfterMessageId: (sessionId, messageId) =>
-			mutateSession(set, sessionId, s => {
+			mutateSession(set, sessionId, Date.now(), s => {
 				const idx = projectRuntimeMessages(s).findIndex(m => m.id === messageId);
 				if (idx !== -1) s.revertedFromMessageId = messageId;
 			}),
@@ -1480,7 +1547,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 		},
 
 		removePendingQuestion: (requestId, sessionId) =>
-			mutateSession(set, sessionId ?? get().activeSessionId, s => {
+			mutateSession(set, sessionId ?? get().activeSessionId, Date.now(), s => {
 				s.pendingQuestions = s.pendingQuestions.filter(question => question.id !== requestId);
 			}),
 	},

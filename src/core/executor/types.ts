@@ -315,6 +315,12 @@ export interface CLIExecutor extends EventEmitter {
 	): Promise<ChildProcess | null>;
 	/** Truncate session history at a specific message ID (OpenCode only). */
 	truncateSession?(sessionId: string, messageId: string, config: CLIConfig): Promise<void>;
+	/** Delete a message and all newer messages without reverting workspace snapshot. */
+	deleteSessionMessagesFrom?(
+		sessionId: string,
+		messageId: string,
+		config: CLIConfig,
+	): Promise<void>;
 	/** Execute a slash command (e.g. /compact, /summarize) via the appropriate API. */
 	executeCommand(
 		command: string,

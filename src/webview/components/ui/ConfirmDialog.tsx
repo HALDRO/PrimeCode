@@ -63,7 +63,7 @@ export const ConfirmDialog: React.FC = () => {
 					'flex flex-col gap-(--gap-4) p-(--gap-5)',
 					'bg-(--surface-overlay) border border-(--border-default) rounded-lg',
 					'shadow-[0_4px_16px_rgba(0,0,0,0.4)]',
-					'min-w-70 max-w-90',
+					'w-[min(80vw,720px)] max-w-[80vw]',
 					'animate-scale-in',
 				)}
 				onClick={e => e.stopPropagation()}
@@ -76,15 +76,28 @@ export const ConfirmDialog: React.FC = () => {
 					{confirmDialog.title}
 				</h2>
 
-				<p className="text-base text-vscode-descriptionForeground m-0 leading-relaxed text-center">
+				<p className="text-base text-vscode-descriptionForeground m-0 leading-relaxed text-center max-w-none">
 					{confirmDialog.message}
 				</p>
 
-				<div className="flex gap-(--gap-4) justify-center pt-(--gap-2)">
-					<Button variant="primary" size="md" onClick={handleConfirm} autoFocus>
+				<div className="grid grid-cols-2 gap-(--gap-3) pt-(--gap-2)">
+					<Button
+						variant="primary"
+						size="md"
+						onClick={handleConfirm}
+						autoFocus
+						fullWidth
+						className="min-h-10 text-center whitespace-normal leading-snug"
+					>
 						{confirmDialog.confirmLabel || 'Confirm'}
 					</Button>
-					<Button variant="ghost" size="md" onClick={handleCancel}>
+					<Button
+						variant="secondary"
+						size="md"
+						onClick={handleCancel}
+						fullWidth
+						className="min-h-10 text-center whitespace-normal leading-snug"
+					>
 						{confirmDialog.cancelLabel || 'Cancel'}
 					</Button>
 				</div>

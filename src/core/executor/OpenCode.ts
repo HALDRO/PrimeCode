@@ -179,6 +179,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 	private eventAbort: AbortController | null = null;
 	private eventStreamRunning = false;
+	private eventRestartTimer: ReturnType<typeof setTimeout> | null = null;
 
 	/** Unified tool call lifecycle state — replaces separate seenToolCalls/taskToolsPendingInput/completedToolCalls Sets. */
 	private readonly toolCallStates = new Map<string, { completed: boolean; hasInput: boolean }>();
@@ -200,6 +201,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 	/** Guards against concurrent ensureServer calls. */
 	private ensureServerPromise: Promise<void> | null = null;
+	/** Guards against overlapping reconnect attempts from health checks and request paths. */
+	private reconnectPromise: Promise<boolean> | null = null;
 
 	// Token stats tracking: snapshot of last known tokens per assistant message (for session_updated delta detection)
 	private readonly lastMessageTokens = new Map<
@@ -231,9 +234,11 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	private static readonly HEALTH_INTERVAL_MS = 15_000;
 	/** How many consecutive health failures before triggering reconnect. */
 	private static readonly HEALTH_FAIL_THRESHOLD = 2;
+	private static readonly HEALTH_FETCH_TIMEOUT_MS = 5_000;
+	private static readonly DELETE_MESSAGE_BATCH_SIZE = 5;
+	/** Give a just-starting server a brief chance to become healthy before killing processes. */
+	private static readonly EXISTING_SERVER_GRACE_MS = 1500;
 	private healthFailCount = 0;
-	/** True while a reconnect attempt is in progress — prevents overlapping reconnects. */
-	private reconnecting = false;
 	/** Stashed config from the last successful ensureServer — needed for reconnect. */
 	private lastConfig: CLIConfig | null = null;
 	/** Timestamp when this window started the currently owned server instance. */
@@ -311,11 +316,25 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 
 		if (await this.tryConnectToExistingServer(config)) return;
+		if (await this.tryConnectToExistingServerWithGrace(config)) return;
 
 		// No live server found — kill any zombie opencode processes holding ports,
 		// then spawn a fresh one.
 		await this.killZombieOpenCodeProcesses();
 		await this.spawnServer(config.workspaceRoot, config);
+	}
+
+	/**
+	 * When a user manually kills/reloads OpenCode, process discovery may briefly see
+	 * a replacement server before `/global/health` is ready. Wait once and retry the
+	 * same discovery path before deciding the processes are zombies and spawning again.
+	 */
+	private async tryConnectToExistingServerWithGrace(config: CLIConfig): Promise<boolean> {
+		const ports = await this.discoverOpenCodePorts();
+		if (ports.length === 0) return false;
+
+		await new Promise(resolve => setTimeout(resolve, OpenCodeExecutor.EXISTING_SERVER_GRACE_MS));
+		return this.tryConnectToExistingServer(config);
 	}
 
 	// =========================================================================
@@ -511,7 +530,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	 */
 	private async isOpenCodeServer(baseUrl: string): Promise<boolean> {
 		const controller = new AbortController();
-		const timeout = setTimeout(() => controller.abort(), 3000);
+		const timeout = setTimeout(() => controller.abort(), OpenCodeExecutor.HEALTH_FETCH_TIMEOUT_MS);
 		try {
 			const res = await fetch(`${baseUrl}/global/health`, {
 				method: 'GET',
@@ -669,6 +688,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 	private resetServerState(): void {
 		logger.info('[OpenCode] Resetting server state for reconnection...');
+		this.clearScheduledEventRestart();
 
 		if (this.serverInstance) {
 			try {
@@ -728,7 +748,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	}
 
 	private async healthCheck(): Promise<void> {
-		if (!this.serverUrl || this.reconnecting) return;
+		if (!this.serverUrl || this.reconnectPromise) return;
 
 		const healthy = await this.isOpenCodeServer(this.serverUrl);
 		if (healthy) {
@@ -758,10 +778,37 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 	}
 
-	private async attemptReconnect(): Promise<void> {
-		if (this.reconnecting || !this.lastConfig) return;
-		this.reconnecting = true;
+	private clearScheduledEventRestart(): void {
+		if (this.eventRestartTimer) {
+			clearTimeout(this.eventRestartTimer);
+			this.eventRestartTimer = null;
+		}
+	}
 
+	private scheduleEventStreamRestart(directory: string, delayMs = 2000): void {
+		if (this.eventRestartTimer || this.reconnectPromise) return;
+		this.eventRestartTimer = setTimeout(() => {
+			this.eventRestartTimer = null;
+			if (this.serverUrl && !this.eventStreamRunning && !this.reconnectPromise) {
+				this.startEventStream(this.serverUrl, directory);
+			}
+		}, delayMs);
+	}
+
+	private async attemptReconnect(configOverride?: CLIConfig): Promise<boolean> {
+		if (this.reconnectPromise) return this.reconnectPromise;
+		const config = configOverride ?? this.lastConfig;
+		if (!config) return false;
+
+		this.reconnectPromise = this.doAttemptReconnect(config);
+		try {
+			return await this.reconnectPromise;
+		} finally {
+			this.reconnectPromise = null;
+		}
+	}
+
+	private async doAttemptReconnect(config: CLIConfig): Promise<boolean> {
 		logger.info('[OpenCode] Server unreachable — attempting reconnect...');
 		this.emit('event', {
 			type: 'error',
@@ -777,7 +824,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 		this.resetServerState();
 
-		const config = this.lastConfig;
 		const maxAttempts = 5;
 		const baseDelay = 2000;
 
@@ -790,14 +836,13 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 					// Restart SSE stream
 					this.startEventStream(this.serverUrl, config.workspaceRoot);
 					this.healthFailCount = 0;
-					this.reconnecting = false;
 
 					logger.info('[OpenCode] Reconnected successfully');
 					this.emit('event', {
 						type: 'server_reconnected' as const,
 						data: { attempt },
 					});
-					return;
+					return true;
 				}
 			} catch (error) {
 				logger.warn(`[OpenCode] Reconnect attempt ${attempt} failed:`, error);
@@ -810,7 +855,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			}
 		}
 
-		this.reconnecting = false;
 		logger.error('[OpenCode] All reconnect attempts failed');
 		this.stopHealthMonitor();
 		this.emit('event', {
@@ -820,6 +864,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 					'Failed to reconnect to OpenCode server after multiple attempts. Please restart the extension.',
 			},
 		});
+		return false;
 	}
 
 	/** Returns the SDK client or throws if not initialized. */
@@ -839,8 +884,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		} catch (error) {
 			if (this.isServerDownError(error)) {
 				logger.warn('[OpenCode] Server connection lost during spawn, reconnecting...');
-				this.resetServerState();
-				await this.ensureServer(config);
+				const recovered = await this.attemptReconnect(config);
+				if (!recovered) throw error;
 				await this.createNewSession(prompt, config);
 			} else {
 				throw error;
@@ -865,7 +910,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		} catch (error) {
 			if (this.isServerDownError(error)) {
 				logger.warn('[OpenCode] Server connection lost during followUp, reconnecting...');
-				this.resetServerState();
+				await this.attemptReconnect(config);
 				// Fallback to creating new session since we lost the old one
 				await this.spawn(prompt, config);
 			} else {
@@ -886,6 +931,73 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			messageID: messageId,
 			directory: config.workspaceRoot,
 		});
+	}
+
+	async deleteSessionMessagesFrom(
+		sessionId: string,
+		messageId: string,
+		config: CLIConfig,
+	): Promise<void> {
+		if (!this.serverUrl) throw new Error('OpenCode server not running');
+
+		logger.info('[OpenCode] Deleting session messages from point without revert', {
+			sessionId,
+			messageId,
+		});
+
+		const client = this.requireSdk();
+		const { data: messages, error: listError } = await client.session.messages({
+			sessionID: sessionId,
+			directory: config.workspaceRoot,
+		});
+		if (listError || !messages) {
+			throw new Error(`Failed to list session messages: ${JSON.stringify(listError ?? null)}`);
+		}
+
+		const startIndex = messages.findIndex(entry => entry.info.id === messageId);
+		if (startIndex === -1) {
+			throw new Error(`Failed to find message ${messageId} in session ${sessionId}`);
+		}
+
+		const toDelete = messages
+			.slice(startIndex)
+			.map(entry => entry.info.id)
+			.reverse();
+
+		for (const _id of toDelete) {
+		}
+
+		for (
+			let index = 0;
+			index < toDelete.length;
+			index += OpenCodeExecutor.DELETE_MESSAGE_BATCH_SIZE
+		) {
+			const chunk = toDelete.slice(index, index + OpenCodeExecutor.DELETE_MESSAGE_BATCH_SIZE);
+			const results = await Promise.allSettled(
+				chunk.map(async id => {
+					const response = await fetch(`${this.serverUrl}/session/${sessionId}/message/${id}`, {
+						method: 'DELETE',
+						headers: {
+							'x-opencode-directory': config.workspaceRoot,
+						},
+					});
+					if (!response.ok) {
+						throw new Error(
+							`Failed to delete session message ${id}: ${response.status} ${response.statusText}`,
+						);
+					}
+				}),
+			);
+
+			const firstError = results.find(
+				(result): result is PromiseRejectedResult => result.status === 'rejected',
+			);
+			if (firstError) {
+				throw firstError.reason instanceof Error
+					? firstError.reason
+					: new Error(String(firstError.reason));
+			}
+		}
 	}
 
 	async unrevertSession(sessionId: string, config: CLIConfig): Promise<void> {
@@ -914,8 +1026,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		} catch (error) {
 			if (this.isServerDownError(error)) {
 				logger.warn('[OpenCode] Server connection lost, reconnecting...');
-				this.resetServerState();
-				await this.ensureServer(config);
+				const recovered = await this.attemptReconnect(config);
+				if (!recovered) throw error;
 				if (!this.serverUrl) throw new Error('OpenCode server not running after reconnect');
 
 				this.sessionId = await this.createSession(config.workspaceRoot);
@@ -1796,6 +1908,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 	private startEventStream(_baseUrl: string, directory: string): void {
 		if (this.eventStreamRunning) return;
+		this.clearScheduledEventRestart();
 		this.eventStreamRunning = true;
 		this.eventAbort = new AbortController();
 		const signal = this.eventAbort.signal;
@@ -1837,18 +1950,9 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				// The health monitor will handle full server death — this covers transient SSE drops.
 				// Skip if a reconnect is already in progress to avoid piling up SSE attempts
 				// against a dead server while attemptReconnect() handles the full recovery.
-				if (!signal.aborted && this.serverUrl && this.directory && !this.reconnecting) {
+				if (!signal.aborted && this.serverUrl && this.directory && !this.reconnectPromise) {
 					logger.info('[OpenCode] SSE stream ended unexpectedly, scheduling restart...');
-					setTimeout(() => {
-						if (
-							this.serverUrl &&
-							this.directory &&
-							!this.eventStreamRunning &&
-							!this.reconnecting
-						) {
-							this.startEventStream(this.serverUrl, this.directory);
-						}
-					}, 2000);
+					this.scheduleEventStreamRestart(this.directory);
 				}
 			}
 		})();
@@ -1966,10 +2070,45 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				this.handleMessageUpdated(props.info, sessionId);
 				break;
 			}
+			case 'message.removed': {
+				const props = (
+					event as {
+						type: 'message.removed';
+						properties: { sessionID: string; messageID: string };
+					}
+				).properties;
+				this.emit('event', {
+					type: 'message_record_removed',
+					data: {
+						sessionID: props.sessionID,
+						messageID: props.messageID,
+					},
+					sessionId: props.sessionID,
+				});
+				break;
+			}
 			case 'message.part.updated': {
 				const props = (event as EventMessagePartUpdated).properties;
 				const sessionId = props.part.sessionID;
 				this.handlePartUpdated(props, sessionId);
+				break;
+			}
+			case 'message.part.removed': {
+				const props = (
+					event as {
+						type: 'message.part.removed';
+						properties: { sessionID: string; messageID: string; partID: string };
+					}
+				).properties;
+				this.emit('event', {
+					type: 'message_part_removed',
+					data: {
+						sessionID: props.sessionID,
+						messageID: props.messageID,
+						partID: props.partID,
+					},
+					sessionId: props.sessionID,
+				});
 				break;
 			}
 			case 'session.status': {
@@ -2671,6 +2810,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	async kill(): Promise<void> {
 		await this.abort();
 		this.stopHealthMonitor();
+		this.clearScheduledEventRestart();
 		this.sessionId = null;
 		this.eventStreamRunning = false;
 		this.eventAbort = null;
@@ -2865,6 +3005,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		try {
 			this.eventAbort?.abort();
 		} catch {}
+		this.clearScheduledEventRestart();
 		this.eventStreamRunning = false;
 		this.eventAbort = null;
 
@@ -2874,18 +3015,13 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		const config = this.lastConfig;
 
 		try {
-			await this.ensureServer(config);
+			const restarted = await this.attemptReconnect(config);
 
-			if (this.serverUrl) {
-				this.startEventStream(this.serverUrl, config.workspaceRoot);
+			if (restarted && this.serverUrl) {
 				this.startHealthMonitor();
 				this.healthFailCount = 0;
 
 				logger.info('[OpenCode] Server restarted successfully');
-				this.emit('event', {
-					type: 'server_reconnected' as const,
-					data: { attempt: 0 },
-				});
 				return true;
 			}
 		} catch (error) {

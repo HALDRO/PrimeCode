@@ -48,6 +48,21 @@ interface UseFileAttachmentsOptions {
 /** Image extensions for path-based detection */
 const IMAGE_EXT_RE = /\.(png|jpg|jpeg|gif|webp|svg|bmp|ico)$/i;
 
+function isSameAttachedImage(
+	left: Pick<AttachedImage, 'dataUrl' | 'path' | 'name'>,
+	right: Pick<AttachedImage, 'dataUrl' | 'path' | 'name'>,
+): boolean {
+	if (left.dataUrl && right.dataUrl && left.dataUrl === right.dataUrl) {
+		return true;
+	}
+
+	if (left.path && right.path && left.path === right.path) {
+		return true;
+	}
+
+	return left.name === right.name && left.dataUrl === right.dataUrl;
+}
+
 /**
  * Normalize a dropped/pasted path: strip file:// prefix, decode URI components,
  * and handle Windows drive-letter URIs (e.g. file:///C:/foo).
@@ -112,6 +127,18 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 		setCodeSnippets(prev => prev.filter(s => s.id !== id));
 	}, []);
 
+	const addAttachedImage = useCallback(
+		(image: { id: string; name: string; dataUrl: string; file?: File; path?: string }) => {
+			setAttachedImages(prev => {
+				if (prev.some(existing => isSameAttachedImage(existing, image))) {
+					return prev;
+				}
+				return [...prev, image];
+			});
+		},
+		[],
+	);
+
 	const clearAll = useCallback(() => {
 		setAttachedFiles([]);
 		setAttachedImages([]);
@@ -161,7 +188,7 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 							const dataUrl = ev.target?.result as string;
 							if (dataUrl) {
 								const id = `img-${crypto.randomUUID()}`;
-								setAttachedImages(prev => [...prev, { id, name: file.name, dataUrl, file }]);
+								addAttachedImage({ id, name: file.name, dataUrl, file });
 							}
 						};
 						reader.readAsDataURL(file);
@@ -203,7 +230,7 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 				// No text data and no files — nothing to do
 			}
 		},
-		[addFile, postMessage],
+		[addAttachedImage, addFile, postMessage],
 	);
 
 	// ── Paste ────────────────────────────────────────────────────────────
@@ -213,35 +240,38 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 	// but it will always be null (paste is never blocked).
 	const [pendingPasteText] = useState<string | null>(null);
 
-	const handlePaste = useCallback((e: React.ClipboardEvent) => {
-		const clipboardData = e.clipboardData;
-		if (!clipboardData) return;
+	const handlePaste = useCallback(
+		(e: React.ClipboardEvent) => {
+			const clipboardData = e.clipboardData;
+			if (!clipboardData) return;
 
-		// 1. Images — intercept and handle (browser can't insert images into textarea)
-		const items = clipboardData.items;
-		for (let i = 0; i < items.length; i++) {
-			const item = items[i];
-			if (item.type.startsWith('image/')) {
-				e.preventDefault();
-				const file = item.getAsFile();
-				if (file) {
-					const reader = new FileReader();
-					reader.onload = ev => {
-						const dataUrl = ev.target?.result as string;
-						if (dataUrl) {
-							const id = `img-${crypto.randomUUID()}`;
-							setAttachedImages(prev => [...prev, { id, name: file.name, dataUrl, file }]);
-						}
-					};
-					reader.readAsDataURL(file);
+			// 1. Images — intercept and handle (browser can't insert images into textarea)
+			const items = clipboardData.items;
+			for (let i = 0; i < items.length; i++) {
+				const item = items[i];
+				if (item.type.startsWith('image/')) {
+					e.preventDefault();
+					const file = item.getAsFile();
+					if (file) {
+						const reader = new FileReader();
+						reader.onload = ev => {
+							const dataUrl = ev.target?.result as string;
+							if (dataUrl) {
+								const id = `img-${crypto.randomUUID()}`;
+								addAttachedImage({ id, name: file.name, dataUrl, file });
+							}
+						};
+						reader.readAsDataURL(file);
+					}
+					return;
 				}
-				return;
 			}
-		}
 
-		// 2. Text — let the browser handle the paste normally (no preventDefault!).
-		//    Text is simply inserted into the input by the browser/CM6.
-	}, []);
+			// 2. Text — let the browser handle the paste normally (no preventDefault!).
+			//    Text is simply inserted into the input by the browser/CM6.
+		},
+		[addAttachedImage],
+	);
 
 	// ── Extension message listener ───────────────────────────────────────
 
@@ -252,10 +282,7 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 			if (message?.type === 'imageData' && message.dataUrl) {
 				const id = message.id || `img-${crypto.randomUUID()}`;
 				const name = message.name || 'image.png';
-				setAttachedImages(prev => [
-					...prev,
-					{ id, name, dataUrl: message.dataUrl, path: message.path },
-				]);
+				addAttachedImage({ id, name, dataUrl: message.dataUrl, path: message.path });
 			}
 
 			if (message?.type === 'browsedFiles' && Array.isArray(message.paths)) {
@@ -273,7 +300,7 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 
 		window.addEventListener('message', handleMessage);
 		return () => window.removeEventListener('message', handleMessage);
-	}, []);
+	}, [addAttachedImage]);
 
 	return {
 		attachedFiles,

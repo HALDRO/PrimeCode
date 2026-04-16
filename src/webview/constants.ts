@@ -172,6 +172,10 @@ export const getMcpToolDisplayInfo = (
 // UI Configuration
 // ============================================================================
 
+export const TOOL_CARD_PREVIEW_MAX_HEIGHT = 120;
+
+export const TOOL_CARD_EXPANDED_MAX_HEIGHT = 'calc(500px - var(--tool-header-height))';
+
 // ============================================================================
 // Timeout Configuration
 // ============================================================================

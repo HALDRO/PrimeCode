@@ -13,7 +13,14 @@ import type {
 	LspDiagnosticsByFile,
 } from '../../../common/normalizedTypes';
 import { buildToolActionType } from '../../../common/normalizedTypes';
-import { getMcpToolDisplayInfo, isFileEditTool, isMcpTool, isToolMatch } from '../../constants';
+import {
+	getMcpToolDisplayInfo,
+	isFileEditTool,
+	isMcpTool,
+	isToolMatch,
+	TOOL_CARD_EXPANDED_MAX_HEIGHT,
+	TOOL_CARD_PREVIEW_MAX_HEIGHT,
+} from '../../constants';
 import { useElapsedTimer } from '../../hooks/useElapsedTimer';
 import { cn } from '../../lib/cn';
 import {
@@ -51,8 +58,6 @@ const TOOL_CARD_CLASSES = 'bg-(--tool-bg-header) border border-(--tool-border-co
 
 const TOOL_CARD_HEADER_CLASSES =
 	'flex items-center justify-between w-full h-(--tool-header-height) px-(--tool-header-padding) bg-(--tool-bg-header) select-none';
-
-const PREVIEW_MAX_HEIGHT = 120;
 
 /** Module-level constant — avoids recreating nested object on every render */
 const OVERLAY_SCROLLBAR_OPTIONS = {
@@ -337,7 +342,7 @@ const FileEditCard: React.FC<FileEditCardProps> = ({
 
 	if (!hasContent) return null;
 
-	const maxHeight = 120;
+	const maxHeight = TOOL_CARD_PREVIEW_MAX_HEIGHT;
 	const needsExpand = getDiffContentHeight(lines) > maxHeight;
 	const showAccessGate = accessRequest && !accessRequest.resolved && accessRequest.requestId;
 
@@ -672,9 +677,9 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		const needsExpand = lineCount > 6;
 		const showAccessGate = accessRequest && !accessRequest.resolved && accessRequest.requestId;
 
-		// Bash/terminal cards: always collapsible, start collapsed, no preview mode.
-		// Clicking the header toggles between hidden body and full output.
-		const bashAlwaysCollapsible = isBash && hasBody;
+		// Non-diff tool cards stay collapsed by default and expand into a bounded,
+		// scrollable body. Diff/file-change cards keep their dedicated preview mode.
+		const alwaysCollapsible = hasBody;
 
 		return (
 			<ToolCard
@@ -729,19 +734,15 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 						)}
 					</div>
 				}
-				isCollapsible={bashAlwaysCollapsible || (needsExpand && hasBody) || Boolean(showAccessGate)}
+				isCollapsible={alwaysCollapsible || (needsExpand && hasBody) || Boolean(showAccessGate)}
 				expanded={expanded}
 				onToggle={() => setExpanded(prev => !prev)}
 				body={
-					hasBody && (!bashAlwaysCollapsible || expanded) ? (
+					hasBody && expanded ? (
 						<div className="relative">
 							<OverlayScrollbarsComponent
 								style={{
-									maxHeight: bashAlwaysCollapsible
-										? 'calc(500px - var(--tool-header-height))'
-										: expanded
-											? undefined
-											: `${PREVIEW_MAX_HEIGHT}px`,
+									maxHeight: TOOL_CARD_EXPANDED_MAX_HEIGHT,
 								}}
 								className="bg-(--tool-bg-header)"
 								options={OVERLAY_SCROLLBAR_OPTIONS}

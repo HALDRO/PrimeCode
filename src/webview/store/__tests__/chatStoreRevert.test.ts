@@ -153,6 +153,19 @@ describe('chatStore revert/unrevert state', () => {
 			// to prevent UI desync (dimmed messages with no unrevert button)
 			expect(getSession('s1').revertedFromMessageId).toBeNull();
 		});
+
+		it('should not invent a revert point without revertedFromMessageId', () => {
+			createSession('s1', [userMsg('u1'), userMsg('u2')]);
+
+			dispatchRestore('s1', {
+				action: 'success',
+				canUnrevert: true,
+			});
+
+			const session = getSession('s1');
+			expect(session.unrevertAvailable).toBe(true);
+			expect(session.revertedFromMessageId).toBeNull();
+		});
 	});
 
 	// =========================================================================

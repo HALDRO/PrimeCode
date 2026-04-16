@@ -5,7 +5,7 @@
  *              (used in UserMessage to display message attachments).
  */
 
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { cn } from '../../lib/cn';
 import { getShortFileName } from '../../utils/format';
 import { PathChip } from '../ui';
@@ -37,6 +37,7 @@ interface AttachmentsBarProps {
 	onOpenFile?: (path: string, startLine?: number, endLine?: number) => void;
 	/** Display inline (no padding/margin) for embedding inside message text */
 	inline?: boolean;
+	maxRows?: number;
 }
 
 export const AttachmentsBar: React.FC<AttachmentsBarProps> = React.memo(
@@ -50,17 +51,82 @@ export const AttachmentsBar: React.FC<AttachmentsBarProps> = React.memo(
 		onPreviewImage,
 		onOpenFile,
 		inline,
+		maxRows,
 	}) => {
 		const readOnly = !onRemoveImage && !onRemoveFile && !onRemoveSnippet;
+		const containerRef = useRef<HTMLDivElement>(null);
+		const clampRows = readOnly && typeof maxRows === 'number' && maxRows > 0;
+
+		useEffect(() => {
+			if (!clampRows) {
+				return;
+			}
+
+			const element = containerRef.current;
+			if (!element) return;
+			let rafId: number | null = null;
+
+			const measureOverflow = () => {
+				if (rafId !== null) {
+					cancelAnimationFrame(rafId);
+				}
+				rafId = requestAnimationFrame(() => {
+					rafId = null;
+					if (!element.isConnected) return;
+
+					const children = Array.from(element.children).filter(
+						(child): child is HTMLElement => child instanceof HTMLElement,
+					);
+					const rowTops: number[] = [];
+					let maxVisibleBottom = 0;
+
+					for (const child of children) {
+						const top = child.offsetTop;
+						let rowIndex = rowTops.findIndex(existingTop => Math.abs(existingTop - top) <= 1);
+						if (rowIndex === -1) {
+							rowTops.push(top);
+							rowIndex = rowTops.length - 1;
+						}
+						if (rowIndex < maxRows) {
+							maxVisibleBottom = Math.max(maxVisibleBottom, child.offsetTop + child.offsetHeight);
+						}
+					}
+
+					const gapPx = 4;
+					const maxHeightPx = Math.max(0, Math.ceil(maxVisibleBottom + gapPx));
+					element.style.setProperty('--attachments-max-height', `${maxHeightPx}px`);
+					const isOverflowing = rowTops.length > maxRows;
+					if (element.hasAttribute('data-overflowing') !== isOverflowing) {
+						element.toggleAttribute('data-overflowing', isOverflowing);
+					}
+				});
+			};
+
+			measureOverflow();
+
+			const resizeObserver = new ResizeObserver(measureOverflow);
+			resizeObserver.observe(element);
+
+			return () => {
+				resizeObserver.disconnect();
+				element.style.removeProperty('--attachments-max-height');
+				if (rafId !== null) {
+					cancelAnimationFrame(rafId);
+				}
+			};
+		}, [clampRows, maxRows]);
 
 		return (
 			<div
+				ref={containerRef}
 				className={cn(
 					'flex flex-wrap gap-(--gap-1-5)',
 					inline
-						? 'inline-flex align-middle mr-1'
+						? 'w-full items-start'
 						: 'items-start px-(--gap-3) py-(--gap-1-5) m-(--gap-1-5)_(--gap-3)',
+					clampRows && 'overflow-hidden',
 				)}
+				style={clampRows ? { maxHeight: 'var(--attachments-max-height)' } : undefined}
 			>
 				{/* Images */}
 				{images.map(img => (
