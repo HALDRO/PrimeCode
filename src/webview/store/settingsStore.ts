@@ -316,6 +316,7 @@ export interface SettingsState {
 
 	// CLI Provider
 	provider: CLIProviderType;
+	accessAutoApprove: boolean;
 
 	// Proxy Configuration
 	/** When true, only main model is used for all tasks */
@@ -455,6 +456,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 	workspaceName: '',
 
 	provider: 'opencode',
+	accessAutoApprove: false,
 
 	proxyUseSingleModel: true,
 	proxyHaikuModel: '',

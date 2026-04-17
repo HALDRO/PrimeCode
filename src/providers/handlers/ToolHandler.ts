@@ -6,21 +6,38 @@ import {
 	VALID_POLICY_VALUES,
 } from '../../common/permissions';
 import type { CommandOf, PermissionPolicies, WebviewCommand } from '../../common/protocol';
+import { resolveToolName } from '../../common/toolRegistry';
 import { logger } from '../../utils/logger';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
 const POLICIES_KEY = 'primeCode.permissionPolicies';
+const ALWAYS_ALLOW_KEY = 'primeCode.permissionAlwaysAllowByTool';
+const AUTO_ACCEPT_KEY = 'primeCode.permissionAutoAcceptBySession';
+
+type PermissionAutoAcceptMode = 'default' | 'on' | 'off';
+type PermissionAutoAcceptState = { mode: PermissionAutoAcceptMode; effective: boolean };
 
 export class ToolHandler implements WebviewMessageHandler {
-	private alwaysAllowByTool: Record<string, boolean> = {};
+	private alwaysAllowByTool: Record<string, true> = {};
 	private policies: PermissionPolicies;
-	private readonly autoAcceptBySession = new Map<string, boolean>();
+	private readonly autoAcceptBySession = new Map<string, PermissionAutoAcceptMode>();
 
 	constructor(private context: HandlerContext) {
 		this.alwaysAllowByTool =
-			(this.context.extensionContext.workspaceState.get('primeCode.alwaysAllowByTool') as
-				| Record<string, boolean>
+			(this.context.extensionContext.workspaceState.get(ALWAYS_ALLOW_KEY) as
+				| Record<string, true>
 				| undefined) ?? {};
+
+		const storedAutoAccept = this.context.extensionContext.workspaceState.get(AUTO_ACCEPT_KEY) as
+			| Record<string, PermissionAutoAcceptMode>
+			| undefined;
+		if (storedAutoAccept) {
+			for (const [sessionId, mode] of Object.entries(storedAutoAccept)) {
+				if (mode === 'default' || mode === 'on' || mode === 'off') {
+					this.autoAcceptBySession.set(sessionId, mode);
+				}
+			}
+		}
 
 		const stored = this.context.extensionContext.workspaceState.get(POLICIES_KEY) as
 			| Record<string, unknown>
@@ -78,7 +95,37 @@ export class ToolHandler implements WebviewMessageHandler {
 	}
 
 	getAlwaysAllowByTool(): Record<string, boolean> {
-		return this.alwaysAllowByTool;
+		return { ...this.alwaysAllowByTool };
+	}
+
+	private normalizePermissionToolName(toolName: string | undefined): string | undefined {
+		if (!toolName) return undefined;
+		return resolveToolName(toolName) ?? toolName.toLowerCase();
+	}
+
+	private async persistAutoAcceptModes(): Promise<void> {
+		const payload = Object.fromEntries(this.autoAcceptBySession.entries());
+		await this.context.extensionContext.workspaceState.update(AUTO_ACCEPT_KEY, payload);
+	}
+
+	getSessionAutoAcceptState(sessionId?: string): PermissionAutoAcceptState {
+		if (!sessionId) return { mode: 'default', effective: false };
+		const visited = new Set<string>();
+		let current: string | undefined = sessionId;
+		let isOwnSession = true;
+		while (current && !visited.has(current)) {
+			visited.add(current);
+			const own = this.autoAcceptBySession.get(current);
+			if (own === 'on') {
+				return { mode: isOwnSession ? 'on' : 'default', effective: true };
+			}
+			if (own === 'off') {
+				return { mode: isOwnSession ? 'off' : 'default', effective: false };
+			}
+			current = this.context.sessionGraph.getParent(current);
+			isOwnSession = false;
+		}
+		return { mode: 'default', effective: false };
 	}
 
 	getPermissionPolicies(): PermissionPolicies {
@@ -99,11 +146,15 @@ export class ToolHandler implements WebviewMessageHandler {
 		}
 
 		if (alwaysAllow) {
-			const toolName = msg.toolName;
+			const toolName = this.normalizePermissionToolName(msg.toolName);
 			if (toolName) {
-				this.alwaysAllowByTool[toolName] = approved;
+				if (approved) {
+					this.alwaysAllowByTool[toolName] = true;
+				} else {
+					delete this.alwaysAllowByTool[toolName];
+				}
 				await this.context.extensionContext.workspaceState.update(
-					'primeCode.alwaysAllowByTool',
+					ALWAYS_ALLOW_KEY,
 					this.alwaysAllowByTool,
 				);
 				this.context.bridge.data(
@@ -203,46 +254,81 @@ export class ToolHandler implements WebviewMessageHandler {
 	private async onGetAccess(): Promise<void> {
 		this.context.bridge.data(
 			'accessData',
-			Object.entries(this.alwaysAllowByTool)
-				.filter(([, allow]) => allow)
-				.map(([toolName]) => ({ toolName, allowAll: true })),
+			Object.entries(this.alwaysAllowByTool).map(([toolName]) => ({ toolName, allowAll: true })),
 		);
 	}
 
 	/** Check if auto-accept mode is currently active for a session. */
 	isAutoAccept(sessionId?: string): boolean {
-		if (!sessionId) return false;
-		const visited = new Set<string>();
-		let current: string | undefined = sessionId;
-		while (current && !visited.has(current)) {
-			visited.add(current);
-			const own = this.autoAcceptBySession.get(current);
-			if (own !== undefined) return own;
-			current = this.context.sessionGraph.getParent(current);
-		}
-		return false;
+		return this.getSessionAutoAcceptState(sessionId).effective;
 	}
 
 	clearSessionAutoAccept(sessionId: string): void {
 		this.autoAcceptBySession.delete(sessionId);
+		void this.persistAutoAcceptModes().catch(error =>
+			logger.warn('[ToolHandler] Failed to persist auto-accept clear', { sessionId, error }),
+		);
+	}
+
+	private async autoRespondPendingPermissions(sessionId: string): Promise<void> {
+		if (!this.isAutoAccept(sessionId)) return;
+		const serverInfo = this.context.cli.getOpenCodeServerInfo();
+		if (!serverInfo?.baseUrl || !serverInfo.directory) return;
+		const pending = await this.context.services.openCodeClient.getSessionPermissions(
+			serverInfo.baseUrl,
+			serverInfo.directory,
+			sessionId,
+		);
+		for (const request of pending) {
+			try {
+				await this.context.cli.respondToPermission({
+					requestId: request.id,
+					approved: true,
+					alwaysAllow: false,
+					response: 'once',
+				});
+				this.context.bridge.emit(sessionId, 'permission', {
+					action: 'remove',
+					requestId: request.id,
+					response: 'once',
+				});
+			} catch (error) {
+				logger.warn('[ToolHandler] Failed to auto-respond pending permission', {
+					sessionId,
+					requestId: request.id,
+					error,
+				});
+			}
+		}
 	}
 
 	private onSetAutoAccept(msg: CommandOf<'setAutoAccept'>): void {
 		const sessionId = msg.sessionId || this.context.sessionState.activeSessionId;
 		if (!sessionId) {
 			logger.warn('[ToolHandler] setAutoAccept ignored: no target session', {
-				enabled: msg.enabled,
+				mode: msg.mode,
 			});
 			return;
 		}
 
-		logger.info('[ToolHandler] setAutoAccept', { enabled: msg.enabled, sessionId });
-		if (msg.enabled) this.autoAcceptBySession.set(sessionId, true);
-		else this.autoAcceptBySession.delete(sessionId);
+		logger.info('[ToolHandler] setAutoAccept', { mode: msg.mode, sessionId });
+		if (msg.mode === 'default') {
+			this.autoAcceptBySession.delete(sessionId);
+		} else {
+			this.autoAcceptBySession.set(sessionId, msg.mode);
+		}
+		void this.persistAutoAcceptModes().catch(error =>
+			logger.warn('[ToolHandler] Failed to persist auto-accept state', { sessionId, error }),
+		);
+		const autoAcceptState = this.getSessionAutoAcceptState(sessionId);
 
 		this.context.bridge.emit(sessionId, 'session_info', {
-			data: { sessionId, autoAccept: msg.enabled },
+			data: { sessionId, autoAccept: autoAcceptState.effective },
+			permissionAutoAccept: autoAcceptState,
 		});
+		if (autoAcceptState.effective) {
+			void this.autoRespondPendingPermissions(sessionId);
+		}
 	}
 
 	private async onCheckCliDiagnostics(): Promise<void> {

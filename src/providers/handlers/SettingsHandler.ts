@@ -205,8 +205,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 
 	private async applyWebviewSettingsPatch(patch: Record<string, unknown>): Promise<void> {
 		const booleanKeys = new Set<keyof PrimeCodeSettings>([
-			'autoApprove',
-			'yoloMode',
+			'access.autoApprove',
 			'proxy.useSingleModel',
 			'opencode.autoStart',
 		]);

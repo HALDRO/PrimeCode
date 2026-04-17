@@ -1,41 +1,60 @@
 /**
- * @file AutoAcceptButton — Toggle button for auto-accepting permissions
- * @description Toggles auto-accept mode for the current session. When active,
- *              all permission requests are automatically approved.
- *              Only the icon color changes — no background/border changes.
+ * @file AutoAcceptButton — Tri-state auto-accept permissions control
+ * @description Cycles auto-accept mode for the current session between on,
+ *              default UI setting, and off.
  */
 
 import React, { useCallback } from 'react';
 import { cn } from '../../lib/cn';
-import { useSessionAutoAccept } from '../../store';
 import { useChatStore } from '../../store/chatStore';
 import { useVSCode } from '../../utils/vscode';
 import { ShieldIcon } from '../icons';
 import { Button } from '../ui';
 
 export const AutoAcceptButton: React.FC = React.memo(() => {
-	const autoAccept = useSessionAutoAccept();
 	const activeSessionId = useChatStore(s => s.activeSessionId);
-	const { updateSession } = useChatStore(s => s.actions);
+	const mode = useChatStore(
+		s =>
+			(s.activeSessionId
+				? s.sessionsById[s.activeSessionId]?.permissionAutoAcceptMode
+				: undefined) ?? 'default',
+	);
+	const autoAccept = useChatStore(
+		s => (s.activeSessionId ? s.sessionsById[s.activeSessionId]?.autoAccept : undefined) ?? false,
+	);
 	const { postMessage } = useVSCode();
 
-	const handleToggle = useCallback(() => {
-		const newValue = !autoAccept;
-		updateSession({ autoAccept: newValue });
-		// Notify extension so it can update permission handling
-		postMessage({ type: 'setAutoAccept', enabled: newValue, sessionId: activeSessionId });
-	}, [activeSessionId, autoAccept, updateSession, postMessage]);
+	const handleCycle = useCallback(() => {
+		const nextMode = mode === 'default' ? 'on' : mode === 'on' ? 'off' : 'default';
+		postMessage({ type: 'setAutoAccept', mode: nextMode, sessionId: activeSessionId });
+	}, [activeSessionId, mode, postMessage]);
+
+	const title =
+		mode === 'on'
+			? 'Auto-accept permissions (on)'
+			: mode === 'default'
+				? `Auto-accept permissions (default UI setting${autoAccept ? ', currently active' : ''})`
+				: mode === 'off'
+					? 'Auto-accept permissions (off for this session)'
+					: 'Auto-accept permissions';
+
+	const toneClass =
+		mode === 'default'
+			? 'text-vscode-descriptionForeground opacity-70 hover:opacity-100'
+			: mode === 'on'
+				? 'text-green-400'
+				: 'text-yellow-400';
 
 	return (
 		<Button
 			variant="ghost"
 			size="xs"
-			onClick={handleToggle}
-			title={autoAccept ? 'Auto-accept permissions (on)' : 'Auto-accept permissions (off)'}
-			aria-pressed={autoAccept}
+			onClick={handleCycle}
+			title={title}
+			aria-pressed={mode === 'on'}
 			className={cn(
 				'h-(--input-toolbar-height) rounded-md shrink-0 flex items-center px-(--gap-1) transition-colors duration-200 border border-transparent bg-transparent hover:bg-(--alpha-5)',
-				autoAccept ? 'text-green-400' : 'opacity-70 hover:opacity-100',
+				toneClass,
 			)}
 		>
 			<ShieldIcon size={13} />

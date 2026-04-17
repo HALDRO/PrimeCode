@@ -1943,6 +1943,7 @@ export class SessionHandler implements WebviewMessageHandler {
 				// Clean up local state if this was the active session
 				this.context.sessionState.startedSessions.delete(sessionId);
 				this.clearPendingMessage(sessionId);
+				this.context.clearSessionAutoAccept?.(sessionId);
 				this.restoredSessions.delete(sessionId);
 				this.restoringSessions.delete(sessionId);
 				this.context.sessionGraph.clearParent(sessionId);
@@ -1982,6 +1983,7 @@ export class SessionHandler implements WebviewMessageHandler {
 
 					this.context.sessionState.startedSessions.delete(session.id);
 					this.clearPendingMessage(session.id);
+					this.context.clearSessionAutoAccept?.(session.id);
 					this.restoredSessions.delete(session.id);
 					this.restoringSessions.delete(session.id);
 					this.context.sessionGraph.clearParent(session.id);
@@ -2242,11 +2244,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			model,
 			workspaceRoot,
 			agent: typeof opencodeAgent === 'string' ? opencodeAgent : undefined,
-			autoApprove: Boolean(
-				this.context.settings.get('access.autoApprove') ||
-					this.context.settings.get('access.yoloMode') ||
-					false,
-			),
+			autoApprove: Boolean(this.context.settings.get('access.autoApprove') || false),
 			policies: this.context.getPermissionPolicies?.() as
 				| Partial<Record<string, string>>
 				| undefined,
@@ -2446,11 +2444,14 @@ export class SessionHandler implements WebviewMessageHandler {
 	}
 
 	private syncSessionRuntimeState(sessionId: string): void {
+		const autoAcceptState = this.context.getSessionAutoAcceptState?.(sessionId);
 		this.context.bridge.emit(sessionId, 'session_info', {
 			data: {
 				sessionId,
-				autoAccept: this.context.getSessionAutoAccept?.(sessionId) ?? false,
+				autoAccept:
+					autoAcceptState?.effective ?? this.context.getSessionAutoAccept?.(sessionId) ?? false,
 			},
+			...(autoAcceptState ? { permissionAutoAccept: autoAcceptState } : {}),
 		});
 		void this.restoreSessionRuntimeStateFromServer(sessionId).catch(error =>
 			logger.warn('[SessionHandler] Failed to sync session runtime state', { sessionId, error }),

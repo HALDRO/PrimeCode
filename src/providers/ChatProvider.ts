@@ -193,6 +193,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			// Lazy getter — ToolHandler is created below but the closure captures `this`
 			getPermissionPolicies: () => this.toolHandler.getPermissionPolicies(),
 			getSessionAutoAccept: (sessionId: string) => this.toolHandler.isAutoAccept(sessionId),
+			getSessionAutoAcceptState: (sessionId: string) =>
+				this.toolHandler.getSessionAutoAcceptState(sessionId),
 			clearSessionAutoAccept: (sessionId: string) =>
 				this.toolHandler.clearSessionAutoAccept(sessionId),
 			registerCheckpoint: (commitId, record) =>
@@ -351,9 +353,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			provider: 'opencode' as const,
 			workspaceRoot,
 			agent: typeof opencodeAgent === 'string' ? opencodeAgent : undefined,
-			autoApprove: Boolean(
-				this.settings.get('access.autoApprove') || this.settings.get('access.yoloMode') || false,
-			),
+			autoApprove: Boolean(this.settings.get('access.autoApprove') || false),
 			policies: { ...policies },
 			serverTimeoutMs:
 				typeof opencodeServerTimeout === 'number' && Number.isFinite(opencodeServerTimeout)
@@ -1220,16 +1220,16 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			});
 		};
 
-		const isYolo = Boolean(this.settings.get('access.yoloMode'));
 		const isAutoApprove = Boolean(this.settings.get('access.autoApprove'));
 		const isAutoAccept = this.toolHandler.isAutoAccept(permissionTargetSessionId);
-		if (isYolo || isAutoApprove || isAutoAccept) {
+		if (isAutoApprove || isAutoAccept) {
 			autoRespond(true);
 			return;
 		}
 
 		const alwaysAllowByTool = this.toolHandler.getAlwaysAllowByTool();
-		if (alwaysAllowByTool[tool]) {
+		const normalizedTool = resolveToolName(tool) ?? tool.toLowerCase();
+		if (alwaysAllowByTool[normalizedTool]) {
 			autoRespond(true, true);
 			return;
 		}

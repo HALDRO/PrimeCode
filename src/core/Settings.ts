@@ -16,10 +16,7 @@ import { logger } from '../utils/logger';
 export interface PrimeCodeSettings {
 	provider: 'opencode';
 	model?: string;
-	autoApprove: boolean;
-	yoloMode: boolean;
 	'access.autoApprove': boolean;
-	'access.yoloMode': boolean;
 	mcpServers: Record<string, unknown>;
 
 	'proxy.endpoints'?: Array<{
@@ -109,10 +106,7 @@ export class Settings implements ISettings {
 		return {
 			provider: 'opencode',
 			model: this.get('model'),
-			autoApprove: this.get('access.autoApprove') || this.get('autoApprove') || false,
-			yoloMode: this.get('access.yoloMode') || this.get('yoloMode') || false,
 			'access.autoApprove': this.get('access.autoApprove') || false,
-			'access.yoloMode': this.get('access.yoloMode') || false,
 			mcpServers: this.get('mcpServers') ?? {},
 
 			'proxy.endpoints': this.get('proxy.endpoints') ?? [],

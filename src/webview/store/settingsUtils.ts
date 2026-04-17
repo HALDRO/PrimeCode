@@ -10,6 +10,9 @@ export const handleSettingsData = (
 	const mappedSettings: Record<string, unknown> = {};
 
 	if (settings.provider !== undefined) mappedSettings.provider = settings.provider;
+	if (settings['access.autoApprove'] !== undefined) {
+		mappedSettings.accessAutoApprove = settings['access.autoApprove'];
+	}
 	if (settings['proxy.endpoints'] !== undefined && Array.isArray(settings['proxy.endpoints'])) {
 		const currentById = new Map(
 			(currentState?.proxyEndpoints ?? []).map(endpoint => [endpoint.id, endpoint]),

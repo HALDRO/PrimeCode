@@ -360,9 +360,15 @@ export interface SessionInfoData {
 	autoAccept?: boolean;
 }
 
+export interface PermissionAutoAcceptState {
+	mode: 'default' | 'on' | 'off';
+	effective: boolean;
+}
+
 export interface SessionInfoPayload {
 	eventType: 'session_info';
 	data: SessionInfoData;
+	permissionAutoAccept?: PermissionAutoAcceptState;
 }
 
 export interface SessionAuthPayload {
@@ -1206,7 +1212,7 @@ export interface SetPermissionsCommand {
 }
 export interface SetAutoAcceptCommand {
 	type: 'setAutoAccept';
-	enabled: boolean;
+	mode: 'default' | 'on' | 'off';
 	sessionId?: string;
 }
 export interface CheckDiscoveryStatusCommand {

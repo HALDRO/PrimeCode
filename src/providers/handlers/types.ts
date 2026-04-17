@@ -21,6 +21,11 @@ export interface HandlerContext {
 	getPermissionPolicies?: () => PermissionPolicies;
 	/** Returns whether runtime auto-accept is enabled for a session. */
 	getSessionAutoAccept?: (sessionId: string) => boolean;
+	/** Returns effective + explicit permission auto-accept state for a session. */
+	getSessionAutoAcceptState?: (sessionId: string) => {
+		mode: 'default' | 'on' | 'off';
+		effective: boolean;
+	};
 	/** Clears runtime auto-accept state for a session. */
 	clearSessionAutoAccept?: (sessionId: string) => void;
 	/** Register a checkpoint on the backend so the frontend can restore by commitId alone. */

@@ -50,6 +50,10 @@ function createMockHandlerContext(
 		respondToPermission: vi.fn().mockResolvedValue(undefined),
 		getProvider: vi.fn().mockReturnValue('opencode'),
 		getSdkClient: vi.fn().mockReturnValue(null),
+		getOpenCodeServerInfo: vi.fn().mockReturnValue({
+			baseUrl: 'http://127.0.0.1:4096',
+			directory: '/mock/workspace',
+		}),
 	};
 
 	const mockSettings = {
@@ -234,7 +238,106 @@ describe('ToolHandler', () => {
 			);
 
 			const alwaysAllow = handler.getAlwaysAllowByTool();
-			expect(alwaysAllow.Write).toBe(true);
+			expect(alwaysAllow.write).toBe(true);
+		});
+	});
+
+	describe('session auto-accept', () => {
+		it('should persist explicit session auto-accept mode', async () => {
+			const ctx = createMockHandlerContext();
+			const handler = new ToolHandler(ctx);
+
+			await handler.handleMessage({
+				type: 'setAutoAccept',
+				mode: 'on',
+				sessionId: 'test-session-1',
+			});
+
+			expect(handler.getSessionAutoAcceptState('test-session-1')).toEqual({
+				mode: 'on',
+				effective: true,
+			});
+			expect(
+				ctx.extensionContext.workspaceState.get('primeCode.permissionAutoAcceptBySession'),
+			).toEqual({
+				'test-session-1': 'on',
+			});
+		});
+
+		it('should inherit auto-accept from parent sessions', async () => {
+			const ctx = createMockHandlerContext();
+			ctx.sessionGraph.registerChild('child-session', 'test-session-1', 'tool-1');
+			const handler = new ToolHandler(ctx);
+
+			await handler.handleMessage({
+				type: 'setAutoAccept',
+				mode: 'on',
+				sessionId: 'test-session-1',
+			});
+
+			expect(handler.getSessionAutoAcceptState('child-session')).toEqual({
+				mode: 'default',
+				effective: true,
+			});
+		});
+
+		it('should clear explicit mode when switched to default', async () => {
+			const ctx = createMockHandlerContext();
+			const handler = new ToolHandler(ctx);
+
+			await handler.handleMessage({
+				type: 'setAutoAccept',
+				mode: 'on',
+				sessionId: 'test-session-1',
+			});
+			await handler.handleMessage({
+				type: 'setAutoAccept',
+				mode: 'default',
+				sessionId: 'test-session-1',
+			});
+
+			expect(handler.getSessionAutoAcceptState('test-session-1')).toEqual({
+				mode: 'default',
+				effective: false,
+			});
+			expect(
+				ctx.extensionContext.workspaceState.get('primeCode.permissionAutoAcceptBySession'),
+			).toEqual({});
+		});
+
+		it('should auto-respond to already pending permissions when enabled', async () => {
+			const ctx = createMockHandlerContext({
+				services: {
+					openCodeClient: {
+						getSessionPermissions: vi.fn().mockResolvedValue([
+							{
+								id: 'perm-1',
+								sessionID: 'test-session-1',
+								permission: 'bash',
+								patterns: [],
+								metadata: {},
+								always: [],
+							},
+						]),
+					},
+				} as any,
+			});
+			const handler = new ToolHandler(ctx);
+
+			await handler.handleMessage({
+				type: 'setAutoAccept',
+				mode: 'on',
+				sessionId: 'test-session-1',
+			});
+
+			await Promise.resolve();
+
+			expect(ctx.cli.respondToPermission).toHaveBeenCalledWith({
+				requestId: 'perm-1',
+				approved: true,
+				alwaysAllow: false,
+				response: 'once',
+			});
 		});
 	});
 

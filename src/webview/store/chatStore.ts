@@ -192,6 +192,7 @@ export interface ChatSession {
 	availableMcpServers?: string[];
 	/** Per-session auto-accept permissions toggle. */
 	autoAccept?: boolean;
+	permissionAutoAcceptMode?: 'default' | 'on' | 'off';
 	todos: import('../../common').SessionTodoItem[];
 	pendingPermissions: import('../../common').SessionPermissionRequest[];
 	pendingQuestions: import('../../common').SessionQuestionRequest[];
@@ -873,11 +874,16 @@ function dispatchToSession(
 	if (eventType === 'session_info') {
 		const info = payload as {
 			data?: { tools?: string[]; mcpServers?: string[]; autoAccept?: boolean };
+			permissionAutoAccept?: { mode: 'default' | 'on' | 'off'; effective: boolean };
 		};
 		if (info.data?.tools) targetSession.availableTools = info.data.tools;
 		if (info.data?.mcpServers) targetSession.availableMcpServers = info.data.mcpServers;
 		if (typeof info.data?.autoAccept === 'boolean') {
 			targetSession.autoAccept = info.data.autoAccept;
+		}
+		if (info.permissionAutoAccept) {
+			targetSession.permissionAutoAcceptMode = info.permissionAutoAccept.mode;
+			targetSession.autoAccept = info.permissionAutoAccept.effective;
 		}
 	}
 }
@@ -909,6 +915,7 @@ const createEmptySession = (id: string, timestamp: number): ChatSession => ({
 	availableTools: [],
 	availableMcpServers: [],
 	autoAccept: false,
+	permissionAutoAcceptMode: 'default',
 	todos: [],
 	pendingPermissions: [],
 	pendingQuestions: [],
