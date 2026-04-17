@@ -55,30 +55,25 @@ export class OutboundBridge {
 	// =========================================================================
 
 	public send(msg: unknown): void {
-		// In collect mode, buffer session_event messages for batch delivery
-		if (this._collectBuffer !== null) {
-			const msgType = (msg as { type?: string })?.type;
-			if (msgType === 'session_event') {
-				this._collectBuffer.push(msg);
-				return;
-			}
+		const msgType = (msg as { type?: string })?.type;
+		if (this._collectBuffer !== null && msgType === 'session_event') {
+			this._collectBuffer.push(msg);
+			return;
 		}
 		if (!this._view) {
 			if (this._queue.length >= OutboundBridge.MAX_QUEUE_SIZE) {
-				logger.warn(
-					`[OutboundBridge] Queue full (${OutboundBridge.MAX_QUEUE_SIZE}), dropping oldest message`,
-					{ droppedType: (this._queue[0] as { type?: string })?.type },
-				);
+				logger.warn('[OutboundBridge] Queue full, dropping oldest message', {
+					droppedType: (this._queue[0] as { type?: string })?.type,
+				});
 				this._queue.shift();
 			}
 			logger.debug('[OutboundBridge] view not ready, queuing message', {
-				type: (msg as { type?: string })?.type,
+				type: msgType,
 				queueSize: this._queue.length,
 			});
 			this._queue.push(msg);
 			return;
 		}
-		const msgType = (msg as { type?: string })?.type;
 		if (msgType !== 'session_event') {
 			logger.trace('[OutboundBridge] send', { type: msgType });
 		}

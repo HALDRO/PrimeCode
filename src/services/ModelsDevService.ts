@@ -55,6 +55,7 @@ export class ModelsDevService implements vscode.Disposable {
 	private fetchPromise: Promise<ModelsDevData | null> | null = null;
 	/** Sorted known model IDs (longest first) for substring matching. */
 	private knownIds: string[] = [];
+	private flatIndex = new Map<string, ModelsDevModelInfo>();
 
 	/**
 	 * Get the full models.dev database (cached, refreshed hourly).
@@ -97,14 +98,14 @@ export class ModelsDevService implements vscode.Disposable {
 		if (this.knownIds.length === 0) this.buildKnownIds(data);
 
 		// 1. Try exact match first (fast path)
-		const exact = this.findExact(data, modelId);
+		const exact = this.findExact(modelId);
 		if (exact) return exact;
 
 		// 2. Substring match: find the longest known ID contained in modelId
 		const bestMatch = this.findLongestSubstring(modelId);
 		if (!bestMatch) return undefined;
 
-		return this.findExact(data, bestMatch);
+		return this.findExact(bestMatch);
 	}
 
 	/**
@@ -121,7 +122,7 @@ export class ModelsDevService implements vscode.Disposable {
 
 		for (const originalId of modelIds) {
 			// 1. Exact match
-			let info = this.findExact(data, originalId);
+			let info = this.findExact(originalId);
 			if (info) {
 				result.set(originalId, info);
 				continue;
@@ -129,7 +130,7 @@ export class ModelsDevService implements vscode.Disposable {
 			// 2. Substring match
 			const bestMatch = this.findLongestSubstring(originalId);
 			if (!bestMatch) continue;
-			info = this.findExact(data, bestMatch);
+			info = this.findExact(bestMatch);
 			if (info) result.set(originalId, info);
 		}
 		return result;
@@ -142,11 +143,28 @@ export class ModelsDevService implements vscode.Disposable {
 	/** Build a sorted list of all known model IDs (longest first). */
 	private buildKnownIds(data: ModelsDevData): void {
 		const ids = new Set<string>();
+		this.flatIndex.clear();
 		for (const provider of Object.values(data)) {
 			if (!provider.models) continue;
 			for (const [key, model] of Object.entries(provider.models)) {
-				ids.add(model.id ?? key);
-				if (model.id && model.id !== key) ids.add(key);
+				const id = model.id ?? key;
+				const info: ModelsDevModelInfo = {
+					id,
+					name: model.name,
+					context: model.limit?.context,
+					output: model.limit?.output,
+					reasoning: model.reasoning,
+					tool_call: model.tool_call,
+					attachment: model.attachment,
+					temperature: model.temperature,
+					modalities: model.modalities,
+				};
+				ids.add(id);
+				this.flatIndex.set(id, info);
+				if (model.id && model.id !== key) {
+					ids.add(key);
+					this.flatIndex.set(key, info);
+				}
 			}
 		}
 		// Sort longest first so "claude-sonnet-4-5" matches before "claude-sonnet-4"
@@ -160,27 +178,8 @@ export class ModelsDevService implements vscode.Disposable {
 	}
 
 	/** Exact lookup by model ID or key across all providers. */
-	private findExact(data: ModelsDevData, modelId: string): ModelsDevModelInfo | undefined {
-		for (const provider of Object.values(data)) {
-			if (!provider.models) continue;
-			for (const [key, model] of Object.entries(provider.models)) {
-				const id = model.id ?? key;
-				if (id === modelId || key === modelId) {
-					return {
-						id,
-						name: model.name,
-						context: model.limit?.context,
-						output: model.limit?.output,
-						reasoning: model.reasoning,
-						tool_call: model.tool_call,
-						attachment: model.attachment,
-						temperature: model.temperature,
-						modalities: model.modalities,
-					};
-				}
-			}
-		}
-		return undefined;
+	private findExact(modelId: string): ModelsDevModelInfo | undefined {
+		return this.flatIndex.get(modelId);
 	}
 
 	private async fetchData(): Promise<ModelsDevData | null> {
@@ -206,6 +205,7 @@ export class ModelsDevService implements vscode.Disposable {
 			this.cache = json as ModelsDevData;
 			this.lastFetchTime = Date.now();
 			this.knownIds = []; // force rebuild on next lookup
+			this.flatIndex.clear();
 			logger.info('[ModelsDevService] models.dev data refreshed');
 			return this.cache;
 		} catch (error) {
@@ -219,5 +219,6 @@ export class ModelsDevService implements vscode.Disposable {
 		this.cache = null;
 		this.fetchPromise = null;
 		this.knownIds = [];
+		this.flatIndex.clear();
 	}
 }

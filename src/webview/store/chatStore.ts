@@ -608,7 +608,15 @@ function handleMessageRecordRemovedEvent(
 function _handleMessagePartEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
 	const evt = payload as import('../../common').SessionMessagePartPayload;
 	const list = targetSession.runtimeMessagePartsById[evt.part.messageId] || [];
-	const idx = list.findIndex(p => p.id === evt.part.id);
+	const idx = list.findIndex(
+		p =>
+			p.id === evt.part.id ||
+			(evt.part.type === 'tool' &&
+				p.type === 'tool' &&
+				p.callId &&
+				evt.part.callId &&
+				p.callId === evt.part.callId),
+	);
 	if (idx >= 0) {
 		const existing = list[idx];
 		const nextPart = {

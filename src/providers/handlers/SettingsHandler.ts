@@ -192,124 +192,97 @@ export class SettingsHandler implements WebviewMessageHandler {
 	}
 
 	private async applyWebviewSettingsPatch(patch: Record<string, unknown>): Promise<void> {
-		// Webview sends schema-style keys like 'proxy.baseUrl', 'opencode.agent', etc.
-		// Apply only known keys, everything else is ignored.
-		for (const [key, value] of Object.entries(patch)) {
-			switch (key) {
-				case 'provider':
-					if (value === 'opencode') {
-						await this.context.settings.set('provider', value);
-					}
-					break;
+		const booleanKeys = new Set<keyof PrimeCodeSettings>([
+			'autoApprove',
+			'yoloMode',
+			'proxy.useSingleModel',
+			'opencode.autoStart',
+		]);
+		const nullableStringKeys = new Set<keyof PrimeCodeSettings>([
+			'proxy.haikuModel',
+			'proxy.sonnetModel',
+			'proxy.opusModel',
+			'proxy.subagentModel',
+			'opencode.agent',
+			'promptImprove.model',
+			'promptImprove.template',
+		]);
+		const stringArrayKeys = new Set<keyof PrimeCodeSettings>([
+			'opencode.enabledModels',
+			'providers.disabled',
+		]);
 
-				case 'model':
-					// Model is stored per-session in chatStore, not in workspace settings
-					break;
+		const isValidProxyEndpointList = (
+			input: unknown,
+		): input is NonNullable<PrimeCodeSettings['proxy.endpoints']> =>
+			Array.isArray(input) &&
+			input.every(entry => {
+				if (!entry || typeof entry !== 'object') return false;
+				const record = entry as Record<string, unknown>;
+				return (
+					typeof record.id === 'string' &&
+					typeof record.name === 'string' &&
+					typeof record.baseUrl === 'string' &&
+					typeof record.apiKey === 'string' &&
+					Array.isArray(record.enabledModels) &&
+					(record.headers === undefined ||
+						(typeof record.headers === 'object' && !Array.isArray(record.headers)))
+				);
+			});
 
-				case 'autoApprove':
-					if (typeof value === 'boolean') {
-						await this.context.settings.set('autoApprove', value);
-					}
-					break;
+		for (const [rawKey, value] of Object.entries(patch)) {
+			if (rawKey === 'model') continue;
 
-				case 'yoloMode':
-					if (typeof value === 'boolean') {
-						await this.context.settings.set('yoloMode', value);
-					}
-					break;
+			if (rawKey === 'provider') {
+				if (value === 'opencode') {
+					await this.context.settings.set('provider', value);
+				}
+				continue;
+			}
 
-				case 'mcpServers':
-					if (typeof value === 'object' && value !== null) {
-						await this.context.settings.set('mcpServers', value as Record<string, unknown>);
-					}
-					break;
+			if (rawKey === 'mcpServers') {
+				if (typeof value === 'object' && value !== null) {
+					await this.context.settings.set('mcpServers', value as Record<string, unknown>);
+				}
+				continue;
+			}
 
-				case 'proxy.endpoints':
-					if (
-						Array.isArray(value) &&
-						value.every(
-							entry =>
-								entry &&
-								typeof entry === 'object' &&
-								typeof (entry as Record<string, unknown>).id === 'string' &&
-								typeof (entry as Record<string, unknown>).name === 'string' &&
-								typeof (entry as Record<string, unknown>).baseUrl === 'string' &&
-								typeof (entry as Record<string, unknown>).apiKey === 'string' &&
-								Array.isArray((entry as Record<string, unknown>).enabledModels) &&
-								((entry as Record<string, unknown>).headers === undefined ||
-									(typeof (entry as Record<string, unknown>).headers === 'object' &&
-										!Array.isArray((entry as Record<string, unknown>).headers))),
-						)
-					) {
-						await this.context.settings.set(
-							'proxy.endpoints',
-							value as NonNullable<
-								import('../../core/Settings').PrimeCodeSettings['proxy.endpoints']
-							>,
-						);
-					}
-					break;
+			if (rawKey === 'proxy.endpoints') {
+				if (isValidProxyEndpointList(value)) {
+					await this.context.settings.set('proxy.endpoints', value);
+				}
+				continue;
+			}
 
-				case 'proxy.useSingleModel':
-					if (typeof value === 'boolean') {
-						await this.context.settings.set('proxy.useSingleModel', value);
-					}
-					break;
+			if (rawKey === 'opencode.serverTimeout') {
+				if (typeof value === 'number' && Number.isFinite(value)) {
+					await this.context.settings.set('opencode.serverTimeout', value);
+				}
+				continue;
+			}
 
-				case 'proxy.haikuModel':
-				case 'proxy.sonnetModel':
-				case 'proxy.opusModel':
-				case 'proxy.subagentModel':
-					if (typeof value === 'string') {
-						await this.context.settings.set(key, value);
-					} else if (value === null || value === undefined) {
-						await this.context.settings.set(key, undefined);
-					}
-					break;
+			const key = rawKey as keyof PrimeCodeSettings;
 
-				case 'opencode.autoStart':
-					if (typeof value === 'boolean') {
-						await this.context.settings.set('opencode.autoStart', value);
-					}
-					break;
+			if (booleanKeys.has(key)) {
+				if (typeof value === 'boolean') {
+					await this.context.settings.set(key, value);
+				}
+				continue;
+			}
 
-				case 'opencode.serverTimeout':
-					if (typeof value === 'number' && Number.isFinite(value)) {
-						await this.context.settings.set('opencode.serverTimeout', value);
-					}
-					break;
+			if (nullableStringKeys.has(key)) {
+				if (typeof value === 'string') {
+					await this.context.settings.set(key, value);
+				} else if (value === null || value === undefined) {
+					await this.context.settings.set(key, undefined);
+				}
+				continue;
+			}
 
-				case 'opencode.agent':
-					if (typeof value === 'string') {
-						await this.context.settings.set('opencode.agent', value);
-					} else if (value === null || value === undefined) {
-						await this.context.settings.set('opencode.agent', undefined);
-					}
-					break;
-
-				case 'opencode.enabledModels':
-					if (Array.isArray(value) && value.every(v => typeof v === 'string')) {
-						await this.context.settings.set('opencode.enabledModels', value);
-					}
-					break;
-
-				case 'providers.disabled':
-					if (Array.isArray(value) && value.every(v => typeof v === 'string')) {
-						await this.context.settings.set('providers.disabled', value);
-					}
-					break;
-
-				case 'promptImprove.model':
-				case 'promptImprove.template':
-					if (typeof value === 'string') {
-						await this.context.settings.set(key, value);
-					} else if (value === null || value === undefined) {
-						await this.context.settings.set(key, undefined);
-					}
-					break;
-
-				default:
-					break;
+			if (stringArrayKeys.has(key)) {
+				if (Array.isArray(value) && value.every(item => typeof item === 'string')) {
+					await this.context.settings.set(key, value);
+				}
 			}
 		}
 	}

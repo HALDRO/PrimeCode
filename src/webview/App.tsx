@@ -7,6 +7,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
+import type { ExtensionMessage } from '../common';
 import { ChangedFilesPanel } from './components/chat/ChangedFilesPanel';
 import { GenerationStatus } from './components/chat/GenerationStatus';
 import { MessageItem } from './components/chat/MessageItem';
@@ -22,11 +23,11 @@ import { SettingsPage } from './components/settings';
 import { ConfirmDialog } from './components/ui';
 import { ScrollThumb } from './components/ui/ScrollContainer';
 import { useElementHeight } from './hooks/useElementHeight';
-import { useExtensionMessages } from './hooks/useExtensionMessages';
 import {
 	useActiveModal,
 	useActiveSessionId,
 	useChangedFilesState,
+	useChatStore,
 	useIsProcessing,
 	useMcpServers,
 	useMessages,
@@ -35,8 +36,38 @@ import {
 	useTurnTokens,
 } from './store';
 import { useSettingsStore } from './store/settingsStore';
+import { useUIStore } from './store/uiStore';
 import { groupMessagesIntoSections, type MessageSection } from './utils/groupSections';
 import { vscode } from './utils/vscode';
+
+const COALESCABLE_EVENT_TYPES = new Set(['message', 'status', 'stats', 'turn_tokens']);
+
+let pendingSessionEvents: import('../common').SessionEventMessage[] = [];
+let pendingFrameId: number | null = null;
+
+function flushPendingSessionEvents(): void {
+	pendingFrameId = null;
+	if (pendingSessionEvents.length === 0) return;
+	const events = pendingSessionEvents;
+	pendingSessionEvents = [];
+	useChatStore.getState().actions.dispatchBatch(events);
+}
+
+const handleExtensionMessage = (message: ExtensionMessage): void => {
+	if (message.type === 'session_event' && COALESCABLE_EVENT_TYPES.has(message.eventType)) {
+		pendingSessionEvents.push(message);
+		if (pendingFrameId === null) {
+			pendingFrameId = window.requestAnimationFrame(flushPendingSessionEvents);
+		}
+		useUIStore.getState().actions.handleExtensionMessage(message);
+		useSettingsStore.getState().actions.handleExtensionMessage(message);
+		return;
+	}
+
+	useChatStore.getState().actions.handleExtensionMessage(message);
+	useUIStore.getState().actions.handleExtensionMessage(message);
+	useSettingsStore.getState().actions.handleExtensionMessage(message);
+};
 
 /**
  * Structurally compare two sections — reuse the old ref if nothing meaningful changed.
@@ -603,7 +634,33 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 ChatArea.displayName = 'ChatArea';
 
 export const App: React.FC = () => {
-	useExtensionMessages();
+	const didSendInitialRequests = useRef(false);
+
+	useEffect(() => {
+		const handleMessage = (event: MessageEvent) => {
+			const message = event.data;
+			handleExtensionMessage(message);
+		};
+
+		window.addEventListener('message', handleMessage);
+
+		if (!didSendInitialRequests.current) {
+			didSendInitialRequests.current = true;
+			vscode.postMessage({ type: 'webviewDidLaunch' });
+			vscode.postMessage({ type: 'checkExtensionVersion' });
+		}
+
+		return () => {
+			window.removeEventListener('message', handleMessage);
+			if (pendingFrameId !== null) {
+				cancelAnimationFrame(pendingFrameId);
+				pendingFrameId = null;
+			}
+			if (pendingSessionEvents.length > 0) {
+				flushPendingSessionEvents();
+			}
+		};
+	}, []);
 
 	const headerHeight = useElementHeight<HTMLDivElement>({ fallbackHeight: 44 });
 	const activeSessionId = useActiveSessionId();

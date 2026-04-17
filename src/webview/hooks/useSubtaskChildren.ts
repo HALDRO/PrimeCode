@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { type GroupedResponseItem, groupToolMessages } from '../components/chat/toolGrouping';
 import type { RenderMessage, RenderSubtaskMessage, TokenUsage } from '../store';
-import { useChatStore } from '../store/chatStore';
+import { type ChatState, useChatStore } from '../store/chatStore';
 import { projectRuntimeMessages } from '../store/selectors';
 
 // Stable empty array reference to prevent infinite re-renders
@@ -10,25 +10,61 @@ const EMPTY_GROUPED: GroupedResponseItem[] = [];
 
 type SubtaskTokenStats = Pick<TokenUsage, 'input' | 'output' | 'total'>;
 
-function useSubtaskChildrenInSession(childSessionId: string | undefined): RenderMessage[] {
-	const childSession = useChatStore(state =>
-		childSessionId ? state.sessionsById[childSessionId] : undefined,
-	);
+function hasCanonicalTaskResult(message: RenderSubtaskMessage | undefined): boolean {
+	return typeof message?.result === 'string' && message.result.trim().length > 0;
+}
+
+function findSubtaskCard(
+	sessionsById: ChatState['sessionsById'],
+	parentSessionId: string,
+	subtaskId: string,
+): RenderSubtaskMessage | undefined {
+	const parentSession = sessionsById[parentSessionId];
+	if (!parentSession) return undefined;
+	const found = projectRuntimeMessages(parentSession).find(m => m.id === subtaskId);
+	return found && found.kind === 'subtask' ? (found as RenderSubtaskMessage) : undefined;
+}
+
+function buildInlineSessionPreviewMessages(
+	sessionsById: ChatState['sessionsById'],
+	sessionId: string | undefined,
+	excludeTerminalAssistantText: boolean,
+): RenderMessage[] {
+	if (!sessionId) return EMPTY_MESSAGES;
+	const childSession = sessionsById[sessionId];
+	if (!childSession) return EMPTY_MESSAGES;
+
+	const projected = projectRuntimeMessages(childSession, {
+		materializeTaskCards: false,
+		compactToolOutputs: true,
+		excludeTerminalAssistantText,
+	});
+	return projected.length > 0 ? projected : EMPTY_MESSAGES;
+}
+
+function useInlineChildSessionPreview(
+	childSessionId: string | undefined,
+	excludeTerminalAssistantText: boolean,
+): RenderMessage[] {
+	const sessionsById = useChatStore(state => state.sessionsById);
 
 	return useMemo(() => {
-		if (!childSession) return EMPTY_MESSAGES;
-		const projected = projectRuntimeMessages(childSession);
+		const projected = buildInlineSessionPreviewMessages(
+			sessionsById,
+			childSessionId,
+			excludeTerminalAssistantText,
+		);
 		return projected.length ? projected : EMPTY_MESSAGES;
-	}, [childSession]);
+	}, [sessionsById, childSessionId, excludeTerminalAssistantText]);
 }
 
 /**
- * Higher-level hook for UI rendering: returns subtask message, grouped children, and total duration.
- * This keeps UI components from duplicating the parent-card vs child-session lookup logic.
+ * Derived view model for a task-linked child session preview rendered inside a subtask card.
+ * This stays UI-only: canonical data lives in session/message/part state.
  */
-export function useSubtaskThread(
+export function useSubtaskPreview(
 	subtaskId: string,
-	sessionId: string,
+	parentSessionId: string,
 	_mcpServerNames: string[],
 ): {
 	message?: RenderSubtaskMessage;
@@ -37,27 +73,30 @@ export function useSubtaskThread(
 	totalDurationMs: number;
 	tokenStats: SubtaskTokenStats | null;
 	childModelId: string | undefined;
+	taskResultEntry: RenderSubtaskMessage['normalizedEntry'];
+	taskResultContent: string;
 } {
-	const session = useChatStore(state => state.sessionsById[sessionId]);
+	const sessionsById = useChatStore(state => state.sessionsById);
 
-	const message = useMemo(() => {
-		const found = projectRuntimeMessages(session).find(m => m.id === subtaskId);
-		return found && found.kind === 'subtask' ? (found as RenderSubtaskMessage) : undefined;
-	}, [session, subtaskId]);
+	const message = useMemo(
+		() => findSubtaskCard(sessionsById, parentSessionId, subtaskId),
+		[sessionsById, parentSessionId, subtaskId],
+	);
 
 	const childSessionId = (message as { childSessionId?: string } | undefined)?.childSessionId;
-	const children = useSubtaskChildrenInSession(childSessionId);
+	const shouldProjectTaskResult = hasCanonicalTaskResult(message);
+	const visiblePreview = useInlineChildSessionPreview(childSessionId, shouldProjectTaskResult);
 
 	const groupedChildren = useMemo(() => {
-		if (!children.length) return EMPTY_GROUPED;
+		if (!visiblePreview.length) return EMPTY_GROUPED;
 		const isStreaming = message?.status === 'running';
-		const grouped = groupToolMessages(children, _mcpServerNames, isStreaming);
+		const grouped = groupToolMessages(visiblePreview, _mcpServerNames, isStreaming);
 		return grouped.length ? grouped : EMPTY_GROUPED;
-	}, [children, _mcpServerNames, message?.status]);
+	}, [visiblePreview, _mcpServerNames, message?.status]);
 
 	const totalDurationMs = useMemo(() => {
-		return message?.durationMs ?? 0;
-	}, [message?.durationMs]);
+		return message?.durationMs ?? message?.childTokens?.durationMs ?? 0;
+	}, [message?.durationMs, message?.childTokens?.durationMs]);
 
 	// Read token stats and model ID directly from the subtask message
 	const tokenStats: SubtaskTokenStats | null = useMemo(() => {
@@ -72,13 +111,17 @@ export function useSubtaskThread(
 	}, [message?.childTokens]);
 
 	const childModelId: string | undefined = message?.childModelId;
+	const taskResultContent = shouldProjectTaskResult ? (message?.result ?? '').trim() : '';
+	const taskResultEntry = shouldProjectTaskResult ? message?.normalizedEntry : undefined;
 
 	return {
 		message,
-		children,
+		children: visiblePreview,
 		groupedChildren,
 		totalDurationMs,
 		tokenStats,
 		childModelId,
+		taskResultEntry,
+		taskResultContent,
 	};
 }

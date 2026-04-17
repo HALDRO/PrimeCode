@@ -18,6 +18,7 @@ export interface TokenDelta {
 	outputTokens: number;
 	totalTokens: number;
 	cacheReadTokens: number;
+	durationMs?: number;
 }
 
 interface AccumulatedTokens {
@@ -25,9 +26,16 @@ interface AccumulatedTokens {
 	output: number;
 	total: number;
 	cacheRead: number;
+	durationMs?: number;
 }
 
-const ZERO_TOKENS: AccumulatedTokens = { input: 0, output: 0, total: 0, cacheRead: 0 };
+const ZERO_TOKENS: AccumulatedTokens = {
+	input: 0,
+	output: 0,
+	total: 0,
+	cacheRead: 0,
+	durationMs: 0,
+};
 
 export class SubtaskManager {
 	/** Tool IDs awaiting child session linking. */
@@ -38,6 +46,8 @@ export class SubtaskManager {
 	private readonly toolToParentSession = new Map<string, string>();
 	/** toolUseId → childSessionId */
 	private readonly toolToChildSession = new Map<string, string>();
+	/** toolUseId → parent assistant messageID */
+	private readonly toolToParentMessageId = new Map<string, string>();
 	/** Accumulated child token stats per toolUseId. */
 	private readonly tokenAccumulators = new Map<string, AccumulatedTokens>();
 
@@ -49,8 +59,14 @@ export class SubtaskManager {
 	 * Register a new subtask from a `task` tool_use event.
 	 * Child session ID may already be known from OpenCode task metadata.
 	 */
-	registerSubtask(toolUseId: string, parentSessionId: string, childSessionId?: string): void {
+	registerSubtask(
+		toolUseId: string,
+		parentSessionId: string,
+		childSessionId?: string,
+		parentMessageId?: string,
+	): void {
 		this.toolToParentSession.set(toolUseId, parentSessionId);
+		if (parentMessageId) this.toolToParentMessageId.set(toolUseId, parentMessageId);
 
 		if (childSessionId) {
 			this.linkChildSession(childSessionId, toolUseId, parentSessionId);
@@ -105,6 +121,10 @@ export class SubtaskManager {
 		return this.toolToChildSession.get(toolUseId);
 	}
 
+	getParentMessageId(toolUseId: string): string | undefined {
+		return this.toolToParentMessageId.get(toolUseId);
+	}
+
 	getOldestPendingToolUseId(parentSessionId: string): string | undefined {
 		for (const toolUseId of this.pendingToolIds) {
 			if (this.toolToParentSession.get(toolUseId) === parentSessionId) {
@@ -124,12 +144,16 @@ export class SubtaskManager {
 	 */
 	resolveRouting(
 		childSessionId: string,
-	): { parentSessionId: string; toolUseId: string } | undefined {
+	): { parentSessionId: string; toolUseId: string; parentMessageId?: string } | undefined {
 		const parentSessionId = this.graph.getParent(childSessionId);
 		if (!parentSessionId) return undefined;
 		const toolUseId = this.childToToolUseId.get(childSessionId);
 		if (!toolUseId) return undefined;
-		return { parentSessionId, toolUseId };
+		return {
+			parentSessionId,
+			toolUseId,
+			parentMessageId: this.toolToParentMessageId.get(toolUseId),
+		};
 	}
 
 	// ─── Token Accumulation ──────────────────────────────────────────────────
@@ -141,6 +165,7 @@ export class SubtaskManager {
 			output: prev.output + (delta.outputTokens ?? 0),
 			total: prev.total + (delta.totalTokens ?? 0),
 			cacheRead: prev.cacheRead + (delta.cacheReadTokens ?? 0),
+			durationMs: (prev.durationMs ?? 0) + (delta.durationMs ?? 0),
 		};
 		this.tokenAccumulators.set(toolUseId, accumulated);
 		return accumulated;
@@ -156,6 +181,7 @@ export class SubtaskManager {
 	completeSubtask(toolUseId: string): void {
 		this.pendingToolIds.delete(toolUseId);
 		this.toolToParentSession.delete(toolUseId);
+		this.toolToParentMessageId.delete(toolUseId);
 		this.tokenAccumulators.delete(toolUseId);
 		this.toolToChildSession.delete(toolUseId);
 
@@ -171,6 +197,7 @@ export class SubtaskManager {
 	clearAll(): void {
 		this.pendingToolIds.clear();
 		this.toolToParentSession.clear();
+		this.toolToParentMessageId.clear();
 		this.childToToolUseId.clear();
 		this.toolToChildSession.clear();
 		this.tokenAccumulators.clear();

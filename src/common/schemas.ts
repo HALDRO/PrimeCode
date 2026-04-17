@@ -782,8 +782,8 @@ export const ParsedSubagentSchema = Type.Object({
 export type ParsedSubagent = Static<typeof ParsedSubagentSchema>;
 
 /**
- * Shared payload fields for CreateSubagent commands (used by both protocol.ts and webviewCommands.ts).
- * Derived from ParsedSubagent to avoid duplicating the permission/tools shape in multiple files.
+ * Shared payload fields for CreateSubagent commands in `protocol.ts`.
+ * Derived from ParsedSubagent to avoid duplicating the permission/tools shape.
  */
 export type SubagentCommandFields = {
 	type: 'createSubagent';

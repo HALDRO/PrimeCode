@@ -116,23 +116,20 @@ const getNumber = (value: unknown): number | undefined =>
 	typeof value === 'number' ? value : undefined;
 
 const getPathFromInput = (input: Record<string, unknown>) =>
-	getString(input.path) || getString(input.file_path) || getString(input.filePath);
+	getString(input.path ?? input.file_path ?? input.filePath);
 
-const getFirstString = (input: Record<string, unknown>, keys: string[]): string => {
-	for (const key of keys) {
-		const value = input[key];
-		if (typeof value === 'string' && value) return value;
-	}
-	return '';
-};
+const getFirstString = (input: Record<string, unknown>, keys: string[]): string =>
+	getString(keys.reduce<unknown>((value, key) => value ?? input[key], undefined));
 
 const getSearchQuery = (input: Record<string, unknown>): string =>
 	getFirstString(input, ['query', 'search_query', 'pattern', 'glob_pattern', 'glob']);
 
 const mapEditChange = (input: Record<string, unknown>): FileChange => {
 	const diff = getString(input.diff);
-	const oldContent = getFirstString(input, ['old_string', 'old_str', 'oldString']);
-	const newContent = getFirstString(input, ['new_string', 'new_str', 'newString']);
+	const oldContent = getString(input.old_string ?? input.old_str ?? input.oldString);
+	const newContent = getString(
+		input.new_string ?? input.new_str ?? input.newString ?? input.content,
+	);
 
 	if (diff) return { type: 'Edit', unifiedDiff: diff, hasLineNumbers: false };
 	if (oldContent || newContent) {

@@ -8,7 +8,7 @@ import type {
 	SessionTodoItem,
 	SessionUserMessagePayload,
 } from '../../common';
-import { generateId, parseModelId } from '../../common';
+import { extractCanonicalTaskResult, generateId, parseModelId } from '../../common';
 import { IMPROVE_PROMPT_DEFAULT_TEMPLATE } from '../../common/promptImprover';
 import type { CommandOf, QueuedMessageData, WebviewCommand } from '../../common/protocol';
 import { parseSessionTodoItem, parseSessionUpdatedRuntimePayload } from '../../common/schemas';
@@ -86,6 +86,17 @@ export class SessionHandler implements WebviewMessageHandler {
 			if (typeof obj[key] === 'string') return obj[key] as string;
 		}
 		return fallback;
+	}
+
+	private updateQueue(
+		sessionId: string,
+		mutator: (queue: QueuedMessageData[]) => QueuedMessageData[],
+	): QueuedMessageData[] {
+		const current = this.pendingMessages.get(sessionId) ?? [];
+		const next = mutator([...current]);
+		if (next.length === 0) this.pendingMessages.delete(sessionId);
+		else this.pendingMessages.set(sessionId, next);
+		return next;
 	}
 
 	async handleMessage(msg: WebviewCommand): Promise<void> {
@@ -425,21 +436,7 @@ export class SessionHandler implements WebviewMessageHandler {
 
 		const entries = messagesResult.data ?? [];
 		const explicitLinks = this.extractExplicitTaskLinksFromEntries(entries, sessionId);
-		const childSessionIds = new Set<string>(explicitLinks.values());
-		for (const child of allSessions.filter(s => s.parentID === sessionId)) {
-			childSessionIds.add(child.id);
-		}
 		const parentTurnTokens = this.buildTurnTokenMap(entries);
-		const childResults = await Promise.all(
-			[...childSessionIds].map(async childSessionId => ({
-				childSessionId,
-				childSession: allSessions.find(session => session.id === childSessionId),
-				childMessagesResult: await sdkClient.session.messages({
-					sessionID: childSessionId,
-					directory: config.workspaceRoot,
-				}),
-			})),
-		);
 
 		const childSnapshots = new Map<
 			string,
@@ -475,10 +472,27 @@ export class SessionHandler implements WebviewMessageHandler {
 			{ input: number; output: number; total: number; cacheRead: number }
 		>();
 		const childModelIdMap = new Map<string, string>();
-		for (const { childSessionId, childSession, childMessagesResult } of childResults) {
+		const visitedChildSessionIds = new Set<string>();
+		const pendingChildSessionIds = new Set<string>(explicitLinks.values());
+		for (const child of allSessions.filter(s => s.parentID === sessionId)) {
+			pendingChildSessionIds.add(child.id);
+		}
+
+		while (pendingChildSessionIds.size > 0) {
+			const nextChildSessionId = pendingChildSessionIds.values().next().value as string | undefined;
+			if (!nextChildSessionId) break;
+			pendingChildSessionIds.delete(nextChildSessionId);
+			if (visitedChildSessionIds.has(nextChildSessionId)) continue;
+			visitedChildSessionIds.add(nextChildSessionId);
+
+			const childSession = allSessions.find(session => session.id === nextChildSessionId);
+			const childMessagesResult = await sdkClient.session.messages({
+				sessionID: nextChildSessionId,
+				directory: config.workspaceRoot,
+			});
 			if (childMessagesResult.error) {
 				logger.warn('[SessionHandler] Failed to fetch canonical child session messages', {
-					sessionId: childSessionId,
+					sessionId: nextChildSessionId,
 					error: childMessagesResult.error,
 				});
 				continue;
@@ -486,33 +500,45 @@ export class SessionHandler implements WebviewMessageHandler {
 
 			const childEntries = childMessagesResult.data ?? [];
 			if (childEntries.length > 0) {
+				const nestedExplicitLinks = this.extractExplicitTaskLinksFromEntries(
+					childEntries,
+					nextChildSessionId,
+				);
+				for (const nestedChildSessionId of nestedExplicitLinks.values()) {
+					if (!visitedChildSessionIds.has(nestedChildSessionId)) {
+						pendingChildSessionIds.add(nestedChildSessionId);
+					}
+				}
+				for (const nestedChild of allSessions.filter(s => s.parentID === nextChildSessionId)) {
+					if (!visitedChildSessionIds.has(nestedChild.id)) {
+						pendingChildSessionIds.add(nestedChild.id);
+					}
+				}
 				const canonicalDuration = this.computeCanonicalSessionDuration(childEntries, {
 					fallbackCreatedAt: childSession?.created,
 					fallbackUpdatedAt: childSession?.lastModified,
 				});
 				if (typeof canonicalDuration === 'number' && canonicalDuration > 0) {
-					childDurations.set(childSessionId, canonicalDuration);
+					childDurations.set(nextChildSessionId, canonicalDuration);
 				}
 				const childTurnTokens = this.buildTurnTokenMap(childEntries);
 				const childTotals = this.computeCanonicalChildTokenTotals(childTurnTokens);
 				if (childTotals) {
-					childTokensMap.set(childSessionId, childTotals);
+					childTokensMap.set(nextChildSessionId, childTotals);
 				}
 				const childModelId = this.extractCanonicalModelId(childEntries);
 				if (childModelId) {
-					childModelIdMap.set(childSessionId, childModelId);
+					childModelIdMap.set(nextChildSessionId, childModelId);
 				}
 				childSnapshots.set(
-					childSessionId,
-					this.buildCanonicalSessionSnapshot(childSessionId, childEntries, childTurnTokens, {
-						workspaceSessionId: childSessionId,
-					}),
+					nextChildSessionId,
+					this.buildCanonicalSessionSnapshot(nextChildSessionId, childEntries, childTurnTokens),
 				);
 				continue;
 			}
 
 			logger.warn('[SessionHandler] Canonical child session snapshot is empty', {
-				sessionId: childSessionId,
+				sessionId: nextChildSessionId,
 			});
 		}
 
@@ -531,13 +557,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			}
 		}
 
-		const snapshot = this.buildCanonicalSessionSnapshot(sessionId, entries, parentTurnTokens, {
-			workspaceSessionId: sessionId,
-			explicitLinks,
-			childDurations,
-			childTokensMap,
-			childModelIdMap,
-		});
+		const snapshot = this.buildCanonicalSessionSnapshot(sessionId, entries, parentTurnTokens);
 		this.context.bridge.emit(sessionId, 'messages_reload', {
 			messages: snapshot.messages,
 			runtimeMessageRecords: snapshot.runtimeMessageRecords,
@@ -556,6 +576,36 @@ export class SessionHandler implements WebviewMessageHandler {
 		});
 		if (snapshot.todos) {
 			this.context.bridge.emit(sessionId, 'todo', { todos: snapshot.todos });
+		}
+
+		for (const [toolUseId, childSessionId] of explicitLinks) {
+			const childTokens = childTokensMap.get(childSessionId);
+			const durationMs = childDurations.get(childSessionId);
+			const childModelId = childModelIdMap.get(childSessionId);
+			if (!childTokens && !durationMs && !childModelId) continue;
+
+			this.context.bridge.emit(sessionId, 'subtask', {
+				subtask: {
+					id: toolUseId,
+					agent: 'subagent',
+					prompt: '',
+					description: 'Subtask',
+					parentSessionId: sessionId,
+					childSessionId,
+					status: 'completed',
+					...(childTokens
+						? {
+								childTokens: {
+									...childTokens,
+									...(typeof durationMs === 'number' && durationMs > 0 ? { durationMs } : {}),
+								},
+							}
+						: {}),
+					...(typeof durationMs === 'number' && durationMs > 0 ? { durationMs } : {}),
+					...(childModelId ? { childModelId } : {}),
+					timestamp: new Date().toISOString(),
+				},
+			});
 		}
 
 		if (
@@ -773,80 +823,6 @@ export class SessionHandler implements WebviewMessageHandler {
 		return undefined;
 	}
 
-	private mapCanonicalTaskPartToSubtask(
-		part: {
-			id?: string;
-			callID?: string;
-			tool?: string;
-			state?: unknown;
-		},
-		info: { id: string; time?: { created?: number } },
-		partTime: { start?: number; end?: number; created?: number } | undefined,
-		sessionId: string,
-		explicitLinks: Map<string, string>,
-		childDurations: Map<string, number>,
-		childTokensMap: Map<
-			string,
-			{ input: number; output: number; total: number; cacheRead: number }
-		>,
-		childModelIdMap: Map<string, string>,
-	): SessionSubtaskPayload['subtask'] | undefined {
-		if (part.tool !== 'task') return undefined;
-
-		const taskState =
-			part.state && typeof part.state === 'object' ? (part.state as Record<string, unknown>) : {};
-		const taskInput =
-			taskState.input && typeof taskState.input === 'object'
-				? (taskState.input as Record<string, unknown>)
-				: {};
-		const toolUseId = typeof part.callID === 'string' ? part.callID : part.id || info.id;
-		const childSessionId =
-			taskState.metadata &&
-			typeof taskState.metadata === 'object' &&
-			typeof (taskState.metadata as Record<string, unknown>).sessionId === 'string'
-				? ((taskState.metadata as Record<string, unknown>).sessionId as string)
-				: explicitLinks.get(toolUseId);
-
-		return {
-			id: toolUseId,
-			partId: toolUseId,
-			toolUseId,
-			toolName: part.tool,
-			agent: typeof taskInput.subagent_type === 'string' ? taskInput.subagent_type : 'subagent',
-			prompt: typeof taskInput.prompt === 'string' ? taskInput.prompt : '',
-			description: typeof taskInput.description === 'string' ? taskInput.description : 'Subtask',
-			status:
-				taskState.status === 'completed'
-					? 'completed'
-					: taskState.status === 'error'
-						? 'error'
-						: 'running',
-			...(typeof taskState.output === 'string' ? { result: taskState.output } : {}),
-			parentSessionId: sessionId,
-			...(childSessionId ? { childSessionId } : {}),
-			toolInput: Object.keys(taskInput).length > 0 ? JSON.stringify(taskInput) : '',
-			rawInput: taskInput,
-			isRunning: taskState.status !== 'completed' && taskState.status !== 'error',
-			timestamp:
-				typeof partTime?.start === 'number'
-					? new Date(partTime.start).toISOString()
-					: typeof info.time?.created === 'number'
-						? new Date(info.time.created).toISOString()
-						: new Date().toISOString(),
-			startTime:
-				typeof partTime?.start === 'number' ? new Date(partTime.start).toISOString() : undefined,
-			...(childSessionId && childDurations.get(childSessionId)
-				? { durationMs: childDurations.get(childSessionId) }
-				: {}),
-			...(childSessionId && childTokensMap.get(childSessionId)
-				? { childTokens: childTokensMap.get(childSessionId) }
-				: {}),
-			...(childSessionId && childModelIdMap.get(childSessionId)
-				? { childModelId: childModelIdMap.get(childSessionId) }
-				: {}),
-		};
-	}
-
 	private async onCreateSession(): Promise<void> {
 		logger.info('[SessionHandler] Creating new real session');
 
@@ -1005,14 +981,13 @@ export class SessionHandler implements WebviewMessageHandler {
 
 	private onCancelQueuedMessage(msg: CommandOf<'cancelQueuedMessage'>): void {
 		const { sessionId, queueId } = msg;
-		const queue = this.pendingMessages.get(sessionId);
-		if (!queue) return;
-		const idx = queue.findIndex(e => e.queueId === queueId);
-		if (idx === -1) return;
-		const removed = queue[idx];
-		const newQueue = queue.filter(e => e.queueId !== queueId);
-		if (newQueue.length === 0) this.pendingMessages.delete(sessionId);
-		else this.pendingMessages.set(sessionId, newQueue);
+		let removed: QueuedMessageData | undefined;
+		const newQueue = this.updateQueue(sessionId, queue => {
+			const idx = queue.findIndex(entry => entry.queueId === queueId);
+			if (idx !== -1) removed = queue.splice(idx, 1)[0];
+			return queue;
+		});
+		if (!removed) return;
 		logger.info('[SessionHandler] Cancelled queued message', { sessionId, queueId });
 		this.context.bridge.queue.update(
 			'cancelled',
@@ -1042,20 +1017,19 @@ export class SessionHandler implements WebviewMessageHandler {
 		// Safety: keep any entries not in queueIds at the end
 		reordered.push(...queueMap.values());
 
-		this.pendingMessages.set(sessionId, reordered);
+		this.updateQueue(sessionId, () => reordered);
 		this.context.bridge.queue.update('enqueued', sessionId, [...reordered]);
 	}
 
 	private async onForceQueuedMessage(msg: CommandOf<'forceQueuedMessage'>): Promise<void> {
 		const { sessionId, queueId } = msg;
-		const queue = this.pendingMessages.get(sessionId);
-		if (!queue) return;
-		const idx = queue.findIndex(e => e.queueId === queueId);
-		if (idx === -1) return;
-		const entry = queue[idx];
-		const newQueue = queue.filter(e => e.queueId !== queueId);
-		if (newQueue.length === 0) this.pendingMessages.delete(sessionId);
-		else this.pendingMessages.set(sessionId, newQueue);
+		let entry: QueuedMessageData | undefined;
+		const newQueue = this.updateQueue(sessionId, queue => {
+			const idx = queue.findIndex(item => item.queueId === queueId);
+			if (idx !== -1) entry = queue.splice(idx, 1)[0];
+			return queue;
+		});
+		if (!entry) return;
 
 		// Only stop if session is actually busy (avoids false "Stopped by user")
 		const isBusy = this.context.cli.isSessionActive?.(sessionId) ?? false;
@@ -1065,8 +1039,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		}
 
 		// Notify webview of updated queue
-		const remaining = this.pendingMessages.get(sessionId) ?? [];
-		this.context.bridge.queue.update('dequeued', sessionId, [...remaining]);
+		this.context.bridge.queue.update('dequeued', sessionId, [...newQueue]);
 
 		// Acquire sending lock to prevent race with concurrent onSendMessage
 		this.sendingLock.add(sessionId);
@@ -1091,18 +1064,18 @@ export class SessionHandler implements WebviewMessageHandler {
 	 * (FIFO) and sends it. Remaining messages stay in queue for next idle.
 	 */
 	public async processQueueOnIdle(sessionId: string): Promise<void> {
-		const queue = this.pendingMessages.get(sessionId);
-		if (!queue || queue.length === 0) return;
-		const entry = queue[0];
-		queue.shift();
-		if (queue.length === 0) this.pendingMessages.delete(sessionId);
+		let entry: QueuedMessageData | undefined;
+		const remaining = this.updateQueue(sessionId, queue => {
+			entry = queue.shift();
+			return queue;
+		});
+		if (!entry) return;
 
 		logger.info('[SessionHandler] Auto-dequeuing message on idle', {
 			sessionId,
 			queueId: entry.queueId,
 		});
 
-		const remaining = this.pendingMessages.get(sessionId) ?? [];
 		this.context.bridge.queue.update('dequeued', sessionId, [...remaining]);
 
 		// Acquire sending lock to prevent race with concurrent onSendMessage
@@ -1635,13 +1608,6 @@ export class SessionHandler implements WebviewMessageHandler {
 		sessionId: string,
 		entries: Array<{ info: CanonicalSdkMessage; parts: CanonicalSdkPart[] }>,
 		turnTokensByUser: Map<string, ReplayTurnTokens>,
-		options: {
-			workspaceSessionId: string;
-			explicitLinks?: Map<string, string>;
-			childDurations?: Map<string, number>;
-			childTokensMap?: Map<string, ReplayChildTokens>;
-			childModelIdMap?: Map<string, string>;
-		},
 	): {
 		messages: Array<SessionUserMessagePayload['message'] | SessionSubtaskPayload['subtask']>;
 		runtimeMessageRecords: import('../../common').SessionMessageRecordPayload['message'][];
@@ -1692,6 +1658,29 @@ export class SessionHandler implements WebviewMessageHandler {
 			{ input: number; output: number; total?: number; cacheRead?: number; durationMs?: number }
 		> = {};
 		const restoreCommits: CommitInfo[] = [];
+		const enrichRuntimePart = (
+			part: import('../../common').SessionMessagePartPayload['part'],
+		): import('../../common').SessionMessagePartPayload['part'] => {
+			if (part.type !== 'tool' || part.toolName !== 'task') return part;
+			const toolState = part.state && typeof part.state === 'object' ? part.state : undefined;
+			const toolInput =
+				toolState?.input && typeof toolState.input === 'object'
+					? (toolState.input as Record<string, unknown>)
+					: undefined;
+			const output = typeof toolState?.output === 'string' ? toolState.output : undefined;
+			if (!output) return part;
+			return {
+				...part,
+				normalizedEntry:
+					part.normalizedEntry ??
+					this.logNormalizer.normalizeTaskResult(
+						part.callId ?? part.id,
+						typeof toolInput?.description === 'string' ? toolInput.description : 'Subtask',
+						extractCanonicalTaskResult(output),
+						toolState?.status === 'error',
+					),
+			};
+		};
 
 		for (const entry of entries) {
 			const info = entry.info;
@@ -1729,26 +1718,7 @@ export class SessionHandler implements WebviewMessageHandler {
 						latestTodos = this.extractTodoSnapshotFromToolInput(toolState?.input) ?? latestTodos;
 					}
 				}
-				const partTime =
-					'time' in part && part.time && typeof part.time === 'object'
-						? (part.time as { start?: number; end?: number; created?: number })
-						: undefined;
-				const subtask = this.mapCanonicalTaskPartToSubtask(
-					part,
-					info,
-					partTime,
-					options.workspaceSessionId,
-					options.explicitLinks ?? new Map<string, string>(),
-					options.childDurations ?? new Map<string, number>(),
-					options.childTokensMap ?? new Map(),
-					options.childModelIdMap ?? new Map<string, string>(),
-				);
-				if (subtask) {
-					messages.push(subtask);
-					continue;
-				}
-
-				runtimeMessageParts.push(mapSdkPartToPayload(part, info.id, sessionId));
+				runtimeMessageParts.push(enrichRuntimePart(mapSdkPartToPayload(part, info.id, sessionId)));
 				if (part.type !== 'tool' || typeof part.tool !== 'string') continue;
 				const toolState =
 					part.state && typeof part.state === 'object'

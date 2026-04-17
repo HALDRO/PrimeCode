@@ -7,9 +7,8 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import type { NormalizedEntry } from '../../../common/normalizedTypes';
 import { useContainerAutoScroll } from '../../hooks/useContainerAutoScroll';
-import { useSubtaskThread } from '../../hooks/useSubtaskChildren';
+import { useSubtaskPreview } from '../../hooks/useSubtaskChildren';
 import {
 	type RenderAssistantMessage,
 	type RenderMessage,
@@ -63,18 +62,6 @@ const subtaskStatusIcon = (status: RenderSubtaskMessage['status']) => {
 	}
 };
 
-/** Strip <task_result> XML wrapper and task_id prefix from subtask result text */
-const cleanSubtaskResult = (raw: string): string => {
-	let text = raw;
-	// Remove task_id: ... line at the start
-	text = text.replace(/^task_id:\s*\S+.*\n?/i, '');
-	// Remove <task_result> / </task_result> wrappers
-	text = text.replace(/<\/?task_result>/gi, '');
-	// Remove <task_metadata>...</task_metadata> blocks
-	text = text.replace(/<task_metadata>[\s\S]*?<\/task_metadata>/gi, '');
-	return text.trim();
-};
-
 type SubtaskExpandState = 'preview' | 'expanded';
 
 const SUBTASK_PREVIEW_MAX_HEIGHT = 150;
@@ -93,64 +80,12 @@ const SubtaskItem = React.memo<{
 		totalDurationMs,
 		tokenStats,
 		childModelId,
-	} = useSubtaskThread(message.id || '', ctx.sessionId, mcpServerNames);
+		taskResultEntry,
+		taskResultContent,
+	} = useSubtaskPreview(message.id || '', ctx.sessionId, mcpServerNames);
 
-	// Strip trailing assistant message that duplicates the subtask result
-	const groupedChildren = useMemo(() => {
-		let nextChildren = rawGroupedChildren;
-
-		// The card already renders the task prompt above the child session timeline.
-		// Some child sessions also emit the same prompt as their first visible item
-		// (either as a user echo or as an assistant bridge message). Drop that
-		// duplicate so the subtask timeline starts with real activity.
-		if (message.prompt && nextChildren.length > 0) {
-			const first = nextChildren[0];
-			if (!Array.isArray(first) && (first.kind === 'user' || first.kind === 'assistant')) {
-				const firstContent = ('content' in first ? first.content : '').trim();
-				if (firstContent && firstContent === message.prompt.trim()) {
-					nextChildren = nextChildren.slice(1);
-				}
-			}
-		}
-
-		if (message.status === 'completed' && message.result && nextChildren.length > 0) {
-			const last = nextChildren[nextChildren.length - 1];
-			if (!Array.isArray(last) && last.kind === 'assistant') {
-				return nextChildren.slice(0, -1);
-			}
-		}
-		return nextChildren;
-	}, [rawGroupedChildren, message.status, message.result, message.prompt]);
-
-	// Build TaskResult normalizedEntry from the subtask's own normalizedEntry or result text
-	const taskResultEntry = useMemo((): NormalizedEntry | undefined => {
-		if (message.status !== 'completed' || !message.result) return undefined;
-		const existing = (message as unknown as { normalizedEntry?: NormalizedEntry }).normalizedEntry;
-		if (
-			existing?.entryType &&
-			typeof existing.entryType === 'object' &&
-			'actionType' in existing.entryType &&
-			existing.entryType.actionType.type === 'TaskResult'
-		) {
-			return existing;
-		}
-		const cleaned = cleanSubtaskResult(message.result);
-		return {
-			timestamp: message.timestamp || new Date().toISOString(),
-			entryType: {
-				type: 'ToolUse',
-				toolName: 'task',
-				actionType: {
-					type: 'TaskResult',
-					description: message.description || '',
-					result: cleaned,
-					status: 'completed',
-				},
-				status: 'success',
-			},
-			content: cleaned,
-		};
-	}, [message.status, message.result, message.description, message.timestamp, message]);
+	const groupedChildren = rawGroupedChildren;
+	const shouldRenderTaskResult = Boolean(taskResultEntry) && Boolean(taskResultContent);
 
 	const isRunning = message.status === 'running';
 
@@ -297,11 +232,11 @@ const SubtaskItem = React.memo<{
 								className="my-2"
 							/>
 						)}
-						{taskResultEntry && (
+						{shouldRenderTaskResult && (
 							<InlineToolLine
 								toolName="task"
 								rawInput={{}}
-								content={cleanSubtaskResult(message.result || '')}
+								content={taskResultContent}
 								isError={false}
 								normalizedEntry={taskResultEntry}
 								showCollapseOverlay
@@ -409,14 +344,15 @@ const SimpleToolGroup = React.memo<{
 	}, [isLive, shouldCollapse]);
 
 	useEffect(() => {
-		if (shouldCollapse && !prevShouldCollapseRef.current && !isLive) {
-			// Real content appeared after the group — collapse immediately
-			// and cancel the fallback timer.
+		if (shouldCollapse && !prevShouldCollapseRef.current) {
+			// As soon as a real post-group item appears, collapse immediately.
+			// Waiting for isLive=false makes live streaming keep the group open
+			// until the end of the turn, which breaks the expected behavior.
 			clearTimeout(collapseTimerRef.current);
 			setExpanded(false);
 		}
 		prevShouldCollapseRef.current = shouldCollapse;
-	}, [shouldCollapse, isLive]);
+	}, [shouldCollapse]);
 
 	// Cleanup timer on unmount
 	useEffect(() => () => clearTimeout(collapseTimerRef.current), []);

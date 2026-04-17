@@ -119,3 +119,20 @@ export function normalizeProxyBaseUrl(raw: string): string {
 		.replace(/\/+$/, '')
 		.replace(/\/v1(?:\/.*)?$/, '')}/v1`;
 }
+
+export function asRecord(value: unknown): Record<string, unknown> {
+	return value && typeof value === 'object' && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: {};
+}
+
+export function getStringField(record: unknown, key: string, fallback = ''): string {
+	const value = asRecord(record)[key];
+	return typeof value === 'string' ? value : fallback;
+}
+
+export function extractCanonicalTaskResult(raw: string): string {
+	const trimmed = raw.trim();
+	const match = trimmed.match(/<task_result>\s*([\s\S]*?)\s*<\/task_result>/i);
+	return match?.[1]?.trim() ?? trimmed;
+}

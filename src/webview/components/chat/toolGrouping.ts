@@ -14,7 +14,6 @@ import type { RenderMessage } from '../../store';
 
 const MIN_SIMPLE_TOOL_GROUP_SIZE = 3;
 const MAX_BRIDGE_MESSAGE_LENGTH = 200;
-
 // -----------------------------------------------------------------------------
 // Live tool group tracking
 // -----------------------------------------------------------------------------
@@ -61,7 +60,6 @@ const getToolUseCount = (msgs: RenderMessage[]): number => {
 	return uniqueToolUseIds.size;
 };
 
-/** Whether a message can act as a bridge between two tool groups */
 export const isBridgeMessage = (msg: RenderMessage): boolean => {
 	if (msg.kind === 'thinking') return true;
 	if (msg.kind === 'assistant') {
@@ -71,11 +69,6 @@ export const isBridgeMessage = (msg: RenderMessage): boolean => {
 	return false;
 };
 
-/**
- * Strip trailing bridge messages (assistant/thinking) from the end of a group.
- * Returns the stripped messages so they can be emitted after the group.
- * Bridge messages in the middle of a group (between tool sequences) stay put.
- */
 const stripTrailingBridges = (group: RenderMessage[]): RenderMessage[] => {
 	const stripped: RenderMessage[] = [];
 	while (group.length > 0 && isBridgeMessage(group[group.length - 1])) {
@@ -95,10 +88,7 @@ const stripTrailingBridges = (group: RenderMessage[]): RenderMessage[] => {
  * Simple algorithm: tools and bridge messages (short assistant / thinking)
  * are accumulated into a group. When a non-bridge message arrives (heavy tool,
  * long assistant, subtask, etc.) the group is flushed. On flush, trailing
- * bridge messages are stripped from the group and emitted separately — there's
- * no point hiding them inside a collapsed group.
- *
- * No look-ahead, no streaming-specific branching for bridge absorption.
+ * bridge messages are stripped from the group and emitted separately.
  * `isStreaming` is only used to mark the trailing group as `isLive` for
  * preview mode in SimpleToolGroup.
  */
@@ -113,8 +103,6 @@ export const groupToolMessages = (
 	const flushGroup = (reason: 'boundary' | 'final') => {
 		if (currentToolGroup.length === 0) return;
 
-		// Strip trailing bridge messages — they shouldn't be hidden inside
-		// a collapsed group. They'll be emitted as standalone items after it.
 		const trailingBridges = stripTrailingBridges(currentToolGroup);
 
 		const toolUseCount = getToolUseCount(currentToolGroup);
@@ -129,7 +117,6 @@ export const groupToolMessages = (
 			result.push(...currentToolGroup);
 		}
 
-		// Emit stripped trailing bridges after the group
 		result.push(...trailingBridges);
 
 		currentToolGroup = [];
@@ -143,7 +130,6 @@ export const groupToolMessages = (
 			continue;
 		}
 
-		// Bridge messages (short assistant / thinking) — absorb into group
 		if (isBridgeMessage(msg) && currentToolGroup.length > 0) {
 			currentToolGroup.push(msg);
 			continue;
@@ -193,8 +179,6 @@ export type GroupedResponseItem = RenderMessage | RenderMessage[];
 
 const itemTriggersCollapse = (item: GroupedResponseItem): boolean => {
 	if (Array.isArray(item)) {
-		// Bridge messages (assistant/thinking) inside a grouped array are not collapse triggers —
-		// they were absorbed as connectors between tool sequences.
 		return item.some(msg => !isBridgeMessage(msg) && shouldTriggerCollapse(msg));
 	}
 	return shouldTriggerCollapse(item);

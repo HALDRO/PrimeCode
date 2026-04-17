@@ -7,7 +7,7 @@
 
 import { useCallback, useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { parseModelId } from '../../common';
+import { extractCanonicalTaskResult, parseModelId } from '../../common';
 import {
 	type ChangedFile,
 	type ChatSession,
@@ -33,8 +33,34 @@ const EMPTY_NOTIFICATIONS: TransientNotification[] = [];
 const EMPTY_PERMISSIONS: import('../../common').SessionPermissionRequest[] = [];
 const EMPTY_QUESTIONS: import('../../common').SessionQuestionRequest[] = [];
 
-export function projectRuntimeMessages(session: ChatSession | undefined): RenderMessage[] {
+function getTaskResultFromNormalizedEntry(
+	entry: RenderSubtaskMessage['normalizedEntry'] | undefined,
+): string | undefined {
+	if (
+		!entry?.entryType ||
+		typeof entry.entryType !== 'object' ||
+		!('actionType' in entry.entryType)
+	) {
+		return undefined;
+	}
+	const action = entry.entryType.actionType;
+	return action.type === 'TaskResult' && typeof action.result === 'string'
+		? action.result
+		: undefined;
+}
+
+export function projectRuntimeMessages(
+	session: ChatSession | undefined,
+	options?: {
+		materializeTaskCards?: boolean;
+		compactToolOutputs?: boolean;
+		excludeTerminalAssistantText?: boolean;
+	},
+): RenderMessage[] {
 	if (!session) return EMPTY_MESSAGES;
+	const materializeTaskCards = options?.materializeTaskCards !== false;
+	const compactToolOutputs = options?.compactToolOutputs === true;
+	const excludeTerminalAssistantText = options?.excludeTerminalAssistantText === true;
 
 	const runtimeUserMessageIds = new Set(
 		session.runtimeMessageRecords
@@ -43,24 +69,86 @@ export function projectRuntimeMessages(session: ChatSession | undefined): Render
 	);
 
 	const passthrough: RenderMessage[] = [];
+	const subtasksByParentMessageId = new Map<string, RenderSubtaskMessage[]>();
+	const subtaskOverlayById = session.subtasksById;
+	const createDerivedSubtask = (
+		part: ChatSession['runtimeMessagePartsById'][string][number],
+		timestamp: string,
+		messageID: string,
+	): RenderSubtaskMessage | undefined => {
+		if (!materializeTaskCards) return undefined;
+		if (part.type !== 'tool' || !part.callId || part.toolName !== 'task') return undefined;
+		const overlay = subtaskOverlayById[part.callId];
+		const rawInput =
+			(part.state?.input as Record<string, unknown> | undefined) ?? overlay?.rawInput ?? {};
+		const taskMetadata = part.state?.metadata as Record<string, unknown> | undefined;
+		const canonicalResult =
+			getTaskResultFromNormalizedEntry(overlay?.normalizedEntry) ??
+			getTaskResultFromNormalizedEntry(part.normalizedEntry) ??
+			(typeof part.state?.output === 'string'
+				? extractCanonicalTaskResult(part.state.output)
+				: undefined);
+		const childTokens = overlay?.childTokens;
+		const durationMs = overlay?.durationMs ?? childTokens?.durationMs;
+		const status =
+			overlay?.status ??
+			(part.state?.status === 'completed'
+				? 'completed'
+				: part.state?.status === 'error'
+					? 'error'
+					: 'running');
+		return {
+			id: part.callId,
+			kind: 'subtask',
+			type: 'subtask',
+			timestamp: overlay?.timestamp ?? timestamp,
+			partId: overlay?.partId ?? part.id,
+			messageID,
+			toolUseId: overlay?.toolUseId ?? part.callId,
+			toolName: overlay?.toolName ?? part.toolName,
+			agent:
+				overlay?.agent ||
+				(typeof rawInput.subagent_type === 'string' ? rawInput.subagent_type : 'subagent'),
+			prompt: overlay?.prompt || (typeof rawInput.prompt === 'string' ? rawInput.prompt : ''),
+			description:
+				overlay?.description ||
+				(typeof rawInput.description === 'string' ? rawInput.description : 'Subtask'),
+			parentSessionId: overlay?.parentSessionId ?? session.id,
+			...(overlay?.childSessionId
+				? { childSessionId: overlay.childSessionId }
+				: typeof taskMetadata?.sessionId === 'string'
+					? { childSessionId: taskMetadata.sessionId }
+					: {}),
+			status,
+			...(overlay?.command ? { command: overlay.command } : {}),
+			...(overlay?.contextId ? { contextId: overlay.contextId } : {}),
+			...((overlay?.result ?? canonicalResult)
+				? { result: overlay?.result ?? canonicalResult }
+				: {}),
+			...(overlay?.startTime ? { startTime: overlay.startTime } : {}),
+			...(typeof durationMs === 'number' ? { durationMs } : {}),
+			...(childTokens ? { childTokens } : {}),
+			...(overlay?.childModelId ? { childModelId: overlay.childModelId } : {}),
+			...(overlay?.retryInfo ? { retryInfo: overlay.retryInfo } : {}),
+			toolInput: overlay?.toolInput ?? JSON.stringify(rawInput),
+			rawInput,
+			isRunning: status === 'running',
+			...(overlay?.normalizedEntry
+				? { normalizedEntry: overlay.normalizedEntry }
+				: part.normalizedEntry
+					? { normalizedEntry: part.normalizedEntry }
+					: {}),
+		};
+	};
 	for (const message of Object.values(session.userMessagesById)) {
 		if (typeof message.id === 'string' && !runtimeUserMessageIds.has(message.id)) {
+			if (compactToolOutputs) continue;
 			const renderUser: RenderUserMessage = {
 				...message,
 				id: message.id,
 				kind: 'user' as const,
 			};
 			passthrough.push(renderUser);
-		}
-	}
-	for (const message of Object.values(session.subtasksById)) {
-		if (message.id) {
-			const renderSubtask: RenderSubtaskMessage = {
-				...message,
-				id: message.id,
-				kind: 'subtask' as const,
-			};
-			passthrough.push(renderSubtask);
 		}
 	}
 	const userMessagesById = session.userMessagesById;
@@ -99,6 +187,11 @@ export function projectRuntimeMessages(session: ChatSession | undefined): Render
 					timestamp,
 					...(record?.agent ? { agent: record.agent } : {}),
 				});
+				const anchoredSubtasks = subtasksByParentMessageId.get(messageId);
+				if (anchoredSubtasks?.length) {
+					runtimeProjected.push(...anchoredSubtasks);
+					subtasksByParentMessageId.delete(messageId);
+				}
 				continue;
 			}
 
@@ -121,6 +214,13 @@ export function projectRuntimeMessages(session: ChatSession | undefined): Render
 			}
 
 			if (part.type === 'tool' && part.callId) {
+				const derivedSubtask = createDerivedSubtask(part, timestamp, messageId);
+				if (derivedSubtask) {
+					const existing = subtasksByParentMessageId.get(messageId);
+					if (existing) existing.push(derivedSubtask);
+					else subtasksByParentMessageId.set(messageId, [derivedSubtask]);
+					continue;
+				}
 				const isRunning =
 					!partCompleted &&
 					(part.state?.status === 'pending' ||
@@ -134,12 +234,16 @@ export function projectRuntimeMessages(session: ChatSession | undefined): Render
 					toolUseId: part.callId,
 					toolInput: JSON.stringify(part.state?.input || {}),
 					rawInput: (part.state?.input as Record<string, unknown>) ?? {},
-					streamingOutput: part.state?.output,
+					...(compactToolOutputs ? {} : { streamingOutput: part.state?.output }),
 					isRunning,
 					timestamp,
 					...(part.state?.status ? { status: part.state.status } : {}),
 					...(part.state?.title ? { title: part.state.title } : {}),
-					...(part.state?.output ? { resultContent: part.state.output } : {}),
+					...(compactToolOutputs
+						? {}
+						: part.state?.output
+							? { resultContent: part.state.output }
+							: {}),
 					...(part.state?.metadata
 						? { metadata: part.state.metadata as Record<string, unknown> }
 						: {}),
@@ -147,18 +251,26 @@ export function projectRuntimeMessages(session: ChatSession | undefined): Render
 				});
 			}
 		}
+
+		const anchoredSubtasks = subtasksByParentMessageId.get(messageId);
+		if (anchoredSubtasks?.length) {
+			runtimeProjected.push(...anchoredSubtasks);
+			subtasksByParentMessageId.delete(messageId);
+		}
 	};
 
 	for (const record of session.runtimeMessageRecords) {
 		if (record.role === 'user') {
-			const user = userMessagesById[record.id];
-			if (user?.id) {
-				const renderUser = {
-					...user,
-					id: user.id,
-					kind: 'user',
-				} satisfies RenderUserMessage;
-				runtimeProjected.push(renderUser);
+			if (!compactToolOutputs) {
+				const user = userMessagesById[record.id];
+				if (user?.id) {
+					const renderUser = {
+						...user,
+						id: user.id,
+						kind: 'user',
+					} satisfies RenderUserMessage;
+					runtimeProjected.push(renderUser);
+				}
 			}
 			seenMessageIds.add(record.id);
 			continue;
@@ -172,12 +284,23 @@ export function projectRuntimeMessages(session: ChatSession | undefined): Render
 		projectParts(messageId);
 	}
 
-	return [...passthrough, ...runtimeProjected].sort((a, b) => {
-		const timeDiff = new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime();
-		if (timeDiff !== 0) return timeDiff;
-		// Stable fallback when timestamps match
-		return (a.id || '').localeCompare(b.id || '');
-	});
+	// Preserve store arrival order. Live streaming can emit multiple parts with the
+	// same timestamps, and sorting here reorders tool/text blocks versus the order
+	// established by runtimeMessageRecords and runtimeMessagePartsById.
+	const result = [...passthrough, ...runtimeProjected];
+
+	if (excludeTerminalAssistantText) {
+		for (let i = result.length - 1; i >= 0; i--) {
+			const message = result[i];
+			if (message.kind === 'assistant') {
+				result.splice(i, 1);
+				break;
+			}
+			if (message.kind !== 'thinking') break;
+		}
+	}
+
+	return result;
 }
 
 function getActiveSession(state: ChatState): ChatSession | undefined {

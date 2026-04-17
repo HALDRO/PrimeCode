@@ -8,7 +8,8 @@
  * Loading State Management:
  * -------------------------
  * Loading states are set when initiating requests and MUST be reset when responses arrive.
- * The following message types reset their corresponding loading states in useExtensionMessages.ts:
+ * The following message types reset their corresponding loading states in the webview
+ * extension-message dispatcher:
  *
  * - 'cliDiagnostics'    -> cliDiagnostics.isChecking = false
  * - 'openCodeStatus'    -> opencodeStatus.isChecking = false

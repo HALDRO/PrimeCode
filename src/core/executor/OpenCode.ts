@@ -24,7 +24,7 @@ import type {
 } from '@opencode-ai/sdk/v2/client';
 import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk/v2/client';
 
-import { parseModelId } from '../../common';
+import { asRecord, getStringField, parseModelId } from '../../common';
 import { PERMISSION_CATEGORIES } from '../../common/permissions';
 import {
 	mapPermissionRuntimePayloadToRequest,
@@ -114,29 +114,17 @@ function getTokenTotal(tokens: AssistantInfo['tokens']): number {
 	return typeof runtimeTotal === 'number' ? runtimeTotal : tokens.input + tokens.output;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-	return value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
-}
-
-function getStringField(
-	record: Record<string, unknown> | undefined,
-	key: string,
-): string | undefined {
-	const value = record?.[key];
-	return typeof value === 'string' ? value : undefined;
-}
-
 function isTaskToolName(name: string): boolean {
 	return name === 'task' || name === 'Task';
 }
 
 function getTaskDescription(input: unknown): string {
 	const record = asRecord(input);
-	return getStringField(record, 'description') ?? getStringField(record, 'prompt') ?? '';
+	return getStringField(record, 'description') || getStringField(record, 'prompt');
 }
 
 function getMetadataSessionId(metadata: unknown): string | undefined {
-	return getStringField(asRecord(metadata), 'sessionId');
+	return getStringField(metadata, 'sessionId') || undefined;
 }
 
 // =============================================================================
@@ -393,17 +381,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			const isWindows = process.platform === 'win32';
 
 			if (isWindows) {
-				// Step 1: find PIDs of opencode.exe processes
-				const { stdout: tasklistOut } = await execFileAsync(
-					'tasklist',
-					['/FI', 'IMAGENAME eq opencode.exe', '/FO', 'CSV', '/NH'],
-					{ timeout: 5000 },
-				);
-				const pids = new Set<string>();
-				for (const line of tasklistOut.split('\n')) {
-					const match = line.match(/"opencode\.exe","(\d+)"/i);
-					if (match) pids.add(match[1]);
-				}
+				const pids = new Set(await this.getWindowsOpencodePids());
 				if (pids.size === 0) return [];
 
 				// Step 2: find which ports those PIDs are listening on
@@ -481,17 +459,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 		try {
 			if (process.platform === 'win32') {
-				// Find opencode.exe PIDs
-				const { stdout } = await execFileAsync(
-					'tasklist',
-					['/FI', 'IMAGENAME eq opencode.exe', '/FO', 'CSV', '/NH'],
-					{ timeout: 5000 },
-				);
-				const pids: string[] = [];
-				for (const line of stdout.split('\n')) {
-					const match = line.match(/"opencode\.exe","(\d+)"/i);
-					if (match) pids.push(match[1]);
-				}
+				const pids = await this.getWindowsOpencodePids();
 				for (const pid of pids) {
 					try {
 						await execFileAsync('taskkill', ['/PID', pid, '/F'], { timeout: 5000 });
@@ -510,6 +478,23 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			}
 		} catch (error) {
 			logger.warn('[OpenCode] Failed to kill zombie processes', { error: String(error) });
+		}
+	}
+
+	private async getWindowsOpencodePids(): Promise<string[]> {
+		const { execFile } = await import('node:child_process');
+		const { promisify } = await import('node:util');
+		const execFileAsync = promisify(execFile);
+
+		try {
+			const { stdout } = await execFileAsync(
+				'tasklist',
+				['/FI', 'IMAGENAME eq opencode.exe', '/FO', 'CSV', '/NH'],
+				{ timeout: 5000 },
+			);
+			return [...stdout.matchAll(/"opencode\.exe","(\d+)"/gi)].map(match => match[1]);
+		} catch {
+			return [];
 		}
 	}
 
@@ -2297,18 +2282,22 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		name: string,
 		state: { input?: unknown; title?: string; metadata?: unknown } | undefined,
 		status: string | undefined,
+		messageID?: string,
+		partId?: string,
 		sessionId?: string,
 	): void {
-		const inputObj = (state?.input ?? {}) as Record<string, unknown>;
+		const inputObj = asRecord(state?.input);
 		const normalized = this.logNormalizer.normalizeToolUse(name, inputObj, callID);
 		const evt = {
 			data: {
 				id: callID,
+				...(messageID ? { messageID } : {}),
 				name,
 				input: state?.input,
 				state: status,
 				title: state?.title,
 				metadata: state?.metadata,
+				...(partId ? { partId } : {}),
 			},
 			normalizedEntry: normalized,
 			sessionId,
@@ -2319,7 +2308,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 	private handleToolPart(part: OpenCodePart, sessionId?: string): void {
 		if (part.type !== 'tool' || !part.callID) return;
-		const { callID, tool: name = 'unknown', state } = part;
+		const { callID, tool: name = 'unknown', state, messageID, id: partId } = part;
 		const status = state?.status;
 
 		// Skip question tool — it's handled separately via question.asked SSE event
@@ -2336,7 +2325,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 			if (isFirstSeen || awaitingInput) {
 				// First emission OR re-emit when input arrives (was missing on initial pending).
-				this.emitToolUse(callID, name, state, status, sessionId);
+				this.emitToolUse(callID, name, state, status, messageID, partId, sessionId);
 				this.toolCallStates.set(callID, { completed: false, hasInput: hasInputNow });
 			} else if (status === 'running' && current && !current.completed) {
 				// Intermediate update for a running tool.
@@ -2347,7 +2336,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				// ctx.metadata() after Session.create()), re-emit as tool_use so
 				// ChatProvider can extract the child session ID and link it.
 				if (isTask && getMetadataSessionId(meta)) {
-					this.emitToolUse(callID, name, state, status, sessionId);
+					this.emitToolUse(callID, name, state, status, messageID, partId, sessionId);
 					this.toolCallStates.set(callID, { completed: false, hasInput: hasInputNow });
 				} else if (meta && Object.keys(meta).length > 0) {
 					// Non-task tools: forward metadata as streaming update (e.g. bash output).
@@ -2355,9 +2344,11 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 						type: 'tool_streaming',
 						data: {
 							id: callID,
+							...(messageID ? { messageID } : {}),
 							name,
 							streamingOutput: typeof meta.output === 'string' ? meta.output : undefined,
 							metadata: meta,
+							...(partId ? { partId } : {}),
 						},
 						sessionId,
 					});
@@ -2378,21 +2369,19 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 						outputText,
 						status === 'error',
 					)
-				: this.logNormalizer.normalizeToolUse(
-						name,
-						(state?.input ?? {}) as Record<string, unknown>,
-						callID,
-					);
+				: this.logNormalizer.normalizeToolUse(name, asRecord(state?.input), callID);
 			this.emit('event', {
 				type: 'tool_result',
 				data: {
 					tool_use_id: callID,
+					...(messageID ? { messageID } : {}),
 					name,
 					content: state?.output ?? '',
 					is_error: status === 'error',
 					input: state?.input,
 					title: state?.title,
 					metadata: state?.metadata,
+					...(partId ? { partId } : {}),
 				},
 				normalizedEntry: resultNormalized,
 				sessionId,

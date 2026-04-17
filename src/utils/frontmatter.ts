@@ -48,13 +48,9 @@ export function parseFrontmatter(content: string): {
  * Creates a markdown string with YAML-like frontmatter.
  */
 export function stringifyFrontmatter(attributes: Record<string, unknown>, body: string): string {
-	const cleanAttributes: Record<string, unknown> = {};
-
-	for (const [key, value] of Object.entries(attributes)) {
-		if (value !== undefined && value !== '') {
-			cleanAttributes[key] = value;
-		}
-	}
+	const cleanAttributes = Object.fromEntries(
+		Object.entries(attributes).filter(([, value]) => value !== undefined && value !== ''),
+	);
 
 	if (Object.keys(cleanAttributes).length === 0) {
 		return body.trim();

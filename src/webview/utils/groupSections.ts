@@ -6,7 +6,11 @@
  *              so the frontend components stay dumb renderers.
  */
 
-import { type GroupedResponseItem, groupToolMessages } from '../components/chat/SimpleTool';
+import {
+	type GroupedResponseItem,
+	groupToolMessages,
+	isBridgeMessage,
+} from '../components/chat/toolGrouping';
 import type { ChangedFile, RenderMessage, RenderUserMessage, TokenUsage } from '../store';
 
 function groupRenderResponses(
@@ -29,6 +33,10 @@ function groupRenderResponses(
 
 	for (const response of responses) {
 		if (response.kind === 'tool_use') {
+			toolBuffer.push(response);
+			continue;
+		}
+		if (toolBuffer.length > 0 && isBridgeMessage(response)) {
 			toolBuffer.push(response);
 			continue;
 		}

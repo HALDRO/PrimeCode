@@ -162,10 +162,8 @@ describe('groupToolMessages', () => {
 				assistant('a2', 'All done.'),
 			];
 			const result = groupToolMessages(msgs, NO_MCP);
-			// Bridge absorption: short assistant is absorbed, creating one group of 7 (4 tools + 2 results + 1 assistant bridge) + trailing assistant
 			expect(result).toHaveLength(2);
 			expect(Array.isArray(result[0])).toBe(true);
-			// Group contains all 3 tool_use + 3 tool_result + 1 absorbed assistant
 			expect((result[0] as Message[]).length).toBe(7);
 			expect((result[1] as Message).type).toBe('assistant');
 		});
@@ -184,7 +182,6 @@ describe('groupToolMessages', () => {
 				assistant('a1', 'Done.'),
 			];
 			const result = groupToolMessages(msgs, NO_MCP);
-			// Bridge absorption: thinking is absorbed, single group of 9 (4 tools + 4 results + 1 thinking) + trailing assistant
 			expect(result).toHaveLength(2);
 			expect(Array.isArray(result[0])).toBe(true);
 			expect((result[0] as Message[]).length).toBe(9);
@@ -209,7 +206,6 @@ describe('groupToolMessages', () => {
 				assistant('a2', 'Done.'),
 			];
 			const result = groupToolMessages(msgs, NO_MCP);
-			// Bridge absorption: short assistant absorbed, one merged group of 13 + trailing assistant
 			expect(result).toHaveLength(2);
 			expect(Array.isArray(result[0])).toBe(true);
 			expect((result[0] as Message[]).length).toBe(13);
@@ -296,8 +292,6 @@ describe('groupToolMessages', () => {
 		});
 
 		it('should absorb short assistant bridging single tool to more tools into one group', () => {
-			// Bridge absorption: short assistant between 1 tool and 2 more tools
-			// Total 3 tool_use → meets threshold, absorbed into single group
 			const msgs = [
 				toolUse('1'),
 				toolResult('1r', 'tu-1'),
@@ -309,7 +303,6 @@ describe('groupToolMessages', () => {
 				assistant('a2', 'Done.'),
 			];
 			const result = groupToolMessages(msgs, NO_MCP);
-			// Bridge absorption merges all into one group of 7 + trailing assistant
 			expect(result).toHaveLength(2);
 			expect(Array.isArray(result[0])).toBe(true);
 			expect((result[0] as Message[]).length).toBe(7);
@@ -368,8 +361,6 @@ describe('groupToolMessages', () => {
 				toolResult('3r', 'tu-3'),
 			];
 			const result = groupToolMessages(msgs, NO_MCP, true);
-			// Bridge absorption: short assistant absorbed, 3 tool_use meets threshold,
-			// streaming allows trailing group → single group of 7
 			expect(result).toHaveLength(1);
 			expect(Array.isArray(result[0])).toBe(true);
 			expect((result[0] as Message[]).length).toBe(7);
@@ -446,8 +437,6 @@ describe('groupToolMessages', () => {
 		});
 
 		it('should keep mid-group assistant but strip trailing assistant', () => {
-			// Assistant between two tool sequences stays in the group.
-			// Trailing assistant at the end is stripped out.
 			const msgs = [
 				toolUse('1'),
 				toolResult('1r', 'tu-1'),
@@ -465,8 +454,8 @@ describe('groupToolMessages', () => {
 			const streaming = groupToolMessages(msgs, NO_MCP, true);
 			expect(streaming).toHaveLength(2);
 			expect(Array.isArray(streaming[0])).toBe(true);
-			expect((streaming[0] as Message[]).length).toBe(9); // tools + mid-group assistant
-			expect((streaming[1] as Message).type).toBe('assistant'); // "Done." standalone
+			expect((streaming[0] as Message[]).length).toBe(9);
+			expect((streaming[1] as Message).type).toBe('assistant');
 
 			// Non-streaming: same result
 			const final = groupToolMessages(msgs, NO_MCP, false);
@@ -476,8 +465,6 @@ describe('groupToolMessages', () => {
 		});
 
 		it('should keep group stable when more tools arrive after absorbed assistant during streaming', () => {
-			// Simulates render cycle 2: tools arrive after the previously-absorbed assistant.
-			// The group should stay as one unit (no break-then-reassemble).
 			const msgs = [
 				toolUse('1'),
 				toolResult('1r', 'tu-1'),
@@ -490,7 +477,6 @@ describe('groupToolMessages', () => {
 				toolResult('4r', 'tu-4'),
 			];
 			const result = groupToolMessages(msgs, NO_MCP, true);
-			// All absorbed into one group of 9
 			expect(result).toHaveLength(1);
 			expect(Array.isArray(result[0])).toBe(true);
 			expect((result[0] as Message[]).length).toBe(9);

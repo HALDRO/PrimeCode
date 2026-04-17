@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import {
+	extractCanonicalTaskResult,
 	mapPermissionRuntimePayloadToRequest,
 	mapQuestionRuntimePayloadToRequest,
 } from '../common';
@@ -36,6 +37,34 @@ import { UtilityHandler } from './handlers/UtilityHandler';
 
 /** Commands whose errors should not be surfaced as chat messages (file/UI ops). */
 const SILENT_COMMANDS = new Set(['openFile', 'openFileDiff', 'openExternal', 'getImageData']);
+
+function buildTaskMessagePart(
+	e: Record<string, unknown>,
+	parentSessionId: string,
+	toolUseId: string,
+	toolName: string,
+	normalizedEntry: CLIEvent['normalizedEntry'],
+	status: 'pending' | 'running' | 'completed' | 'error',
+	input?: Record<string, unknown>,
+	metadata?: Record<string, unknown>,
+): import('../common').SessionMessagePartPayload['part'] {
+	return {
+		id: typeof e.partId === 'string' ? e.partId : toolUseId,
+		messageId: typeof e.messageID === 'string' ? e.messageID : toolUseId,
+		sessionId: parentSessionId,
+		type: 'tool',
+		callId: toolUseId,
+		toolName,
+		state: {
+			status,
+			...(input ? { input } : {}),
+			...(metadata ? { metadata } : {}),
+			...(typeof e.content === 'string' ? { output: e.content as string } : {}),
+			...(typeof e.title === 'string' ? { title: e.title } : {}),
+		},
+		...(normalizedEntry ? { normalizedEntry } : {}),
+	};
+}
 
 /**
  * Short tool activity labels shown during execution.
@@ -920,8 +949,18 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 					this.bridge.emit(targetSessionId, 'message_part', {
 						part: {
-							id: e.id,
-							messageId: e.id,
+							id:
+								typeof e.partId === 'string'
+									? e.partId
+									: typeof e.id === 'string'
+										? e.id
+										: `tool-${Date.now()}`,
+							messageId:
+								typeof e.messageID === 'string'
+									? e.messageID
+									: typeof e.id === 'string'
+										? e.id
+										: `tool-${Date.now()}`,
 							sessionId: targetSessionId,
 							type: 'tool',
 							callId: e.id,
@@ -1061,6 +1100,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			outputTokens: typeof payload?.outputTokens === 'number' ? payload.outputTokens : 0,
 			totalTokens: typeof payload?.totalTokens === 'number' ? payload.totalTokens : 0,
 			cacheReadTokens: typeof payload?.cacheReadTokens === 'number' ? payload.cacheReadTokens : 0,
+			durationMs: typeof payload?.durationMs === 'number' ? payload.durationMs : 0,
 		};
 		if (delta.totalTokens <= 0) return;
 
@@ -1068,7 +1108,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.bridge.emit(routing.parentSessionId, 'subtask', {
 			subtask: {
 				id: routing.toolUseId,
+				...(routing.parentMessageId ? { messageID: routing.parentMessageId } : {}),
 				childTokens: accumulated,
+				...(typeof accumulated.durationMs === 'number' && accumulated.durationMs > 0
+					? { durationMs: accumulated.durationMs }
+					: {}),
 				timestamp: new Date().toISOString(),
 				agent: 'subagent',
 				prompt: '',
@@ -1089,6 +1133,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.bridge.emit(routing.parentSessionId, 'subtask', {
 			subtask: {
 				id: routing.toolUseId,
+				...(routing.parentMessageId ? { messageID: routing.parentMessageId } : {}),
 				childModelId: modelID,
 				timestamp: new Date().toISOString(),
 				agent: 'subagent',
@@ -1206,6 +1251,23 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					? metadataModel.modelID
 					: undefined;
 
+			const emitTaskPart = (status: 'pending' | 'running' | 'completed' | 'error') => {
+				this.bridge.emit(parentSessionId, 'message_part', {
+					part: buildTaskMessagePart(
+						e,
+						parentSessionId,
+						toolUseId,
+						toolName,
+						event.normalizedEntry,
+						status,
+						input,
+						metadata,
+					),
+				});
+			};
+
+			emitTaskPart('running');
+
 			// Re-emitted tool_use with input that was missing on first emission.
 			// Update the existing subtask card with prompt/description/agent.
 			if (this.subtaskManager.isRegistered(toolUseId)) {
@@ -1217,6 +1279,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					this.bridge.emit(parentSessionId, 'subtask', {
 						subtask: {
 							id: toolUseId,
+							...(typeof e.messageID === 'string' ? { messageID: e.messageID } : {}),
 							...(knownChildSessionId
 								? { childSessionId: knownChildSessionId, parentSessionId }
 								: { parentSessionId }),
@@ -1242,6 +1305,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				subtask: {
 					id: toolUseId,
 					partId: toolUseId,
+					...(typeof e.messageID === 'string' ? { messageID: e.messageID } : {}),
 					toolUseId,
 					toolName,
 					agent: ChatProvider.safeString(input.subagent_type) || 'subagent',
@@ -1261,7 +1325,12 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				},
 			});
 
-			this.subtaskManager.registerSubtask(toolUseId, parentSessionId, knownChildSessionId);
+			this.subtaskManager.registerSubtask(
+				toolUseId,
+				parentSessionId,
+				knownChildSessionId,
+				typeof e.messageID === 'string' ? e.messageID : undefined,
+			);
 
 			return;
 		}
@@ -1346,7 +1415,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					: undefined;
 			const content =
 				typeof e.content === 'string'
-					? (e.content as string)
+					? extractCanonicalTaskResult(e.content as string)
 					: e.content
 						? JSON.stringify(e.content)
 						: '';
@@ -1368,10 +1437,24 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			if (!parentSessionId) return;
 			const resolvedParentSessionId = parentSessionId;
 
+			this.bridge.emit(resolvedParentSessionId, 'message_part', {
+				part: buildTaskMessagePart(
+					e,
+					resolvedParentSessionId,
+					toolUseId,
+					toolName,
+					event.normalizedEntry,
+					e.is_error ? 'error' : 'completed',
+					taskInput,
+					metadata,
+				),
+			});
+
 			this.bridge.emit(resolvedParentSessionId, 'subtask', {
 				subtask: {
 					id: toolUseId,
 					partId: toolUseId,
+					...(typeof e.messageID === 'string' ? { messageID: e.messageID } : {}),
 					agent:
 						typeof taskInput?.subagent_type === 'string'
 							? (taskInput.subagent_type as string)
@@ -1478,10 +1561,12 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		}
 
 		if (!isChildSession) {
+			const messageId = typeof e.messageID === 'string' ? e.messageID : toolUseId;
+			const partId = typeof e.partId === 'string' ? e.partId : toolUseId;
 			this.bridge.emit(targetSessionId, 'message_part', {
 				part: {
-					id: toolUseId,
-					messageId: toolUseId,
+					id: partId,
+					messageId: messageId,
 					sessionId: targetSessionId,
 					type: 'tool',
 					callId: toolUseId,
@@ -1570,18 +1655,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		const linked = this.subtaskManager.linkChildSession(childSessionId, toolUseId, parentSessionId);
 		if (!linked) return;
 		this.completeActiveThinking(parentSessionId);
-		this.bridge.emit(parentSessionId, 'subtask', {
-			subtask: {
-				id: toolUseId,
-				childSessionId,
-				parentSessionId,
-				agent: 'subagent',
-				prompt: '',
-				description: 'Subtask',
-				status: 'running',
-				timestamp: new Date().toISOString(),
-			},
-		});
 	}
 
 	private updateSubtaskLifecycle(
@@ -1595,6 +1668,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.bridge.emit(routing.parentSessionId, 'subtask', {
 			subtask: {
 				id: routing.toolUseId,
+				...(routing.parentMessageId ? { messageID: routing.parentMessageId } : {}),
 				childSessionId,
 				parentSessionId: routing.parentSessionId,
 				agent: update.agent || 'subagent',

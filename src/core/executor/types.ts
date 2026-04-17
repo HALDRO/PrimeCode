@@ -65,6 +65,7 @@ export interface ThinkingEventData {
 
 export interface ToolUseEventData {
 	id?: string;
+	messageID?: string;
 	tool?: string;
 	name?: string;
 	input?: unknown;
@@ -72,12 +73,14 @@ export interface ToolUseEventData {
 	title?: string;
 	metadata?: unknown;
 	toolUseId?: string;
+	partId?: string;
 	timestamp?: string;
 }
 
 export interface ToolResultEventData {
 	tool_use_id?: string;
 	id?: string;
+	messageID?: string;
 	name?: string;
 	tool?: string;
 	content?: string | unknown;
@@ -85,14 +88,17 @@ export interface ToolResultEventData {
 	input?: unknown;
 	title?: string;
 	metadata?: unknown;
+	partId?: string;
 	timestamp?: string;
 }
 
 export interface ToolStreamingEventData {
 	id?: string;
+	messageID?: string;
 	name?: string;
 	streamingOutput?: string;
 	metadata?: Record<string, unknown>;
+	partId?: string;
 }
 
 export interface ErrorEventData {
