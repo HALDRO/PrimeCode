@@ -238,7 +238,7 @@ export class UtilityHandler implements WebviewMessageHandler {
 		logger.info('[UtilityHandler] Restarting OpenCode server...');
 		const success = await this.context.cli.restartServer();
 		if (success) {
-			await this.handleGetConnectionDetails();
+			await this.context.refreshAfterServerRestart?.();
 		} else {
 			logger.error('[UtilityHandler] Failed to restart OpenCode server');
 		}
@@ -251,34 +251,12 @@ export class UtilityHandler implements WebviewMessageHandler {
 
 	private async handleGetConnectionDetails(): Promise<void> {
 		const details = this.context.cli.getConnectionDetails();
-		const serverUrl = details.serverUrl;
-
-		let healthy = false;
-		if (serverUrl) {
-			try {
-				const controller = new AbortController();
-				const timeout = setTimeout(() => controller.abort(), 3000);
-				const res = await fetch(`${serverUrl}/global/health`, {
-					method: 'GET',
-					signal: controller.signal,
-				});
-				clearTimeout(timeout);
-				if (res.ok) {
-					const data = (await res.json()) as { healthy?: boolean };
-					healthy = data.healthy === true;
-				}
-			} catch {
-				healthy = false;
-			}
-		}
 
 		this.context.bridge.data('connectionDetails', {
 			serverUrl: details.serverUrl,
-			status: healthy ? 'connected' : details.serverUrl ? 'error' : 'disconnected',
 			isServerOwner: details.isServerOwner,
 			uptime: details.uptime,
 			port: details.port,
-			healthy,
 		});
 	}
 }

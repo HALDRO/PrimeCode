@@ -140,6 +140,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			registerCheckpoint: (commitId, record) =>
 				this.restoreHandler.registerCheckpoint(commitId, record),
 			cleanupSessionRestore: sessionId => this.restoreHandler.cleanupSession(sessionId),
+			refreshAfterServerRestart: async () => {
+				this.sendServerInfo(true);
+				this.hasSynced = false;
+				await this.syncAllOrDefer('manual-server-restart');
+			},
 		};
 
 		this.sessionHandler = new SessionHandler(handlerContext);
@@ -159,16 +164,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 		// Forward CLI events to webview
 		this.cli.on('event', event => this.handleCliEvent(event));
-
-		// Handle server reconnection — re-sync all UI state
-		this.cli.on('event', event => {
-			if (event.type === 'server_reconnected') {
-				logger.info('[ChatProvider] Server reconnected, re-syncing UI...');
-				this.sendServerInfo(true);
-				this.hasSynced = false;
-				void this.syncAllOrDefer('server-reconnected');
-			}
-		});
 
 		// Watch settings changes
 		this.disposables.push(
@@ -319,9 +314,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 			// Notify webview of server URL so it can establish SSE health polling
 			this.sendServerInfo(true);
-
-			// Start background health monitor for auto-reconnect
-			this.cli.startHealthMonitor();
 
 			// If webviewDidLaunch arrived before the server was ready, run deferred
 			// session restoration NOW — before syncAll, which can take 10-15s.
@@ -681,10 +673,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private handleCliEvent(event: CLIEvent): void {
 		const now = Date.now();
 		this.traceCliEvent(event);
-
-		if (event.type === 'server_reconnected') {
-			return;
-		}
 
 		if (event.type === 'session_updated') {
 			this.handleSessionUpdatedCliEvent(event);

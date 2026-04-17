@@ -16,6 +16,7 @@ import {
 	type RenderMessage,
 	useChangedFilesState,
 	useChatActions,
+	useHasTodos,
 	useMcpServers,
 	useTodoState,
 } from '../../store';
@@ -316,7 +317,7 @@ const FileRow = React.memo<{
 			{formatDiffCount(file.linesRemoved, 'removed')}
 		</span>
 
-		<div className="flex-1 min-w-0">
+		<div className="flex-1 min-w-0 ml-(--gap-2)">
 			<PathChip
 				path={file.filePath}
 				onClick={onOpenDiff}
@@ -352,6 +353,7 @@ FileRow.displayName = 'FileRow';
 
 export const ChangedFilesPanel: React.FC = React.memo(() => {
 	const { changedFiles, cumulativeDiffs } = useChangedFilesState();
+	const hasTodos = useHasTodos();
 	const hasCumulative = cumulativeDiffs.length > 0;
 	// When cumulative diffs are available, they are authoritative — only show panel
 	// if at least one file has non-zero stats. Before cumulative arrives, fall back
@@ -360,12 +362,11 @@ export const ChangedFilesPanel: React.FC = React.memo(() => {
 		? cumulativeDiffs.some(d => d.additions > 0 || d.deletions > 0)
 		: changedFiles.length > 0;
 
-	// When no changed files, keep the area above the input empty.
-	if (!hasFiles) {
+	// Keep the panel visible when either file diffs or active todos exist.
+	if (!hasFiles && !hasTodos) {
 		return null;
 	}
 
-	// When changed files exist — show the full ChangedFilesPanel.
 	return <ChangedFilesPanelContent />;
 });
 ChangedFilesPanel.displayName = 'ChangedFilesPanel';
@@ -373,6 +374,7 @@ ChangedFilesPanel.displayName = 'ChangedFilesPanel';
 const ChangedFilesPanelContent: React.FC = React.memo(() => {
 	const { postMessage } = useVSCode();
 	const { changedFiles, cumulativeDiffs } = useChangedFilesState();
+	const hasTodos = useHasTodos();
 	const { clearChangedFiles, removeChangedFile } = useChatActions();
 	const { showConfirmDialog } = useUIActions();
 	const mcpServers = useMcpServers();
@@ -530,11 +532,11 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 		[handleCopyLastResponse, handleCopyAllMessages, handleCopyLastDiffs, handleCopyAllDiffs],
 	);
 
-	// Always render - TodoSection will handle its own visibility
-	// This prevents ChangedFilesPanel from subscribing to messages
-	if (groupedFiles.length === 0) {
+	if (groupedFiles.length === 0 && !hasTodos) {
 		return null;
 	}
+
+	const hasFiles = groupedFiles.length > 0;
 
 	return (
 		<div className="w-full box-border relative bg-transparent">
@@ -544,12 +546,12 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 
 			<div
 				className={cn(
-					'bg-(--panel-header-bg) rounded-t-lg border border-(--panel-header-border) border-b-0',
+					'bg-(--panel-header-bg) border border-(--panel-header-border)',
+					hasFiles ? 'rounded-t-lg border-b-0' : 'rounded-lg',
 					'@container/panel',
 				)}
 			>
-				{/* Header - only when files exist */}
-				{groupedFiles.length > 0 && (
+				{hasFiles ? (
 					<button
 						type="button"
 						tabIndex={0}
@@ -578,7 +580,7 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 							<span className="text-error whitespace-nowrap text-left min-w-8 ml-(--gap-4)">
 								{formatDiffCount(totalRemoved, 'removed')}
 							</span>
-							<span className="flex items-center gap-(--gap-1) text-sm text-vscode-foreground opacity-90">
+							<span className="flex items-center gap-(--gap-1) text-sm text-vscode-foreground opacity-90 ml-(--gap-2)">
 								<FileIcon size={12} />
 								<span className="hide-on-narrow">
 									{uniqueFileCount} {uniqueFileCount === 1 ? 'File' : 'Files'}
@@ -641,9 +643,18 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 							</Tooltip>
 						</div>
 					</button>
+				) : (
+					<div
+						className={cn(
+							'flex items-center justify-center w-full h-(--tool-header-height) px-(--tool-header-padding)',
+							'text-sm font-(family-name:--vscode-font-family)',
+						)}
+					>
+						<TodoSection />
+					</div>
 				)}
 
-				{expanded && groupedFiles.length > 0 && (
+				{expanded && hasFiles && (
 					<div>
 						<ScrollContainer className="px-(--tool-header-padding) max-h-[40vh]">
 							{groupedFiles.map(file => (

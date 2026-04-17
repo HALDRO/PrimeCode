@@ -35,6 +35,8 @@ export interface HandlerContext {
 	) => void;
 	/** Clean up restore/revert state when a session is deleted. */
 	cleanupSessionRestore?: (sessionId: string) => void;
+	/** Refresh webview bootstrap after a successful manual server restart. */
+	refreshAfterServerRestart?: () => Promise<void>;
 }
 
 export interface WebviewMessageHandler {

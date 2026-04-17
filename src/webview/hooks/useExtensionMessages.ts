@@ -86,12 +86,9 @@ export function useExtensionMessages(): void {
 
 		if (!didSendInitialRequests.current) {
 			didSendInitialRequests.current = true;
-			// Request initial data only after the webview listener is installed.
-			// Some extension bootstrap messages can be posted before the webview JS is
-			// fully listening, so we explicitly re-request syncAll here to avoid stale
-			// defaults like a false Disconnected indicator.
+			// Request bootstrap only after the webview listener is installed.
+			// The extension drives the initial sync once the server/view are ready.
 			vscode.postMessage({ type: 'webviewDidLaunch' });
-			vscode.postMessage({ type: 'syncAll' });
 			vscode.postMessage({ type: 'checkExtensionVersion' });
 		}
 

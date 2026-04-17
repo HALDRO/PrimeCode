@@ -464,4 +464,98 @@ describe('chatStore revert/unrevert state', () => {
 			expect(getSession('s1').revertedFromMessageId).toBeNull();
 		});
 	});
+
+	// =========================================================================
+	// Streaming order regressions
+	// =========================================================================
+
+	describe('streaming part order', () => {
+		it('should preserve arrival order for mixed text and tool parts in one assistant message', () => {
+			const { actions } = useChatStore.getState();
+			actions.handleSessionCreated('s1');
+
+			actions.dispatch('s1', 'user_message', {
+				eventType: 'user_message',
+				message: {
+					id: 'u1',
+					content: 'debug this',
+					timestamp: new Date(Date.UTC(2024, 0, 1, 0, 0, 0)).toISOString(),
+				},
+			});
+
+			actions.dispatch('s1', 'message_record', {
+				eventType: 'message_record',
+				message: {
+					id: 'a1',
+					sessionId: 's1',
+					role: 'assistant',
+					parentId: 'u1',
+					createdAt: Date.UTC(2024, 0, 1, 0, 0, 1),
+				},
+			});
+
+			actions.dispatch('s1', 'message_part', {
+				eventType: 'message_part',
+				part: {
+					id: 'p-text-1',
+					messageId: 'a1',
+					sessionId: 's1',
+					type: 'text',
+					text: 'First text',
+					createdAt: 200,
+				},
+			});
+
+			actions.dispatch('s1', 'message_part', {
+				eventType: 'message_part',
+				part: {
+					id: 'p-tool-1',
+					messageId: 'a1',
+					sessionId: 's1',
+					type: 'tool',
+					callId: 'tool-1',
+					toolName: 'todowrite',
+					state: { status: 'completed', input: {}, output: '[]' },
+					createdAt: 300,
+				},
+			});
+
+			actions.dispatch('s1', 'message_part', {
+				eventType: 'message_part',
+				part: {
+					id: 'p-tool-2',
+					messageId: 'a1',
+					sessionId: 's1',
+					type: 'tool',
+					callId: 'tool-2',
+					toolName: 'bash',
+					state: { status: 'completed', input: {}, output: 'ok' },
+					createdAt: 400,
+				},
+			});
+
+			// Late text can carry an earlier start timestamp in session dumps/SSE updates.
+			// The UI must still keep it after the tools if it arrived after them.
+			actions.dispatch('s1', 'message_part', {
+				eventType: 'message_part',
+				part: {
+					id: 'p-text-2',
+					messageId: 'a1',
+					sessionId: 's1',
+					type: 'text',
+					text: 'Late text',
+					createdAt: 250,
+				},
+			});
+
+			const rendered = projectRuntimeMessages(getSession('s1'));
+			expect(rendered.map(message => message.id)).toEqual([
+				'u1',
+				'msg-p-text-1',
+				'tool-1',
+				'tool-2',
+				'msg-p-text-2',
+			]);
+		});
+	});
 });

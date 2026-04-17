@@ -278,7 +278,6 @@ export type CLIEvent =
 	| (CLIEventBase & { type: 'tool_streaming'; data: ToolStreamingEventData })
 	| (CLIEventBase & { type: 'error'; data: ErrorEventData })
 	| (CLIEventBase & { type: 'finished'; data: FinishedEventData })
-	| (CLIEventBase & { type: 'server_reconnected'; data: ServerReconnectedEventData })
 	| (CLIEventBase & { type: 'permission'; data: PermissionEventData })
 	| (CLIEventBase & { type: 'question'; data: QuestionEventData })
 	| (CLIEventBase & { type: 'todo'; data: TodoEventData })

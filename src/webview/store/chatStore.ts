@@ -650,7 +650,10 @@ function handleMessageRecordEvent(targetSession: ChatSession, payload: SessionEv
 			...evt.message,
 		};
 	} else targetSession.runtimeMessageRecords.push(evt.message);
-	if (targetSession.runtimeMessageRecords.length > 1) {
+	if (
+		targetSession.runtimeMessageRecords.length > 1 &&
+		!(targetSession as ChatSession & { __deferRecordSort?: boolean }).__deferRecordSort
+	) {
 		targetSession.runtimeMessageRecords.sort(
 			(a, b) => (a.createdAt || 0) - (b.createdAt || 0) || a.id.localeCompare(b.id),
 		);
@@ -775,6 +778,10 @@ function handleMessagesReloadEvent(targetSession: ChatSession, payload: SessionE
 	targetSession.runtimeMessagePartsById = {};
 	targetSession.userMessagesById = {};
 	targetSession.subtasksById = {};
+	targetSession.changedFiles = r.changedFiles || [];
+	targetSession.cumulativeDiffs = r.cumulativeDiffs || [];
+	targetSession.turnTokens = {};
+	targetSession.restoreCommits = r.restoreCommits || [];
 	const displayMessages = (r.messages || [])
 		.map(m => ({
 			...m,
@@ -790,6 +797,20 @@ function handleMessagesReloadEvent(targetSession: ChatSession, payload: SessionE
 			upsertSubtaskMessage(targetSession, message as SubtaskMessage);
 		}
 	}
+	for (const record of r.runtimeMessageRecords || []) {
+		targetSession.runtimeMessageRecords.push(record);
+	}
+	if (targetSession.runtimeMessageRecords.length > 1) {
+		targetSession.runtimeMessageRecords.sort(
+			(a, b) => (a.createdAt || 0) - (b.createdAt || 0) || a.id.localeCompare(b.id),
+		);
+	}
+	for (const part of r.runtimeMessageParts || []) {
+		const list = targetSession.runtimeMessagePartsById[part.messageId] || [];
+		list.push({ ...part });
+		targetSession.runtimeMessagePartsById[part.messageId] = list;
+	}
+	targetSession.turnTokens = r.turnTokens || {};
 	syncSessionModelFromUserMessages(targetSession);
 }
 
@@ -1258,18 +1279,34 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 			const now = Date.now();
 			set(
 				produce((state: ChatState) => {
+					const touchedSessions = new Set<string>();
 					for (const event of events) {
 						const targetId = event.targetId;
 						if (!state.sessionsById[targetId]) {
 							state.sessionsById[targetId] = createEmptySession(targetId, now);
 						}
-						const targetSession = state.sessionsById[targetId];
+						const targetSession = state.sessionsById[targetId] as ChatSession & {
+							__deferRecordSort?: boolean;
+						};
+						targetSession.__deferRecordSort = true;
+						touchedSessions.add(targetId);
 						targetSession.lastActive = now;
 						dispatchToSession(
 							targetSession,
 							event.eventType,
 							prepareEventPayload(event.eventType, event.payload, now),
 						);
+					}
+					for (const sessionId of touchedSessions) {
+						const targetSession = state.sessionsById[sessionId] as ChatSession & {
+							__deferRecordSort?: boolean;
+						};
+						delete targetSession.__deferRecordSort;
+						if (targetSession.runtimeMessageRecords.length > 1) {
+							targetSession.runtimeMessageRecords.sort(
+								(a, b) => (a.createdAt || 0) - (b.createdAt || 0) || a.id.localeCompare(b.id),
+							);
+						}
 					}
 				}),
 			);

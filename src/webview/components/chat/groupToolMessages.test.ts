@@ -540,11 +540,9 @@ describe('groupToolMessages', () => {
 			expect(flags[0]).toBe(true);
 		});
 
-		it('should not split group when non-groupable tool_result lands between groupable tool_use messages (streaming order)', () => {
-			// During live streaming, parallel tools from one CLI step arrive as:
-			// all tool_use first (pending/running), then tool_result (completed).
-			// A tool_result from a non-groupable tool (e.g. bash) can land between
-			// groupable tool_use messages — it must NOT split the group.
+		it('should keep non-groupable completed tools outside SimpleToolGroup', () => {
+			// Card-style tools such as bash must stay standalone even when their
+			// completed update arrives between lightweight tools.
 			const msgs = [
 				heavyTool('bash1', 'bash'), // tool_use: bash (non-groupable)
 				toolUse('r1'), // tool_use: read (groupable)
@@ -556,34 +554,42 @@ describe('groupToolMessages', () => {
 				toolResult('r2-res', 'tu-r2'),
 				toolResult('r3-res', 'tu-r3'),
 				toolResult('r4-res', 'tu-r4'),
-				// Next step: more groupable tools
-				toolUse('g1', 'grep'),
-				toolResult('g1-res', 'tu-g1', 'grep'),
-				toolUse('g2', 'grep'),
-				toolResult('g2-res', 'tu-g2', 'grep'),
-				toolUse('r5'),
-				toolResult('r5-res', 'tu-r5'),
 			];
 
 			const grouped = groupToolMessages(msgs, NO_MCP);
 
-			// bash tool_use is non-groupable → standalone
+			// bash start stays standalone
 			expect(grouped[0]).toBe(msgs[0]);
+			// first lightweight batch is grouped on its own
+			expect(Array.isArray(grouped[1])).toBe(true);
+			expect(
+				(grouped[1] as Message[]).every(
+					item => item.kind !== 'tool_use' || item.toolName !== 'bash',
+				),
+			).toBe(true);
 
-			// All remaining tools (read x4 + bash tool_result + read results + grep x2 + read)
-			// should be in ONE group, not split into two
-			const groups = grouped.filter(item => Array.isArray(item));
-			expect(groups).toHaveLength(1);
+			// late bash completion must stay standalone, not inside the SimpleToolGroup
+			expect(grouped[2]).toBe(msgs[5]);
+			expect(Array.isArray(grouped[2])).toBe(false);
+		});
 
-			// The single group should contain 8 unique tool executions: the late bash
-			// completion is still present in the group, but crucially it no longer
-			// splits the lightweight tool batch into two groups.
-			const toolUseCount = new Set(
-				(groups[0] as Message[])
-					.filter(m => m.type === 'tool_use')
-					.map(m => (m as Extract<Message, { type: 'tool_use' }>).toolUseId),
-			).size;
-			expect(toolUseCount).toBe(8);
+		it('should collapse a grouped tools item when followed by a card-style tool', () => {
+			const msgs = [
+				toolUse('1'),
+				toolResult('1r', 'tu-1'),
+				toolUse('2'),
+				toolResult('2r', 'tu-2'),
+				toolUse('3'),
+				toolResult('3r', 'tu-3'),
+				heavyTool('bash1', 'bash'),
+			];
+
+			const grouped = groupToolMessages(msgs, NO_MCP);
+			expect(Array.isArray(grouped[0])).toBe(true);
+			expect((grouped[1] as Extract<Message, { kind: 'tool_use' }>).toolName).toBe('bash');
+
+			const flags = precomputeCollapseFlags(grouped);
+			expect(flags[0]).toBe(true);
 		});
 
 		it('should collapse a trailing grouped tools item after streaming completes', () => {

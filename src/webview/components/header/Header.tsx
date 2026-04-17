@@ -21,6 +21,7 @@ import { useChatActions, useChatStore, useHistoryDropdownState, useUIActions } f
 import type { ChatState } from '../../store/chatStore';
 import { useUIStore } from '../../store/uiStore';
 import { proxyEventSource } from '../../utils/proxyEventSource';
+import { proxyFetch } from '../../utils/proxyFetch';
 import { useVSCode } from '../../utils/vscode';
 import { CloseIcon, HistoryIcon, MessageIcon, PlusIcon, SettingsIcon } from '../icons';
 import { Button, ScrollContainer } from '../ui';
@@ -39,11 +40,9 @@ const ConnectionStatusMenu: React.FC<{
 	serverStatus: 'connected' | 'disconnected' | 'error';
 	connectionDetails: {
 		serverUrl: string | null;
-		status: 'connected' | 'disconnected' | 'error';
 		isServerOwner: boolean;
 		uptime: number | null;
 		port: number | null;
-		healthy: boolean;
 	} | null;
 	restartDisabled: boolean;
 	onClose: () => void;
@@ -144,7 +143,7 @@ const ConnectionStatusMenu: React.FC<{
 							{connectionDetails.isServerOwner ? 'Server owner: this window' : 'Shared server'}
 						</div>
 						<div className="text-[10px] text-vscode-descriptionForeground">
-							Health: {connectionDetails.healthy ? 'OK' : 'Unhealthy'}
+							Health: {serverStatus === 'connected' ? 'OK' : 'Unhealthy'}
 						</div>
 						{uptimeLabel && (
 							<div className="text-[10px] text-vscode-descriptionForeground">
@@ -207,6 +206,10 @@ const ConnectionStatusMenu: React.FC<{
 };
 
 export const Header: React.FC = React.memo(() => {
+	const HEALTH_POLL_INTERVAL_MS = 10_000;
+	const HEALTH_FETCH_TIMEOUT_MS = 3_000;
+	const SSE_HEARTBEAT_TIMEOUT_MS = 15_000;
+
 	// Optimized selectors
 	const { showHistoryDropdown, setShowHistoryDropdown } = useHistoryDropdownState();
 	const { setActiveModal, setServerStatus, showConfirmDialog } = useUIActions();
@@ -230,32 +233,111 @@ export const Header: React.FC = React.memo(() => {
 	const [showStatusMenu, setShowStatusMenu] = useState(false);
 	const statusBtnRef = useRef<HTMLButtonElement>(null);
 	const restartDisabled = connectionDetails?.isServerOwner === false;
+	const lastSseActivityAtRef = useRef<number>(0);
 
 	const sessions: TabInfo[] = useMemo(() => sessionOrder.map(id => ({ id })), [sessionOrder]);
 
-	// Subscribe to server events for connection status.
-	// serverUrlVersion is appended as a cache-buster to force SSE reconnect
-	// even when the URL hasn't changed (e.g. after server restart).
+	// SSE is transport-only: if the stream goes stale, re-subscribe without
+	// inferring anything about server process state.
 	useEffect(() => {
 		if (!serverUrl) {
 			setServerStatus('disconnected');
 			return;
 		}
 
-		const unsubscribe = proxyEventSource(
-			`${serverUrl}/event?v=${serverUrlVersion}`,
-			() => {
-				setServerStatus('connected');
-			},
-			() => {
-				setServerStatus('error');
-			},
-		);
+		let disposed = false;
+		let unsubscribeCurrent: (() => void) | null = null;
+		let heartbeatTimer: number | null = null;
+
+		const clearHeartbeat = () => {
+			if (heartbeatTimer !== null) {
+				window.clearTimeout(heartbeatTimer);
+				heartbeatTimer = null;
+			}
+		};
+
+		const scheduleHeartbeat = () => {
+			clearHeartbeat();
+			heartbeatTimer = window.setTimeout(() => {
+				if (disposed) return;
+				if (Date.now() - lastSseActivityAtRef.current < SSE_HEARTBEAT_TIMEOUT_MS) return;
+				unsubscribeCurrent?.();
+				subscribe();
+			}, SSE_HEARTBEAT_TIMEOUT_MS);
+		};
+
+		const markActivity = () => {
+			lastSseActivityAtRef.current = Date.now();
+			setServerStatus('connected');
+			scheduleHeartbeat();
+		};
+
+		const subscribe = () => {
+			unsubscribeCurrent = proxyEventSource(
+				`${serverUrl}/event?v=${serverUrlVersion}`,
+				() => {
+					markActivity();
+				},
+				() => {
+					setServerStatus('error');
+				},
+			);
+		};
+
+		lastSseActivityAtRef.current = Date.now();
+		subscribe();
+		scheduleHeartbeat();
 
 		return () => {
-			unsubscribe();
+			disposed = true;
+			clearHeartbeat();
+			unsubscribeCurrent?.();
 		};
 	}, [serverUrl, setServerStatus, serverUrlVersion]);
+
+	useEffect(() => {
+		if (!serverUrl) return;
+
+		let disposed = false;
+		let timer: number | null = null;
+
+		const runCheck = async () => {
+			try {
+				const controller = new AbortController();
+				const timeout = window.setTimeout(() => controller.abort(), HEALTH_FETCH_TIMEOUT_MS);
+				const response = await proxyFetch(`${serverUrl}/global/health`, {
+					method: 'GET',
+					signal: controller.signal,
+				});
+				window.clearTimeout(timeout);
+				if (disposed) return;
+
+				if (!response.ok) {
+					setServerStatus('error');
+					return;
+				}
+
+				const payload = (await response.json()) as { healthy?: boolean };
+				if (disposed) return;
+				setServerStatus(payload.healthy === true ? 'connected' : 'error');
+			} catch {
+				if (disposed) return;
+				setServerStatus('error');
+			}
+		};
+
+		void runCheck();
+		timer = window.setInterval(() => {
+			void runCheck();
+		}, HEALTH_POLL_INTERVAL_MS);
+
+		return () => {
+			disposed = true;
+			if (timer !== null) {
+				window.clearInterval(timer);
+			}
+		};
+	}, [serverUrl, setServerStatus]);
 
 	const handleSwitchSession = useCallback(
 		(sessionId: string) => {
@@ -328,7 +410,8 @@ export const Header: React.FC = React.memo(() => {
 	}, [setActiveModal]);
 
 	const handleStatusClick = useCallback(() => {
-		// Request fresh connection details when opening the menu
+		// Request structural details (owner/uptime/port) when opening the menu.
+		// Health/status are tracked directly in the webview.
 		postMessage({ type: 'getConnectionDetails' });
 		setShowStatusMenu(prev => !prev);
 	}, [postMessage]);

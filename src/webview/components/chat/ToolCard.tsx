@@ -114,6 +114,18 @@ const getToolCardCategory = (
 	return hasAccessRequest ? 'mcp' : 'inline';
 };
 
+export const shouldHideRunningFileEditTool = (
+	actionType: ActionType | null,
+	toolName: string,
+	isRunning: boolean,
+	hasRenderableDiff: boolean,
+): boolean => {
+	if (!isRunning || hasRenderableDiff) return false;
+	return (
+		actionType?.type === 'FileEdit' || actionType?.type === 'ApplyPatch' || isFileEditTool(toolName)
+	);
+};
+
 const ToolCardLeadingIcon: React.FC<{ children: ReactNode; className?: string }> = ({
 	children,
 	className,
@@ -553,6 +565,12 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 			toolUse.status === 'pending' ||
 			toolUse.status === 'running' ||
 			(toolUse.isRunning ?? !toolResult);
+		const shouldHideWhileRunning = shouldHideRunningFileEditTool(
+			actionType,
+			toolName,
+			isRunning,
+			canRenderDiffCard,
+		);
 		const liveElapsed = useElapsedTimer(isRunning, toolUse.timestamp);
 		const [expanded, setExpanded] = useState(defaultExpanded ?? false);
 		const [diffExpanded, setDiffExpanded] = useState(defaultExpanded ?? false);
@@ -594,6 +612,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		}, [isRunning, toolUse.streamingOutput]);
 
 		if (!toolName) return null;
+		if (shouldHideWhileRunning) return null;
 
 		if (resolvedQuestionRequest) {
 			return <QuestionCard request={resolvedQuestionRequest} />;

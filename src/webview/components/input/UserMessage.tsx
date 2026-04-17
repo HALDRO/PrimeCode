@@ -221,8 +221,16 @@ const MessageStats = React.memo<{
 
 	return (
 		<div className="flex items-center justify-between w-full gap-(--gap-2)">
-			<StatsDisplay mode="message" items={leftItems} className="min-w-0 shrink !px-0 !pt-0 !pb-0" />
-			<StatsDisplay mode="message" items={rightItems} className="shrink-0 !px-0 !pt-0 !pb-0" />
+			<StatsDisplay
+				mode="message"
+				items={leftItems}
+				className="min-w-0 shrink !h-auto !mt-0 !px-0 !pt-0 !pb-0 self-end"
+			/>
+			<StatsDisplay
+				mode="message"
+				items={rightItems}
+				className="shrink-0 !h-auto !mt-0 !px-0 !pt-0 !pb-0 self-end"
+			/>
 		</div>
 	);
 });
@@ -633,7 +641,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 								</div>
 							</div>
 						</button>
-						<div className="flex items-center text-sm pl-(--gap-2) pr-0 pb-(--gap-0-5) bg-(--input-bg)">
+						<div className="flex items-end text-sm px-(--gap-4) pt-0 pb-(--gap-1-5) bg-(--input-bg)">
 							<MessageStats
 								fileChanges={fileChangesStats}
 								tokenCount={tokenStats}

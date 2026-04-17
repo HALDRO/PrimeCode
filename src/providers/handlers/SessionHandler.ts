@@ -1,17 +1,19 @@
 import * as vscode from 'vscode';
 import type {
+	CommitInfo,
 	ConversationIndexEntry,
 	OpenCodeProviderData,
 	SessionEventPayload,
 	SessionEventType,
 	SessionSubtaskPayload,
+	SessionTodoItem,
 	SessionUserMessagePayload,
 	TotalStats,
 } from '../../common';
 import { generateId, parseModelId } from '../../common';
 import { IMPROVE_PROMPT_DEFAULT_TEMPLATE } from '../../common/promptImprover';
 import type { CommandOf, QueuedMessageData, WebviewCommand } from '../../common/protocol';
-import { parseSessionUpdatedRuntimePayload } from '../../common/schemas';
+import { parseSessionTodoItem, parseSessionUpdatedRuntimePayload } from '../../common/schemas';
 import {
 	computeDiffLineStats,
 	extractPatchFilePaths,
@@ -80,6 +82,8 @@ export class SessionHandler implements WebviewMessageHandler {
 
 	/** Sessions whose history has already been replayed into the webview. */
 	private replayedSessions = new Set<string>();
+	/** Sessions currently replaying history to avoid duplicate restore work. */
+	private replayingSessions = new Map<string, Promise<void>>();
 
 	/** Deferred flag: webviewDidLaunch arrived before the server was ready. */
 	private pendingWebviewLaunch = false;
@@ -422,6 +426,8 @@ export class SessionHandler implements WebviewMessageHandler {
 					});
 				}
 			}
+
+			this.preloadRestoredTabs(tabsToRestore, activeTab, config, allSessions);
 		} catch (error) {
 			logger.error('[SessionHandler] Failed to restore sessions from CLI:', error);
 			// Fallback: auto-create a session so the user can start typing immediately
@@ -445,6 +451,33 @@ export class SessionHandler implements WebviewMessageHandler {
 	 *                         When omitted, falls back to fetching from CLI.
 	 */
 	private async replaySessionFromCLI(
+		sessionId: string,
+		config: { provider: 'opencode'; workspaceRoot: string },
+		cachedSessions?: Array<{
+			id: string;
+			title?: string;
+			lastModified?: number;
+			created?: number;
+			parentID?: string;
+			revert?: { messageID: string; partID?: string };
+		}>,
+	): Promise<void> {
+		const inFlight = this.replayingSessions.get(sessionId);
+		if (inFlight) {
+			await inFlight;
+			return;
+		}
+
+		const replayPromise = this.doReplaySessionFromCLI(sessionId, config, cachedSessions);
+		this.replayingSessions.set(sessionId, replayPromise);
+		try {
+			await replayPromise;
+		} finally {
+			this.replayingSessions.delete(sessionId);
+		}
+	}
+
+	private async doReplaySessionFromCLI(
 		sessionId: string,
 		config: { provider: 'opencode'; workspaceRoot: string },
 		cachedSessions?: Array<{
@@ -708,20 +741,17 @@ export class SessionHandler implements WebviewMessageHandler {
 			childSessionIds.add(child.id);
 		}
 
-		const { childDurations, childTokensMap, childModelIdMap } = await this.collectChildSessionStats(
-			childSessionIds,
-			allSessions,
-			config,
-		);
+		const { childHistories, childDurations, childTokensMap, childModelIdMap } =
+			await this.collectChildSessionStats(childSessionIds, allSessions, config);
 
-		const [messagesResult] = await Promise.all([
-			sdkClient.session.messages({
-				sessionID: sessionId,
-				directory: config.workspaceRoot,
-			}),
-			this.restoreSessionDiffFromServer(sessionId, config),
-			this.restoreSessionRuntimeStateFromServer(sessionId, config),
-		]);
+		const messagesResult = await sdkClient.session.messages({
+			sessionID: sessionId,
+			directory: config.workspaceRoot,
+		});
+		const diffResult = await sdkClient.session.diff({
+			sessionID: sessionId,
+			directory: config.workspaceRoot,
+		});
 
 		if (messagesResult.error) {
 			throw new Error(
@@ -731,15 +761,46 @@ export class SessionHandler implements WebviewMessageHandler {
 
 		const entries = messagesResult.data ?? [];
 		const parentTurnTokens = this.buildTurnTokenMap(parentHistory, entries);
+		const childResults = await Promise.all(
+			[...childSessionIds].map(async childSessionId => ({
+				childSessionId,
+				childHistory: childHistories.get(childSessionId) ?? [],
+				childMessagesResult: await sdkClient.session.messages({
+					sessionID: childSessionId,
+					directory: config.workspaceRoot,
+				}),
+			})),
+		);
 
-		const actions: SessionReplayAction[] = [];
-		for (const childSessionId of childSessionIds) {
-			const childHistory = await this.context.cli.getHistory(childSessionId, config);
-			const childMessagesResult = await sdkClient.session.messages({
-				sessionID: childSessionId,
-				directory: config.workspaceRoot,
-			});
-
+		const childSnapshots = new Map<
+			string,
+			{
+				messages: Array<SessionUserMessagePayload['message'] | SessionSubtaskPayload['subtask']>;
+				runtimeMessageRecords: import('../../common').SessionMessageRecordPayload['message'][];
+				runtimeMessageParts: import('../../common').SessionMessagePartPayload['part'][];
+				changedFiles: Array<{
+					filePath: string;
+					fileName: string;
+					linesAdded: number;
+					linesRemoved: number;
+					toolUseId: string;
+					timestamp: number;
+				}>;
+				cumulativeDiffs: Array<{
+					file: string;
+					additions: number;
+					deletions: number;
+					status?: 'added' | 'deleted' | 'modified';
+				}>;
+				todos?: SessionTodoItem[];
+				turnTokens: Record<
+					string,
+					{ input: number; output: number; total?: number; cacheRead?: number; durationMs?: number }
+				>;
+				restoreCommits: CommitInfo[];
+			}
+		>();
+		for (const { childSessionId, childHistory, childMessagesResult } of childResults) {
 			if (childMessagesResult.error) {
 				logger.warn(
 					'[SessionHandler] Failed to fetch canonical child session messages, falling back to history replay',
@@ -749,11 +810,10 @@ export class SessionHandler implements WebviewMessageHandler {
 					},
 				);
 				if (childHistory.length > 0) {
-					actions.push(
-						...this.buildHistoryReplayActions(childSessionId, childHistory, {
-							mode: 'default',
-						}),
-					);
+					const fallbackActions = this.buildHistoryReplayActions(childSessionId, childHistory, {
+						mode: 'default',
+					});
+					this.emitReplayActions(fallbackActions);
 				}
 				continue;
 			}
@@ -765,8 +825,9 @@ export class SessionHandler implements WebviewMessageHandler {
 					childDurations.set(childSessionId, canonicalDuration);
 				}
 				const childTurnTokens = this.buildTurnTokenMap(childHistory, childEntries);
-				actions.push(
-					...this.buildCanonicalReplayActions(childSessionId, childEntries, childTurnTokens, {
+				childSnapshots.set(
+					childSessionId,
+					this.buildCanonicalSessionSnapshot(childSessionId, childEntries, childTurnTokens, {
 						workspaceSessionId: childSessionId,
 					}),
 				);
@@ -774,24 +835,79 @@ export class SessionHandler implements WebviewMessageHandler {
 			}
 
 			if (childHistory.length > 0) {
-				actions.push(
-					...this.buildHistoryReplayActions(childSessionId, childHistory, {
-						mode: 'default',
-					}),
-				);
+				const fallbackActions = this.buildHistoryReplayActions(childSessionId, childHistory, {
+					mode: 'default',
+				});
+				this.emitReplayActions(fallbackActions);
 			}
 		}
 
-		actions.push(
-			...this.buildCanonicalReplayActions(sessionId, entries, parentTurnTokens, {
-				workspaceSessionId: sessionId,
-				explicitLinks,
-				childDurations,
-				childTokensMap,
-				childModelIdMap,
+		for (const [childSessionId, snapshot] of childSnapshots) {
+			this.context.bridge.emit(childSessionId, 'messages_reload', {
+				messages: snapshot.messages,
+				runtimeMessageRecords: snapshot.runtimeMessageRecords,
+				runtimeMessageParts: snapshot.runtimeMessageParts,
+				changedFiles: snapshot.changedFiles,
+				cumulativeDiffs: snapshot.cumulativeDiffs,
+				turnTokens: snapshot.turnTokens,
+				restoreCommits: snapshot.restoreCommits,
+			});
+			if (snapshot.todos) {
+				this.context.bridge.emit(childSessionId, 'todo', { todos: snapshot.todos });
+			}
+		}
+
+		const snapshot = this.buildCanonicalSessionSnapshot(sessionId, entries, parentTurnTokens, {
+			workspaceSessionId: sessionId,
+			explicitLinks,
+			childDurations,
+			childTokensMap,
+			childModelIdMap,
+		});
+		this.context.bridge.emit(sessionId, 'messages_reload', {
+			messages: snapshot.messages,
+			runtimeMessageRecords: snapshot.runtimeMessageRecords,
+			runtimeMessageParts: snapshot.runtimeMessageParts,
+			changedFiles: snapshot.changedFiles,
+			cumulativeDiffs: diffResult.data
+				? diffResult.data.map(entry => ({
+						file: entry.file,
+						additions: entry.additions || 0,
+						deletions: entry.deletions || 0,
+						status: entry.status as 'added' | 'deleted' | 'modified' | undefined,
+					}))
+				: snapshot.cumulativeDiffs,
+			turnTokens: snapshot.turnTokens,
+			restoreCommits: snapshot.restoreCommits,
+		});
+		if (snapshot.todos) {
+			this.context.bridge.emit(sessionId, 'todo', { todos: snapshot.todos });
+		}
+
+		void this.restoreSessionCounterStateFromHistory(sessionId, config).catch(error =>
+			logger.warn(
+				'[SessionHandler] Failed to restore session counter state after canonical replay',
+				{
+					sessionId,
+					error,
+				},
+			),
+		);
+		void this.restoreSessionDiffFromServer(sessionId, config).catch(error =>
+			logger.warn('[SessionHandler] Failed to restore session diff after canonical replay', {
+				sessionId,
+				error,
 			}),
 		);
-		this.emitReplayActions(actions);
+		void this.restoreSessionRuntimeStateFromServer(sessionId, config).catch(error =>
+			logger.warn(
+				'[SessionHandler] Failed to restore session runtime state after canonical replay',
+				{
+					sessionId,
+					error,
+				},
+			),
+		);
 
 		if (
 			currentSession?.revert?.messageID &&
@@ -936,6 +1052,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		}>,
 		config: { provider: 'opencode'; workspaceRoot: string },
 	): Promise<{
+		childHistories: Map<string, CLIEvent[]>;
 		childDurations: Map<string, number>;
 		childTokensMap: Map<
 			string,
@@ -943,6 +1060,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		>;
 		childModelIdMap: Map<string, string>;
 	}> {
+		const childHistories = new Map<string, CLIEvent[]>();
 		const childDurations = new Map<string, number>();
 		const childTokensMap = new Map<
 			string,
@@ -951,17 +1069,18 @@ export class SessionHandler implements WebviewMessageHandler {
 		const childModelIdMap = new Map<string, string>();
 
 		if (childSessionIds.size === 0) {
-			return { childDurations, childTokensMap, childModelIdMap };
+			return { childHistories, childDurations, childTokensMap, childModelIdMap };
 		}
 
-		const childHistories = await Promise.all(
+		const childHistoryResults = await Promise.all(
 			[...childSessionIds].map(async childId => ({
 				id: childId,
 				history: await this.context.cli.getHistory(childId, config),
 			})),
 		);
 
-		for (const { id, history } of childHistories) {
+		for (const { id, history } of childHistoryResults) {
+			childHistories.set(id, history);
 			if (history.length === 0) continue;
 			const childSession = allSessions.find(session => session.id === id);
 			const duration = this.computeChildSessionDuration(history, {
@@ -1003,7 +1122,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			}
 		}
 
-		return { childDurations, childTokensMap, childModelIdMap };
+		return { childHistories, childDurations, childTokensMap, childModelIdMap };
 	}
 
 	private computeChildSessionDuration(
@@ -1218,6 +1337,16 @@ export class SessionHandler implements WebviewMessageHandler {
 			});
 		}
 
+		if (this.replayedSessions.has(sessionId)) {
+			this.context.bridge.emit(sessionId, 'session_info', {
+				data: {
+					sessionId,
+					autoAccept: this.context.getSessionAutoAccept?.(sessionId) ?? false,
+				},
+			});
+			return;
+		}
+
 		this.syncSessionRuntimeState(sessionId);
 	}
 
@@ -1248,6 +1377,7 @@ export class SessionHandler implements WebviewMessageHandler {
 
 		this.context.sessionState.startedSessions.delete(sessionId);
 		this.replayedSessions.delete(sessionId);
+		this.replayingSessions.delete(sessionId);
 		this.clearSessionStats(sessionId);
 		this.clearPendingMessage(sessionId);
 		this.context.clearSessionAutoAccept?.(sessionId);
@@ -1912,6 +2042,37 @@ export class SessionHandler implements WebviewMessageHandler {
 		actions.push({ kind: 'session_updated', targetId, data });
 	}
 
+	private extractTodoSnapshot(raw: unknown): SessionTodoItem[] | undefined {
+		if (!Array.isArray(raw) || raw.length === 0) return undefined;
+		const todos = raw.flatMap((item, index) => {
+			const parsed = parseSessionTodoItem(item);
+			if (parsed) return [parsed];
+			if (!item || typeof item !== 'object') return [];
+			const record = item as Record<string, unknown>;
+			const content = typeof record.content === 'string' ? record.content : undefined;
+			if (!content) return [];
+			return [
+				{
+					id: typeof record.id === 'string' ? record.id : `todo-${index}-${content}`,
+					content,
+					status:
+						record.status === 'completed' ||
+						record.status === 'in_progress' ||
+						record.status === 'cancelled'
+							? record.status
+							: 'pending',
+					priority: typeof record.priority === 'string' ? record.priority : 'medium',
+				} satisfies SessionTodoItem,
+			];
+		});
+		return todos.length > 0 ? todos : undefined;
+	}
+
+	private extractTodoSnapshotFromToolInput(input: unknown): SessionTodoItem[] | undefined {
+		if (!input || typeof input !== 'object') return undefined;
+		return this.extractTodoSnapshot((input as { todos?: unknown }).todos);
+	}
+
 	private pushReplayCheckpoint(
 		actions: SessionReplayAction[],
 		targetId: string,
@@ -2118,6 +2279,7 @@ export class SessionHandler implements WebviewMessageHandler {
 	): SessionReplayAction[] {
 		const actions: SessionReplayAction[] = [];
 		const subtaskMeta = new Map<string, { description: string; prompt: string; agent: string }>();
+		let latestTodos: SessionTodoItem[] | undefined;
 
 		for (const event of history) {
 			switch (event.type) {
@@ -2143,6 +2305,9 @@ export class SessionHandler implements WebviewMessageHandler {
 						timestamp?: string;
 					};
 					const toolName = data.tool || 'unknown';
+					if (resolveToolName(toolName) === 'todowrite') {
+						latestTodos = this.extractTodoSnapshotFromToolInput(data.input) ?? latestTodos;
+					}
 					if (toolName.toLowerCase() === 'question') break;
 					const input = (data.input as Record<string, unknown>) || {};
 					const toolUseId = data.toolUseId || `hist-tool-${Math.random()}`;
@@ -2285,10 +2450,16 @@ export class SessionHandler implements WebviewMessageHandler {
 					break;
 			}
 		}
+		if (latestTodos) {
+			this.pushReplayEvent(actions, sessionId, 'todo', {
+				eventType: 'todo',
+				todos: latestTodos,
+			});
+		}
 		return actions;
 	}
 
-	private buildCanonicalReplayActions(
+	private buildCanonicalSessionSnapshot(
 		sessionId: string,
 		entries: Array<{ info: CanonicalSdkMessage; parts: CanonicalSdkPart[] }>,
 		turnTokensByUser: Map<string, ReplayTurnTokens>,
@@ -2299,38 +2470,93 @@ export class SessionHandler implements WebviewMessageHandler {
 			childTokensMap?: Map<string, ReplayChildTokens>;
 			childModelIdMap?: Map<string, string>;
 		},
-	): SessionReplayAction[] {
-		const actions: SessionReplayAction[] = [];
+	): {
+		messages: Array<SessionUserMessagePayload['message'] | SessionSubtaskPayload['subtask']>;
+		runtimeMessageRecords: import('../../common').SessionMessageRecordPayload['message'][];
+		runtimeMessageParts: import('../../common').SessionMessagePartPayload['part'][];
+		changedFiles: Array<{
+			filePath: string;
+			fileName: string;
+			linesAdded: number;
+			linesRemoved: number;
+			toolUseId: string;
+			timestamp: number;
+		}>;
+		cumulativeDiffs: Array<{
+			file: string;
+			additions: number;
+			deletions: number;
+			status?: 'added' | 'deleted' | 'modified';
+		}>;
+		todos?: SessionTodoItem[];
+		turnTokens: Record<
+			string,
+			{ input: number; output: number; total?: number; cacheRead?: number; durationMs?: number }
+		>;
+		restoreCommits: CommitInfo[];
+	} {
+		const messages: Array<SessionUserMessagePayload['message'] | SessionSubtaskPayload['subtask']> =
+			[];
+		const runtimeMessageRecords: import('../../common').SessionMessageRecordPayload['message'][] =
+			[];
+		const runtimeMessageParts: import('../../common').SessionMessagePartPayload['part'][] = [];
+		const changedFiles: Array<{
+			filePath: string;
+			fileName: string;
+			linesAdded: number;
+			linesRemoved: number;
+			toolUseId: string;
+			timestamp: number;
+		}> = [];
+		const cumulativeDiffs: Array<{
+			file: string;
+			additions: number;
+			deletions: number;
+			status?: 'added' | 'deleted' | 'modified';
+		}> = [];
+		let latestTodos: SessionTodoItem[] | undefined;
+		const turnTokens: Record<
+			string,
+			{ input: number; output: number; total?: number; cacheRead?: number; durationMs?: number }
+		> = {};
+		const restoreCommits: CommitInfo[] = [];
 
 		for (const entry of entries) {
 			const info = entry.info;
 			if (info.role === 'user') {
 				const message = this.buildCanonicalUserReplayMessage(entry);
-				this.pushReplayEvent(actions, sessionId, 'user_message', {
-					eventType: 'user_message',
-					message,
-				});
+				messages.push(message);
 				const turn = turnTokensByUser.get(info.id);
 				if (turn) {
-					this.pushReplayEvent(actions, sessionId, 'turn_tokens', {
-						eventType: 'turn_tokens',
-						userMessageId: info.id,
-						inputTokens: turn.inputTokens,
-						outputTokens: turn.outputTokens,
-						totalTokens: turn.totalTokens,
-						cacheReadTokens: turn.cacheReadTokens,
+					turnTokens[info.id] = {
+						input: turn.inputTokens,
+						output: turn.outputTokens,
+						total: turn.totalTokens,
+						cacheRead: turn.cacheReadTokens,
 						...(typeof turn.durationMs === 'number' ? { durationMs: turn.durationMs } : {}),
-					});
+					};
 				}
-				this.pushReplayCheckpoint(actions, sessionId, info.id, String(message.timestamp));
+				restoreCommits.push({
+					id: info.id,
+					sha: info.id,
+					message: 'Checkpoint before message',
+					timestamp: String(message.timestamp),
+					associatedMessageId: info.id,
+				});
 			}
 
-			this.pushReplayEvent(actions, sessionId, 'message_record', {
-				eventType: 'message_record',
-				message: mapSdkMessageToRecord(info),
-			});
+			runtimeMessageRecords.push(mapSdkMessageToRecord(info));
 
 			for (const part of entry.parts) {
+				if (part.type === 'tool' && typeof part.tool === 'string') {
+					if (resolveToolName(part.tool) === 'todowrite') {
+						const toolState =
+							part.state && typeof part.state === 'object'
+								? (part.state as Record<string, unknown>)
+								: undefined;
+						latestTodos = this.extractTodoSnapshotFromToolInput(toolState?.input) ?? latestTodos;
+					}
+				}
 				const partTime =
 					'time' in part && part.time && typeof part.time === 'object'
 						? (part.time as { start?: number; end?: number; created?: number })
@@ -2346,17 +2572,11 @@ export class SessionHandler implements WebviewMessageHandler {
 					options.childModelIdMap ?? new Map<string, string>(),
 				);
 				if (subtask) {
-					this.pushReplayEvent(actions, sessionId, 'subtask', {
-						eventType: 'subtask',
-						subtask,
-					});
+					messages.push(subtask);
 					continue;
 				}
 
-				this.pushReplayEvent(actions, sessionId, 'message_part', {
-					eventType: 'message_part',
-					part: mapSdkPartToPayload(part, info.id, sessionId),
-				});
+				runtimeMessageParts.push(mapSdkPartToPayload(part, info.id, sessionId));
 				if (part.type !== 'tool' || typeof part.tool !== 'string') continue;
 				const toolState =
 					part.state && typeof part.state === 'object'
@@ -2379,18 +2599,43 @@ export class SessionHandler implements WebviewMessageHandler {
 					'newString',
 					'content',
 				]);
-				this.pushReplayFileActions(
-					actions,
-					sessionId,
-					part.tool,
-					toolInput,
-					toolUseId,
-					computeDiffLineStats(String(oldContent), String(newContent)),
-				);
+				const filePath = SessionHandler.extractFilePath(toolInput);
+				if (filePath && this.isFileEditTool(part.tool)) {
+					const diffStats = computeDiffLineStats(String(oldContent), String(newContent));
+					changedFiles.push({
+						filePath,
+						fileName: filePath.split(/[/\\]/).pop() || filePath,
+						linesAdded: diffStats.added,
+						linesRemoved: diffStats.removed,
+						toolUseId,
+						timestamp: typeof info.time?.created === 'number' ? info.time.created : Date.now(),
+					});
+					continue;
+				}
+				if (resolveToolName(part.tool) !== 'apply_patch') continue;
+				for (const patchPath of extractPatchFilePaths(toolInput)) {
+					changedFiles.push({
+						filePath: patchPath,
+						fileName: patchPath.split(/[/\\]/).pop() || patchPath,
+						linesAdded: 0,
+						linesRemoved: 0,
+						toolUseId,
+						timestamp: typeof info.time?.created === 'number' ? info.time.created : Date.now(),
+					});
+				}
 			}
 		}
 
-		return actions;
+		return {
+			messages,
+			runtimeMessageRecords,
+			runtimeMessageParts,
+			changedFiles,
+			cumulativeDiffs,
+			...(latestTodos ? { todos: latestTodos } : {}),
+			turnTokens,
+			restoreCommits,
+		};
 	}
 
 	private async restoreSessionDiffFromServer(
@@ -2517,6 +2762,7 @@ export class SessionHandler implements WebviewMessageHandler {
 				this.clearSessionStats(sessionId);
 				this.clearPendingMessage(sessionId);
 				this.replayedSessions.delete(sessionId);
+				this.replayingSessions.delete(sessionId);
 				this.context.sessionGraph.clearParent(sessionId);
 
 				// Clean up restore/revert state for deleted session
@@ -2556,6 +2802,7 @@ export class SessionHandler implements WebviewMessageHandler {
 					this.clearSessionStats(session.id);
 					this.clearPendingMessage(session.id);
 					this.replayedSessions.delete(session.id);
+					this.replayingSessions.delete(session.id);
 					this.context.sessionGraph.clearParent(session.id);
 					this.context.cleanupSessionRestore?.(session.id);
 					if (this.context.sessionState.activeSessionId === session.id) {
@@ -2917,6 +3164,39 @@ export class SessionHandler implements WebviewMessageHandler {
 		const { openTabs } = this.getPersistedTabs();
 		const newTabs = openTabs.includes(sessionId) ? openTabs : [...openTabs, sessionId];
 		await this.writePersistedTabs(newTabs, sessionId);
+	}
+
+	private preloadRestoredTabs(
+		tabsToRestore: string[],
+		activeTab: string,
+		config: { provider: 'opencode'; workspaceRoot: string },
+		allSessions: Array<{
+			id: string;
+			title?: string;
+			lastModified?: number;
+			created?: number;
+			parentID?: string;
+			revert?: { messageID: string; partID?: string };
+		}>,
+	): void {
+		const preloadIds = tabsToRestore.filter(
+			tabId => tabId !== activeTab && !this.replayedSessions.has(tabId),
+		);
+		if (preloadIds.length === 0) return;
+
+		void Promise.all(
+			preloadIds.map(async sessionId => {
+				try {
+					await this.replaySessionFromCLI(sessionId, config, allSessions);
+					this.replayedSessions.add(sessionId);
+				} catch (error) {
+					logger.warn('[SessionHandler] Failed to preload restored tab history', {
+						sessionId,
+						error,
+					});
+				}
+			}),
+		);
 	}
 
 	/**

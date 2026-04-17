@@ -158,11 +158,9 @@ export interface UIState {
 	/** Connection details from the extension (populated on demand). */
 	connectionDetails: {
 		serverUrl: string | null;
-		status: 'connected' | 'disconnected' | 'error';
 		isServerOwner: boolean;
 		uptime: number | null;
 		port: number | null;
-		healthy: boolean;
 	} | null;
 
 	showSlashCommands: boolean;

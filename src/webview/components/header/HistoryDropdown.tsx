@@ -88,8 +88,7 @@ export const HistoryDropdown: React.FC = () => {
 		setShowHistoryDropdown(false);
 	}, [setShowHistoryDropdown]);
 
-	// Re-fetch the conversation list when the dropdown mounts (opens) and whenever
-	// the list becomes empty (e.g. after clearing all conversations).
+	// Re-fetch the conversation list when the dropdown mounts (opens).
 	// Show loading spinner only when the list is empty; otherwise show stale data
 	// while the fresh list loads in the background.
 	useEffect(() => {

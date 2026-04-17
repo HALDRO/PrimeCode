@@ -42,13 +42,6 @@ const isGroupableTool = (msg: RenderMessage, mcpServerNames: string[]): boolean 
 		return false;
 	}
 
-	// Completed/error updates can arrive as separate synthetic entries for a tool
-	// that already started earlier in the same turn. Treat them as groupable so a
-	// late result from a heavy tool does not split a lightweight tool batch.
-	if (msg.status === 'completed' || msg.status === 'error') {
-		return true;
-	}
-
 	const toolName = msg.toolName || '';
 
 	if (isMcpTool(toolName, mcpServerNames)) {

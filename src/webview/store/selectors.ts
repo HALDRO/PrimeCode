@@ -73,12 +73,10 @@ export function projectRuntimeMessages(session: ChatSession | undefined): Render
 		record?: ChatSession['runtimeMessageRecords'][number],
 	): void => {
 		seenMessageIds.add(messageId);
-		const parts = [...(session.runtimeMessagePartsById[messageId] || [])].sort((a, b) => {
-			const aCreated = typeof a.createdAt === 'number' ? a.createdAt : Number.MAX_SAFE_INTEGER;
-			const bCreated = typeof b.createdAt === 'number' ? b.createdAt : Number.MAX_SAFE_INTEGER;
-			if (aCreated !== bCreated) return aCreated - bCreated;
-			return a.id.localeCompare(b.id);
-		});
+		// Keep the original arrival order from the store. During streaming, later tool
+		// updates can share timestamps with earlier text parts, and re-sorting here
+		// makes assistant text jump below tool cards and breaks tool grouping.
+		const parts = session.runtimeMessagePartsById[messageId] || [];
 		for (const part of parts) {
 			const partCompleted = typeof part.completedAt === 'number';
 			const recordCompleted = typeof record?.completedAt === 'number';
@@ -651,15 +649,22 @@ export const useModelContextWindow = () =>
 				}
 			}
 			// Check OpenCode providers (includes models.dev metadata)
-			const provider = opencodeProviders.find(p => p.id === parsed.providerId);
+			const provider = opencodeProviders.find(
+				(p: { id: string; models: Array<{ id: string; limit?: { context?: number } }> }) =>
+					p.id === parsed.providerId,
+			);
 			if (provider) {
-				const model = provider.models.find(m => m.id === parsed.modelId);
+				const model = provider.models.find(
+					(m: { id: string; limit?: { context?: number } }) => m.id === parsed.modelId,
+				);
 				if (model?.limit?.context) return model.limit.context;
 			}
 		}
 		// Fallback: check proxy endpoint models by raw ID
 		for (const endpoint of proxyEndpoints) {
-			const epModel = endpoint.models.find(m => m.id === selectedModel);
+			const epModel = endpoint.models.find(
+				(m: { id: string; contextLength?: number }) => m.id === selectedModel,
+			);
 			if (epModel?.contextLength) return epModel.contextLength;
 		}
 		return DEFAULT_CONTEXT_WINDOW;

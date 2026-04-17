@@ -321,6 +321,33 @@ export interface SessionAccessPayload {
 export interface SessionMessagesReloadPayload {
 	eventType: 'messages_reload';
 	messages: Array<SessionUserMessagePayload['message'] | SessionSubtaskPayload['subtask']>;
+	runtimeMessageRecords?: SessionMessageRecordPayload['message'][];
+	runtimeMessageParts?: SessionMessagePartPayload['part'][];
+	changedFiles?: Array<{
+		filePath: string;
+		fileName: string;
+		linesAdded: number;
+		linesRemoved: number;
+		toolUseId: string;
+		timestamp: number;
+	}>;
+	cumulativeDiffs?: Array<{
+		file: string;
+		additions: number;
+		deletions: number;
+		status?: 'added' | 'deleted' | 'modified';
+	}>;
+	turnTokens?: Record<
+		string,
+		{
+			input: number;
+			output: number;
+			total?: number;
+			cacheRead?: number;
+			durationMs?: number;
+		}
+	>;
+	restoreCommits?: CommitInfo[];
 }
 
 export interface SessionDeleteMessagesAfterPayload {
@@ -873,11 +900,9 @@ export type ExtensionVersionMessage = BaseExtensionMessage<
 
 export interface ConnectionDetailsData {
 	serverUrl: string | null;
-	status: 'connected' | 'disconnected' | 'error';
 	isServerOwner: boolean;
 	uptime: number | null;
 	port: number | null;
-	healthy: boolean;
 }
 
 export type ConnectionDetailsMessage = BaseExtensionMessage<
