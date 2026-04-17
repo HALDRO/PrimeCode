@@ -264,6 +264,22 @@ describe('ToolHandler', () => {
 			});
 		});
 
+		it('should not fail when pending permission lookup is unavailable', async () => {
+			const ctx = createMockHandlerContext({ services: {} as any });
+			const handler = new ToolHandler(ctx);
+
+			await expect(
+				handler.handleMessage({
+					type: 'setAutoAccept',
+					mode: 'on',
+					sessionId: 'test-session-1',
+				}),
+			).resolves.toBeUndefined();
+
+			await Promise.resolve();
+			expect(ctx.cli.respondToPermission).not.toHaveBeenCalled();
+		});
+
 		it('should inherit auto-accept from parent sessions', async () => {
 			const ctx = createMockHandlerContext();
 			ctx.sessionGraph.registerChild('child-session', 'test-session-1', 'tool-1');

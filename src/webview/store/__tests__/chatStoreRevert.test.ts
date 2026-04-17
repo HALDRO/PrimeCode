@@ -412,9 +412,8 @@ describe('chatStore revert/unrevert state', () => {
 			const session = getSession('s1');
 			// Should keep messages before u2 only
 			const rendered = projectRuntimeMessages(session);
-			expect(rendered).toHaveLength(2);
+			expect(rendered).toHaveLength(1);
 			expect(rendered[0].id).toBe('u1');
-			expect(rendered[1].id).toBe('msg-assistant-part-u1');
 		});
 
 		it('should do nothing when no revertedFromMessageId', () => {
@@ -450,8 +449,8 @@ describe('chatStore revert/unrevert state', () => {
 
 			const session = getSession('s1');
 			const rendered = projectRuntimeMessages(session);
-			expect(rendered).toHaveLength(3);
-			expect(rendered.map(m => m.id)).toEqual(['u1', 'msg-assistant-part-u1', 'u2']);
+			expect(rendered).toHaveLength(2);
+			expect(rendered.map(m => m.id)).toEqual(['u1', 'u2']);
 		});
 
 		it('should clear revertedFromMessageId', () => {

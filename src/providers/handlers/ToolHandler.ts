@@ -274,7 +274,9 @@ export class ToolHandler implements WebviewMessageHandler {
 		if (!this.isAutoAccept(sessionId)) return;
 		const serverInfo = this.context.cli.getOpenCodeServerInfo();
 		if (!serverInfo?.baseUrl || !serverInfo.directory) return;
-		const pending = await this.context.services.openCodeClient.getSessionPermissions(
+		const openCodeClient = this.context.services.openCodeClient;
+		if (!openCodeClient?.getSessionPermissions) return;
+		const pending = await openCodeClient.getSessionPermissions(
 			serverInfo.baseUrl,
 			serverInfo.directory,
 			sessionId,

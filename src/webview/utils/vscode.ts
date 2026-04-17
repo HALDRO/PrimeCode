@@ -19,6 +19,13 @@ import { useChatStore } from '../store/chatStore';
 
 let vscodeApi: VSCodeApi | undefined;
 
+function getBrowserStorage(): Storage | undefined {
+	if (typeof globalThis === 'undefined' || !('localStorage' in globalThis)) {
+		return undefined;
+	}
+	return globalThis.localStorage;
+}
+
 /**
  * Initialize and get VS Code API instance (singleton)
  * Checks window.vscode first, then tries acquireVsCodeApi()
@@ -63,7 +70,7 @@ class VSCodeAPIWrapper {
 			return api.getState();
 		}
 		// Fallback for development outside VS Code
-		const state = localStorage.getItem('vscodeState');
+		const state = getBrowserStorage()?.getItem('vscodeState');
 		return state ? JSON.parse(state) : undefined;
 	}
 
@@ -76,7 +83,7 @@ class VSCodeAPIWrapper {
 			return api.setState(newState) as T;
 		}
 		// Fallback for development outside VS Code
-		localStorage.setItem('vscodeState', JSON.stringify(newState));
+		getBrowserStorage()?.setItem('vscodeState', JSON.stringify(newState));
 		return newState;
 	}
 }
