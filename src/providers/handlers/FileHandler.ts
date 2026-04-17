@@ -1,12 +1,13 @@
 import * as vscode from 'vscode';
 import type { CommandOf, WebviewCommand } from '../../common/protocol';
+import { decodeFilePath, getPathBaseName, pathsReferToSameFile } from '../../utils/path';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
 export class FileHandler implements WebviewMessageHandler {
 	constructor(private context: HandlerContext) {}
 
 	private resolveFileUri(filePath: string): vscode.Uri {
-		const trimmed = filePath.trim();
+		const trimmed = decodeFilePath(filePath);
 		if (/^file:\/\//i.test(trimmed)) {
 			return vscode.Uri.parse(trimmed);
 		}
@@ -57,7 +58,7 @@ export class FileHandler implements WebviewMessageHandler {
 			doc = await vscode.workspace.openTextDocument(uri);
 		} catch {
 			// File not found at exact path — search workspace by filename
-			const fileName = filePath.replace(/\\/g, '/').split('/').pop();
+			const fileName = getPathBaseName(filePath);
 			if (fileName) {
 				const matches = await vscode.workspace.findFiles(`**/${fileName}`, '**/node_modules/**', 5);
 				if (matches.length === 1) {
@@ -65,8 +66,7 @@ export class FileHandler implements WebviewMessageHandler {
 					doc = await vscode.workspace.openTextDocument(uri);
 				} else if (matches.length > 1) {
 					// Multiple matches — pick the one whose path best matches the input
-					const normalized = filePath.replace(/\\/g, '/');
-					const best = matches.find(m => m.fsPath.replace(/\\/g, '/').endsWith(normalized));
+					const best = matches.find(m => pathsReferToSameFile(m.fsPath, filePath));
 					uri = best ?? matches[0];
 					doc = await vscode.workspace.openTextDocument(uri);
 				}
@@ -93,7 +93,7 @@ export class FileHandler implements WebviewMessageHandler {
 
 		// If we have old/new content, show an in-memory diff directly
 		if (oldContent !== undefined || newContent !== undefined) {
-			const fileName = absolutePath.split(/[\\/]/).pop() ?? 'file';
+			const fileName = getPathBaseName(absolutePath) || 'file';
 			// Keep the original extension so VS Code detects language & icon
 			const ts = Date.now();
 			const oldUri = vscode.Uri.from({

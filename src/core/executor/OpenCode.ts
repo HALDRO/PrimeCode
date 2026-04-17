@@ -32,6 +32,7 @@ import {
 	parseSessionTodoItem,
 } from '../../common/schemas';
 import { logger } from '../../utils/logger';
+import { getPathBaseName, toFileUri } from '../../utils/path';
 import { LogNormalizer } from './LogNormalizer';
 import { mapSdkMessageToRecord, mapSdkPartToPayload } from './OpenCodeEventMapper';
 import type { CLIConfig, CLIEvent, CLIExecutor } from './types';
@@ -1671,23 +1672,17 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (attachments) {
 			// Attach workspace files as file parts
 			for (const filePath of attachments.files ?? []) {
-				const fileUrl = filePath.startsWith('file://')
-					? filePath
-					: `file://${filePath.replace(/\\/g, '/')}`;
-				const fileName = filePath.split(/[\\/]/).pop() || filePath;
+				const fileUrl = toFileUri(filePath);
+				const fileName = getPathBaseName(filePath) || filePath;
 				parts.push({ type: 'file' as const, mime: 'text/plain', url: fileUrl, filename: fileName });
 			}
 
 			// Attach code snippets as file parts with line ranges
 			for (const snippet of attachments.codeSnippets ?? []) {
-				const snippetUrl = new URL(
-					snippet.filePath.startsWith('file://')
-						? snippet.filePath
-						: `file://${snippet.filePath.replace(/\\/g, '/')}`,
-				);
+				const snippetUrl = new URL(toFileUri(snippet.filePath));
 				if (snippet.startLine) snippetUrl.searchParams.set('start', String(snippet.startLine));
 				if (snippet.endLine) snippetUrl.searchParams.set('end', String(snippet.endLine));
-				const fileName = snippet.filePath.split(/[\\/]/).pop() || snippet.filePath;
+				const fileName = getPathBaseName(snippet.filePath) || snippet.filePath;
 				parts.push({
 					type: 'file' as const,
 					mime: 'text/plain',
@@ -1862,6 +1857,13 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (eventSessionId && this.deletedSessions.has(eventSessionId)) return;
 
 		switch (event.type) {
+			case 'lsp.updated': {
+				this.emit('event', {
+					type: 'lsp_updated',
+					data: {},
+				});
+				break;
+			}
 			case 'session.created': {
 				const props = (envelope as { type: string; properties: { info: Session } }).properties;
 				const info = props.info;

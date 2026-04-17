@@ -8,7 +8,13 @@ import type {
 	SessionTodoItem,
 	SessionUserMessagePayload,
 } from '../../common';
-import { extractCanonicalTaskResult, generateId, parseModelId } from '../../common';
+import {
+	extractCanonicalTaskResult,
+	formatModelId,
+	generateId,
+	parseModelId,
+	remapLspDiagnosticsToFilePaths,
+} from '../../common';
 import { IMPROVE_PROMPT_DEFAULT_TEMPLATE } from '../../common/promptImprover';
 import type { CommandOf, QueuedMessageData, WebviewCommand } from '../../common/protocol';
 import { parseSessionTodoItem, parseSessionUpdatedRuntimePayload } from '../../common/schemas';
@@ -86,6 +92,34 @@ export class SessionHandler implements WebviewMessageHandler {
 			if (typeof obj[key] === 'string') return obj[key] as string;
 		}
 		return fallback;
+	}
+
+	private collectChangedFilePathsForTool(
+		toolName: string,
+		toolInput: Record<string, unknown>,
+		toolMetadata: Record<string, unknown> | undefined,
+	): string[] {
+		const filePath = SessionHandler.extractFilePath(toolInput);
+		if (filePath && this.isFileEditTool(toolName)) return [filePath];
+		if (resolveToolName(toolName) !== 'apply_patch') return [];
+
+		const metadataFiles = Array.isArray(toolMetadata?.files)
+			? (toolMetadata.files as Record<string, unknown>[])
+			: [];
+		if (metadataFiles.length > 0) {
+			return metadataFiles
+				.map(metadataFile => {
+					return (
+						(typeof metadataFile.filePath === 'string' && metadataFile.filePath) ||
+						(typeof metadataFile.relativePath === 'string' && metadataFile.relativePath) ||
+						(typeof metadataFile.path === 'string' && metadataFile.path) ||
+						''
+					);
+				})
+				.filter((path): path is string => path.length > 0);
+		}
+
+		return extractPatchFilePaths(toolInput);
 	}
 
 	private updateQueue(
@@ -319,9 +353,9 @@ export class SessionHandler implements WebviewMessageHandler {
 			// Switch to the active tab — query real status from executor
 			this.context.sessionState.activeSessionId = activeTab;
 			const isActiveTabBusy = this.context.cli.isSessionActive?.(activeTab) ?? false;
-			this.postLifecycle('switched', activeTab, { isProcessing: isActiveTabBusy });
 
 			await this.restoreSessionIfNeeded(activeTab, config, allSessions);
+			this.postLifecycle('switched', activeTab, { isProcessing: isActiveTabBusy });
 			this.syncSessionRuntimeState(activeTab);
 			// Post status matching real backend state
 			if (isActiveTabBusy) {
@@ -815,9 +849,13 @@ export class SessionHandler implements WebviewMessageHandler {
 		entries: Array<{ info: CanonicalSdkMessage; parts: CanonicalSdkPart[] }>,
 	): string | undefined {
 		for (let i = entries.length - 1; i >= 0; i--) {
-			const modelId = (entries[i]?.info as { modelID?: unknown } | undefined)?.modelID;
-			if (typeof modelId === 'string' && modelId) {
-				return modelId;
+			const info = entries[i]?.info as { modelID?: unknown; providerID?: unknown } | undefined;
+			const compositeModelId = formatModelId(
+				typeof info?.providerID === 'string' ? info.providerID : undefined,
+				typeof info?.modelID === 'string' ? info.modelID : undefined,
+			);
+			if (compositeModelId) {
+				return compositeModelId;
 			}
 		}
 		return undefined;
@@ -860,7 +898,6 @@ export class SessionHandler implements WebviewMessageHandler {
 		// Query REAL processing status from the backend executor.
 		// The executor tracks active sessions via SSE session.status events.
 		const isActive = this.context.cli.isSessionActive?.(sessionId) ?? false;
-		this.postLifecycle('switched', sessionId, { isProcessing: isActive });
 		await this.persistAddTab(sessionId);
 
 		if (!this.restoredSessions.has(sessionId)) {
@@ -871,6 +908,8 @@ export class SessionHandler implements WebviewMessageHandler {
 				logger.error('[SessionHandler] Failed to lazy-load session history:', error);
 			}
 		}
+
+		this.postLifecycle('switched', sessionId, { isProcessing: isActive });
 
 		// Post status matching the real backend state
 		if (isActive) {
@@ -1190,14 +1229,6 @@ export class SessionHandler implements WebviewMessageHandler {
 
 		// NOW update UI — backend has confirmed the stop.
 		this.context.bridge.emit(targetId, 'status', { status: 'idle', statusText: 'Stopped' });
-		this.context.bridge.emit(targetId, 'notification', {
-			notification: {
-				id: `interrupted-${Date.now()}`,
-				type: 'interrupted',
-				content: 'Stopped by user',
-				timestamp: new Date().toISOString(),
-			},
-		});
 
 		// Also force idle on child sessions (subagents) of the target session only
 		for (const sid of sessionsToStop) {
@@ -1496,8 +1527,19 @@ export class SessionHandler implements WebviewMessageHandler {
 			logger.info('[SessionHandler] Session already open, switching to it', { sessionId });
 			this.context.sessionState.activeSessionId = sessionId;
 			const isBusy = this.context.cli.isSessionActive?.(sessionId) ?? false;
-			this.postLifecycle('switched', sessionId, { isProcessing: isBusy });
 			await this.persistAddTab(sessionId);
+			if (!this.restoredSessions.has(sessionId)) {
+				try {
+					const config = this.buildBaseConfig();
+					await this.restoreSessionIfNeeded(sessionId, config);
+				} catch (error) {
+					logger.error('[SessionHandler] Failed to restore already-open session before switch:', {
+						sessionId,
+						error,
+					});
+				}
+			}
+			this.postLifecycle('switched', sessionId, { isProcessing: isBusy });
 			return;
 		}
 
@@ -1507,13 +1549,13 @@ export class SessionHandler implements WebviewMessageHandler {
 		this.context.sessionState.activeSessionId = sessionId;
 		this.context.sessionState.startedSessions.add(sessionId);
 		this.postLifecycle('created', sessionId);
-		// New conversations are never busy — they haven't been sent to yet
-		this.postLifecycle('switched', sessionId, { isProcessing: false });
 		await this.persistAddTab(sessionId);
 
 		try {
 			const config = this.buildBaseConfig();
 			await this.restoreSessionIfNeeded(sessionId, config);
+			// New conversations are never busy — they haven't been sent to yet
+			this.postLifecycle('switched', sessionId, { isProcessing: false });
 			this.syncSessionRuntimeState(sessionId);
 			// Query real status — loaded conversation could theoretically be active
 			const isBusy = this.context.cli.isSessionActive?.(sessionId) ?? false;
@@ -1566,7 +1608,11 @@ export class SessionHandler implements WebviewMessageHandler {
 		parts: CanonicalSdkPart[];
 	}): Extract<SessionEventPayload, { eventType: 'user_message' }>['message'] {
 		const { info, parts } = entry;
-		const modelInfo = info as CanonicalSdkMessage & { model?: { modelID?: string } };
+		const modelInfo = info as CanonicalSdkMessage & {
+			model?: { providerID?: string; modelID?: string };
+			providerID?: string;
+			modelID?: string;
+		};
 		const attachments = this.extractCanonicalUserAttachments(parts);
 		const diffs =
 			'summary' in info &&
@@ -1575,6 +1621,9 @@ export class SessionHandler implements WebviewMessageHandler {
 			'diffs' in info.summary
 				? info.summary.diffs
 				: undefined;
+		const compositeModelId =
+			formatModelId(modelInfo.model?.providerID, modelInfo.model?.modelID) ??
+			formatModelId(modelInfo.providerID, modelInfo.modelID);
 		return {
 			id: info.id,
 			content: parts
@@ -1587,7 +1636,7 @@ export class SessionHandler implements WebviewMessageHandler {
 				typeof info.time?.created === 'number'
 					? new Date(info.time.created).toISOString()
 					: new Date().toISOString(),
-			...(modelInfo.model?.modelID ? { model: modelInfo.model.modelID } : {}),
+			...(compositeModelId ? { model: compositeModelId } : {}),
 			...(typeof info.agent === 'string' ? { agent: info.agent } : {}),
 			...(diffs
 				? {
@@ -1718,7 +1767,29 @@ export class SessionHandler implements WebviewMessageHandler {
 						latestTodos = this.extractTodoSnapshotFromToolInput(toolState?.input) ?? latestTodos;
 					}
 				}
-				runtimeMessageParts.push(enrichRuntimePart(mapSdkPartToPayload(part, info.id, sessionId)));
+				const remappedPart = mapSdkPartToPayload(part, info.id, sessionId);
+				if (part.type === 'tool' && typeof part.tool === 'string') {
+					const toolState =
+						part.state && typeof part.state === 'object'
+							? (part.state as Record<string, unknown>)
+							: undefined;
+					const toolMetadata =
+						toolState?.metadata && typeof toolState.metadata === 'object'
+							? (toolState.metadata as Record<string, unknown>)
+							: undefined;
+					const toolInput =
+						toolState?.input && typeof toolState.input === 'object'
+							? (toolState.input as Record<string, unknown>)
+							: undefined;
+					if (toolMetadata && toolInput && remappedPart.state) {
+						remappedPart.state.metadata = remapLspDiagnosticsToFilePaths(
+							toolMetadata,
+							this.collectChangedFilePathsForTool(part.tool, toolInput, toolMetadata),
+							this.context.settings.getWorkspaceRoot(),
+						);
+					}
+				}
+				runtimeMessageParts.push(enrichRuntimePart(remappedPart));
 				if (part.type !== 'tool' || typeof part.tool !== 'string') continue;
 				const toolState =
 					part.state && typeof part.state === 'object'

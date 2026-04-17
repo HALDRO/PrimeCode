@@ -7,12 +7,8 @@
 import type { OverlayScrollbars } from 'overlayscrollbars';
 import { OverlayScrollbarsComponent } from 'overlayscrollbars-react';
 import React, { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type {
-	ActionType,
-	LspDiagnostic,
-	LspDiagnosticsByFile,
-} from '../../../common/normalizedTypes';
-import { buildToolActionType } from '../../../common/normalizedTypes';
+import type { ActionType, LspDiagnosticsByFile } from '../../../common/normalizedTypes';
+import { buildToolActionType, extractLspDiagnostics } from '../../../common/normalizedTypes';
 import {
 	getMcpToolDisplayInfo,
 	isFileEditTool,
@@ -237,29 +233,6 @@ interface ToolCardMessageProps {
 // ---------------------------------------------------------------------------
 // LSP Diagnostics Display
 // ---------------------------------------------------------------------------
-
-/**
- * Extract diagnostics from tool result metadata.
- * OpenCode sends `metadata.diagnostics: Record<string, Diagnostic[]>` on edit/write/apply_patch.
- */
-function extractDiagnosticsFromMeta(
-	metadata: Record<string, unknown> | undefined,
-): LspDiagnosticsByFile | undefined {
-	if (!metadata) return undefined;
-	const raw = metadata.diagnostics;
-	if (!raw || typeof raw !== 'object') return undefined;
-	const result: LspDiagnosticsByFile = {};
-	for (const [filePath, diags] of Object.entries(raw as Record<string, unknown>)) {
-		if (!Array.isArray(diags)) continue;
-		const valid = diags.filter(
-			(d): d is LspDiagnostic => d && typeof d === 'object' && 'message' in d && 'range' in d,
-		);
-		// Only show errors (severity === 1) or diagnostics with no severity set
-		const errors = valid.filter(d => !d.severity || d.severity === 1);
-		if (errors.length > 0) result[filePath] = errors;
-	}
-	return Object.keys(result).length > 0 ? result : undefined;
-}
 
 /** Group diagnostics by message, collecting locations for each unique error */
 function groupDiagnosticsByMessage(
@@ -575,10 +548,11 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		const [expanded, setExpanded] = useState(defaultExpanded ?? false);
 		const [diffExpanded, setDiffExpanded] = useState(defaultExpanded ?? false);
 
-		// Extract LSP diagnostics from tool result metadata
+		// Extract LSP diagnostics from the same merged metadata source used by diff rendering.
+		// Diagnostics may arrive on the live tool state before/without a separate final toolResult.
 		const diagnostics = useMemo(
-			() => extractDiagnosticsFromMeta(toolResult?.metadata as Record<string, unknown> | undefined),
-			[toolResult?.metadata],
+			() => extractLspDiagnostics(effectiveMetadata as Record<string, unknown> | undefined),
+			[effectiveMetadata],
 		);
 
 		// --- All hooks must be called unconditionally, before any early returns ---
@@ -645,7 +619,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 							diffExpanded={diffExpanded}
 							onToggleDiff={() => setDiffExpanded(prev => !prev)}
 							diagnostics={
-								diagnostics?.[change.filePath]
+								change.filePath && diagnostics?.[change.filePath]
 									? { [change.filePath]: diagnostics[change.filePath] }
 									: undefined
 							}
@@ -691,7 +665,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		// For MCP tools, show server name and tool name as secondary labels: "MCP · context7-mcp · resolve-library-id"
 		const mcpServerLabel = isMcp ? (mcpInfo?.server ?? '') : '';
 		const mcpToolLabel = isMcp ? (mcpInfo?.tool ?? toolName) : '';
-		const displayLabel = isSummarize && isRunning ? `${label}...` : label;
+		const displayLabel = isBash ? '' : isSummarize && isRunning ? `${label}...` : label;
 
 		const needsExpand = lineCount > 6;
 		const showAccessGate = accessRequest && !accessRequest.resolved && accessRequest.requestId;
@@ -705,9 +679,11 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 				headerLeft={
 					<>
 						{icon}
-						<span className="text-sm text-vscode-foreground opacity-90 whitespace-nowrap">
-							{displayLabel}
-						</span>
+						{displayLabel && (
+							<span className="text-sm text-vscode-foreground opacity-90 whitespace-nowrap">
+								{displayLabel}
+							</span>
+						)}
 						{mcpServerLabel && (
 							<span className="text-sm text-vscode-foreground opacity-70 whitespace-nowrap">
 								· {mcpServerLabel}

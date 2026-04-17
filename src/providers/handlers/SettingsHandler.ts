@@ -97,7 +97,13 @@ export class SettingsHandler implements WebviewMessageHandler {
 	 * without re-reading opencode.json separately.
 	 */
 	async getResolvedEndpoints(): Promise<
-		Array<{ id: string; baseUrl: string; apiKey: string; headers?: Record<string, string> }>
+		Array<{
+			id: string;
+			baseUrl: string;
+			apiKey: string;
+			headers?: Record<string, string>;
+			modelVariants?: Record<string, string[]>;
+		}>
 	> {
 		const settings = this.context.settings.getAll();
 		const merged = await this.mergeOpenCodeJsonEndpoints(settings);
@@ -106,6 +112,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 			baseUrl: ep.baseUrl,
 			apiKey: ep.apiKey,
 			headers: ep.headers,
+			modelVariants: ep.modelVariants,
 		}));
 	}
 
@@ -168,6 +175,11 @@ export class SettingsHandler implements WebviewMessageHandler {
 					baseUrl: provider.baseUrl,
 					apiKey: provider.apiKey,
 					enabledModels: provider.models.map(m => m.id),
+					modelVariants: Object.fromEntries(
+						provider.models.flatMap(m =>
+							m.variants && m.variants.length > 0 ? [[m.id, m.variants] as const] : [],
+						),
+					),
 				};
 				mergedEndpoints.push(newEndpoint);
 				if (canonicalBaseUrl) {
@@ -225,6 +237,8 @@ export class SettingsHandler implements WebviewMessageHandler {
 					typeof record.baseUrl === 'string' &&
 					typeof record.apiKey === 'string' &&
 					Array.isArray(record.enabledModels) &&
+					(record.modelVariants === undefined ||
+						(typeof record.modelVariants === 'object' && !Array.isArray(record.modelVariants))) &&
 					(record.headers === undefined ||
 						(typeof record.headers === 'object' && !Array.isArray(record.headers)))
 				);
@@ -418,6 +432,8 @@ export class SettingsHandler implements WebviewMessageHandler {
 							id: typeof a.name === 'string' ? a.name : String(a.name ?? ''),
 							mode: typeof a.mode === 'string' ? a.mode : undefined,
 							description: typeof a.description === 'string' ? a.description : undefined,
+							model: typeof a.model === 'string' ? a.model : undefined,
+							variant: typeof a.variant === 'string' ? a.variant : undefined,
 							builtIn: typeof a.builtIn === 'boolean' ? a.builtIn : undefined,
 							hidden: typeof a.hidden === 'boolean' ? a.hidden : undefined,
 						}))

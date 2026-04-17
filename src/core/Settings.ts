@@ -29,6 +29,7 @@ export interface PrimeCodeSettings {
 		apiKey: string;
 		enabledModels: string[];
 		headers?: Record<string, string>;
+		modelVariants?: Record<string, string[]>;
 	}>;
 	'proxy.useSingleModel'?: boolean;
 	'proxy.haikuModel'?: string;

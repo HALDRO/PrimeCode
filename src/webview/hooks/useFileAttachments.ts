@@ -11,6 +11,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import { decodeFilePath } from '../../utils/path';
 import { useVSCode } from '../utils/vscode';
 
 interface CodeSnippet {
@@ -61,31 +62,6 @@ function isSameAttachedImage(
 	}
 
 	return left.name === right.name && left.dataUrl === right.dataUrl;
-}
-
-/**
- * Normalize a dropped/pasted path: strip file:// prefix, decode URI components,
- * and handle Windows drive-letter URIs (e.g. file:///C:/foo).
- */
-function normalizePath(raw: string): string {
-	let p = raw.trim();
-	if (p.startsWith('file:///')) {
-		// file:///C:/foo → C:/foo  (Windows)
-		// file:///home/user → /home/user (Unix)
-		p = p.substring(8); // strip "file:///"
-		// On Windows the path starts with drive letter, on Unix we need the leading /
-		if (!/^[a-zA-Z]:/.test(p)) {
-			p = `/${p}`;
-		}
-	} else if (p.startsWith('file://')) {
-		p = p.substring(7);
-	}
-	try {
-		p = decodeURIComponent(p);
-	} catch {
-		// already decoded or malformed — use as-is
-	}
-	return p;
 }
 
 export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
@@ -212,7 +188,7 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 			if (text) {
 				const lines = text.split(/\r?\n/).filter(line => line.trim() !== '');
 				for (const line of lines) {
-					const processedPath = normalizePath(line);
+					const processedPath = decodeFilePath(line);
 					if (!processedPath) continue;
 
 					// Check for images passed as paths

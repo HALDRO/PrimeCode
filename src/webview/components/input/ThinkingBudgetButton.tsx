@@ -35,7 +35,12 @@ export const ThinkingBudgetButton: React.FC = React.memo(() => {
 	const [isOpen, setIsOpen] = useState(false);
 	const triggerRef = useRef<HTMLButtonElement>(null);
 
-	const { opencodeProviders, selectedModel: globalModel, setModelVariant } = useModelSelection();
+	const {
+		opencodeProviders,
+		proxyEndpoints,
+		selectedModel: globalModel,
+		setModelVariant,
+	} = useModelSelection();
 	const sessionModel = useChatStore(s => {
 		const sid = s.activeSessionId;
 		return sid ? s.sessionsById[sid]?.model : undefined;
@@ -43,8 +48,8 @@ export const ThinkingBudgetButton: React.FC = React.memo(() => {
 	const effectiveModel = sessionModel ?? globalModel;
 
 	const variantNames = useMemo(() => {
-		return getAvailableModelVariants(opencodeProviders, effectiveModel);
-	}, [effectiveModel, opencodeProviders]);
+		return getAvailableModelVariants(opencodeProviders, effectiveModel, proxyEndpoints);
+	}, [effectiveModel, opencodeProviders, proxyEndpoints]);
 
 	useEffect(() => {
 		if (variant && !resolveValidVariant(variantNames, variant)) {
@@ -103,7 +108,7 @@ export const ThinkingBudgetButton: React.FC = React.memo(() => {
 					(() => {
 						const dotColors = getLevelDotColors(effectiveLevel, variantNames.length);
 						return dotColors ? (
-							<span className="absolute top-[3px] right-[3px] pointer-events-none">
+							<span className="absolute bottom-[3px] right-[5px] pointer-events-none">
 								<GlowDot color={dotColors.color} glow={dotColors.glow} size={4} />
 							</span>
 						) : null;

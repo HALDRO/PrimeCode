@@ -443,25 +443,9 @@ div:hover > .user-copy-btn {
 	overflow-wrap: break-word;
 }
 
-/* Smooth appearance for new structural blocks during streaming.
-   Fires once when a new paragraph/list/code block is created.
-   Pure opacity fade — no translateY to avoid layout jitter. */
-@keyframes streamBlockIn {
-	from {
-		opacity: 0;
-	}
-	to {
-		opacity: 1;
-	}
-}
-
-.markdown-body.streaming > *:last-child {
-	animation: streamBlockIn 0.4s ease-out both;
-}
-
 /* Streaming text fade — .stream-word-new fades in from dim to full brightness.
    .stream-word (without -new) is always opacity:1, so remounted spans don't flash.
-   The -new suffix is removed after animation completes via animationend handler. */
+   Only the newly appended suffix should animate. */
 @keyframes streamWordIn {
 	0% {
 		opacity: 0;

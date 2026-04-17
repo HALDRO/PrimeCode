@@ -12,6 +12,6 @@
 		"types": ["node"],
 		"rootDir": ".."
 	},
-	"include": ["./**/*.ts", "./**/*.tsx", "../common/**/*.ts"],
+	"include": ["./**/*.ts", "./**/*.tsx", "../common/**/*.ts", "../utils/path.ts"],
 	"exclude": ["node_modules"]
 }

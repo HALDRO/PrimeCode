@@ -26,6 +26,7 @@ import {
 	type CLIProviderType,
 	type DiscoveryStatus,
 	type ExtensionMessage,
+	type LspStatusData,
 	type MCPServersMap,
 	normalizeProxyBaseUrl,
 	type OpenCodeProviderData,
@@ -49,6 +50,47 @@ export type {
 
 import { vscode } from '../utils/vscode';
 import { handleSettingsData } from './settingsUtils';
+
+type PersistedSelectionState = {
+	selectedModel?: string;
+	modelVariants?: Record<string, string | undefined>;
+};
+
+function readPersistedSelectionState(): PersistedSelectionState {
+	const raw = vscode.getState();
+	if (!raw || typeof raw !== 'object') return {};
+	const state = raw as {
+		selectedModel?: unknown;
+		modelVariants?: unknown;
+	};
+	let modelVariants: Record<string, string | undefined> | undefined;
+	if (
+		state.modelVariants &&
+		typeof state.modelVariants === 'object' &&
+		!Array.isArray(state.modelVariants)
+	) {
+		modelVariants = Object.fromEntries(
+			Object.entries(state.modelVariants as Record<string, unknown>).filter(
+				([, value]) => typeof value === 'string' || value === undefined,
+			),
+		) as Record<string, string | undefined>;
+	}
+	return {
+		selectedModel: typeof state.selectedModel === 'string' ? state.selectedModel : undefined,
+		modelVariants,
+	};
+}
+
+function writePersistedSelectionState(input: PersistedSelectionState): void {
+	const current = vscode.getState();
+	const next =
+		current && typeof current === 'object' ? { ...(current as Record<string, unknown>) } : {};
+	if (input.selectedModel !== undefined) next.selectedModel = input.selectedModel;
+	if (input.modelVariants !== undefined) next.modelVariants = input.modelVariants;
+	vscode.setState(next);
+}
+
+const persistedSelection = readPersistedSelectionState();
 
 // Extracted helpers to reduce cognitive complexity of handleExtensionMessage
 
@@ -153,12 +195,14 @@ export interface ProxyEndpointState {
 	apiKey: string;
 	enabledModels: string[];
 	headers?: Record<string, string>;
+	modelVariants?: Record<string, string[]>;
 	models: Array<{
 		id: string;
 		name: string;
 		contextLength?: number;
 		maxCompletionTokens?: number;
 		capabilities?: { reasoning?: boolean; vision?: boolean; tools?: boolean };
+		variants?: string[];
 	}>;
 	testStatus: {
 		isLoading: boolean;
@@ -189,6 +233,7 @@ export interface SettingsActions {
 	setMcpInstalledMetadata: (
 		metadata: Record<string, import('../../common').InstalledMcpServerMetadata>,
 	) => void;
+	setLspStatus: (items: LspStatusData[]) => void;
 	setAccess: (access: Access[]) => void;
 	setCLIDiagnostics: (diagnostics: Partial<CLIDiagnostics>) => void;
 	setOpenCodeProviders: (providers: OpenCodeProviderData[]) => void;
@@ -336,6 +381,7 @@ export interface SettingsState {
 		}
 	>;
 	mcpInstalledMetadata: Record<string, import('../../common').InstalledMcpServerMetadata>;
+	lspStatus: LspStatusData[];
 
 	// Commands
 	commands: {
@@ -366,6 +412,8 @@ export interface SettingsState {
 			id: string;
 			mode?: string;
 			description?: string;
+			model?: string;
+			variant?: string;
 			builtIn?: boolean;
 			hidden?: boolean;
 		}>;
@@ -476,13 +524,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 		isWindows: false,
 	},
 
-	selectedModel: 'default',
-	modelVariants: {},
+	selectedModel: persistedSelection.selectedModel ?? 'default',
+	modelVariants: persistedSelection.modelVariants ?? {},
 	proxyEndpoints: [],
 
 	mcpServers: {},
 	mcpStatus: {},
 	mcpInstalledMetadata: {},
+	lspStatus: [],
 
 	commands: {
 		builtin: [],
@@ -549,12 +598,22 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
 	actions: {
 		setSettings: settings => set(state => ({ ...state, ...settings })),
-		setSelectedModel: selectedModel => set({ selectedModel }),
+		setSelectedModel: selectedModel => {
+			writePersistedSelectionState({
+				selectedModel,
+				modelVariants: get().modelVariants,
+			});
+			set({ selectedModel });
+		},
 		setModelVariant: (modelId, variant) =>
 			set(state => {
 				const next = { ...state.modelVariants };
 				if (variant) next[modelId] = variant;
 				else delete next[modelId];
+				writePersistedSelectionState({
+					selectedModel: state.selectedModel,
+					modelVariants: next,
+				});
 				return { modelVariants: next };
 			}),
 		getModelVariant: modelId => {
@@ -654,6 +713,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 		setMcpServers: mcpServers => set({ mcpServers }),
 		setMcpStatus: mcpStatus => set(state => ({ mcpStatus: { ...state.mcpStatus, ...mcpStatus } })),
 		setMcpInstalledMetadata: mcpInstalledMetadata => set({ mcpInstalledMetadata }),
+		setLspStatus: lspStatus => set({ lspStatus }),
 		setAccess: access => set({ access }),
 		setCLIDiagnostics: diagnostics =>
 			set(state => ({
@@ -912,6 +972,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 							version: status.version ?? undefined,
 							error: status.error,
 						});
+					}
+					break;
+
+				case 'lspStatus':
+					if (message.data) {
+						actions.setLspStatus((message.data as { items?: LspStatusData[] }).items ?? []);
 					}
 					break;
 

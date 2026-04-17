@@ -1,8 +1,10 @@
 import * as vscode from 'vscode';
 import {
 	extractCanonicalTaskResult,
+	formatModelId,
 	mapPermissionRuntimePayloadToRequest,
 	mapQuestionRuntimePayloadToRequest,
+	remapLspDiagnosticsToFilePaths,
 } from '../common';
 import { PERMISSION_CATEGORIES, type PermissionCategory } from '../common/permissions';
 import type { WebviewCommand } from '../common/protocol';
@@ -103,6 +105,34 @@ function extractFilePath(input: Record<string, unknown>): string | undefined {
 	return undefined;
 }
 
+function collectChangedFilePaths(
+	toolName: string,
+	toolInput: Record<string, unknown>,
+	metadata: Record<string, unknown> | undefined,
+): string[] {
+	const filePath = extractFilePath(toolInput);
+	if (filePath && isFileEditTool(toolName)) return [filePath];
+	if (resolveToolName(toolName) !== 'apply_patch') return [];
+
+	const metaFiles = metadata?.files;
+	if (Array.isArray(metaFiles) && metaFiles.length > 0) {
+		return metaFiles
+			.map(file => {
+				const item = file as Record<string, unknown>;
+				return typeof item.filePath === 'string'
+					? item.filePath
+					: typeof item.relativePath === 'string'
+						? item.relativePath
+						: typeof item.path === 'string'
+							? item.path
+							: '';
+			})
+			.filter((path): path is string => path.length > 0);
+	}
+
+	return extractPatchFilePaths(toolInput);
+}
+
 export class ChatProvider implements vscode.WebviewViewProvider {
 	private view?: vscode.WebviewView;
 	private cli: OpenCodeExecutor;
@@ -131,7 +161,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private restoreHandler: RestoreHandler;
 	private utilityHandler: UtilityHandler;
 
-	private pendingSyncAll = false;
 	/** Guards against duplicate syncAll calls during startup. */
 	private hasSynced = false;
 	private readonly bridge = new OutboundBridge();
@@ -376,7 +405,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		r.register(
 			this.sessionHandler,
 			[
-				'webviewDidLaunch',
 				'createSession',
 				'switchSession',
 				'closeSession',
@@ -483,11 +511,17 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		// Orchestration
 		r.register(
 			{
-				handleMessage: async () => {
+				handleMessage: async (msg: WebviewCommand) => {
+					if (msg.type === 'webviewDidLaunch') {
+						await this.sendInitialState();
+						await this.syncAllOrDefer('webview-launch');
+						await this.sessionHandler.handleMessage(msg);
+						return;
+					}
 					await this.syncAllOrDefer('webview-syncAll');
 				},
 			},
-			['syncAll'],
+			['webviewDidLaunch', 'syncAll'],
 			'orchestration',
 		);
 
@@ -516,7 +550,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		// When called from OpenCode startup, webview might not be ready yet.
 		if (!this.view) {
 			logger.info('[ChatProvider] syncAll deferred: webview not ready', { source });
-			this.pendingSyncAll = true;
 			return;
 		}
 		// If the server isn't ready yet, defer — provider/model fetches would return
@@ -524,7 +557,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		const serverReady = !!this.cli.getOpenCodeServerInfo()?.baseUrl;
 		if (!serverReady) {
 			logger.info('[ChatProvider] syncAll deferred: server not ready', { source });
-			this.pendingSyncAll = true;
 			return;
 		}
 		// Prevent duplicate syncAll during startup (opencode-start vs webview-syncAll race).
@@ -536,7 +568,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		}
 		this.hasSynced = true;
 		logger.info('[ChatProvider] syncAll started', { source });
-		this.pendingSyncAll = false;
 		await this.syncAll();
 		logger.info('[ChatProvider] syncAll finished', { source });
 	}
@@ -560,6 +591,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			this.providerHandler.handleMessage({ type: 'reloadAllProviders' }),
 			this.toolHandler.handleMessage({ type: 'checkDiscoveryStatus' }),
 			this.settingsHandler.handleMessage({ type: 'getRules' }),
+			this.refreshLspStatus(),
 		];
 
 		const results = await Promise.allSettled(requests);
@@ -648,18 +680,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		// Reset sync flag so full state is re-sent when webview is re-created
 		this.hasSynced = false;
 
-		this.sendInitialState();
-		this.bridge.data('accessData', []);
-
-		// Sync when webview is (re-)created, but ONLY if the server is actually ready.
-		// If the server hasn't started yet, doStartOpenCode will call syncAllOrDefer
-		// once it's up — and at that point this.view will exist, so it will proceed.
-		const serverReady = !!this.cli.getOpenCodeServerInfo()?.baseUrl;
-		if (this.pendingSyncAll || serverReady) {
-			void this.syncAllOrDefer(
-				this.pendingSyncAll ? 'deferred-after-view-ready' : 'webview-recreated',
-			);
-		}
+		// Initial state is sent only after the webview handshake (`webviewDidLaunch`).
+		// This avoids racing the first postMessage against the webview listener setup.
 	}
 
 	private async handleWebviewMessage(msg: WebviewCommand): Promise<void> {
@@ -702,6 +724,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private handleCliEvent(event: CLIEvent): void {
 		const now = Date.now();
 		this.traceCliEvent(event);
+
+		if (event.type === 'lsp_updated') {
+			void this.refreshLspStatus();
+			return;
+		}
 
 		if (event.type === 'session_updated') {
 			this.handleSessionUpdatedCliEvent(event);
@@ -990,9 +1017,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 			case 'error': {
 				// Suppress abort errors when the user explicitly stopped the session.
-				// The backend emits a session.error ("The operation was aborted") after
-				// we call abortSession(), but the user already sees "Stopped by user"
-				// via the 'interrupted' message — showing the abort error is redundant.
+				// The backend may still emit a late abort error after stop; showing it
+				// would replace the expected idle/stopped state with noise.
 				const errorMsg = event.data.message || '';
 				if (this.sessionState.isStopGuarded(targetSessionId) && /abort/i.test(errorMsg)) {
 					break;
@@ -1126,15 +1152,18 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		updatedSessionId: string,
 		record: Record<string, unknown> | undefined,
 	): void {
-		const modelID = record && typeof record.modelID === 'string' ? record.modelID : undefined;
-		if (!modelID) return;
+		const childModelId = formatModelId(
+			record && typeof record.providerID === 'string' ? record.providerID : undefined,
+			record && typeof record.modelID === 'string' ? record.modelID : undefined,
+		);
+		if (!childModelId) return;
 		const routing = this.subtaskManager.resolveRouting(updatedSessionId);
 		if (!routing) return;
 		this.bridge.emit(routing.parentSessionId, 'subtask', {
 			subtask: {
 				id: routing.toolUseId,
 				...(routing.parentMessageId ? { messageID: routing.parentMessageId } : {}),
-				childModelId: modelID,
+				childModelId,
 				timestamp: new Date().toISOString(),
 				agent: 'subagent',
 				prompt: '',
@@ -1142,6 +1171,21 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				status: 'running',
 			},
 		});
+	}
+
+	private getMetadataModelId(metadata: Record<string, unknown> | undefined): string | undefined {
+		const metadataModel =
+			metadata?.model && typeof metadata.model === 'object'
+				? (metadata.model as Record<string, unknown>)
+				: undefined;
+		return formatModelId(
+			metadataModel && typeof metadataModel.providerID === 'string'
+				? metadataModel.providerID
+				: undefined,
+			metadataModel && typeof metadataModel.modelID === 'string'
+				? metadataModel.modelID
+				: undefined,
+		);
 	}
 
 	private handlePermissionRuntimeEvent(event: CLIEvent, targetSessionId: string): void {
@@ -1242,14 +1286,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			const input = (e.input as Record<string, unknown>) || {};
 			const metadata = (e.metadata as Record<string, unknown> | undefined) ?? undefined;
 			const knownChildSessionId = ChatProvider.safeString(metadata?.sessionId);
-			const metadataModel =
-				metadata?.model && typeof metadata.model === 'object'
-					? (metadata.model as Record<string, unknown>)
-					: undefined;
-			const metadataModelId =
-				metadataModel && typeof metadataModel.modelID === 'string'
-					? metadataModel.modelID
-					: undefined;
+			const metadataModelId = this.getMetadataModelId(metadata);
 
 			const emitTaskPart = (status: 'pending' | 'running' | 'completed' | 'error') => {
 				this.bridge.emit(parentSessionId, 'message_part', {
@@ -1405,14 +1442,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					: undefined;
 			const taskInput =
 				e.input && typeof e.input === 'object' ? (e.input as Record<string, unknown>) : undefined;
-			const metadataModel =
-				metadata?.model && typeof metadata.model === 'object'
-					? (metadata.model as Record<string, unknown>)
-					: undefined;
-			const metadataModelId =
-				metadataModel && typeof metadataModel.modelID === 'string'
-					? metadataModel.modelID
-					: undefined;
+			const metadataModelId = this.getMetadataModelId(metadata);
 			const content =
 				typeof e.content === 'string'
 					? extractCanonicalTaskResult(e.content as string)
@@ -1563,6 +1593,20 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		if (!isChildSession) {
 			const messageId = typeof e.messageID === 'string' ? e.messageID : toolUseId;
 			const partId = typeof e.partId === 'string' ? e.partId : toolUseId;
+			const metadata =
+				e.metadata && typeof e.metadata === 'object'
+					? remapLspDiagnosticsToFilePaths(
+							e.metadata as Record<string, unknown>,
+							toolInputRaw && typeof toolInputRaw === 'object'
+								? collectChangedFilePaths(
+										toolName,
+										toolInputRaw as Record<string, unknown>,
+										e.metadata as Record<string, unknown>,
+									)
+								: [],
+							this.settings.getWorkspaceRoot(),
+						)
+					: undefined;
 			this.bridge.emit(targetSessionId, 'message_part', {
 				part: {
 					id: partId,
@@ -1575,7 +1619,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 						status: e.is_error ? 'error' : 'completed',
 						...(typeof e.content === 'string' ? { output: e.content as string } : {}),
 						...(typeof e.title === 'string' ? { title: e.title } : {}),
-						...(e.metadata && typeof e.metadata === 'object' ? { metadata: e.metadata } : {}),
+						...(metadata ? { metadata } : {}),
 						...(e.input ? { input: e.input } : {}),
 					},
 					normalizedEntry: event.normalizedEntry,
@@ -1601,15 +1645,31 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		void this.settingsHandler.handleMessage({ type: 'getSettings' });
 	}
 
-	private sendInitialState(): void {
+	private async sendInitialState(): Promise<void> {
 		// Delegate to settingsHandler so opencode.json endpoints are merged.
-		void this.settingsHandler.handleMessage({ type: 'getSettings' });
+		await this.settingsHandler.handleMessage({ type: 'getSettings' });
 		this.bridge.data(
 			'accessData',
 			Object.entries(this.toolHandler.getAlwaysAllowByTool())
 				.filter(([, allow]) => allow)
 				.map(([toolName]) => ({ toolName, allowAll: true })),
 		);
+	}
+
+	private async refreshLspStatus(): Promise<void> {
+		try {
+			const client = this.cli.getSdkClient();
+			if (!client) {
+				this.bridge.data('lspStatus', { items: [] });
+				return;
+			}
+
+			const items = await this.services.openCodeClient.getLspStatus(client);
+			this.bridge.data('lspStatus', { items });
+		} catch (error) {
+			logger.warn('[ChatProvider] Failed to refresh LSP status:', error);
+			this.bridge.data('lspStatus', { items: [] });
+		}
 	}
 
 	/** Notify webview of the current server URL so it can establish SSE health polling. */

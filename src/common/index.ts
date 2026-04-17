@@ -10,6 +10,7 @@ export * from './normalizedTypes';
 export type {
 	CommandOf,
 	ExtensionMessage,
+	LspStatusData,
 	PermissionPolicies,
 	QuestionAnswer,
 	SessionAccessPayload,

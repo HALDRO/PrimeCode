@@ -23,6 +23,7 @@ export interface ModelsDevModelInfo {
 	tool_call?: boolean;
 	attachment?: boolean;
 	temperature?: boolean;
+	variants?: string[];
 	modalities?: {
 		input?: string[];
 		output?: string[];
@@ -41,6 +42,7 @@ interface ModelsDevProvider {
 			tool_call?: boolean;
 			attachment?: boolean;
 			temperature?: boolean;
+			variants?: Record<string, unknown>;
 			limit?: { context?: number; output?: number; input?: number };
 			modalities?: { input?: string[]; output?: string[] };
 		}
@@ -157,6 +159,7 @@ export class ModelsDevService implements vscode.Disposable {
 					tool_call: model.tool_call,
 					attachment: model.attachment,
 					temperature: model.temperature,
+					variants: model.variants ? Object.keys(model.variants) : undefined,
 					modalities: model.modalities,
 				};
 				ids.add(id);

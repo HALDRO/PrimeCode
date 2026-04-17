@@ -1,3 +1,5 @@
+import { pathsReferToSameFile } from '../utils/path';
+
 /**
  * @file Normalized Event Types
  * @description Pure type definitions for normalized log entries.
@@ -95,6 +97,63 @@ export interface LspDiagnostic {
 
 /** Map of file path → diagnostics array */
 export type LspDiagnosticsByFile = Record<string, LspDiagnostic[]>;
+
+export function extractLspDiagnostics(
+	metadata: Record<string, unknown> | undefined,
+): LspDiagnosticsByFile | undefined {
+	if (!metadata) return undefined;
+	const raw = metadata.diagnostics;
+	if (!raw || typeof raw !== 'object') return undefined;
+
+	const result: LspDiagnosticsByFile = {};
+	for (const [filePath, diags] of Object.entries(raw as Record<string, unknown>)) {
+		if (!Array.isArray(diags)) continue;
+		const valid = diags.filter(
+			(d): d is LspDiagnostic => d && typeof d === 'object' && 'message' in d && 'range' in d,
+		);
+		const errors = valid.filter(d => !d.severity || d.severity === 1);
+		if (errors.length > 0) result[filePath] = errors;
+	}
+
+	return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function findDiagnosticMatch(
+	diagnostics: LspDiagnosticsByFile,
+	filePath: string,
+	workspaceRoot?: string,
+): LspDiagnostic[] | undefined {
+	for (const [diagnosticPath, items] of Object.entries(diagnostics)) {
+		if (pathsReferToSameFile(diagnosticPath, filePath, workspaceRoot)) {
+			return items;
+		}
+	}
+
+	return undefined;
+}
+
+export function remapLspDiagnosticsToFilePaths(
+	metadata: Record<string, unknown> | undefined,
+	filePaths: string[],
+	workspaceRoot?: string,
+): Record<string, unknown> | undefined {
+	const diagnostics = extractLspDiagnostics(metadata);
+	if (!metadata || !diagnostics || filePaths.length === 0) return metadata;
+
+	const remapped: LspDiagnosticsByFile = {};
+	for (const filePath of filePaths) {
+		const match = findDiagnosticMatch(diagnostics, filePath, workspaceRoot);
+		if (match && match.length > 0) {
+			remapped[filePath] = match;
+		}
+	}
+
+	if (Object.keys(remapped).length === 0) return metadata;
+	return {
+		...metadata,
+		diagnostics: remapped,
+	};
+}
 
 // ---------------------------------------------------------------------------
 // ApplyPatch (multi-file patch tool used by GPT models)

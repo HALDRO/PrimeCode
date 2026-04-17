@@ -16,6 +16,7 @@ import {
 
 interface OpenCodeModelConfig {
 	name: string;
+	variants?: Record<string, unknown>;
 	modalities?: {
 		input: string[];
 		output: string[];
@@ -69,6 +70,7 @@ export interface EnrichedProxyModel {
 	contextLength?: number;
 	maxCompletionTokens?: number;
 	capabilities?: { reasoning?: boolean; vision?: boolean; tools?: boolean };
+	variants?: string[];
 }
 
 export interface ProjectProxyProviderConfig {
@@ -77,6 +79,13 @@ export interface ProjectProxyProviderConfig {
 	baseUrl: string;
 	apiKey: string;
 	models: EnrichedProxyModel[];
+}
+
+export interface LspStatusItem {
+	id: string;
+	name: string;
+	root: string;
+	status: 'connected' | 'error';
 }
 
 interface OpenCodeProviderModel {
@@ -238,6 +247,27 @@ export class OpenCodeClientService {
 		});
 	}
 
+	async getLspStatus(client: OpencodeClient): Promise<LspStatusItem[]> {
+		const lspClient = (client as unknown as Record<string, unknown>).lsp as
+			| { status?: () => Promise<{ data?: unknown }> }
+			| undefined;
+		if (!lspClient?.status) return [];
+
+		const result = await lspClient.status();
+		if (!Array.isArray(result.data)) return [];
+
+		return result.data.flatMap(value => {
+			if (!value || typeof value !== 'object') return [];
+			const item = value as Record<string, unknown>;
+			const id = typeof item.id === 'string' ? item.id : null;
+			const name = typeof item.name === 'string' ? item.name : id;
+			const root = typeof item.root === 'string' ? item.root : '';
+			const status = item.status === 'connected' || item.status === 'error' ? item.status : null;
+			if (!id || !name || !status) return [];
+			return [{ id, name, root, status } satisfies LspStatusItem];
+		});
+	}
+
 	async getAvailableProviders(client: OpencodeClient): Promise<AvailableProvider[]> {
 		const { data } = await client.provider.list();
 		if (!data) return [];
@@ -279,6 +309,7 @@ export class OpenCodeClientService {
 			name: model.name || id,
 			contextLength: model.limit?.context,
 			maxCompletionTokens: model.limit?.output,
+			variants: model.variants ? Object.keys(model.variants) : undefined,
 			capabilities: {
 				reasoning: model.reasoning,
 				vision: model.modalities?.input?.includes('image'),
@@ -316,6 +347,7 @@ export class OpenCodeClientService {
 				name: model.name || id,
 				contextLength: model.limit?.context,
 				maxCompletionTokens: model.limit?.output,
+				variants: model.variants ? Object.keys(model.variants) : undefined,
 				capabilities: {
 					reasoning: model.reasoning,
 					vision: model.modalities?.input?.includes('image'),
@@ -388,6 +420,9 @@ export class OpenCodeClientService {
 			}
 			if (m.capabilities?.tools !== undefined) {
 				config.tool_call = m.capabilities.tools;
+			}
+			if (m.variants && m.variants.length > 0) {
+				config.variants = Object.fromEntries(m.variants.map(variant => [variant, {}]));
 			}
 			modelsRecord[m.id] = config;
 		}

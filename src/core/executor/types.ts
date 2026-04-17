@@ -188,6 +188,8 @@ export interface SessionDiffEventData {
 	diff: SessionDiffFileDiff[];
 }
 
+export type LspUpdatedEventData = Record<string, never>;
+
 export interface MessageRecordEventData {
 	id: string;
 	sessionID: string;
@@ -298,7 +300,8 @@ export type CLIEvent =
 	| (CLIEventBase & { type: 'message_part'; data: MessagePartEventData })
 	| (CLIEventBase & { type: 'message_part_delta'; data: MessagePartDeltaEventData })
 	| (CLIEventBase & { type: 'message_part_removed'; data: MessagePartRemovedEventData })
-	| (CLIEventBase & { type: 'session_diff'; data: SessionDiffEventData });
+	| (CLIEventBase & { type: 'session_diff'; data: SessionDiffEventData })
+	| (CLIEventBase & { type: 'lsp_updated'; data: LspUpdatedEventData });
 
 export interface CLIExecutor extends EventEmitter {
 	ensureServer(config: CLIConfig): Promise<void>;

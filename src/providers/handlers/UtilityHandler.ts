@@ -10,6 +10,7 @@ import * as vscode from 'vscode';
 import type { WebviewCommand } from '../../common/protocol';
 import { getWorkspacePath, searchWorkspaceFiles } from '../../services/fileSearch';
 import { logger } from '../../utils/logger';
+import { normalizeComparablePath } from '../../utils/path';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
 const GITHUB_REPO = 'HALDRO/PrimeCode';
@@ -117,8 +118,8 @@ export class UtilityHandler implements WebviewMessageHandler {
 	private isPathWithinWorkspace(filePath: string): boolean {
 		const root = vscode.workspace.workspaceFolders?.[0]?.uri;
 		if (!root) return false;
-		const rootNorm = root.fsPath.replace(/\\/g, '/').toLowerCase();
-		const fileNorm = vscode.Uri.file(filePath).fsPath.replace(/\\/g, '/').toLowerCase();
+		const rootNorm = normalizeComparablePath(root.fsPath);
+		const fileNorm = normalizeComparablePath(vscode.Uri.file(filePath).fsPath);
 		// Ensure trailing separator so "/project-evil" doesn't match "/project"
 		return fileNorm === rootNorm || fileNorm.startsWith(`${rootNorm}/`);
 	}

@@ -76,6 +76,20 @@ export const parseModelId = (
 };
 
 /**
+ * Builds a canonical composite model ID from provider/model parts.
+ * Returns undefined when either side is missing.
+ */
+export const formatModelId = (
+	providerId: string | undefined,
+	modelId: string | undefined,
+): string | undefined => {
+	const normalizedProvider = providerId?.trim();
+	const normalizedModel = modelId?.trim();
+	if (!normalizedProvider || !normalizedModel) return undefined;
+	return `${normalizedProvider}/${normalizedModel}`;
+};
+
+/**
  * Resolves a composite model ID to its display name by looking up providers and proxy models.
  * Returns model.name if found, otherwise falls back to the modelId part, or the raw ID.
  *
@@ -102,8 +116,14 @@ export const resolveModelDisplayName = (
 		return compositeId;
 	}
 
-	// Check proxy models for proxy/oai provider prefixes
-	if (proxyModels && (parsed.providerId === 'proxy' || parsed.providerId === 'oai')) {
+	// Check proxy models for OpenAI-compatible provider prefixes, including
+	// project-scoped proxy endpoint IDs like "oai-<endpointId>".
+	if (
+		proxyModels &&
+		(parsed.providerId === 'proxy' ||
+			parsed.providerId === 'oai' ||
+			isProxyEndpointProviderId(parsed.providerId))
+	) {
 		const pm = proxyModels.find(m => m.id === parsed.modelId);
 		if (pm) return pm.name;
 	}

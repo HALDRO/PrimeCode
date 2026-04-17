@@ -52,6 +52,12 @@ export const handleSettingsData = (
 						!Array.isArray(endpoint.headers)
 							? (endpoint.headers as Record<string, string>)
 							: undefined,
+					modelVariants:
+						endpoint.modelVariants &&
+						typeof endpoint.modelVariants === 'object' &&
+						!Array.isArray(endpoint.modelVariants)
+							? (endpoint.modelVariants as Record<string, string[]>)
+							: undefined,
 					models: current?.models ?? [],
 					testStatus: current?.testStatus ?? {
 						isLoading: false,

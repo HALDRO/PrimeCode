@@ -3,6 +3,7 @@ import {
 	getProxyEndpointProviderId,
 	normalizeProxyBaseUrl,
 	type OpenCodeProviderData,
+	parseModelId,
 } from '../../common';
 import type { CommandOf, WebviewCommand } from '../../common/protocol';
 import type { EnrichedProxyModel } from '../../services/OpenCodeClientService';
@@ -28,11 +29,13 @@ export class ProviderHandler implements WebviewMessageHandler {
 	private async readSelectedModel(): Promise<string | undefined> {
 		const key = this.getSelectedModelKey();
 		const fromWorkspace = this.context.extensionContext.workspaceState.get<string>(key);
-		if (fromWorkspace) return fromWorkspace;
+		if (fromWorkspace) {
+			return parseModelId(fromWorkspace) ? fromWorkspace : undefined;
+		}
 
 		// Migration: copy from globalState → workspaceState (one-time per workspace)
 		const fromGlobal = this.context.extensionContext.globalState.get<string>(key);
-		if (fromGlobal) {
+		if (fromGlobal && parseModelId(fromGlobal)) {
 			await this.context.extensionContext.workspaceState.update(key, fromGlobal);
 			return fromGlobal;
 		}
@@ -249,7 +252,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 
 	private async onSetOpenCodeModel(msg: CommandOf<'setOpenCodeModel'>): Promise<void> {
 		const { model } = msg;
-		if (model) {
+		if (model && parseModelId(model)) {
 			await this.context.extensionContext.workspaceState.update(this.getSelectedModelKey(), model);
 			this.context.bridge.data('openCodeModelSet', { model });
 		}
@@ -257,7 +260,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 
 	private async onSelectModel(msg: CommandOf<'selectModel'>): Promise<void> {
 		const { model } = msg;
-		if (model) {
+		if (model && parseModelId(model)) {
 			await this.context.extensionContext.workspaceState.update(this.getSelectedModelKey(), model);
 			this.context.bridge.send({ type: 'modelSelected', model });
 		}
@@ -361,6 +364,10 @@ export class ProviderHandler implements WebviewMessageHandler {
 						maxCompletionTokens: toPositiveInt(
 							item.max_completion_tokens ?? item.max_output_tokens ?? item.max_tokens,
 						),
+						variants:
+							item.variants && typeof item.variants === 'object' && !Array.isArray(item.variants)
+								? Object.keys(item.variants as Record<string, unknown>)
+								: undefined,
 					};
 				})
 				.filter(m => m.id.length > 0);
@@ -470,6 +477,9 @@ export class ProviderHandler implements WebviewMessageHandler {
 						if (!model.contextLength && devInfo.context) model.contextLength = devInfo.context;
 						if (!model.maxCompletionTokens && devInfo.output)
 							model.maxCompletionTokens = devInfo.output;
+						if (!model.variants && devInfo.variants && devInfo.variants.length > 0) {
+							model.variants = [...devInfo.variants];
+						}
 						if (!model.capabilities) {
 							model.capabilities = {
 								reasoning: devInfo.reasoning,
@@ -533,6 +543,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 			name: string;
 			contextLength?: number;
 			maxCompletionTokens?: number;
+			variants?: string[];
 		}>,
 	): Promise<EnrichedProxyModel[]> {
 		const idsToLookup = models.map(m => m.id);
@@ -548,6 +559,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 				name: m.name,
 				contextLength: m.contextLength ?? dev?.context,
 				maxCompletionTokens: m.maxCompletionTokens ?? dev?.output,
+				variants: m.variants ?? dev?.variants,
 			};
 			if (dev) {
 				enriched.capabilities = {

@@ -9,6 +9,11 @@ import { useCallback, useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { extractCanonicalTaskResult, parseModelId } from '../../common';
 import {
+	getAvailableModelVariants,
+	getConfiguredAgentVariant,
+	resolveEffectiveVariant,
+} from '../lib/modelVariants';
+import {
 	type ChangedFile,
 	type ChatSession,
 	type ChatState,
@@ -887,10 +892,25 @@ export const useSessionAgent = () =>
 /** Reactive selector for the effective model's thinking effort variant. */
 export const useSessionVariant = () => {
 	const activeSessionModel = useChatStore((state: ChatState) => getActiveSession(state)?.model);
+	const activeSessionAgent = useChatStore((state: ChatState) => getActiveSession(state)?.agent);
 	return useSettingsStore((state: SettingsState) => {
 		const effectiveModel = activeSessionModel ?? state.selectedModel;
 		if (!effectiveModel || effectiveModel === 'default') return undefined;
-		return state.modelVariants[effectiveModel];
+		const variants = getAvailableModelVariants(
+			state.opencodeProviders,
+			effectiveModel,
+			state.proxyEndpoints,
+		);
+		const selected = state.modelVariants[effectiveModel];
+		const agentId = activeSessionAgent ?? 'build';
+		const configured = getConfiguredAgentVariant({
+			agent:
+				state.agents.items.find(agent => agent.id === agentId) ??
+				state.subagents.items.find(agent => agent.name === agentId),
+			effectiveModel,
+			variants,
+		});
+		return resolveEffectiveVariant({ variants, selected, configured });
 	});
 };
 

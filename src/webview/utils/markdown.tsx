@@ -1,19 +1,11 @@
 /**
  * @file Markdown renderer with syntax highlighting
  * @description Unified design system with minimal, consistent tokens.
- *              Contains optimized StreamableNode for flicker-free word animations.
+ *              Contains optimized StreamableNode for suffix-only stream animations.
  */
 
 import hljs from 'highlight.js';
-import React, {
-	createContext,
-	useCallback,
-	useContext,
-	useEffect,
-	useMemo,
-	useRef,
-	useState,
-} from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { Components } from 'react-markdown';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -43,16 +35,16 @@ interface MarkdownProps {
 }
 
 // ----------------------------------------------------------------------
-// Streaming Context — tracks which words have already been animated
-// so remounted spans get opacity:1 immediately (no flash)
+// Streaming Context — exposes only the newly appended suffix boundary
+// so remounted older markdown nodes do not animate again.
 // ----------------------------------------------------------------------
 
 const StreamingContext = createContext<{
 	isStreaming: boolean;
-	animatedWords: Set<string>;
+	animateFromOffset: number;
 }>({
 	isStreaming: false,
-	animatedWords: new Set(),
+	animateFromOffset: Number.POSITIVE_INFINITY,
 });
 
 // ----------------------------------------------------------------------
@@ -172,15 +164,10 @@ const renderInlineReferences = (text: string): React.ReactNode[] => {
 // Universal Streamable Node — word animations preserved
 // ----------------------------------------------------------------------
 
-const handleAnimationEnd = (e: React.AnimationEvent<HTMLSpanElement>) => {
-	e.currentTarget.classList.remove('stream-word-new');
-};
-
 const renderTextContent = (
 	content: string,
 	isStreaming: boolean,
-	prefixKey: string,
-	animatedWords: Set<string>,
+	animateFromOffset: number,
 	renderInlineReferencesEnabled = true,
 ) => {
 	const linked = renderInlineReferencesEnabled ? renderInlineReferences(content) : [content];
@@ -193,25 +180,21 @@ const renderTextContent = (
 			const words = part.split(/(\s+)/);
 			let charOffset = currentPartOffset;
 			return words.map(word => {
-				const offset = charOffset;
+				const startOffset = charOffset;
 				charOffset += word.length;
+				const endOffset = charOffset;
 				if (word.trim().length === 0) return word;
 
-				const wordKey = `${prefixKey}-${offset}`;
+				const wordKey = `w-${startOffset}-${word.length}`;
 
 				if (!isStreaming) {
-					return <span key={`w-${wordKey}`}>{word}</span>;
+					return <span key={wordKey}>{word}</span>;
 				}
 
-				const isNew = !animatedWords.has(wordKey);
-				if (isNew) animatedWords.add(wordKey);
+				const isNew = endOffset > animateFromOffset;
 
 				return (
-					<span
-						key={`w-${wordKey}`}
-						className={isNew ? 'stream-word stream-word-new' : 'stream-word'}
-						onAnimationEnd={isNew ? handleAnimationEnd : undefined}
-					>
+					<span key={wordKey} className={isNew ? 'stream-word stream-word-new' : 'stream-word'}>
 						{word}
 					</span>
 				);
@@ -234,19 +217,11 @@ const StreamableNode: React.FC<{
 	index?: number;
 	renderInlineReferencesEnabled?: boolean;
 }> = ({ node, index = 0, renderInlineReferencesEnabled = true }) => {
-	const { isStreaming, animatedWords } = useContext(StreamingContext);
+	const { isStreaming, animateFromOffset } = useContext(StreamingContext);
 
 	if (typeof node === 'string') {
 		return (
-			<>
-				{renderTextContent(
-					node,
-					isStreaming,
-					String(index),
-					animatedWords,
-					renderInlineReferencesEnabled,
-				)}
-			</>
+			<>{renderTextContent(node, isStreaming, animateFromOffset, renderInlineReferencesEnabled)}</>
 		);
 	}
 	if (Array.isArray(node)) {
@@ -552,127 +527,18 @@ const components: Components = {
 	),
 };
 
-// ----------------------------------------------------------------------
-// Streaming throttle
-// ----------------------------------------------------------------------
-const BUFFER_CHARS = 40;
-const MIN_CHARS_PER_FRAME = 2;
-const MAX_CHARS_PER_FRAME = 8;
-const RATE_WINDOW_MS = 2000;
-const STREAM_STALL_FLUSH_MS = 200;
 const COPY_FEEDBACK_MS = 2000;
 
-function useThrottledContent(
-	content: string,
-	isStreaming: boolean,
-): { text: string; isAnimating: boolean } {
-	const [visibleLen, setVisibleLen] = useState(content.length);
-	const rafRef = useRef(0);
-	const contentRef = useRef(content);
-	const visibleLenRef = useRef(content.length);
-	const samplesRef = useRef<{ time: number; len: number }[]>([]);
-
-	contentRef.current = content;
-
-	const prevStreamingRef = useRef(isStreaming);
-	useEffect(() => {
-		if (isStreaming && !prevStreamingRef.current) {
-			visibleLenRef.current = content.length;
-			setVisibleLen(content.length);
-			samplesRef.current = [];
-		}
-		prevStreamingRef.current = isStreaming;
-	}, [isStreaming, content.length]);
-
-	useEffect(() => {
-		if (!isStreaming) return;
-		const now = performance.now();
-		const samples = samplesRef.current;
-		samples.push({ time: now, len: content.length });
-		const cutoff = now - RATE_WINDOW_MS;
-		while (samples.length > 1 && samples[0].time < cutoff) {
-			samples.shift();
-		}
-	}, [content.length, isStreaming]);
-
-	const getCharsPerFrame = useCallback(() => {
-		const samples = samplesRef.current;
-		if (samples.length < 2) return MIN_CHARS_PER_FRAME;
-		const first = samples[0];
-		const last = samples[samples.length - 1];
-		const elapsed = last.time - first.time;
-		if (elapsed <= 0) return MIN_CHARS_PER_FRAME;
-		const charsArrived = last.len - first.len;
-		const charsPerMs = charsArrived / elapsed;
-		const charsPerFrame = Math.round(charsPerMs * 16 * 1.2);
-		return Math.max(MIN_CHARS_PER_FRAME, Math.min(MAX_CHARS_PER_FRAME, charsPerFrame));
-	}, []);
-
-	const snapToWordBoundary = useCallback((text: string) => {
-		const lastSpace = text.search(/\s\S*$/);
-		if (lastSpace <= 0) return text;
-		return text.slice(0, lastSpace);
-	}, []);
-
-	// Single RAF loop that runs while streaming OR while buffer hasn't caught up.
-	// When isStreaming is true, we hold back BUFFER_CHARS from the end.
-	// When isStreaming turns false, the loop keeps running without the buffer
-	// offset, naturally draining remaining words with their fade-in animation.
-	const isStreamingRef = useRef(isStreaming);
-	isStreamingRef.current = isStreaming;
-
-	useEffect(() => {
-		// Run loop while streaming OR while there's buffered content to drain
-		if (!isStreaming && visibleLenRef.current >= contentRef.current.length) return;
-
-		let lastContentLen = contentRef.current.length;
-		let stallStart = performance.now();
-
-		const tick = () => {
-			const contentLen = contentRef.current.length;
-			const now = performance.now();
-			const streaming = isStreamingRef.current;
-
-			if (contentLen !== lastContentLen) {
-				lastContentLen = contentLen;
-				stallStart = now;
-			}
-
-			// If no new chars arrive for a short time, flush the buffered tail even
-			// while the backend is still busy with a tool call.
-			const isStalled = now - stallStart > STREAM_STALL_FLUSH_MS;
-			const target = !streaming || isStalled ? contentLen : Math.max(0, contentLen - BUFFER_CHARS);
-			const current = visibleLenRef.current;
-
-			if (current < target) {
-				const step = getCharsPerFrame();
-				const next = Math.min(current + step, target);
-				visibleLenRef.current = next;
-				setVisibleLen(next);
-			}
-
-			// Keep running until we've caught up to full content after streaming ends
-			if (streaming || current < contentLen) {
-				rafRef.current = requestAnimationFrame(tick);
-			}
-		};
-
-		rafRef.current = requestAnimationFrame(tick);
-		return () => {
-			cancelAnimationFrame(rafRef.current);
-			rafRef.current = 0;
-		};
-	}, [isStreaming, getCharsPerFrame]);
-
-	// Once we've caught up, render the full text immediately. This avoids
-	// trimming the final word while the session is still marked streaming but
-	// the model has already moved on to a tool call.
-	if (visibleLenRef.current >= content.length) return { text: content, isAnimating: false };
-
-	const rawSlice = content.slice(0, Math.max(0, visibleLen));
-
-	// Word-boundary snapping so animations fire per-word
-	return { text: snapToWordBoundary(rawSlice), isAnimating: true };
+function useStreamingSuffixBoundary(content: string, isStreaming: boolean): number {
+	const previousContentRef = useRef(content);
+	const previousContent = previousContentRef.current;
+	const animateFromOffset = !isStreaming
+		? Number.POSITIVE_INFINITY
+		: content.startsWith(previousContent)
+			? previousContent.length
+			: content.length;
+	previousContentRef.current = content;
+	return animateFromOffset;
 }
 
 // ----------------------------------------------------------------------
@@ -694,27 +560,11 @@ const preprocessContent = (content: string): string => {
 
 export const Markdown: React.FC<MarkdownProps> = React.memo(
 	({ content, className, isStreaming }) => {
-		const { text: displayContent, isAnimating } = useThrottledContent(content, !!isStreaming);
-		const processedContent = React.useMemo(
-			() => preprocessContent(displayContent),
-			[displayContent],
-		);
-
-		// Persistent Set of word keys that have already been animated.
-		// Survives re-renders so remounted spans get opacity:1 immediately.
-		// Cleared when animation finishes (not when streaming ends) so buffered words still animate.
-		const animatedWordsRef = useRef(new Set<string>());
-		const prevAnimatingRef = useRef(isAnimating);
-		useEffect(() => {
-			if (!isAnimating && prevAnimatingRef.current) {
-				animatedWordsRef.current = new Set<string>();
-			}
-			prevAnimatingRef.current = isAnimating;
-		}, [isAnimating]);
-
-		const streamingCtx = React.useMemo(
-			() => ({ isStreaming: isAnimating, animatedWords: animatedWordsRef.current }),
-			[isAnimating],
+		const animateFromOffset = useStreamingSuffixBoundary(content, !!isStreaming);
+		const processedContent = useMemo(() => preprocessContent(content), [content]);
+		const streamingCtx = useMemo(
+			() => ({ isStreaming: !!isStreaming, animateFromOffset }),
+			[animateFromOffset, isStreaming],
 		);
 
 		return (

@@ -19,6 +19,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { cn } from '../../lib/cn';
 import { useChatActions, useChatStore, useHistoryDropdownState, useUIActions } from '../../store';
 import type { ChatState } from '../../store/chatStore';
+import { useSettingsStore } from '../../store/settingsStore';
 import { useUIStore } from '../../store/uiStore';
 import { proxyEventSource } from '../../utils/proxyEventSource';
 import { proxyFetch } from '../../utils/proxyFetch';
@@ -44,13 +45,20 @@ const ConnectionStatusMenu: React.FC<{
 		uptime: number | null;
 		port: number | null;
 	} | null;
+	lspStatus: Array<{
+		id: string;
+		name: string;
+		root: string;
+		status: 'connected' | 'error';
+	}>;
 	restartDisabled: boolean;
 	onClose: () => void;
 	anchorRef: React.RefObject<HTMLButtonElement | null>;
-}> = ({ serverStatus, connectionDetails, restartDisabled, onClose, anchorRef }) => {
+}> = ({ serverStatus, connectionDetails, lspStatus, restartDisabled, onClose, anchorRef }) => {
 	const { postMessage } = useVSCode();
 	const menuRef = useRef<HTMLDivElement>(null);
 	const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+	const connectedLspCount = lspStatus.filter(item => item.status === 'connected').length;
 
 	// Compute position from anchor button
 	useLayoutEffect(() => {
@@ -152,6 +160,35 @@ const ConnectionStatusMenu: React.FC<{
 						)}
 					</div>
 				)}
+				<div className="mt-2 pt-2 border-t border-(--alpha-10)">
+					<div className="flex items-center justify-between gap-3 text-[10px] text-vscode-descriptionForeground">
+						<span>LSP</span>
+						<span>
+							{lspStatus.length > 0 ? `${connectedLspCount}/${lspStatus.length} connected` : 'None'}
+						</span>
+					</div>
+					{lspStatus.length > 0 ? (
+						<div className="mt-1.5 space-y-1 max-h-28 overflow-auto">
+							{lspStatus.map(item => (
+								<div
+									key={item.id}
+									className="flex items-center gap-2 text-[10px] text-vscode-descriptionForeground"
+								>
+									<div
+										className={cn(
+											'w-1.5 h-1.5 rounded-full shrink-0',
+											item.status === 'connected' ? 'bg-green-500' : 'bg-red-500',
+										)}
+									/>
+									<div className="min-w-0 flex-1">
+										<div className="truncate text-vscode-foreground">{item.name || item.id}</div>
+										{item.root ? <div className="truncate opacity-80">{item.root}</div> : null}
+									</div>
+								</div>
+							))}
+						</div>
+					) : null}
+				</div>
 			</div>
 
 			{/* Actions */}
@@ -229,13 +266,41 @@ export const Header: React.FC = React.memo(() => {
 	const serverStatus = useUIStore(state => state.serverStatus);
 	const serverUrlVersion = useUIStore(state => state.serverUrlVersion);
 	const connectionDetails = useUIStore(state => state.connectionDetails);
+	const lspStatus = useSettingsStore(state => state.lspStatus);
 
 	const [showStatusMenu, setShowStatusMenu] = useState(false);
+	const [tabsOverflowing, setTabsOverflowing] = useState(false);
 	const statusBtnRef = useRef<HTMLButtonElement>(null);
+	const tabsScrollerRef = useRef<HTMLDivElement>(null);
 	const restartDisabled = connectionDetails?.isServerOwner === false;
 	const lastSseActivityAtRef = useRef<number>(0);
 
 	const sessions: TabInfo[] = useMemo(() => sessionOrder.map(id => ({ id })), [sessionOrder]);
+
+	useLayoutEffect(() => {
+		const scroller = tabsScrollerRef.current;
+		if (!scroller) return;
+
+		const updateOverflowState = () => {
+			setTabsOverflowing(scroller.scrollWidth - scroller.clientWidth > 1);
+		};
+
+		updateOverflowState();
+
+		const resizeObserver = new ResizeObserver(() => {
+			updateOverflowState();
+		});
+		resizeObserver.observe(scroller);
+
+		const content = scroller.firstElementChild;
+		if (content instanceof HTMLElement) {
+			resizeObserver.observe(content);
+		}
+
+		return () => {
+			resizeObserver.disconnect();
+		};
+	}, []);
 
 	// SSE is transport-only: if the stream goes stale, re-subscribe without
 	// inferring anything about server process state.
@@ -510,9 +575,11 @@ export const Header: React.FC = React.memo(() => {
 				{/* Left side - Chat Tabs (Icons only) */}
 				<div className="flex items-center h-full overflow-hidden flex-1 min-w-0">
 					<ScrollContainer
+						ref={tabsScrollerRef}
 						orientation="horizontal"
 						autoHide="scroll"
 						thumbWidth={4}
+						trackGutter={tabsOverflowing ? 8 : 0}
 						autoHideDelay={800}
 						className="h-full"
 					>
@@ -525,7 +592,12 @@ export const Header: React.FC = React.memo(() => {
 				</div>
 
 				{/* Right side - Order: Status, New (Plus), History, Settings */}
-				<div className="flex items-center gap-(--header-gap) shrink-0">
+				<div
+					className={cn(
+						'flex h-full items-center gap-(--header-gap) shrink-0 box-border',
+						tabsOverflowing && 'pb-2',
+					)}
+				>
 					{/* Connection Status Button */}
 					<div className="relative">
 						<button
@@ -554,6 +626,7 @@ export const Header: React.FC = React.memo(() => {
 							<ConnectionStatusMenu
 								serverStatus={serverStatus}
 								connectionDetails={connectionDetails}
+								lspStatus={lspStatus}
 								restartDisabled={restartDisabled}
 								onClose={handleStatusMenuClose}
 								anchorRef={statusBtnRef}

@@ -4,6 +4,8 @@
  * relative time, and tool names across all webview components.
  */
 
+import { getPathBaseName } from '../../utils/path';
+
 /**
  * Format duration in milliseconds to human-readable string
  */
@@ -118,6 +120,5 @@ export const formatCost = (cost: number): string => {
  * Extract file name from full path (cross-platform)
  */
 export const getShortFileName = (filePath: string): string => {
-	const parts = filePath.replace(/\\/g, '/').split('/');
-	return parts[parts.length - 1] || filePath;
+	return getPathBaseName(filePath);
 };

@@ -6,7 +6,11 @@
 
 import { useCallback, useEffect, useMemo } from 'react';
 import { resolveModelDisplayName } from '../../common';
-import { getAvailableModelVariants, resolveValidVariant } from '../lib/modelVariants';
+import {
+	getAvailableModelVariants,
+	getConfiguredAgentVariant,
+	resolveEffectiveVariant,
+} from '../lib/modelVariants';
 import {
 	useChatActions,
 	useDraftAgent,
@@ -17,6 +21,7 @@ import {
 	useModelSelection,
 	usePromptVersions,
 	useSessionAgent,
+	useSessionVariant,
 	useStoreInput,
 } from '../store';
 import { useSettingsStore } from '../store/settingsStore';
@@ -96,7 +101,6 @@ export function useChatInputController(
 		selectedModel,
 		proxyEndpoints,
 		opencodeProviders,
-		getModelVariant,
 		getSessionModel,
 		setSessionModel,
 		getSessionAgent,
@@ -105,15 +109,40 @@ export function useChatInputController(
 	const isImproving = useIsImprovingPrompt();
 	const currentImproveRequestId = useImprovingPromptRequestId();
 	const promptVersions = usePromptVersions();
-	const validSessionVariant = useMemo(() => {
-		const effectiveModel = getSessionModel() ?? selectedModel;
-		const variants = getAvailableModelVariants(opencodeProviders, effectiveModel);
-		return resolveValidVariant(variants, getModelVariant(effectiveModel));
-	}, [getModelVariant, getSessionModel, opencodeProviders, selectedModel]);
-
-	// Build a set of valid agent names for @mention parsing
 	const subagentItems = useSettingsStore(s => s.subagents.items);
 	const agentItems = useSettingsStore(s => s.agents.items);
+	// Use reactive selector so the button re-renders immediately when agent changes.
+	// getSessionAgent() is an imperative getter that doesn't subscribe to store updates.
+	const selectedAgent = useSessionAgent();
+	const reactiveSessionVariant = useSessionVariant();
+	const validSessionVariant = useMemo(() => {
+		const effectiveModel = getSessionModel() ?? selectedModel;
+		const variants = getAvailableModelVariants(opencodeProviders, effectiveModel, proxyEndpoints);
+		const agentId = selectedAgent ?? 'build';
+		const configured = getConfiguredAgentVariant({
+			agent:
+				agentItems.find(agent => agent.id === agentId) ??
+				subagentItems.find(agent => agent.name === agentId),
+			effectiveModel,
+			variants,
+		});
+		return resolveEffectiveVariant({
+			variants,
+			selected: reactiveSessionVariant,
+			configured,
+		});
+	}, [
+		agentItems,
+		getSessionModel,
+		opencodeProviders,
+		proxyEndpoints,
+		reactiveSessionVariant,
+		selectedAgent,
+		selectedModel,
+		subagentItems,
+	]);
+
+	// Build a set of valid agent names for @mention parsing
 	const validAgentNames = useMemo(() => {
 		const names = new Set<string>();
 		for (const sa of subagentItems) names.add(sa.name.toLowerCase());
@@ -135,9 +164,6 @@ export function useChatInputController(
 		[isControlled, controlledOnChange, updateSession],
 	);
 
-	// Use reactive selector so the button re-renders immediately when agent changes.
-	// getSessionAgent() is an imperative getter that doesn't subscribe to store updates.
-	const selectedAgent = useSessionAgent();
 	const setSelectedAgent = useCallback(
 		(a: string | undefined) => {
 			setSessionAgent(a);

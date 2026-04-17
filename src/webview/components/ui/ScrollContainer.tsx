@@ -291,6 +291,7 @@ interface ScrollContainerProps {
 	minThumbHeight?: number;
 	autoHideDelay?: number;
 	orientation?: 'vertical' | 'horizontal';
+	trackGutter?: number;
 }
 
 export const ScrollContainer = React.forwardRef<HTMLDivElement, ScrollContainerProps>(
@@ -304,10 +305,39 @@ export const ScrollContainer = React.forwardRef<HTMLDivElement, ScrollContainerP
 			minThumbHeight = 24,
 			autoHideDelay = 1200,
 			orientation = 'vertical',
+			trackGutter = 0,
 		},
 		forwardedRef,
 	) => {
 		const scrollerRef = useRef<HTMLDivElement | null>(null);
+
+		const handleHorizontalWheel = useCallback(
+			(e: React.WheelEvent<HTMLDivElement>) => {
+				if (orientation !== 'horizontal') return;
+
+				const scroller = scrollerRef.current;
+				if (!scroller) return;
+
+				const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+				if (delta === 0) return;
+
+				const maxScrollLeft = scroller.scrollWidth - scroller.clientWidth;
+				if (maxScrollLeft <= 0) return;
+
+				e.preventDefault();
+				scroller.scrollLeft = Math.max(0, Math.min(maxScrollLeft, scroller.scrollLeft + delta));
+			},
+			[orientation],
+		);
+
+		const handleMiddleMouseDown = useCallback(
+			(e: React.MouseEvent<HTMLDivElement>) => {
+				if (orientation === 'horizontal' && e.button === 1) {
+					e.preventDefault();
+				}
+			},
+			[orientation],
+		);
 
 		const handleScrollerRef = useCallback(
 			(node: HTMLDivElement | null) => {
@@ -331,11 +361,18 @@ export const ScrollContainer = React.forwardRef<HTMLDivElement, ScrollContainerP
 					'relative h-full flex-1 w-full min-h-0 flex flex-col overflow-hidden',
 					className,
 				)}
-				style={style}
+				style={{
+					boxSizing: 'border-box',
+					paddingBottom: orientation === 'horizontal' ? `${trackGutter}px` : undefined,
+					paddingRight: orientation === 'vertical' ? `${trackGutter}px` : undefined,
+					...style,
+				}}
 			>
 				<div
 					ref={handleScrollerRef}
 					className="flex-1 min-h-0"
+					onWheel={handleHorizontalWheel}
+					onMouseDown={handleMiddleMouseDown}
 					style={{
 						overflowX: orientation === 'horizontal' ? 'auto' : 'hidden',
 						overflowY: orientation === 'horizontal' ? 'hidden' : 'auto',

@@ -630,6 +630,7 @@ export interface ProxyModelData {
 	contextLength?: number;
 	maxCompletionTokens?: number;
 	capabilities?: ModelCapabilities;
+	variants?: string[];
 }
 
 export interface ProxyModelsData {
@@ -656,6 +657,13 @@ export type OpenCodeStatusMessage = BaseExtensionMessage<
 	'openCodeStatus',
 	{ installed: boolean; version: string | null; error?: string }
 >;
+export interface LspStatusData {
+	id: string;
+	name: string;
+	root: string;
+	status: 'connected' | 'error';
+}
+export type LspStatusMessage = BaseExtensionMessage<'lspStatus', { items: LspStatusData[] }>;
 export type OpenCodeProvidersMessage = BaseExtensionMessage<
 	'openCodeProviders',
 	{
@@ -821,6 +829,8 @@ export type AgentsListMessage = BaseExtensionMessage<
 			id: string;
 			mode?: string;
 			description?: string;
+			model?: string;
+			variant?: string;
 			builtIn?: boolean;
 			hidden?: boolean;
 		}>;
@@ -923,6 +933,7 @@ export type ExtensionMessage =
 	| ConfigChangedMessage
 	| ClipboardTextMessage
 	| OpenCodeStatusMessage
+	| LspStatusMessage
 	| OpenCodeProvidersMessage
 	| OpenCodeModelSetMessage
 	| OpenCodeAuthResultMessage
