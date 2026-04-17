@@ -361,7 +361,7 @@ export const Header: React.FC = React.memo(() => {
 
 			// When closing the active tab, closeSession in Zustand silently picks a new
 			// activeSessionId but never notifies the backend. Without a switchSession
-			// message the backend won't replay history for the newly-active session,
+			// message the backend won't restore the newly-active session,
 			// leaving the user with an empty chat.
 			if (isClosingActive) {
 				// Read the new activeSessionId that closeSession just set.

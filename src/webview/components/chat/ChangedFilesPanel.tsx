@@ -16,7 +16,6 @@ import {
 	type RenderMessage,
 	useChangedFilesState,
 	useChatActions,
-	useHasTodos,
 	useMcpServers,
 	useTodoState,
 } from '../../store';
@@ -353,17 +352,11 @@ FileRow.displayName = 'FileRow';
 
 export const ChangedFilesPanel: React.FC = React.memo(() => {
 	const { changedFiles, cumulativeDiffs } = useChangedFilesState();
-	const hasTodos = useHasTodos();
-	const hasCumulative = cumulativeDiffs.length > 0;
-	// When cumulative diffs are available, they are authoritative — only show panel
-	// if at least one file has non-zero stats. Before cumulative arrives, fall back
-	// to changedFiles presence so the panel appears immediately on first edit.
-	const hasFiles = hasCumulative
-		? cumulativeDiffs.some(d => d.additions > 0 || d.deletions > 0)
-		: changedFiles.length > 0;
+	// Official OpenCode treats session.diff as the authoritative review/files source.
+	// Keep changedFiles for live metadata, but do not require it for restored visibility.
+	const hasFiles = cumulativeDiffs.length > 0 || changedFiles.length > 0;
 
-	// Keep the panel visible when either file diffs or active todos exist.
-	if (!hasFiles && !hasTodos) {
+	if (!hasFiles) {
 		return null;
 	}
 
@@ -374,7 +367,6 @@ ChangedFilesPanel.displayName = 'ChangedFilesPanel';
 const ChangedFilesPanelContent: React.FC = React.memo(() => {
 	const { postMessage } = useVSCode();
 	const { changedFiles, cumulativeDiffs } = useChangedFilesState();
-	const hasTodos = useHasTodos();
 	const { clearChangedFiles, removeChangedFile } = useChatActions();
 	const { showConfirmDialog } = useUIActions();
 	const mcpServers = useMcpServers();
@@ -384,9 +376,16 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 
 	// Build a lookup map from cumulative diffs (original→current) when available
 	const cumulativeMap = useMemo(() => {
-		const map = new Map<string, { additions: number; deletions: number }>();
+		const map = new Map<
+			string,
+			{ additions: number; deletions: number; status?: 'added' | 'deleted' | 'modified' }
+		>();
 		for (const d of cumulativeDiffs) {
-			map.set(d.file, { additions: d.additions, deletions: d.deletions });
+			map.set(d.file, {
+				additions: d.additions,
+				deletions: d.deletions,
+				status: d.status,
+			});
 		}
 		return map;
 	}, [cumulativeDiffs]);
@@ -394,25 +393,34 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 	const hasCumulative = cumulativeMap.size > 0;
 
 	// Build the file list for display.
-	// When cumulativeDiffs are available (from CLI session.diff — git-level original→current),
-	// they are the single source of truth for stats. Per-edit changedFiles[] are only used
-	// to know which files were touched (for file list membership and metadata like toolUseId).
-	// This eliminates the "double count" problem where per-edit sums showed wrong numbers
-	// before the cumulative event arrived and corrected them.
+	// session.diff is authoritative for restored membership and stats; changedFiles only
+	// enriches rows with live metadata like toolUseId/timestamp when available.
 	const groupedFiles = useMemo(() => {
 		const fileMap = new Map<string, ChangedFile>();
 
-		// Start with changedFiles grouped by path (for file list + metadata)
+		for (const diff of cumulativeDiffs) {
+			fileMap.set(diff.file, {
+				filePath: diff.file,
+				fileName: diff.file.split(/[/\\]/).pop() || diff.file,
+				linesAdded: diff.additions,
+				linesRemoved: diff.deletions,
+				toolUseId: '',
+				timestamp: 0,
+			});
+		}
+
+		// Merge in changedFiles grouped by path for extra metadata and live-only rows.
 		for (const file of changedFiles) {
 			const existing = fileMap.get(file.filePath);
 			if (existing) {
 				fileMap.set(file.filePath, {
 					...existing,
-					// Don't sum per-edit stats — they'll be overridden by cumulative
-					linesAdded: existing.linesAdded + file.linesAdded,
-					linesRemoved: existing.linesRemoved + file.linesRemoved,
+					linesAdded: hasCumulative ? existing.linesAdded : existing.linesAdded + file.linesAdded,
+					linesRemoved: hasCumulative
+						? existing.linesRemoved
+						: existing.linesRemoved + file.linesRemoved,
 					timestamp: Math.max(existing.timestamp, file.timestamp),
-					toolUseId: file.toolUseId,
+					toolUseId: file.toolUseId || existing.toolUseId,
 				});
 			} else {
 				fileMap.set(file.filePath, { ...file });
@@ -420,9 +428,7 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 		}
 
 		if (hasCumulative) {
-			// Override stats only for files that are already associated with this session.
-			// Do not introduce files from session.diff alone: snapshot-level diffs can
-			// include unrelated workspace edits that happened outside the assistant flow.
+			// Override row stats from the authoritative diff snapshot.
 			for (const [filePath, entry] of fileMap) {
 				const cumulative = cumulativeMap.get(filePath);
 				if (cumulative) {
@@ -437,9 +443,17 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 			}
 		}
 
-		// Filter out files with zero additions and zero deletions (reverted edits)
-		return Array.from(fileMap.values()).filter(f => f.linesAdded > 0 || f.linesRemoved > 0);
-	}, [changedFiles, cumulativeMap, hasCumulative]);
+		// Keep diff-owned files even when line stats are 0/0. Binary/image edits can
+		// legitimately restore this way while still being part of session.diff.
+		return Array.from(fileMap.values()).filter(f => {
+			if (f.linesAdded > 0 || f.linesRemoved > 0) {
+				return true;
+			}
+
+			const cumulative = cumulativeMap.get(f.filePath);
+			return Boolean(cumulative?.status);
+		});
+	}, [changedFiles, cumulativeMap, hasCumulative, cumulativeDiffs]);
 
 	// Header totals: always derived from groupedFiles so they match the per-file rows exactly.
 	// Previously this was computed separately from cumulativeDiffs, which could include files
@@ -532,11 +546,9 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 		[handleCopyLastResponse, handleCopyAllMessages, handleCopyLastDiffs, handleCopyAllDiffs],
 	);
 
-	if (groupedFiles.length === 0 && !hasTodos) {
+	if (groupedFiles.length === 0) {
 		return null;
 	}
-
-	const hasFiles = groupedFiles.length > 0;
 
 	return (
 		<div className="w-full box-border relative bg-transparent">
@@ -546,115 +558,103 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 
 			<div
 				className={cn(
-					'bg-(--panel-header-bg) border border-(--panel-header-border)',
-					hasFiles ? 'rounded-t-lg border-b-0' : 'rounded-lg',
+					'bg-(--panel-header-bg) rounded-t-lg border border-(--panel-header-border) border-b-0',
 					'@container/panel',
 				)}
 			>
-				{hasFiles ? (
-					<button
-						type="button"
-						tabIndex={0}
-						onClick={() => setExpanded(!expanded)}
-						onKeyDown={e => {
-							if (e.key === 'Enter' || e.key === ' ') {
-								e.preventDefault();
-								setExpanded(!expanded);
-							}
-						}}
-						className={cn(
-							'flex items-center justify-between w-full h-(--tool-header-height) px-(--tool-header-padding)',
-							'text-sm font-(family-name:--vscode-font-family)',
-							'bg-transparent border-none cursor-pointer',
-							expanded && 'rounded-b-lg',
-						)}
-					>
-						{/* Left section - stats */}
-						<span className="flex items-center overflow-hidden min-w-0 shrink-0">
-							<span className="shrink-0 flex items-center justify-center w-(--icon-md)">
-								<ChevronIcon expanded={expanded} size={10} />
-							</span>
-							<span className="text-success whitespace-nowrap text-right min-w-8">
-								{formatDiffCount(totalAdded, 'added')}
-							</span>
-							<span className="text-error whitespace-nowrap text-left min-w-8 ml-(--gap-4)">
-								{formatDiffCount(totalRemoved, 'removed')}
-							</span>
-							<span className="flex items-center gap-(--gap-1) text-sm text-vscode-foreground opacity-90 ml-(--gap-2)">
-								<FileIcon size={12} />
-								<span className="hide-on-narrow">
-									{uniqueFileCount} {uniqueFileCount === 1 ? 'File' : 'Files'}
-								</span>
-								<span className="show-on-narrow">{uniqueFileCount}</span>
-							</span>
+				<button
+					type="button"
+					tabIndex={0}
+					onClick={() => setExpanded(!expanded)}
+					onKeyDown={e => {
+						if (e.key === 'Enter' || e.key === ' ') {
+							e.preventDefault();
+							setExpanded(!expanded);
+						}
+					}}
+					className={cn(
+						'flex items-center justify-between w-full h-(--tool-header-height) px-(--tool-header-padding)',
+						'text-sm font-(family-name:--vscode-font-family)',
+						'bg-transparent border-none cursor-pointer',
+						expanded && 'rounded-b-lg',
+					)}
+				>
+					{/* Left section - stats */}
+					<span className="flex items-center overflow-hidden min-w-0 shrink-0">
+						<span className="shrink-0 flex items-center justify-center w-(--icon-md)">
+							<ChevronIcon expanded={expanded} size={10} />
 						</span>
+						<span className="text-success whitespace-nowrap text-right min-w-8">
+							{formatDiffCount(totalAdded, 'added')}
+						</span>
+						<span className="text-error whitespace-nowrap text-left min-w-8 ml-(--gap-4)">
+							{formatDiffCount(totalRemoved, 'removed')}
+						</span>
+						<span className="flex items-center gap-(--gap-1) text-sm text-vscode-foreground opacity-90 ml-(--gap-2)">
+							<FileIcon size={12} />
+							<span className="hide-on-narrow">
+								{uniqueFileCount} {uniqueFileCount === 1 ? 'File' : 'Files'}
+							</span>
+							<span className="show-on-narrow">{uniqueFileCount}</span>
+						</span>
+					</span>
 
-						{/* Center section - Todo status */}
-						<TodoSection />
+					{/* Center section - Todo status */}
+					<TodoSection />
 
-						{/* Right section - action buttons */}
-						<div className="flex items-center gap-1 ml-2 shrink-0">
-							<IconButton
-								icon={<CopyIcon size={12} />}
+					{/* Right section - action buttons */}
+					<div className="flex items-center gap-1 ml-2 shrink-0">
+						<IconButton
+							icon={<CopyIcon size={12} />}
+							onClick={e => {
+								e.stopPropagation();
+								setShowCopyDropdown(!showCopyDropdown);
+							}}
+							title="Copy options"
+							size={20}
+						/>
+
+						<Tooltip content="Keep all changes" position="top" delay={200}>
+							<button
+								type="button"
+								className="bg-transparent border-none px-1.5 py-0.5 rounded-sm cursor-pointer text-vscode-foreground opacity-70 transition-all duration-100 ease-out text-sm font-(family-name:--vscode-font-family) hover:bg-white/10 hover:opacity-100 whitespace-nowrap"
 								onClick={e => {
 									e.stopPropagation();
-									setShowCopyDropdown(!showCopyDropdown);
+									showConfirmDialog({
+										title: 'Keep All Changes',
+										message: `This will accept all changes to ${uniqueFileCount} file${uniqueFileCount > 1 ? 's' : ''}.`,
+										confirmLabel: 'Keep',
+										cancelLabel: 'Cancel',
+										onConfirm: handleKeepAll,
+									});
 								}}
-								title="Copy options"
-								size={20}
-							/>
+							>
+								Keep
+							</button>
+						</Tooltip>
 
-							<Tooltip content="Keep all changes" position="top" delay={200}>
-								<button
-									type="button"
-									className="bg-transparent border-none px-1.5 py-0.5 rounded-sm cursor-pointer text-vscode-foreground opacity-70 transition-all duration-100 ease-out text-sm font-(family-name:--vscode-font-family) hover:bg-white/10 hover:opacity-100 whitespace-nowrap"
-									onClick={e => {
-										e.stopPropagation();
-										showConfirmDialog({
-											title: 'Keep All Changes',
-											message: `This will accept all changes to ${uniqueFileCount} file${uniqueFileCount > 1 ? 's' : ''}.`,
-											confirmLabel: 'Keep',
-											cancelLabel: 'Cancel',
-											onConfirm: handleKeepAll,
-										});
-									}}
-								>
-									Keep
-								</button>
-							</Tooltip>
-
-							<Tooltip content="Undo all changes" position="top" delay={200}>
-								<button
-									type="button"
-									className="bg-transparent border-none px-1.5 py-0.5 rounded-sm cursor-pointer text-vscode-foreground opacity-70 transition-all duration-100 ease-out text-sm font-(family-name:--vscode-font-family) hover:bg-white/10 hover:opacity-100 whitespace-nowrap"
-									onClick={e => {
-										e.stopPropagation();
-										showConfirmDialog({
-											title: 'Undo All Changes',
-											message: `This will undo all changes to ${uniqueFileCount} file${uniqueFileCount > 1 ? 's' : ''}.`,
-											confirmLabel: 'Undo',
-											cancelLabel: 'Cancel',
-											onConfirm: handleUndoAll,
-										});
-									}}
-								>
-									Undo
-								</button>
-							</Tooltip>
-						</div>
-					</button>
-				) : (
-					<div
-						className={cn(
-							'flex items-center justify-center w-full h-(--tool-header-height) px-(--tool-header-padding)',
-							'text-sm font-(family-name:--vscode-font-family)',
-						)}
-					>
-						<TodoSection />
+						<Tooltip content="Undo all changes" position="top" delay={200}>
+							<button
+								type="button"
+								className="bg-transparent border-none px-1.5 py-0.5 rounded-sm cursor-pointer text-vscode-foreground opacity-70 transition-all duration-100 ease-out text-sm font-(family-name:--vscode-font-family) hover:bg-white/10 hover:opacity-100 whitespace-nowrap"
+								onClick={e => {
+									e.stopPropagation();
+									showConfirmDialog({
+										title: 'Undo All Changes',
+										message: `This will undo all changes to ${uniqueFileCount} file${uniqueFileCount > 1 ? 's' : ''}.`,
+										confirmLabel: 'Undo',
+										cancelLabel: 'Cancel',
+										onConfirm: handleUndoAll,
+									});
+								}}
+							>
+								Undo
+							</button>
+						</Tooltip>
 					</div>
-				)}
+				</button>
 
-				{expanded && hasFiles && (
+				{expanded && (
 					<div>
 						<ScrollContainer className="px-(--tool-header-padding) max-h-[40vh]">
 							{groupedFiles.map(file => (

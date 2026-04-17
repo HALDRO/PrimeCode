@@ -30,7 +30,7 @@ export class OutboundBridge {
 	private _queue: unknown[] = [];
 	/**
 	 * When non-null, send() collects session_event messages here instead of posting them.
-	 * Used during history replay to batch hundreds of events into a single postMessage.
+	 * Used to batch large session event bursts into a single postMessage.
 	 */
 	private _collectBuffer: unknown[] | null = null;
 
@@ -88,7 +88,7 @@ export class OutboundBridge {
 	/**
 	 * Start collecting session_event messages instead of sending them immediately.
 	 * Call flushCollected() to send all collected messages as a single batch.
-	 * Used during history replay to reduce postMessage overhead.
+	 * Used to reduce postMessage overhead during large session updates.
 	 */
 	public startCollect(): void {
 		this._collectBuffer = [];
@@ -107,7 +107,7 @@ export class OutboundBridge {
 
 	/**
 	 * Send multiple messages as a single batch to reduce postMessage overhead.
-	 * Used during history replay to avoid hundreds of individual postMessage calls.
+	 * Used to avoid hundreds of individual postMessage calls.
 	 * The webview unpacks the batch and processes each message individually.
 	 */
 	public sendBatch(messages: unknown[]): void {
@@ -157,7 +157,7 @@ export class OutboundBridge {
 			type: 'session_event',
 			targetId,
 			eventType,
-			payload: { eventType, ...payloadData } as SessionEventPayload,
+			payload: { eventType, ...payloadData } as unknown as SessionEventPayload,
 			timestamp: Date.now(),
 			sessionId: options?.sessionId ?? targetId,
 			...(options?.normalizedEntry ? { normalizedEntry: options.normalizedEntry } : {}),

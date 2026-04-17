@@ -223,7 +223,6 @@ export const SessionUpdatedRuntimePayloadSchema = Type.Object({
 			next: Type.Optional(Type.Number()),
 		}),
 	),
-	totalStats: Type.Optional(Type.Partial(TotalStatsSchema)),
 });
 export type SessionUpdatedRuntimePayload = Static<typeof SessionUpdatedRuntimePayloadSchema>;
 

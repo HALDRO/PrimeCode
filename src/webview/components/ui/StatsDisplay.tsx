@@ -9,10 +9,10 @@ import type React from 'react';
 import { type CSSProperties, type ReactNode, useMemo } from 'react';
 import { cn } from '../../lib/cn';
 import {
+	useDerivedSessionStats,
 	useModelContextWindow,
 	useSessionContextMetrics,
 	useSubagentTokenTotals,
-	useTotalStats,
 } from '../../store';
 import { formatCost, formatDuration, formatNumber } from '../../utils/format';
 import { BotIcon, HashIcon, TagIcon, TimerIcon, TokensIcon } from '../icons';
@@ -110,7 +110,7 @@ export const SessionStatsDisplay: React.FC<{
 	className?: string;
 	leftContent?: ReactNode;
 }> = ({ mode, style, className, leftContent }) => {
-	const totalStats = useTotalStats();
+	const derivedStats = useDerivedSessionStats();
 	const contextLimit = useModelContextWindow();
 	const subagentTokensTotal = useSubagentTokenTotals();
 	const sessionMetrics = useSessionContextMetrics();
@@ -163,35 +163,35 @@ export const SessionStatsDisplay: React.FC<{
 			});
 		}
 
-		if (totalStats.requestCount > 0) {
+		if (derivedStats.requestCount > 0) {
 			result.push({
 				key: 'requests',
 				icon: <HashIcon size={11} />,
-				value: `${totalStats.requestCount} Req`,
+				value: `${derivedStats.requestCount} Req`,
 				tooltip: 'Total API requests',
 			});
 		}
 
-		if (totalStats.subagentCount > 0) {
+		if (derivedStats.subagentCount > 0) {
 			result.push({
 				key: 'subagents',
 				icon: <BotIcon size={11} />,
-				value: `${totalStats.subagentCount} Sub`,
+				value: `${derivedStats.subagentCount} Sub`,
 				tooltip: 'Total subagent invocations',
 			});
 		}
 
-		if (totalStats.totalDuration && totalStats.totalDuration > 0) {
+		if (derivedStats.totalDuration > 0) {
 			result.push({
 				key: 'duration',
 				icon: <TimerIcon size={11} />,
-				value: formatDuration(totalStats.totalDuration),
+				value: formatDuration(derivedStats.totalDuration),
 				tooltip: 'Total model duration',
 			});
 		}
 
 		return result;
-	}, [totalStats, contextLimit, subagentTokensTotal, sessionMetrics]);
+	}, [derivedStats, contextLimit, subagentTokensTotal, sessionMetrics]);
 
 	return (
 		<StatsDisplay

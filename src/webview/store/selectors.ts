@@ -13,7 +13,6 @@ import {
 	type ChatSession,
 	type ChatState,
 	type CommitInfo,
-	DEFAULT_TOTAL_STATS,
 	type RenderMessage,
 	type RenderSubtaskMessage,
 	type RenderUserMessage,
@@ -245,6 +244,61 @@ export const useSessionContextMetrics = () => {
 	}, [session, contextLimit]);
 };
 
+export const useDerivedSessionStats = () => {
+	const session = useChatStore((state: ChatState) => getActiveSession(state));
+
+	return useMemo(() => {
+		if (!session) {
+			return {
+				requestCount: 0,
+				totalDuration: 0,
+				subagentCount: 0,
+			};
+		}
+
+		let requestCount = 0;
+		let totalDuration = 0;
+		for (const message of session.runtimeMessageRecords) {
+			if (message.role !== 'assistant') continue;
+			const tokens = message.tokens;
+			const total =
+				typeof tokens?.total === 'number'
+					? tokens.total
+					: (tokens?.input ?? 0) +
+						(tokens?.output ?? 0) +
+						(tokens?.reasoning ?? 0) +
+						(tokens?.cacheRead ?? 0) +
+						(tokens?.cacheWrite ?? 0);
+			if (total > 0) {
+				requestCount += 1;
+			}
+
+			const createdAt = message.createdAt;
+			const completedAt = message.completedAt;
+			if (
+				typeof createdAt === 'number' &&
+				typeof completedAt === 'number' &&
+				completedAt >= createdAt
+			) {
+				totalDuration += completedAt - createdAt;
+			}
+		}
+
+		let subagentCount = 0;
+		for (const message of projectRuntimeMessages(session)) {
+			if (message.kind === 'subtask') {
+				subagentCount += 1;
+			}
+		}
+
+		return {
+			requestCount,
+			totalDuration,
+			subagentCount,
+		};
+	}, [session]);
+};
+
 // ============================================
 // Chat Store Selectors
 // ============================================
@@ -310,12 +364,6 @@ export const useStoreInput = () =>
 /** Select chat actions only (stable references) */
 export const useChatActions = () => useChatStore((state: ChatState) => state.actions);
 
-/** Select total stats for active session */
-export const useTotalStats = () =>
-	useChatStore(
-		useShallow((state: ChatState) => getActiveSession(state)?.totalStats ?? DEFAULT_TOTAL_STATS),
-	);
-
 /** Aggregate subagent token totals from subtask messages in active session.
  * Memoized by messages ref to avoid O(N) scan on every store change. */
 const subagentTotalsCache = { messages: null as RenderMessage[] | null, result: 0 };
@@ -337,9 +385,20 @@ export const useSubagentTokenTotals = () => {
 	}, [session]);
 };
 
-/** Select active model ID reported by the backend */
-export const useActiveModelID = () =>
-	useChatStore((state: ChatState) => getActiveSession(state)?.activeModelID);
+/** Select active model ID derived from the latest assistant record with a model. */
+export const useActiveModelID = () => {
+	const session = useChatStore((state: ChatState) => getActiveSession(state));
+	return useMemo(() => {
+		if (!session) return undefined;
+		for (let i = session.runtimeMessageRecords.length - 1; i >= 0; i--) {
+			const modelId = session.runtimeMessageRecords[i]?.modelId;
+			if (typeof modelId === 'string' && modelId) {
+				return modelId;
+			}
+		}
+		return undefined;
+	}, [session]);
+};
 
 /** Select per-turn token data for active session */
 const EMPTY_TURN_TOKENS: Record<string, TokenUsage> = {};

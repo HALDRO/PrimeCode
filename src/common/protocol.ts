@@ -18,7 +18,6 @@ import type {
 	PlatformInfo,
 	QuestionInfo,
 	SubagentCommandFields,
-	TotalStats,
 	WorkspaceFile,
 } from './schemas';
 
@@ -254,13 +253,6 @@ export interface SessionStatusPayload {
 	toolActivity?: ToolActivityInfo | null;
 }
 
-export interface SessionStatsPayload {
-	eventType: 'stats';
-	totalStats?: Partial<TotalStats>;
-	modelID?: string;
-	providerID?: string;
-}
-
 export interface SessionCompletePayload {
 	eventType: 'complete';
 	partId: string;
@@ -467,7 +459,6 @@ export type SessionEventPayload =
 	| SessionMessagePartDeltaPayload
 	| SessionMessagePartRemovedPayload
 	| SessionStatusPayload
-	| SessionStatsPayload
 	| SessionCompletePayload
 	| SessionRestorePayload
 	| SessionFilePayload
@@ -498,7 +489,7 @@ export interface SessionEventMessage {
 }
 
 /**
- * Batched session events for history replay optimization.
+ * Batched session events for transport efficiency.
  * Reduces postMessage overhead by sending multiple events in a single message.
  */
 export interface SessionEventBatchMessage {
@@ -514,7 +505,6 @@ export interface SessionLifecycleMessage {
 	sessionId?: string;
 	data?: {
 		isProcessing?: boolean;
-		totalStats?: TotalStats;
 		messages?: unknown[];
 	};
 }

@@ -24,12 +24,10 @@ import type {
 	SessionMessagesReloadPayload,
 	SessionNotificationPayload,
 	SessionRestorePayload,
-	SessionStatsPayload,
 	SessionStatusPayload,
 	SessionSubtaskPayload,
 	SessionTurnTokensPayload,
 	SessionUserMessagePayload,
-	TotalStats,
 } from '../../common';
 import { generateId } from '../../common';
 import type { NormalizedEntry } from '../../common/normalizedTypes';
@@ -37,7 +35,7 @@ import type { QueuedMessageData } from '../../common/protocol';
 import { projectRuntimeMessages } from './selectors';
 import { useUIStore } from './uiStore';
 
-export type { CommitInfo, TotalStats };
+export type { CommitInfo };
 
 // =============================================================================
 // Types
@@ -156,10 +154,6 @@ export interface ChatSession {
 	agent?: string;
 	/** Per-session model override. Undefined means "use workspace default". */
 	model?: string;
-	/** Model ID reported by the backend for the current/last request. */
-	activeModelID?: string;
-	/** Provider ID reported by the backend for the current/last request. */
-	activeProviderID?: string;
 	userMessagesById: Record<string, UserMessage>;
 	subtasksById: Record<string, SubtaskMessage>;
 	runtimeMessageRecords: RuntimeMessageRecord[];
@@ -185,7 +179,6 @@ export interface ChatSession {
 	restoreCommits: CommitInfo[];
 	unrevertAvailable: boolean;
 	revertedFromMessageId: string | null;
-	totalStats: TotalStats;
 	turnTokens: Record<string, TokenUsage>;
 	/** Queued messages waiting to be sent when generation completes. */
 	queuedMessages: QueuedMessageData[];
@@ -274,9 +267,6 @@ export interface ChatActions {
 	setRestoreCommits: (commits: CommitInfo[], sessionId?: string) => void;
 	setUnrevertAvailable: (available: boolean, sessionId?: string) => void;
 
-	// Stats
-	setTotalStats: (stats: Partial<TotalStats>, sessionId?: string) => void;
-
 	// Subtask actions (session-aware — do NOT rely on activeSessionId)
 	startSubtask: (subtask: SubtaskMessage, sessionId?: string) => void;
 	updateSubtask: (
@@ -309,27 +299,6 @@ export interface ChatActions {
 	getSessionAutoAccept: (sessionId?: string) => boolean;
 	removePendingQuestion: (requestId: string, sessionId?: string) => void;
 }
-
-// =============================================================================
-// Defaults (exported for use in selectors)
-// =============================================================================
-
-export const DEFAULT_TOTAL_STATS: TotalStats = {
-	contextTokens: 0,
-	outputTokens: 0,
-	totalTokens: 0,
-	cacheReadTokens: 0,
-	cacheCreationTokens: 0,
-	reasoningTokens: 0,
-	requestCount: 0,
-	totalDuration: 0,
-	totalCost: 0,
-	subagentTokensInput: 0,
-	subagentTokensOutput: 0,
-	subagentCount: 0,
-	totalInputTokens: 0,
-	totalOutputTokens: 0,
-};
 
 function upsertUserMessage(targetSession: ChatSession, incoming: UserMessage): void {
 	if (!incoming.id) return;
@@ -468,44 +437,6 @@ function handleStatusEvent(targetSession: ChatSession, payload: SessionEventPayl
 	if (s.status === 'idle') {
 		targetSession.toolActivity = null;
 	}
-}
-
-function handleStatsEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
-	const s = payload as SessionStatsPayload;
-	if (s.totalStats) {
-		// Token snapshot fields must be updated atomically — only when a full
-		// token snapshot arrives (totalTokens > 0).  Partial stats events
-		// (e.g. requestCount-only) must NOT overwrite token fields, otherwise
-		// cacheReadTokens and totalTokens become desynchronized.
-		const patch = s.totalStats;
-		const isTokenSnapshot = typeof patch.totalTokens === 'number' && patch.totalTokens > 0;
-		if (isTokenSnapshot) {
-			Object.assign(targetSession.totalStats, patch);
-		} else {
-			// Apply only non-token fields from the patch
-			const {
-				totalTokens,
-				contextTokens,
-				outputTokens,
-				cacheReadTokens,
-				cacheCreationTokens,
-				reasoningTokens,
-				...nonTokenFields
-			} = patch;
-			Object.assign(targetSession.totalStats, nonTokenFields);
-		}
-	}
-	if (s.modelID) {
-		targetSession.activeModelID = s.modelID;
-		// Stamp modelID on the last user message so it's preserved per-message
-		// and doesn't change when the user switches models later.
-		const lastUserMsg = projectRuntimeMessages(targetSession).findLast(m => m.kind === 'user');
-		if (lastUserMsg?.id && !lastUserMsg.model) {
-			const storedUser = targetSession.userMessagesById[lastUserMsg.id];
-			if (storedUser && !storedUser.model) storedUser.model = s.modelID;
-		}
-	}
-	if (s.providerID) targetSession.activeProviderID = s.providerID;
 }
 
 function handleTurnTokensEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
@@ -904,7 +835,6 @@ const DISPATCH_HANDLERS: Partial<
 	message_part_delta: handleMessagePartDeltaEvent,
 	message_part_removed: handleMessagePartRemovedEvent,
 	status: handleStatusEvent,
-	stats: handleStatsEvent,
 	turn_tokens: handleTurnTokensEvent,
 	complete: handleCompleteEvent,
 	restore: handleRestoreEvent,
@@ -966,7 +896,6 @@ const createEmptySession = (id: string, timestamp: number): ChatSession => ({
 	restoreCommits: [],
 	unrevertAvailable: false,
 	revertedFromMessageId: null,
-	totalStats: { ...DEFAULT_TOTAL_STATS },
 	turnTokens: {},
 	queuedMessages: [],
 	availableTools: [],
@@ -1091,9 +1020,6 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 									{ isProcessing: lifecycle.data.isProcessing },
 									lifecycle.sessionId,
 								);
-							}
-							if (lifecycle.data?.totalStats) {
-								actions.setTotalStats(lifecycle.data.totalStats, lifecycle.sessionId);
 							}
 						}
 						break;
@@ -1480,7 +1406,10 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
 		addChangedFile: (file, sessionId) =>
 			mutateSession(set, sessionId ?? get().activeSessionId, Date.now(), s => {
-				const idx = s.changedFiles.findIndex(f => f.toolUseId === file.toolUseId);
+				const toolId = file.toolUseId || '';
+				const idx = toolId
+					? s.changedFiles.findIndex(f => f.toolUseId === toolId && f.filePath === file.filePath)
+					: -1;
 				if (idx !== -1) {
 					s.changedFiles[idx] = { ...s.changedFiles[idx], ...file };
 				} else {
@@ -1513,9 +1442,6 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
 		setUnrevertAvailable: (available, sessionId) =>
 			get().actions.updateSession({ unrevertAvailable: available }, sessionId),
-
-		setTotalStats: (stats, sessionId) =>
-			mutateSession(set, sessionId, Date.now(), s => Object.assign(s.totalStats, stats)),
 
 		startSubtask: (subtask, sessionId) =>
 			mutateSession(set, sessionId, Date.now(), s => {

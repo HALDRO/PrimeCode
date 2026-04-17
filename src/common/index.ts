@@ -34,7 +34,6 @@ export type {
 	SessionQuestionPayload,
 	SessionQuestionRequest,
 	SessionRestorePayload,
-	SessionStatsPayload,
 	SessionStatus,
 	SessionStatusPayload,
 	SessionSubtaskPayload,

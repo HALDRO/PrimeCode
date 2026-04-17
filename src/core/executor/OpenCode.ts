@@ -1098,12 +1098,9 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 			if (!Array.isArray(messages)) return [];
 
-			// Track last assistant message's full token snapshot + cumulative counters
-			let lastInput = 0;
-			let lastOutput = 0;
-			let lastCacheRead = 0;
-			let assistantCount = 0;
-			let totalModelDuration = 0;
+			// Track cumulative counters and latest model/provider info.
+			let _assistantCount = 0;
+			let _totalModelDuration = 0;
 			let lastModelID: string | undefined;
 			let lastProviderID: string | undefined;
 
@@ -1129,11 +1126,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				// Aggregate tokens and duration from assistant messages
 				if (info.role === 'assistant') {
 					const { tokens } = info;
-					assistantCount++;
-					// Keep last assistant's full token snapshot (CLI gives absolute values)
-					if (tokens.input > 0) lastInput = tokens.input;
-					if (tokens.output > 0) lastOutput = tokens.output;
-					if (tokens.cache.read > 0) lastCacheRead = tokens.cache.read;
+					_assistantCount++;
 
 					// Track model info from assistant messages for replay
 					if (info.modelID) lastModelID = info.modelID;
@@ -1143,7 +1136,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 					const created = info.time?.created;
 					const completed = info.time?.completed;
 					if (typeof created === 'number' && typeof completed === 'number' && completed > created) {
-						totalModelDuration += completed - created;
+						_totalModelDuration += completed - created;
 					}
 
 					// Collect snapshot for this turn (last value wins; delta computed on frontend)
@@ -1364,19 +1357,10 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				});
 			}
 
-			// Append last token snapshot as totalStats for history replay
-			if (lastInput > 0 || lastOutput > 0 || lastCacheRead > 0) {
+			if (lastModelID) {
 				events.push({
 					type: 'session_updated' as const,
 					data: {
-						totalStats: {
-							contextTokens: lastInput,
-							outputTokens: lastOutput,
-							totalTokens: lastInput + lastOutput,
-							cacheReadTokens: lastCacheRead,
-							requestCount: assistantCount,
-							...(totalModelDuration > 0 ? { totalDuration: totalModelDuration } : {}),
-						},
 						modelID: lastModelID,
 						providerID: lastProviderID,
 					},
@@ -2120,22 +2104,11 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			const modelID = info.modelID || undefined;
 			const providerID = info.providerID || undefined;
 
-			// Emit session_updated with token snapshot for context bar / session stats
+			// Emit session_updated only for model/provider changes.
 			if (hasTokenDelta) {
-				this.emit('event', {
-					type: 'session_updated',
-					data: {
-						totalStats: {
-							contextTokens: input,
-							outputTokens: output,
-							totalTokens: total,
-							cacheReadTokens: cacheRead,
-						},
-						modelID,
-						providerID,
-					},
-					sessionId,
-				});
+				if (modelID) {
+					this.emit('event', { type: 'session_updated', data: { modelID, providerID }, sessionId });
+				}
 			} else if (modelID) {
 				this.emit('event', { type: 'session_updated', data: { modelID, providerID }, sessionId });
 			}
@@ -2151,17 +2124,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			const isStepDone = hasCompleted || !!finish;
 
 			if (isStepDone) {
-				// Emit requestCount + currentDuration for session-level stats
-				this.emit('event', {
-					type: 'session_updated',
-					data: {
-						totalStats: { requestCount: 1, ...(durationMs ? { currentDuration: durationMs } : {}) },
-						modelID,
-						providerID,
-					},
-					sessionId,
-				});
-
 				// Accumulate duration per user turn, but total is always a snapshot (last wins).
 				// Skip zero-total steps (empty/aborted messages) to avoid overwriting real data.
 				if (userMessageId) {

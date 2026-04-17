@@ -15,7 +15,7 @@ import type {
 import { generateId } from '../../common';
 
 // Re-export types from chatStore for backward compatibility
-export type { ChangedFile, CommitInfo, TotalStats } from './chatStore';
+export type { ChangedFile, CommitInfo } from './chatStore';
 export type { ConversationIndexEntry, WorkspaceFile };
 
 export type ModalType = 'settings' | 'history' | 'access' | 'mcp' | null;
@@ -320,7 +320,7 @@ export const useUIStore = create<UIState>((set, get) => ({
 					break;
 				}
 
-				// Handle batched session events (history replay optimization)
+				// Handle batched session events from the transport layer
 				case 'session_event_batch' as ExtensionMessage['type']: {
 					const batch = message as unknown as { messages: unknown[] };
 					if (!Array.isArray(batch.messages)) break;

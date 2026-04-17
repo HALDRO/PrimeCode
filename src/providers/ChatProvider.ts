@@ -853,7 +853,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 			case 'turn_tokens': {
 				if (isChildSession) {
-					// Child token stats are handled via cumulative totalStats in session_updated
+					this.syncChildSubtaskTotalsFromTurnTokens(
+						targetSessionId,
+						event.data as unknown as Record<string, unknown> | undefined,
+					);
 					break;
 				}
 				this.bridge.emit(targetSessionId, 'turn_tokens', event.data);
@@ -1007,7 +1010,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 		const record = event.data as Record<string, unknown> | undefined;
 		this.syncChildSubtaskStatus(updatedSessionId, record);
-		this.syncChildSubtaskTotals(updatedSessionId, record);
 		this.syncChildSubtaskModel(updatedSessionId, record);
 	}
 
@@ -1047,32 +1049,26 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
-	private syncChildSubtaskTotals(
-		updatedSessionId: string,
-		record: Record<string, unknown> | undefined,
+	private syncChildSubtaskTotalsFromTurnTokens(
+		childSessionId: string,
+		payload: Record<string, unknown> | undefined,
 	): void {
-		const totalStats = record?.totalStats as
-			| {
-					contextTokens?: number;
-					outputTokens?: number;
-					totalTokens?: number;
-					cacheReadTokens?: number;
-			  }
-			| undefined;
-		if (!totalStats || (totalStats.totalTokens ?? 0) <= 0) {
-			return;
-		}
-		const routing = this.subtaskManager.resolveRouting(updatedSessionId);
+		const routing = this.subtaskManager.resolveRouting(childSessionId);
 		if (!routing) return;
+
+		const delta = {
+			inputTokens: typeof payload?.inputTokens === 'number' ? payload.inputTokens : 0,
+			outputTokens: typeof payload?.outputTokens === 'number' ? payload.outputTokens : 0,
+			totalTokens: typeof payload?.totalTokens === 'number' ? payload.totalTokens : 0,
+			cacheReadTokens: typeof payload?.cacheReadTokens === 'number' ? payload.cacheReadTokens : 0,
+		};
+		if (delta.totalTokens <= 0) return;
+
+		const accumulated = this.subtaskManager.accumulateTokens(routing.toolUseId, delta);
 		this.bridge.emit(routing.parentSessionId, 'subtask', {
 			subtask: {
 				id: routing.toolUseId,
-				childTokens: {
-					input: totalStats.contextTokens ?? 0,
-					output: totalStats.outputTokens ?? 0,
-					total: totalStats.totalTokens ?? 0,
-					cacheRead: totalStats.cacheReadTokens,
-				},
+				childTokens: accumulated,
 				timestamp: new Date().toISOString(),
 				agent: 'subagent',
 				prompt: '',

@@ -4,11 +4,9 @@ import type {
 	ConversationIndexEntry,
 	OpenCodeProviderData,
 	SessionEventPayload,
-	SessionEventType,
 	SessionSubtaskPayload,
 	SessionTodoItem,
 	SessionUserMessagePayload,
-	TotalStats,
 } from '../../common';
 import { generateId, parseModelId } from '../../common';
 import { IMPROVE_PROMPT_DEFAULT_TEMPLATE } from '../../common/promptImprover';
@@ -25,7 +23,7 @@ import {
 	mapSdkMessageToRecord,
 	mapSdkPartToPayload,
 } from '../../core/executor/OpenCodeEventMapper';
-import type { CLIConfig, CLIEvent } from '../../core/executor/types';
+import type { CLIConfig } from '../../core/executor/types';
 import { logger } from '../../utils/logger';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
@@ -39,51 +37,14 @@ type ReplayTurnTokens = {
 	cacheReadTokens: number;
 	durationMs?: number;
 };
-type ReplayBuildOptions = {
-	mode?: 'default' | 'parent';
-	parentSessionId?: string;
-	childDurations?: Map<string, number>;
-	childHistories?: Map<string, CLIEvent[]>;
-	childTokensMap?: Map<string, ReplayChildTokens>;
-	childModelIdMap?: Map<string, string>;
-};
-
-type SessionReplayAction =
-	| {
-			kind: 'event';
-			targetId: string;
-			eventType: SessionEventType;
-			payload: SessionEventPayload;
-			normalizedEntry?: CLIEvent['normalizedEntry'];
-	  }
-	| {
-			kind: 'session_updated';
-			targetId: string;
-			data: unknown;
-	  };
 
 export class SessionHandler implements WebviewMessageHandler {
 	private readonly logNormalizer = new LogNormalizer();
-	private sessionTotalsByUiSession = new Map<
-		string,
-		{
-			requestCount: number;
-			totalDuration: number;
-			subagentTokensInput: number;
-			subagentTokensOutput: number;
-			subagentCount: number;
-			totalInputTokens: number;
-			totalOutputTokens: number;
-			/** Previous snapshot values for computing deltas */
-			_prevContextTokens: number;
-			_prevOutputTokens: number;
-		}
-	>();
 
-	/** Sessions whose history has already been replayed into the webview. */
-	private replayedSessions = new Set<string>();
-	/** Sessions currently replaying history to avoid duplicate restore work. */
-	private replayingSessions = new Map<string, Promise<void>>();
+	/** Sessions whose canonical snapshot has already been restored into the webview. */
+	private restoredSessions = new Set<string>();
+	/** Sessions currently restoring to avoid duplicate snapshot work. */
+	private restoringSessions = new Map<string, Promise<void>>();
 
 	/** Deferred flag: webviewDidLaunch arrived before the server was ready. */
 	private pendingWebviewLaunch = false;
@@ -194,7 +155,6 @@ export class SessionHandler implements WebviewMessageHandler {
 		if (!targetSessionId) {
 			logger.warn('[SessionHandler] Dropping session_updated event without sessionId', {
 				statusType: status?.type,
-				hasStats: !!parsed.totalStats,
 			});
 			return;
 		}
@@ -245,54 +205,6 @@ export class SessionHandler implements WebviewMessageHandler {
 				},
 			});
 		}
-
-		const totalStatsPatch = parsed.totalStats as Partial<TotalStats> | undefined;
-
-		// Aggregate only truly cumulative counters per UI session
-		this.initializeSessionStats(targetSessionId);
-		const totals = this.sessionTotalsByUiSession.get(targetSessionId);
-		if (!totals) return;
-
-		if (totalStatsPatch?.currentDuration) {
-			totals.totalDuration += totalStatsPatch.currentDuration;
-		} else if (totalStatsPatch?.totalDuration && totals.totalDuration === 0) {
-			// History replay sends pre-computed totalDuration (not incremental)
-			totals.totalDuration = totalStatsPatch.totalDuration;
-		}
-
-		if (typeof totalStatsPatch?.requestCount === 'number') {
-			totals.requestCount += totalStatsPatch.requestCount;
-		}
-
-		if (typeof totalStatsPatch?.subagentCount === 'number') {
-			totals.subagentCount += totalStatsPatch.subagentCount;
-		}
-
-		// Accumulate token deltas: contextTokens/outputTokens are snapshots (last API call),
-		// so we compute deltas from previous snapshot to get cumulative totals.
-		if (typeof totalStatsPatch?.contextTokens === 'number' && totalStatsPatch.contextTokens > 0) {
-			const delta = Math.max(0, totalStatsPatch.contextTokens - totals._prevContextTokens);
-			totals.totalInputTokens += delta;
-			totals._prevContextTokens = totalStatsPatch.contextTokens;
-		}
-		if (typeof totalStatsPatch?.outputTokens === 'number' && totalStatsPatch.outputTokens > 0) {
-			const delta = Math.max(0, totalStatsPatch.outputTokens - totals._prevOutputTokens);
-			totals.totalOutputTokens += delta;
-			totals._prevOutputTokens = totalStatsPatch.outputTokens;
-		}
-
-		this.postStats(targetSessionId, {
-			totalStats: {
-				...(totalStatsPatch ?? {}),
-				requestCount: totals.requestCount,
-				totalDuration: totals.totalDuration,
-				subagentCount: totals.subagentCount,
-				totalInputTokens: totals.totalInputTokens,
-				totalOutputTokens: totals.totalOutputTokens,
-			},
-			modelID: parsed.modelID,
-			providerID: parsed.providerID,
-		});
 	}
 
 	// =============================================================================
@@ -391,7 +303,6 @@ export class SessionHandler implements WebviewMessageHandler {
 			for (const tabId of tabsToRestore) {
 				this.context.sessionState.startedSessions.add(tabId);
 				this.postLifecycle('created', tabId);
-				this.initializeSessionStats(tabId);
 			}
 
 			// Switch to the active tab — query real status from executor
@@ -399,10 +310,8 @@ export class SessionHandler implements WebviewMessageHandler {
 			const isActiveTabBusy = this.context.cli.isSessionActive?.(activeTab) ?? false;
 			this.postLifecycle('switched', activeTab, { isProcessing: isActiveTabBusy });
 
-			// Replay history only for the active tab (others lazy-load on switch)
-			// Pass allSessions to avoid a redundant listSessions() call inside replaySessionFromCLI
-			await this.replaySessionFromCLI(activeTab, config, allSessions);
-			this.replayedSessions.add(activeTab);
+			await this.restoreSessionIfNeeded(activeTab, config, allSessions);
+			this.syncSessionRuntimeState(activeTab);
 			// Post status matching real backend state
 			if (isActiveTabBusy) {
 				this.context.bridge.emit(activeTab, 'status', {
@@ -443,14 +352,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		}
 	}
 
-	/**
-	 * Loads a session's full history (including child subagent sessions) from CLI
-	 * and replays it into the webview. Uses SessionGraph for parent↔child linkage.
-	 *
-	 * @param cachedSessions - Pre-fetched sessions list to avoid redundant listSessions() calls.
-	 *                         When omitted, falls back to fetching from CLI.
-	 */
-	private async replaySessionFromCLI(
+	private async restoreSessionIfNeeded(
 		sessionId: string,
 		config: { provider: 'opencode'; workspaceRoot: string },
 		cachedSessions?: Array<{
@@ -462,255 +364,27 @@ export class SessionHandler implements WebviewMessageHandler {
 			revert?: { messageID: string; partID?: string };
 		}>,
 	): Promise<void> {
-		const inFlight = this.replayingSessions.get(sessionId);
+		if (this.restoredSessions.has(sessionId)) {
+			return;
+		}
+
+		const inFlight = this.restoringSessions.get(sessionId);
 		if (inFlight) {
 			await inFlight;
 			return;
 		}
 
-		const replayPromise = this.doReplaySessionFromCLI(sessionId, config, cachedSessions);
-		this.replayingSessions.set(sessionId, replayPromise);
+		const restorePromise = this.restoreSessionFromCanonicalSnapshot(
+			sessionId,
+			config,
+			cachedSessions,
+		);
+		this.restoringSessions.set(sessionId, restorePromise);
 		try {
-			await replayPromise;
+			await restorePromise;
+			this.restoredSessions.add(sessionId);
 		} finally {
-			this.replayingSessions.delete(sessionId);
-		}
-	}
-
-	private async doReplaySessionFromCLI(
-		sessionId: string,
-		config: { provider: 'opencode'; workspaceRoot: string },
-		cachedSessions?: Array<{
-			id: string;
-			title?: string;
-			lastModified?: number;
-			created?: number;
-			parentID?: string;
-			revert?: { messageID: string; partID?: string };
-		}>,
-	): Promise<void> {
-		const sdkClient = this.context.cli.getSdkClient?.();
-		if (sdkClient) {
-			await this.restoreSessionFromCanonicalSnapshot(sessionId, config, cachedSessions);
-			return;
-		}
-
-		const graph = this.context.sessionGraph;
-
-		const allSessions = cachedSessions ?? (await this.context.cli.listSessions(config));
-
-		// Extract task toolUseId → childSessionId links from parent history metadata.
-		// listSessions() returns roots-only, so we cannot rely on allSessions to find children.
-		// Instead, trust metadata.sessionId from task tool_result events directly.
-		const parentHistory = await this.context.cli.getHistory(sessionId, config);
-		const explicitLinks = new Map<string, string>(); // toolUseId → childSessionId
-
-		for (const ev of parentHistory) {
-			if (ev.type === 'tool_result') {
-				const d = ev.data as {
-					tool?: string;
-					tool_use_id?: string;
-					metadata?: { sessionId?: string };
-					content?: string;
-				};
-				if (d.tool === 'task' && d.tool_use_id) {
-					const metaSessionId = d.metadata?.sessionId;
-					if (metaSessionId) {
-						explicitLinks.set(d.tool_use_id, metaSessionId);
-					}
-				}
-			}
-		}
-
-		// Build childSessions from explicitLinks (authoritative) merged with allSessions fallback
-		const linkedChildIds = new Set(explicitLinks.values());
-		const childSessionsFromList = allSessions
-			.filter(s => s.parentID === sessionId)
-			.sort((a, b) => (a.created || 0) - (b.created || 0));
-		// Merge: all linked IDs + any from allSessions not yet included
-		const allChildIds = new Set(linkedChildIds);
-		for (const s of childSessionsFromList) allChildIds.add(s.id);
-		const childSessions = [...allChildIds].map(id => {
-			const fromList = childSessionsFromList.find(s => s.id === id);
-			return {
-				id,
-				title: fromList?.title,
-				created: fromList?.created,
-				lastModified: fromList?.lastModified,
-			};
-		});
-
-		// Register explicit links in SessionGraph
-		for (const [toolUseId, childId] of explicitLinks) {
-			graph.registerChild(childId, sessionId, toolUseId);
-		}
-
-		// Pre-load ALL child histories in parallel (instead of sequential loop).
-		// Child events are aggregated into parent subtask transcripts (no separate buckets).
-		const childHistories = new Map<string, CLIEvent[]>();
-		const childDurations = new Map<string, number>();
-		const childTokensMap = new Map<
-			string,
-			{ input: number; output: number; total: number; cacheRead: number }
-		>();
-		const childModelIdMap = new Map<string, string>();
-
-		if (childSessions.length > 0) {
-			const childResults = await Promise.all(
-				childSessions.map(async child => ({
-					id: child.id,
-					title: child.title,
-					history: await this.context.cli.getHistory(child.id, config),
-				})),
-			);
-
-			for (const { id, history } of childResults) {
-				childHistories.set(id, history);
-
-				if (history.length > 0) {
-					const childSession = childSessions.find(child => child.id === id);
-					const duration = this.computeChildSessionDuration(history, {
-						fallbackCreatedAt: childSession?.created,
-						fallbackUpdatedAt: childSession?.lastModified,
-					});
-					if (typeof duration === 'number' && duration > 0) {
-						childDurations.set(id, duration);
-					}
-
-					// Aggregate turn_tokens from child history for childTokens on subtask cards
-					let totalInput = 0;
-					let totalOutput = 0;
-					let totalTokens = 0;
-					let totalCacheRead = 0;
-					for (const ev of history) {
-						if (ev.type === 'turn_tokens') {
-							const d = ev.data as {
-								inputTokens?: number;
-								outputTokens?: number;
-								totalTokens?: number;
-								cacheReadTokens?: number;
-							};
-							totalInput += d.inputTokens ?? 0;
-							totalOutput += d.outputTokens ?? 0;
-							totalTokens += d.totalTokens ?? 0;
-							totalCacheRead += d.cacheReadTokens ?? 0;
-						}
-					}
-					if (totalTokens > 0) {
-						childTokensMap.set(id, {
-							input: totalInput,
-							output: totalOutput,
-							total: totalTokens,
-							cacheRead: totalCacheRead,
-						});
-					}
-
-					// Extract modelID from child session_updated events
-					for (const ev of history) {
-						if (ev.type === 'session_updated') {
-							const rec = ev.data as Record<string, unknown> | undefined;
-							const mid = rec && typeof rec.modelID === 'string' ? rec.modelID : undefined;
-							if (mid) {
-								childModelIdMap.set(id, mid);
-							}
-						}
-					}
-				}
-			}
-		}
-
-		// Batch all replay messages into a single postMessage to reduce overhead.
-		// startCollect() buffers session_event messages; flushCollected() sends them as one batch.
-		// Use server-side revert state (source of truth) instead of persisted workspaceState.
-		// The CLI session object has a `revert` field that tracks the real revert point.
-		const currentSession = allSessions.find(s => s.id === sessionId);
-		const serverRevert = currentSession?.revert;
-
-		const actions: SessionReplayAction[] = [];
-		// Surface child sessions as subtask cards if parent history is compacted
-		if (explicitLinks.size === 0 && childSessions.length > 0) {
-			for (const child of childSessions) {
-				const duration = childDurations.get(child.id);
-				const childTokens = childTokensMap.get(child.id);
-				actions.push({
-					kind: 'event',
-					targetId: sessionId,
-					eventType: 'subtask',
-					payload: {
-						eventType: 'subtask',
-						subtask: {
-							id: `hist-subtask-${child.id}`,
-							agent: 'subagent',
-							prompt: '',
-							description: child.title || 'Subtask',
-							status: 'completed',
-							timestamp: new Date().toISOString(),
-							...(duration ? { durationMs: duration } : {}),
-							...(childTokens ? { childTokens } : {}),
-							...(childModelIdMap.get(child.id)
-								? { childModelId: childModelIdMap.get(child.id) }
-								: {}),
-						},
-					},
-				});
-			}
-		}
-
-		// Replay parent history, using graph for task→child resolution
-		if (parentHistory.length > 0) {
-			logger.info(
-				`[SessionHandler] Replaying ${parentHistory.length} events for session ${sessionId}`,
-			);
-			actions.push(
-				...this.buildHistoryReplayActions(sessionId, parentHistory, {
-					mode: 'parent',
-					parentSessionId: sessionId,
-					childDurations,
-					childHistories,
-					childTokensMap,
-					childModelIdMap,
-				}),
-			);
-		}
-
-		this.emitReplayActions(actions);
-
-		// Official OpenCode keeps session diff as separate session-scoped data,
-		// not as part of the regular message history. Restore it explicitly after
-		// replaying the session timeline so the webview gets the current diff state.
-		await this.restoreSessionDiffFromServer(sessionId, config);
-		await this.restoreSessionRuntimeStateFromServer(sessionId, config);
-
-		// After replay is flushed, restore revert state using the server's revert field
-		// (source of truth). The CLI session object has a `revert.messageID` that tracks
-		// the exact revert point. This replaces the old workspaceState-based approach
-		// which could become stale and cause phantom UnRevert buttons.
-		if (serverRevert?.messageID) {
-			const revertUserMessageId = this.findReplayedUserMessageIdInHistory(
-				parentHistory,
-				serverRevert.messageID,
-			);
-
-			if (revertUserMessageId) {
-				this.context.bridge.emit(sessionId, 'restore', {
-					action: 'success',
-					canUnrevert: true,
-					revertedFromMessageId: revertUserMessageId,
-				});
-				logger.info('[SessionHandler] Restored revert state from server', {
-					sessionId,
-					revertedFromMessageId: revertUserMessageId,
-					serverRevertMessageId: serverRevert.messageID,
-				});
-			} else {
-				logger.warn(
-					'[SessionHandler] Skipping revert state restore: message not present in replayed history',
-					{
-						sessionId,
-						serverRevertMessageId: serverRevert.messageID,
-					},
-				);
-			}
+			this.restoringSessions.delete(sessionId);
 		}
 	}
 
@@ -734,16 +408,6 @@ export class SessionHandler implements WebviewMessageHandler {
 		const allSessions = cachedSessions ?? (await this.context.cli.listSessions(config));
 		const currentSession = allSessions.find(s => s.id === sessionId);
 
-		const parentHistory = await this.context.cli.getHistory(sessionId, config);
-		const explicitLinks = this.extractExplicitTaskLinks(parentHistory, sessionId);
-		const childSessionIds = new Set<string>(explicitLinks.values());
-		for (const child of allSessions.filter(s => s.parentID === sessionId)) {
-			childSessionIds.add(child.id);
-		}
-
-		const { childHistories, childDurations, childTokensMap, childModelIdMap } =
-			await this.collectChildSessionStats(childSessionIds, allSessions, config);
-
 		const messagesResult = await sdkClient.session.messages({
 			sessionID: sessionId,
 			directory: config.workspaceRoot,
@@ -760,11 +424,16 @@ export class SessionHandler implements WebviewMessageHandler {
 		}
 
 		const entries = messagesResult.data ?? [];
-		const parentTurnTokens = this.buildTurnTokenMap(parentHistory, entries);
+		const explicitLinks = this.extractExplicitTaskLinksFromEntries(entries, sessionId);
+		const childSessionIds = new Set<string>(explicitLinks.values());
+		for (const child of allSessions.filter(s => s.parentID === sessionId)) {
+			childSessionIds.add(child.id);
+		}
+		const parentTurnTokens = this.buildTurnTokenMap(entries);
 		const childResults = await Promise.all(
 			[...childSessionIds].map(async childSessionId => ({
 				childSessionId,
-				childHistory: childHistories.get(childSessionId) ?? [],
+				childSession: allSessions.find(session => session.id === childSessionId),
 				childMessagesResult: await sdkClient.session.messages({
 					sessionID: childSessionId,
 					directory: config.workspaceRoot,
@@ -800,31 +469,39 @@ export class SessionHandler implements WebviewMessageHandler {
 				restoreCommits: CommitInfo[];
 			}
 		>();
-		for (const { childSessionId, childHistory, childMessagesResult } of childResults) {
+		const childDurations = new Map<string, number>();
+		const childTokensMap = new Map<
+			string,
+			{ input: number; output: number; total: number; cacheRead: number }
+		>();
+		const childModelIdMap = new Map<string, string>();
+		for (const { childSessionId, childSession, childMessagesResult } of childResults) {
 			if (childMessagesResult.error) {
-				logger.warn(
-					'[SessionHandler] Failed to fetch canonical child session messages, falling back to history replay',
-					{
-						sessionId: childSessionId,
-						error: childMessagesResult.error,
-					},
-				);
-				if (childHistory.length > 0) {
-					const fallbackActions = this.buildHistoryReplayActions(childSessionId, childHistory, {
-						mode: 'default',
-					});
-					this.emitReplayActions(fallbackActions);
-				}
+				logger.warn('[SessionHandler] Failed to fetch canonical child session messages', {
+					sessionId: childSessionId,
+					error: childMessagesResult.error,
+				});
 				continue;
 			}
 
 			const childEntries = childMessagesResult.data ?? [];
 			if (childEntries.length > 0) {
-				const canonicalDuration = this.computeCanonicalSessionDuration(childEntries);
+				const canonicalDuration = this.computeCanonicalSessionDuration(childEntries, {
+					fallbackCreatedAt: childSession?.created,
+					fallbackUpdatedAt: childSession?.lastModified,
+				});
 				if (typeof canonicalDuration === 'number' && canonicalDuration > 0) {
 					childDurations.set(childSessionId, canonicalDuration);
 				}
-				const childTurnTokens = this.buildTurnTokenMap(childHistory, childEntries);
+				const childTurnTokens = this.buildTurnTokenMap(childEntries);
+				const childTotals = this.computeCanonicalChildTokenTotals(childTurnTokens);
+				if (childTotals) {
+					childTokensMap.set(childSessionId, childTotals);
+				}
+				const childModelId = this.extractCanonicalModelId(childEntries);
+				if (childModelId) {
+					childModelIdMap.set(childSessionId, childModelId);
+				}
 				childSnapshots.set(
 					childSessionId,
 					this.buildCanonicalSessionSnapshot(childSessionId, childEntries, childTurnTokens, {
@@ -834,12 +511,9 @@ export class SessionHandler implements WebviewMessageHandler {
 				continue;
 			}
 
-			if (childHistory.length > 0) {
-				const fallbackActions = this.buildHistoryReplayActions(childSessionId, childHistory, {
-					mode: 'default',
-				});
-				this.emitReplayActions(fallbackActions);
-			}
+			logger.warn('[SessionHandler] Canonical child session snapshot is empty', {
+				sessionId: childSessionId,
+			});
 		}
 
 		for (const [childSessionId, snapshot] of childSnapshots) {
@@ -883,31 +557,6 @@ export class SessionHandler implements WebviewMessageHandler {
 		if (snapshot.todos) {
 			this.context.bridge.emit(sessionId, 'todo', { todos: snapshot.todos });
 		}
-
-		void this.restoreSessionCounterStateFromHistory(sessionId, config).catch(error =>
-			logger.warn(
-				'[SessionHandler] Failed to restore session counter state after canonical replay',
-				{
-					sessionId,
-					error,
-				},
-			),
-		);
-		void this.restoreSessionDiffFromServer(sessionId, config).catch(error =>
-			logger.warn('[SessionHandler] Failed to restore session diff after canonical replay', {
-				sessionId,
-				error,
-			}),
-		);
-		void this.restoreSessionRuntimeStateFromServer(sessionId, config).catch(error =>
-			logger.warn(
-				'[SessionHandler] Failed to restore session runtime state after canonical replay',
-				{
-					sessionId,
-					error,
-				},
-			),
-		);
 
 		if (
 			currentSession?.revert?.messageID &&
@@ -1017,116 +666,58 @@ export class SessionHandler implements WebviewMessageHandler {
 		};
 	}
 
-	private extractExplicitTaskLinks(
-		history: CLIEvent[],
+	private extractExplicitTaskLinksFromEntries(
+		entries: Array<{ info: CanonicalSdkMessage; parts: CanonicalSdkPart[] }>,
 		parentSessionId: string,
 	): Map<string, string> {
 		const explicitLinks = new Map<string, string>();
-		for (const ev of history) {
-			if (ev.type !== 'tool_result') continue;
-			const d = ev.data as {
-				tool?: string;
-				tool_use_id?: string;
-				metadata?: { sessionId?: string };
-			};
-			if (d.tool === 'task' && d.tool_use_id && d.metadata?.sessionId) {
-				explicitLinks.set(d.tool_use_id, d.metadata.sessionId);
-				this.context.sessionGraph.registerChild(
-					d.metadata.sessionId,
-					parentSessionId,
-					d.tool_use_id,
-				);
+		for (const entry of entries) {
+			for (const part of entry.parts) {
+				if (part.type !== 'tool' || part.tool !== 'task') continue;
+				const toolUseId = typeof part.callID === 'string' ? part.callID : undefined;
+				const state =
+					part.state && typeof part.state === 'object'
+						? (part.state as Record<string, unknown>)
+						: undefined;
+				const metadata =
+					state?.metadata && typeof state.metadata === 'object'
+						? (state.metadata as Record<string, unknown>)
+						: undefined;
+				const childSessionId =
+					typeof metadata?.sessionId === 'string' ? metadata.sessionId : undefined;
+				if (!toolUseId || !childSessionId) continue;
+
+				explicitLinks.set(toolUseId, childSessionId);
+				this.context.sessionGraph.registerChild(childSessionId, parentSessionId, toolUseId);
 			}
 		}
 		return explicitLinks;
 	}
 
-	private async collectChildSessionStats(
-		childSessionIds: Set<string>,
-		allSessions: Array<{
-			id: string;
-			title?: string;
-			lastModified?: number;
-			created?: number;
-			parentID?: string;
-		}>,
-		config: { provider: 'opencode'; workspaceRoot: string },
-	): Promise<{
-		childHistories: Map<string, CLIEvent[]>;
-		childDurations: Map<string, number>;
-		childTokensMap: Map<
-			string,
-			{ input: number; output: number; total: number; cacheRead: number }
-		>;
-		childModelIdMap: Map<string, string>;
-	}> {
-		const childHistories = new Map<string, CLIEvent[]>();
-		const childDurations = new Map<string, number>();
-		const childTokensMap = new Map<
-			string,
-			{ input: number; output: number; total: number; cacheRead: number }
-		>();
-		const childModelIdMap = new Map<string, string>();
+	private computeCanonicalChildTokenTotals(
+		turnTokensByUser: Map<string, ReplayTurnTokens>,
+	): ReplayChildTokens | undefined {
+		let input = 0;
+		let output = 0;
+		let total = 0;
+		let cacheRead = 0;
 
-		if (childSessionIds.size === 0) {
-			return { childHistories, childDurations, childTokensMap, childModelIdMap };
+		for (const turn of turnTokensByUser.values()) {
+			input += turn.inputTokens;
+			output += turn.outputTokens;
+			total += turn.totalTokens;
+			cacheRead += turn.cacheReadTokens;
 		}
 
-		const childHistoryResults = await Promise.all(
-			[...childSessionIds].map(async childId => ({
-				id: childId,
-				history: await this.context.cli.getHistory(childId, config),
-			})),
-		);
-
-		for (const { id, history } of childHistoryResults) {
-			childHistories.set(id, history);
-			if (history.length === 0) continue;
-			const childSession = allSessions.find(session => session.id === id);
-			const duration = this.computeChildSessionDuration(history, {
-				fallbackCreatedAt: childSession?.created,
-				fallbackUpdatedAt: childSession?.lastModified,
-			});
-			if (typeof duration === 'number' && duration > 0) childDurations.set(id, duration);
-
-			let totalInput = 0;
-			let totalOutput = 0;
-			let totalTokens = 0;
-			let totalCacheRead = 0;
-			for (const ev of history) {
-				if (ev.type === 'turn_tokens') {
-					const d = ev.data as {
-						inputTokens?: number;
-						outputTokens?: number;
-						totalTokens?: number;
-						cacheReadTokens?: number;
-					};
-					totalInput += d.inputTokens ?? 0;
-					totalOutput += d.outputTokens ?? 0;
-					totalTokens += d.totalTokens ?? 0;
-					totalCacheRead += d.cacheReadTokens ?? 0;
-				}
-				if (ev.type === 'session_updated') {
-					const rec = ev.data as Record<string, unknown> | undefined;
-					const mid = rec && typeof rec.modelID === 'string' ? rec.modelID : undefined;
-					if (mid) childModelIdMap.set(id, mid);
-				}
-			}
-			if (totalTokens > 0) {
-				childTokensMap.set(id, {
-					input: totalInput,
-					output: totalOutput,
-					total: totalTokens,
-					cacheRead: totalCacheRead,
-				});
-			}
+		if (total <= 0) {
+			return undefined;
 		}
 
-		return { childHistories, childDurations, childTokensMap, childModelIdMap };
+		return { input, output, total, cacheRead };
 	}
 
-	private computeChildSessionDuration(
-		history: CLIEvent[],
+	private computeCanonicalSessionDuration(
+		entries: Array<{ info: CanonicalSdkMessage; parts: CanonicalSdkPart[] }>,
 		fallbacks?: { fallbackCreatedAt?: number; fallbackUpdatedAt?: number },
 	): number | undefined {
 		if (
@@ -1137,33 +728,6 @@ export class SessionHandler implements WebviewMessageHandler {
 			return fallbacks.fallbackUpdatedAt - fallbacks.fallbackCreatedAt;
 		}
 
-		let earliestTs: number | undefined;
-		let latestTs: number | undefined;
-
-		for (const ev of history) {
-			const rawTs = (ev.data as { timestamp?: string | number } | undefined)?.timestamp;
-			const ts =
-				typeof rawTs === 'number'
-					? rawTs
-					: typeof rawTs === 'string'
-						? new Date(rawTs).getTime()
-						: Number.NaN;
-			if (!Number.isFinite(ts) || ts <= 0) continue;
-			earliestTs = earliestTs === undefined ? ts : Math.min(earliestTs, ts);
-			latestTs = latestTs === undefined ? ts : Math.max(latestTs, ts);
-		}
-
-		const start = earliestTs;
-		const end = latestTs;
-		if (typeof start !== 'number' || typeof end !== 'number' || end <= start) {
-			return undefined;
-		}
-		return end - start;
-	}
-
-	private computeCanonicalSessionDuration(
-		entries: Array<{ info: CanonicalSdkMessage; parts: CanonicalSdkPart[] }>,
-	): number | undefined {
 		let earliestTs: number | undefined;
 		let latestTs: number | undefined;
 
@@ -1195,6 +759,18 @@ export class SessionHandler implements WebviewMessageHandler {
 			return undefined;
 		}
 		return latestTs - earliestTs;
+	}
+
+	private extractCanonicalModelId(
+		entries: Array<{ info: CanonicalSdkMessage; parts: CanonicalSdkPart[] }>,
+	): string | undefined {
+		for (let i = entries.length - 1; i >= 0; i--) {
+			const modelId = (entries[i]?.info as { modelID?: unknown } | undefined)?.modelID;
+			if (typeof modelId === 'string' && modelId) {
+				return modelId;
+			}
+		}
+		return undefined;
 	}
 
 	private mapCanonicalTaskPartToSubtask(
@@ -1280,7 +856,7 @@ export class SessionHandler implements WebviewMessageHandler {
 
 			this.context.sessionState.activeSessionId = newSessionId;
 			this.context.sessionState.startedSessions.add(newSessionId);
-			this.replayedSessions.add(newSessionId);
+			this.restoredSessions.add(newSessionId);
 
 			this.postLifecycle('created', newSessionId);
 			this.postLifecycle('switched', newSessionId, { isProcessing: false });
@@ -1288,7 +864,6 @@ export class SessionHandler implements WebviewMessageHandler {
 				status: 'idle',
 				statusText: 'Ready',
 			});
-			this.initializeSessionStats(newSessionId);
 			await this.persistAddTab(newSessionId);
 		} catch (error) {
 			logger.error('[SessionHandler] Failed to create session:', error);
@@ -1310,15 +885,12 @@ export class SessionHandler implements WebviewMessageHandler {
 		// The executor tracks active sessions via SSE session.status events.
 		const isActive = this.context.cli.isSessionActive?.(sessionId) ?? false;
 		this.postLifecycle('switched', sessionId, { isProcessing: isActive });
-		this.initializeSessionStats(sessionId);
 		await this.persistAddTab(sessionId);
 
-		// Lazy-load history for tabs that were restored but not yet replayed
-		if (!this.replayedSessions.has(sessionId)) {
+		if (!this.restoredSessions.has(sessionId)) {
 			try {
 				const config = this.buildBaseConfig();
-				await this.replaySessionFromCLI(sessionId, config);
-				this.replayedSessions.add(sessionId);
+				await this.restoreSessionIfNeeded(sessionId, config);
 			} catch (error) {
 				logger.error('[SessionHandler] Failed to lazy-load session history:', error);
 			}
@@ -1335,16 +907,6 @@ export class SessionHandler implements WebviewMessageHandler {
 				status: 'idle',
 				statusText: 'Ready',
 			});
-		}
-
-		if (this.replayedSessions.has(sessionId)) {
-			this.context.bridge.emit(sessionId, 'session_info', {
-				data: {
-					sessionId,
-					autoAccept: this.context.getSessionAutoAccept?.(sessionId) ?? false,
-				},
-			});
-			return;
 		}
 
 		this.syncSessionRuntimeState(sessionId);
@@ -1376,9 +938,8 @@ export class SessionHandler implements WebviewMessageHandler {
 		}
 
 		this.context.sessionState.startedSessions.delete(sessionId);
-		this.replayedSessions.delete(sessionId);
-		this.replayingSessions.delete(sessionId);
-		this.clearSessionStats(sessionId);
+		this.restoredSessions.delete(sessionId);
+		this.restoringSessions.delete(sessionId);
 		this.clearPendingMessage(sessionId);
 		this.context.clearSessionAutoAccept?.(sessionId);
 		// Clean up session graph entries to prevent unbounded Map growth
@@ -1796,7 +1357,6 @@ export class SessionHandler implements WebviewMessageHandler {
 
 				this.postLifecycle('created', newSessionId);
 				this.postLifecycle('switched', newSessionId, { isProcessing: true });
-				this.initializeSessionStats(newSessionId);
 
 				activeId = newSessionId;
 			}
@@ -1880,7 +1440,6 @@ export class SessionHandler implements WebviewMessageHandler {
 				status: 'busy',
 				statusText: 'Working...',
 			});
-			this.initializeSessionStats(activeId);
 
 			// Pass our client-generated ID to the server so it uses it as the
 			// real user message ID (OpenCode prompt.ts: id = input.messageID ?? ...).
@@ -1900,7 +1459,6 @@ export class SessionHandler implements WebviewMessageHandler {
 
 			if (activeId) {
 				this.context.sessionState.startedSessions.delete(activeId);
-				this.sessionTotalsByUiSession.delete(activeId);
 				this.context.bridge.emit(activeId, 'status', {
 					status: 'error',
 					statusText: 'Failed to start',
@@ -1978,13 +1536,12 @@ export class SessionHandler implements WebviewMessageHandler {
 		this.postLifecycle('created', sessionId);
 		// New conversations are never busy — they haven't been sent to yet
 		this.postLifecycle('switched', sessionId, { isProcessing: false });
-		this.initializeSessionStats(sessionId);
 		await this.persistAddTab(sessionId);
 
 		try {
 			const config = this.buildBaseConfig();
-			await this.replaySessionFromCLI(sessionId, config);
-			this.replayedSessions.add(sessionId);
+			await this.restoreSessionIfNeeded(sessionId, config);
+			this.syncSessionRuntimeState(sessionId);
 			// Query real status — loaded conversation could theoretically be active
 			const isBusy = this.context.cli.isSessionActive?.(sessionId) ?? false;
 			this.context.bridge.emit(sessionId, 'status', {
@@ -1998,48 +1555,6 @@ export class SessionHandler implements WebviewMessageHandler {
 				statusText: 'Failed to load',
 			});
 		}
-	}
-
-	private emitReplayActions(actions: SessionReplayAction[]): void {
-		if (actions.length === 0) return;
-		this.context.bridge.startCollect();
-		try {
-			for (const action of actions) {
-				if (action.kind === 'session_updated') {
-					this.handleSessionUpdatedEvent(action.data, action.targetId);
-					continue;
-				}
-				this.context.bridge.emit(action.targetId, action.eventType, action.payload, {
-					...(action.normalizedEntry ? { normalizedEntry: action.normalizedEntry } : {}),
-				});
-			}
-		} finally {
-			this.context.bridge.flushCollected();
-		}
-	}
-
-	private pushReplayEvent<T extends SessionEventType>(
-		actions: SessionReplayAction[],
-		targetId: string,
-		eventType: T,
-		payload: Extract<SessionEventPayload, { eventType: T }>,
-		normalizedEntry?: CLIEvent['normalizedEntry'],
-	): void {
-		actions.push({
-			kind: 'event',
-			targetId,
-			eventType,
-			payload,
-			...(normalizedEntry ? { normalizedEntry } : {}),
-		});
-	}
-
-	private pushReplaySessionUpdated(
-		actions: SessionReplayAction[],
-		targetId: string,
-		data: unknown,
-	): void {
-		actions.push({ kind: 'session_updated', targetId, data });
 	}
 
 	private extractTodoSnapshot(raw: unknown): SessionTodoItem[] | undefined {
@@ -2071,67 +1586,6 @@ export class SessionHandler implements WebviewMessageHandler {
 	private extractTodoSnapshotFromToolInput(input: unknown): SessionTodoItem[] | undefined {
 		if (!input || typeof input !== 'object') return undefined;
 		return this.extractTodoSnapshot((input as { todos?: unknown }).todos);
-	}
-
-	private pushReplayCheckpoint(
-		actions: SessionReplayAction[],
-		targetId: string,
-		messageId: string,
-		timestamp: string,
-	): void {
-		const commitId = generateId('checkpoint');
-		this.context.registerCheckpoint?.(commitId, {
-			sessionId: targetId,
-			messageId,
-			associatedMessageId: messageId,
-			isOpenCode: true,
-		});
-		this.pushReplayEvent(actions, targetId, 'restore', {
-			eventType: 'restore',
-			action: 'add_commit',
-			commit: {
-				id: commitId,
-				sha: commitId,
-				message: 'Checkpoint before message',
-				timestamp,
-				associatedMessageId: messageId,
-			},
-		});
-	}
-
-	private pushReplayFileActions(
-		actions: SessionReplayAction[],
-		sessionId: string,
-		toolName: string,
-		input: Record<string, unknown>,
-		toolUseId: string,
-		stats?: { added: number; removed: number },
-	): void {
-		const filePath = SessionHandler.extractFilePath(input);
-		if (filePath && this.isFileEditTool(toolName)) {
-			this.pushReplayEvent(actions, sessionId, 'file', {
-				eventType: 'file',
-				action: 'changed',
-				filePath,
-				fileName: filePath.split(/[/\\]/).pop() || filePath,
-				linesAdded: stats?.added ?? 0,
-				linesRemoved: stats?.removed ?? 0,
-				toolUseId,
-			});
-			return;
-		}
-		if (resolveToolName(toolName) !== 'apply_patch') return;
-		for (const patchPath of extractPatchFilePaths(input)) {
-			this.pushReplayEvent(actions, sessionId, 'file', {
-				eventType: 'file',
-				action: 'changed',
-				filePath: patchPath,
-				fileName: patchPath.split(/[/\\]/).pop() || patchPath,
-				linesAdded: 0,
-				linesRemoved: 0,
-				toolUseId,
-			});
-		}
 	}
 
 	private buildCanonicalUserReplayMessage(entry: {
@@ -2175,288 +1629,6 @@ export class SessionHandler implements WebviewMessageHandler {
 				: {}),
 			...(attachments ? { attachments } : {}),
 		};
-	}
-
-	private buildHistoryNormalizedLogReplayActions(
-		actions: SessionReplayAction[],
-		sessionId: string,
-		event: Extract<CLIEvent, { type: 'normalized_log' }>,
-	): void {
-		const data = event.data as {
-			role?: string;
-			content?: string;
-			timestamp?: string;
-			messageId?: string;
-			model?: string;
-			agent?: string;
-			summary?: SessionUserMessagePayload['message']['summary'];
-			attachments?: SessionUserMessagePayload['message']['attachments'];
-		};
-		if (data.role !== 'user') return;
-		const messageId =
-			data.messageId?.trim() || `msg-local-${Math.random().toString(36).slice(2, 9)}`;
-		const timestamp = data.timestamp || new Date().toISOString();
-		this.pushReplayEvent(actions, sessionId, 'message_record', {
-			eventType: 'message_record',
-			message: {
-				id: messageId,
-				sessionId,
-				role: 'user',
-				createdAt: new Date(timestamp).getTime(),
-				...(data.model ? { modelId: data.model } : {}),
-				...(data.agent ? { agent: data.agent } : {}),
-			},
-		});
-		this.pushReplayEvent(
-			actions,
-			sessionId,
-			'user_message',
-			{
-				eventType: 'user_message',
-				message: {
-					id: messageId,
-					content: data.content || '',
-					timestamp,
-					...(data.model ? { model: data.model } : {}),
-					...(data.agent ? { agent: data.agent } : {}),
-					...(data.summary ? { summary: data.summary } : {}),
-					...(data.attachments ? { attachments: data.attachments } : {}),
-					...(event.normalizedEntry ? { normalizedEntry: event.normalizedEntry } : {}),
-				},
-			},
-			event.normalizedEntry,
-		);
-		this.pushReplayCheckpoint(actions, sessionId, messageId, timestamp);
-	}
-
-	private buildHistoryTaskSubtaskReplayAction(
-		actions: SessionReplayAction[],
-		sessionId: string,
-		toolUseId: string,
-		meta: { description: string; prompt: string; agent: string },
-		options: ReplayBuildOptions,
-		timestamp?: string,
-		result?: string,
-		isError?: boolean,
-		normalizedEntry?: CLIEvent['normalizedEntry'],
-	): void {
-		const childSessionId = this.context.sessionGraph.getChildByTaskId(toolUseId);
-		this.pushReplayEvent(
-			actions,
-			sessionId,
-			'subtask',
-			{
-				eventType: 'subtask',
-				subtask: {
-					id: toolUseId,
-					...meta,
-					...(typeof result === 'string' ? { result } : {}),
-					...(options.parentSessionId ? { parentSessionId: options.parentSessionId } : {}),
-					...(childSessionId ? { childSessionId } : {}),
-					status: isError ? 'error' : result === undefined ? 'running' : 'completed',
-					timestamp: timestamp || new Date().toISOString(),
-					...(result === undefined ? { startTime: timestamp } : {}),
-					...(childSessionId && options.childDurations?.get(childSessionId)
-						? { durationMs: options.childDurations.get(childSessionId) }
-						: {}),
-					...(childSessionId && options.childTokensMap?.get(childSessionId)
-						? { childTokens: options.childTokensMap.get(childSessionId) }
-						: {}),
-					...(childSessionId && options.childModelIdMap?.get(childSessionId)
-						? { childModelId: options.childModelIdMap.get(childSessionId) }
-						: {}),
-					...(normalizedEntry ? { normalizedEntry } : {}),
-				},
-			},
-			normalizedEntry,
-		);
-	}
-
-	private buildHistoryReplayActions(
-		sessionId: string,
-		history: CLIEvent[],
-		options: ReplayBuildOptions = {},
-	): SessionReplayAction[] {
-		const actions: SessionReplayAction[] = [];
-		const subtaskMeta = new Map<string, { description: string; prompt: string; agent: string }>();
-		let latestTodos: SessionTodoItem[] | undefined;
-
-		for (const event of history) {
-			switch (event.type) {
-				case 'normalized_log':
-					this.buildHistoryNormalizedLogReplayActions(actions, sessionId, event);
-					break;
-				case 'turn_tokens':
-					this.pushReplayEvent(
-						actions,
-						sessionId,
-						'turn_tokens',
-						event.data as Extract<SessionEventPayload, { eventType: 'turn_tokens' }>,
-					);
-					break;
-				case 'session_updated':
-					this.pushReplaySessionUpdated(actions, sessionId, event.data);
-					break;
-				case 'tool_use': {
-					const data = event.data as {
-						tool?: string;
-						input?: unknown;
-						toolUseId?: string;
-						timestamp?: string;
-					};
-					const toolName = data.tool || 'unknown';
-					if (resolveToolName(toolName) === 'todowrite') {
-						latestTodos = this.extractTodoSnapshotFromToolInput(data.input) ?? latestTodos;
-					}
-					if (toolName.toLowerCase() === 'question') break;
-					const input = (data.input as Record<string, unknown>) || {};
-					const toolUseId = data.toolUseId || `hist-tool-${Math.random()}`;
-					if (options.mode === 'parent' && toolName === 'task') {
-						const meta = {
-							agent: typeof input.subagent_type === 'string' ? input.subagent_type : 'subagent',
-							prompt: typeof input.prompt === 'string' ? input.prompt : '',
-							description: typeof input.description === 'string' ? input.description : 'Subtask',
-						};
-						subtaskMeta.set(toolUseId, meta);
-						this.buildHistoryTaskSubtaskReplayAction(
-							actions,
-							sessionId,
-							toolUseId,
-							meta,
-							options,
-							data.timestamp,
-						);
-						break;
-					}
-					this.pushReplayEvent(actions, sessionId, 'message_part', {
-						eventType: 'message_part',
-						part: {
-							id: toolUseId,
-							messageId: toolUseId,
-							sessionId,
-							type: 'tool',
-							callId: toolUseId,
-							toolName,
-							state: { status: 'running', input },
-							...(event.normalizedEntry ? { normalizedEntry: event.normalizedEntry } : {}),
-						},
-					});
-					const oldContent = SessionHandler.getFieldValue(input, [
-						'old_string',
-						'old_str',
-						'oldString',
-					]);
-					const newContent = SessionHandler.getFieldValue(input, [
-						'new_string',
-						'new_str',
-						'newString',
-						'content',
-					]);
-					this.pushReplayFileActions(
-						actions,
-						sessionId,
-						toolName,
-						input,
-						toolUseId,
-						computeDiffLineStats(String(oldContent), String(newContent)),
-					);
-					break;
-				}
-				case 'tool_result': {
-					const data = event.data as {
-						tool?: string;
-						tool_use_id?: string;
-						content?: unknown;
-						input?: unknown;
-						is_error?: boolean;
-						metadata?: unknown;
-						timestamp?: string;
-					};
-					const toolName = data.tool || 'unknown';
-					if (toolName.toLowerCase() === 'question') break;
-					const toolUseId = data.tool_use_id || `hist-tool-${Math.random()}`;
-					if (options.mode === 'parent' && toolName === 'task') {
-						const savedMeta = subtaskMeta.get(toolUseId);
-						this.buildHistoryTaskSubtaskReplayAction(
-							actions,
-							sessionId,
-							toolUseId,
-							{
-								agent: savedMeta?.agent || 'subagent',
-								prompt: savedMeta?.prompt || '',
-								description: savedMeta?.description || 'Subtask',
-							},
-							options,
-							data.timestamp,
-							String(data.content || ''),
-							data.is_error,
-							event.normalizedEntry,
-						);
-						break;
-					}
-					const metadata =
-						resolveToolName(toolName) === 'apply_patch' &&
-						data.metadata &&
-						typeof data.metadata === 'object'
-							? (data.metadata as Record<string, unknown>)
-							: undefined;
-					for (const entry of Array.isArray(metadata?.files) ? metadata.files : []) {
-						if (!entry || typeof entry !== 'object') continue;
-						const file = entry as Record<string, unknown>;
-						const filePath =
-							(typeof file.filePath === 'string' && file.filePath) ||
-							(typeof file.relativePath === 'string' && file.relativePath) ||
-							(typeof file.path === 'string' && file.path) ||
-							'';
-						if (!filePath) continue;
-						this.pushReplayEvent(actions, sessionId, 'file', {
-							eventType: 'file',
-							action: 'changed',
-							filePath,
-							fileName: filePath.split(/[/\\]/).pop() || filePath,
-							linesAdded: typeof file.additions === 'number' ? file.additions : 0,
-							linesRemoved: typeof file.deletions === 'number' ? file.deletions : 0,
-							toolUseId,
-						});
-					}
-					this.pushReplayEvent(actions, sessionId, 'message_part', {
-						eventType: 'message_part',
-						part: {
-							id: toolUseId,
-							messageId: toolUseId,
-							sessionId,
-							type: 'tool',
-							callId: toolUseId,
-							toolName,
-							state: {
-								status: data.is_error ? 'error' : 'completed',
-								input: data.input,
-								output:
-									typeof data.content === 'string'
-										? data.content
-										: JSON.stringify(data.content ?? ''),
-								title:
-									typeof (data as { title?: unknown }).title === 'string'
-										? ((data as { title?: string }).title ?? undefined)
-										: undefined,
-								metadata: data.metadata,
-							},
-							...(event.normalizedEntry ? { normalizedEntry: event.normalizedEntry } : {}),
-						},
-					});
-					break;
-				}
-				default:
-					break;
-			}
-		}
-		if (latestTodos) {
-			this.pushReplayEvent(actions, sessionId, 'todo', {
-				eventType: 'todo',
-				todos: latestTodos,
-			});
-		}
-		return actions;
 	}
 
 	private buildCanonicalSessionSnapshot(
@@ -2582,6 +1754,10 @@ export class SessionHandler implements WebviewMessageHandler {
 					part.state && typeof part.state === 'object'
 						? (part.state as Record<string, unknown>)
 						: undefined;
+				const toolMetadata =
+					toolState?.metadata && typeof toolState.metadata === 'object'
+						? (toolState.metadata as Record<string, unknown>)
+						: undefined;
 				const toolInput =
 					toolState?.input && typeof toolState.input === 'object'
 						? (toolState.input as Record<string, unknown>)
@@ -2613,6 +1789,28 @@ export class SessionHandler implements WebviewMessageHandler {
 					continue;
 				}
 				if (resolveToolName(part.tool) !== 'apply_patch') continue;
+				const metadataFiles = Array.isArray(toolMetadata?.files)
+					? (toolMetadata.files as Record<string, unknown>[])
+					: [];
+				if (metadataFiles.length > 0) {
+					for (const metadataFile of metadataFiles) {
+						const patchPath =
+							(typeof metadataFile.filePath === 'string' && metadataFile.filePath) ||
+							(typeof metadataFile.relativePath === 'string' && metadataFile.relativePath) ||
+							(typeof metadataFile.path === 'string' && metadataFile.path) ||
+							'';
+						if (!patchPath) continue;
+						changedFiles.push({
+							filePath: patchPath,
+							fileName: patchPath.split(/[/\\]/).pop() || patchPath,
+							linesAdded: typeof metadataFile.additions === 'number' ? metadataFile.additions : 0,
+							linesRemoved: typeof metadataFile.deletions === 'number' ? metadataFile.deletions : 0,
+							toolUseId,
+							timestamp: typeof info.time?.created === 'number' ? info.time.created : Date.now(),
+						});
+					}
+					continue;
+				}
 				for (const patchPath of extractPatchFilePaths(toolInput)) {
 					changedFiles.push({
 						filePath: patchPath,
@@ -2638,48 +1836,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		};
 	}
 
-	private async restoreSessionDiffFromServer(
-		sessionId: string,
-		config: { provider: 'opencode'; workspaceRoot: string },
-	): Promise<void> {
-		const sdkClient = this.context.cli.getSdkClient?.();
-		if (!sdkClient) {
-			return;
-		}
-
-		try {
-			const { data, error } = await sdkClient.session.diff({
-				sessionID: sessionId,
-				directory: config.workspaceRoot,
-			});
-			if (error) {
-				logger.warn('[SessionHandler] Failed to fetch session diff during restore', {
-					sessionId,
-					error,
-				});
-				return;
-			}
-
-			this.context.bridge.emit(sessionId, 'file_diff', {
-				diffs: (data || []).map(entry => ({
-					file: entry.file,
-					additions: entry.additions || 0,
-					deletions: entry.deletions || 0,
-					status: entry.status as 'added' | 'deleted' | 'modified' | undefined,
-				})),
-			});
-		} catch (error) {
-			logger.warn('[SessionHandler] Session diff restore request failed', {
-				sessionId,
-				error,
-			});
-		}
-	}
-
-	private async restoreSessionRuntimeStateFromServer(
-		sessionId: string,
-		config: { provider: 'opencode'; workspaceRoot: string },
-	): Promise<void> {
+	private async restoreSessionRuntimeStateFromServer(sessionId: string): Promise<void> {
 		const sdkClient = this.context.cli.getSdkClient?.();
 		const admin = this.context.cli.getOpenCodeServerInfo();
 		if (!sdkClient || !admin?.baseUrl) return;
@@ -2708,27 +1865,12 @@ export class SessionHandler implements WebviewMessageHandler {
 				return [];
 			}
 		};
-		const safeFetchTodos = async () => {
-			try {
-				return await this.context.services.openCodeClient.getSessionTodos(
-					sdkClient,
-					sessionId,
-					config.workspaceRoot,
-				);
-			} catch (error) {
-				logger.warn('[SessionHandler] Failed to fetch session todos', { sessionId, error });
-				return [];
-			}
-		};
-
 		try {
-			const [todos, permissionResult, questionResult] = await Promise.all([
-				safeFetchTodos(),
+			const [permissionResult, questionResult] = await Promise.all([
 				safeFetchPermissions(),
 				safeFetchQuestions(),
 			]);
 
-			this.context.bridge.emit(sessionId, 'todo', { todos });
 			this.context.bridge.emit(sessionId, 'permission', {
 				action: 'set',
 				requests: permissionResult,
@@ -2759,10 +1901,9 @@ export class SessionHandler implements WebviewMessageHandler {
 				const wasActive = this.context.sessionState.activeSessionId === sessionId;
 				// Clean up local state if this was the active session
 				this.context.sessionState.startedSessions.delete(sessionId);
-				this.clearSessionStats(sessionId);
 				this.clearPendingMessage(sessionId);
-				this.replayedSessions.delete(sessionId);
-				this.replayingSessions.delete(sessionId);
+				this.restoredSessions.delete(sessionId);
+				this.restoringSessions.delete(sessionId);
 				this.context.sessionGraph.clearParent(sessionId);
 
 				// Clean up restore/revert state for deleted session
@@ -2799,10 +1940,9 @@ export class SessionHandler implements WebviewMessageHandler {
 					if (!success) continue;
 
 					this.context.sessionState.startedSessions.delete(session.id);
-					this.clearSessionStats(session.id);
 					this.clearPendingMessage(session.id);
-					this.replayedSessions.delete(session.id);
-					this.replayingSessions.delete(session.id);
+					this.restoredSessions.delete(session.id);
+					this.restoringSessions.delete(session.id);
 					this.context.sessionGraph.clearParent(session.id);
 					this.context.cleanupSessionRestore?.(session.id);
 					if (this.context.sessionState.activeSessionId === session.id) {
@@ -3076,46 +2216,6 @@ export class SessionHandler implements WebviewMessageHandler {
 		};
 	}
 
-	private initializeSessionStats(sessionId: string | undefined): void {
-		if (!sessionId || this.sessionTotalsByUiSession.has(sessionId)) {
-			return;
-		}
-		this.sessionTotalsByUiSession.set(sessionId, {
-			requestCount: 0,
-			totalDuration: 0,
-			subagentTokensInput: 0,
-			subagentTokensOutput: 0,
-			subagentCount: 0,
-			totalInputTokens: 0,
-			totalOutputTokens: 0,
-			_prevContextTokens: 0,
-			_prevOutputTokens: 0,
-		});
-
-		this.postStats(sessionId, {
-			totalStats: {
-				contextTokens: 0,
-				outputTokens: 0,
-				totalTokens: 0,
-				cacheReadTokens: 0,
-				cacheCreationTokens: 0,
-				reasoningTokens: 0,
-				requestCount: 0,
-				totalDuration: 0,
-				totalCost: 0,
-				subagentTokensInput: 0,
-				subagentTokensOutput: 0,
-				subagentCount: 0,
-				totalInputTokens: 0,
-				totalOutputTokens: 0,
-			},
-		});
-	}
-
-	private clearSessionStats(sessionId: string): void {
-		this.sessionTotalsByUiSession.delete(sessionId);
-	}
-
 	// =========================================================================
 	// Tab persistence — delta-based, read-modify-write approach.
 	//
@@ -3180,15 +2280,15 @@ export class SessionHandler implements WebviewMessageHandler {
 		}>,
 	): void {
 		const preloadIds = tabsToRestore.filter(
-			tabId => tabId !== activeTab && !this.replayedSessions.has(tabId),
+			tabId => tabId !== activeTab && !this.restoredSessions.has(tabId),
 		);
 		if (preloadIds.length === 0) return;
 
 		void Promise.all(
 			preloadIds.map(async sessionId => {
 				try {
-					await this.replaySessionFromCLI(sessionId, config, allSessions);
-					this.replayedSessions.add(sessionId);
+					await this.restoreSessionIfNeeded(sessionId, config, allSessions);
+					this.syncSessionRuntimeState(sessionId);
 				} catch (error) {
 					logger.warn('[SessionHandler] Failed to preload restored tab history', {
 						sessionId,
@@ -3311,85 +2411,12 @@ export class SessionHandler implements WebviewMessageHandler {
 				autoAccept: this.context.getSessionAutoAccept?.(sessionId) ?? false,
 			},
 		});
-		const config = this.buildBaseConfig();
-		void this.restoreSessionCounterStateFromHistory(sessionId, config).catch(error =>
-			logger.warn('[SessionHandler] Failed to sync session counter state', { sessionId, error }),
-		);
-		void this.restoreSessionRuntimeStateFromServer(sessionId, config).catch(error =>
+		void this.restoreSessionRuntimeStateFromServer(sessionId).catch(error =>
 			logger.warn('[SessionHandler] Failed to sync session runtime state', { sessionId, error }),
 		);
-		void this.restoreSessionDiffFromServer(sessionId, config).catch(error =>
-			logger.warn('[SessionHandler] Failed to sync session diff', { sessionId, error }),
-		);
-	}
-
-	private postStats(
-		sessionId: string,
-		payload: { totalStats?: Partial<TotalStats>; modelID?: string; providerID?: string },
-	): void {
-		this.context.bridge.emit(sessionId, 'stats', payload);
-	}
-
-	private async restoreSessionCounterStateFromHistory(
-		sessionId: string,
-		config: { provider: 'opencode'; workspaceRoot: string },
-	): Promise<void> {
-		const history = await this.context.cli.getHistory(sessionId, config);
-		const sdkClient = this.context.cli.getSdkClient?.();
-		const entriesResult = sdkClient
-			? await sdkClient.session.messages({ sessionID: sessionId, directory: config.workspaceRoot })
-			: { data: [], error: undefined };
-		const entries = entriesResult.data ?? [];
-		const turnTokensByUser = this.buildTurnTokenMap(history, entriesResult.data ?? []);
-
-		for (const [userMessageId, turn] of turnTokensByUser) {
-			this.context.bridge.emit(sessionId, 'turn_tokens', {
-				userMessageId,
-				inputTokens: turn.inputTokens,
-				outputTokens: turn.outputTokens,
-				totalTokens: turn.totalTokens,
-				cacheReadTokens: turn.cacheReadTokens,
-				...(typeof turn.durationMs === 'number' ? { durationMs: turn.durationMs } : {}),
-			});
-		}
-
-		const assistantEntries = entries.filter(
-			(entry): entry is (typeof entries)[number] => entry.info.role === 'assistant',
-		);
-		const totalDuration = assistantEntries.reduce((sum, entry) => {
-			const created = entry.info.time?.created;
-			const completed = 'completed' in entry.info.time ? entry.info.time.completed : undefined;
-			if (typeof created === 'number' && typeof completed === 'number' && completed >= created) {
-				return sum + (completed - created);
-			}
-			return sum;
-		}, 0);
-		const requestCount = assistantEntries.length;
-		const totalCost = assistantEntries.reduce(
-			(sum, entry) =>
-				sum + ('cost' in entry.info && typeof entry.info.cost === 'number' ? entry.info.cost : 0),
-			0,
-		);
-		const subagentCount = history.reduce((count, ev) => {
-			if (ev.type !== 'tool_result') return count;
-			const data = ev.data as { tool?: string; metadata?: { sessionId?: string } };
-			return data.tool === 'task' && data.metadata?.sessionId ? count + 1 : count;
-		}, 0);
-
-		this.postStats(sessionId, {
-			totalStats: {
-				requestCount,
-				totalDuration,
-				totalCost,
-				subagentCount,
-			},
-		});
-
-		await this.restoreSessionDiffMembershipFromServer(sessionId, config);
 	}
 
 	private buildTurnTokenMap(
-		history: CLIEvent[],
 		entries: Array<{
 			info: {
 				id: string;
@@ -3459,52 +2486,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			});
 		}
 
-		if (result.size > 0) {
-			return result;
-		}
-
-		let lastUserMessageId: string | undefined;
-		for (const ev of history) {
-			if (ev.type === 'normalized_log' && (ev.data as { role?: string }).role === 'user') {
-				lastUserMessageId = (ev.data as { messageId?: string }).messageId || lastUserMessageId;
-				continue;
-			}
-			if (ev.type === 'turn_tokens' && lastUserMessageId) {
-				const d = ev.data as {
-					inputTokens?: number;
-					outputTokens?: number;
-					totalTokens?: number;
-					cacheReadTokens?: number;
-					durationMs?: number;
-				};
-				result.set(lastUserMessageId, {
-					inputTokens: d.inputTokens ?? 0,
-					outputTokens: d.outputTokens ?? 0,
-					totalTokens: d.totalTokens ?? 0,
-					cacheReadTokens: d.cacheReadTokens ?? 0,
-					...(typeof d.durationMs === 'number' ? { durationMs: d.durationMs } : {}),
-				});
-			}
-		}
-
 		return result;
-	}
-
-	private findReplayedUserMessageIdInHistory(
-		history: CLIEvent[],
-		revertMessageId: string,
-	): string | undefined {
-		for (let i = history.length - 1; i >= 0; i--) {
-			const ev = history[i];
-			if (ev.type !== 'normalized_log' || (ev.data as { role?: string }).role !== 'user') {
-				continue;
-			}
-			const eventMessageId = (ev.data as { messageId?: string }).messageId;
-			if (eventMessageId === revertMessageId) {
-				return eventMessageId;
-			}
-		}
-		return undefined;
 	}
 
 	private hasCanonicalUserMessage(
@@ -3538,27 +2520,5 @@ export class SessionHandler implements WebviewMessageHandler {
 				associatedMessageId: messageId,
 			},
 		});
-	}
-
-	private async restoreSessionDiffMembershipFromServer(
-		sessionId: string,
-		config: { provider: 'opencode'; workspaceRoot: string },
-	): Promise<void> {
-		const sdkClient = this.context.cli.getSdkClient?.();
-		if (!sdkClient) return;
-		const { data } = await sdkClient.session.diff({
-			sessionID: sessionId,
-			directory: config.workspaceRoot,
-		});
-		for (const entry of data || []) {
-			this.context.bridge.emit(sessionId, 'file', {
-				action: 'changed',
-				filePath: entry.file,
-				fileName: entry.file.split(/[/\\]/).pop() || entry.file,
-				linesAdded: entry.additions || 0,
-				linesRemoved: entry.deletions || 0,
-				toolUseId: `restore:${entry.file}`,
-			});
-		}
 	}
 }
