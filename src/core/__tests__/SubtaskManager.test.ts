@@ -104,6 +104,37 @@ describe('SubtaskManager', () => {
 				durationMs: 0,
 			});
 		});
+
+		it('overwrites total when child turn tokens are snapshots', () => {
+			const { manager } = createManager();
+			manager.registerSubtask('tool-1', 'parent-session-1');
+
+			manager.accumulateTokens('tool-1', {
+				inputTokens: 100,
+				outputTokens: 50,
+				totalTokens: 150,
+				cacheReadTokens: 10,
+				durationMs: 25,
+				isSnapshot: true,
+			});
+			manager.accumulateTokens('tool-1', {
+				inputTokens: 80,
+				outputTokens: 20,
+				totalTokens: 120,
+				cacheReadTokens: 5,
+				durationMs: 35,
+				isSnapshot: true,
+			});
+
+			expect(manager.getAccumulatedTokens('tool-1')).toEqual({
+				input: 180,
+				output: 70,
+				total: 150,
+				cacheRead: 15,
+				durationMs: 60,
+				lastSnapshotTotal: 120,
+			});
+		});
 	});
 
 	describe('completeSubtask', () => {

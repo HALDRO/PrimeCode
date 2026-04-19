@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { resolveModelDisplayName } from '../../../common';
-
+import { getDisplayDurationMs } from '../../../common/tokenStats';
 import { useElapsedTimer } from '../../hooks/useElapsedTimer';
 
 import { cn } from '../../lib/cn';
@@ -12,6 +12,7 @@ import {
 	useEditDraft,
 	useEditingMessageId,
 	useIsProcessing,
+	useMessageTurnTokens,
 	useRestoreCommits,
 	useUnrevertAvailable,
 } from '../../store';
@@ -159,81 +160,112 @@ UnrevertButton.displayName = 'UnrevertButton';
 
 const MessageStats = React.memo<{
 	fileChanges: { added: number; removed: number; files: number } | null;
-	tokenCount: number | null;
+	messageId: string;
 	timestamp: string;
-	processingTime: string | null;
+	processingTimeFallbackMs: number | null;
+	isProcessing: boolean;
+	staticTokenCount: number | null;
 	modelName: string;
-}>(({ fileChanges, tokenCount, timestamp, processingTime, modelName }) => {
-	// Left side items: model name, then file changes
-	const leftItems: StatItem[] = [];
+}>(
+	({
+		fileChanges,
+		messageId,
+		timestamp,
+		processingTimeFallbackMs,
+		isProcessing,
+		staticTokenCount,
+		modelName,
+	}) => {
+		const liveTurnTokens = useMessageTurnTokens(messageId);
+		const liveElapsed = useElapsedTimer(isProcessing, timestamp);
 
-	leftItems.push({
-		key: 'model',
-		value: <span className="truncate">{modelName}</span>,
-		tooltip: `Model: ${modelName}`,
-	});
+		// Simple token display: live usage if available, otherwise static (pre-computed from store).
+		// No refs, no caching, no complex fallback chains.
+		const liveUsage =
+			typeof liveTurnTokens?.usage === 'number' && liveTurnTokens.usage > 0
+				? liveTurnTokens.usage
+				: null;
+		const tokenCount = isProcessing ? liveUsage : (liveUsage ?? staticTokenCount);
 
-	if (fileChanges) {
+		const durationMs = getDisplayDurationMs({
+			liveDurationMs: liveTurnTokens?.durationMs,
+			statsDurationMs: processingTimeFallbackMs ?? undefined,
+			isProcessing,
+			liveElapsedMs: liveElapsed,
+		});
+		const processingTime = durationMs ? formatDuration(durationMs) : null;
+
+		// Left side items: model name, then file changes
+		const leftItems: StatItem[] = [];
+
 		leftItems.push({
-			key: 'files',
-			tooltip: `${fileChanges.files} file${fileChanges.files > 1 ? 's' : ''} changed`,
-			value: (
-				<>
-					{fileChanges.added > 0 && (
-						<span className="text-(--changed-files-added)">+{fileChanges.added}</span>
-					)}
-					{fileChanges.removed > 0 && (
-						<span className="text-(--changed-files-removed)">-{fileChanges.removed}</span>
-					)}
-				</>
-			),
+			key: 'model',
+			value: <span className="truncate">{modelName}</span>,
+			tooltip: `Model: ${modelName}`,
 		});
-	}
 
-	// Right side items: tokens, duration, time
-	const rightItems: StatItem[] = [];
+		if (fileChanges) {
+			leftItems.push({
+				key: 'files',
+				tooltip: `${fileChanges.files} file${fileChanges.files > 1 ? 's' : ''} changed`,
+				value: (
+					<>
+						{fileChanges.added > 0 && (
+							<span className="text-(--changed-files-added)">+{fileChanges.added}</span>
+						)}
+						{fileChanges.removed > 0 && (
+							<span className="text-(--changed-files-removed)">-{fileChanges.removed}</span>
+						)}
+					</>
+				),
+			});
+		}
 
-	if (tokenCount) {
+		// Right side items: tokens, duration, time
+		const rightItems: StatItem[] = [];
+
+		if (tokenCount) {
+			rightItems.push({
+				key: 'tokens',
+				icon: <TokensIcon size={12} />,
+				value: formatTokens(tokenCount),
+				tooltip: 'Total tokens used for this message',
+			});
+		}
+
+		if (processingTime) {
+			rightItems.push({
+				key: 'duration',
+				icon: <TimerIcon size={12} />,
+				value: processingTime,
+				tooltip: 'Processing time',
+				variant: 'success',
+			});
+		}
+
 		rightItems.push({
-			key: 'tokens',
-			icon: <TokensIcon size={12} />,
-			value: formatTokens(tokenCount),
-			tooltip: 'Estimated tokens used',
+			key: 'time',
+			icon: <ClockIcon size={12} />,
+			value: formatTime(timestamp),
+			tooltip: 'Time sent',
 		});
-	}
 
-	if (processingTime) {
-		rightItems.push({
-			key: 'duration',
-			icon: <TimerIcon size={12} />,
-			value: processingTime,
-			tooltip: 'Processing time',
-			variant: 'success',
-		});
-	}
-
-	rightItems.push({
-		key: 'time',
-		icon: <ClockIcon size={12} />,
-		value: formatTime(timestamp),
-		tooltip: 'Time sent',
-	});
-
-	return (
-		<div className="flex items-center justify-between w-full gap-(--gap-2)">
-			<StatsDisplay
-				mode="message"
-				items={leftItems}
-				className="min-w-0 shrink !h-auto !mt-0 !px-0 !pt-0 !pb-0 self-end"
-			/>
-			<StatsDisplay
-				mode="message"
-				items={rightItems}
-				className="shrink-0 !h-auto !mt-0 !px-0 !pt-0 !pb-0 self-end"
-			/>
-		</div>
-	);
-});
+		return (
+			<div className="flex items-center justify-between w-full gap-(--gap-2)">
+				<StatsDisplay
+					mode="message"
+					items={leftItems}
+					className="min-w-0 shrink !h-auto !mt-0 !px-0 !pt-0 !pb-0 self-end"
+				/>
+				<StatsDisplay
+					mode="message"
+					items={rightItems}
+					className="shrink-0 !h-auto !mt-0 !px-0 !pt-0 !pb-0 self-end"
+				/>
+			</div>
+		);
+	},
+);
 MessageStats.displayName = 'MessageStats';
 
 /**
@@ -321,28 +353,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 		const isLastUserMessage = stats.isLast;
 		const fileChangesStats = stats.fileChanges;
 		const tokenStats = stats.tokenCount;
-
-		// Live timer for processing state (replaces forceUpdate pattern)
 		const isProcessingLastMessage = isProcessing && isLastUserMessage;
-		const liveElapsed = useElapsedTimer(isProcessingLastMessage);
-
-		// Calculate processing time locally
-		const processingTime = useMemo(() => {
-			// Prefer real duration from backend (turn_tokens event)
-			if (stats.durationMs && stats.durationMs > 0) {
-				return formatDuration(stats.durationMs);
-			}
-
-			// Live timer while processing — must be checked BEFORE lastResponseTs
-			// because during child sessions there are already assistant messages
-			// (e.g. "I'll use the task tool...") which set lastResponseTs,
-			// but the session is still actively processing.
-			if (isProcessingLastMessage && liveElapsed > 0) {
-				return formatDuration(liveElapsed);
-			}
-
-			return null;
-		}, [stats.durationMs, isProcessingLastMessage, liveElapsed]);
 
 		// Parse attachments (prop-based, stable)
 		const {
@@ -644,9 +655,11 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 						<div className="flex items-end text-sm px-(--gap-4) pt-0 pb-(--gap-1-5) bg-(--input-bg)">
 							<MessageStats
 								fileChanges={fileChangesStats}
-								tokenCount={tokenStats}
+								messageId={message.id}
 								timestamp={message.timestamp}
-								processingTime={processingTime}
+								processingTimeFallbackMs={stats.durationMs}
+								isProcessing={isProcessingLastMessage}
+								staticTokenCount={tokenStats}
 								modelName={getModelDisplayName(message.model || activeModelID || '')}
 							/>
 						</div>

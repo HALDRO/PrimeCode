@@ -7,6 +7,7 @@
  */
 
 import React from 'react';
+import { getDisplayDurationMs } from '../../../common/tokenStats';
 import { useElapsedTimer } from '../../hooks/useElapsedTimer';
 import { useMessageTurnTokens } from '../../store';
 import { formatDuration, formatTime, formatTokens } from '../../utils/format';
@@ -69,18 +70,22 @@ export const LiveMessageStats = React.memo<LiveMessageStatsProps>(
 		const liveTurnTokens = useMessageTurnTokens(messageId);
 		const liveElapsed = useElapsedTimer(isProcessing, messageTimestamp);
 
-		const tokenCount = liveTurnTokens?.total ?? stats.tokenCount;
+		// Simple token display: live usage if available, otherwise static (pre-computed from store).
+		// No refs, no caching, no complex fallback chains.
+		const liveUsage =
+			typeof liveTurnTokens?.usage === 'number' && liveTurnTokens.usage > 0
+				? liveTurnTokens.usage
+				: null;
+		const tokenCount = isProcessing ? liveUsage : (liveUsage ?? stats.tokenCount);
 
 		// Duration priority chain
-		const durationText = getDurationText(
-			liveTurnTokens?.durationMs,
-			stats.durationMs ?? undefined,
-			stats.nextUserMessageTs ?? undefined,
-			stats.lastResponseTs ?? undefined,
-			messageTimestamp,
+		const durationMs = getDisplayDurationMs({
+			liveDurationMs: liveTurnTokens?.durationMs,
+			statsDurationMs: stats.durationMs ?? undefined,
 			isProcessing,
-			liveElapsed,
-		);
+			liveElapsedMs: liveElapsed,
+		});
+		const durationText = durationMs ? formatDuration(durationMs) : null;
 
 		const rightItems: StatItem[] = [];
 
@@ -89,7 +94,7 @@ export const LiveMessageStats = React.memo<LiveMessageStatsProps>(
 				key: 'tokens',
 				icon: <TokensIcon size={12} />,
 				value: formatTokens(tokenCount),
-				tooltip: 'Estimated tokens used',
+				tooltip: 'Total tokens used for this message',
 			});
 		}
 
@@ -114,22 +119,3 @@ export const LiveMessageStats = React.memo<LiveMessageStatsProps>(
 	},
 );
 LiveMessageStats.displayName = 'LiveMessageStats';
-
-/* ── helpers ───────────────────────────────────────────────────────── */
-
-function getDurationText(
-	liveDurationMs: number | undefined,
-	statsDurationMs: number | undefined,
-	_nextUserMessageTs: number | undefined,
-	_lastResponseTs: number | undefined,
-	_messageTimestamp: string,
-	isProcessing: boolean,
-	liveElapsed: number,
-): string | null {
-	if (liveDurationMs && liveDurationMs > 0) return formatDuration(liveDurationMs);
-	if (statsDurationMs && statsDurationMs > 0) return formatDuration(statsDurationMs);
-
-	if (isProcessing && liveElapsed > 0) return formatDuration(liveElapsed);
-
-	return null;
-}

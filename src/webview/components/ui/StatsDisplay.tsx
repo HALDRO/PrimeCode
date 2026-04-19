@@ -116,7 +116,7 @@ export const SessionStatsDisplay: React.FC<{
 	const sessionMetrics = useSessionContextMetrics();
 
 	const items = useMemo<StatItem[]>(() => {
-		// Context window usage: total tokens (input + output) from CLI
+		// Session token snapshot from the latest assistant message.
 		const context = sessionMetrics.context;
 		const windowUsed = context?.total ?? 0;
 		const inputTokens = context?.input ?? 0;
@@ -141,8 +141,8 @@ export const SessionStatsDisplay: React.FC<{
 			value: tokenParts.join(' '),
 			tooltip:
 				cacheRead > 0 && inputTokens > 0 && cacheRead <= inputTokens
-					? `Context: ${formatNumber(windowUsed)} / ${formatNumber(contextLimit)} · Cache: ${formatNumber(cacheRead)} of ${formatNumber(inputTokens)} input tokens`
-					: 'Context window (in+out) / limit',
+					? `Latest token snapshot: ${formatNumber(windowUsed)} / ${formatNumber(contextLimit)} · Cache read: ${formatNumber(cacheRead)} of ${formatNumber(inputTokens)} input tokens`
+					: 'Latest token snapshot / model limit',
 		});
 
 		if (subagentTokensTotal > 0) {

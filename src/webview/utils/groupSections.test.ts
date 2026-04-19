@@ -472,11 +472,11 @@ describe('groupMessagesIntoSections', () => {
 				} as Message,
 			];
 			const turnTokens = {
-				u1: { input: 50, output: 50, total: 100, cacheRead: 0 },
+				u1: { input: 50, output: 50, total: 100, usage: 25, cacheRead: 0 },
 			};
 			const result = groupMessagesIntoSections(msgs, [], null, [], turnTokens);
 
-			expect(result[0].stats.tokenCount).toBe(100);
+			expect(result[0].stats.tokenCount).toBe(25);
 		});
 
 		it('should return null tokenCount when no content to estimate', () => {

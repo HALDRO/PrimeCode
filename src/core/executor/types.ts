@@ -171,6 +171,7 @@ export interface TurnTokensEventData {
 	inputTokens: number;
 	outputTokens: number;
 	totalTokens: number;
+	usageTokens?: number;
 	cacheReadTokens: number;
 	durationMs?: number;
 	userMessageId?: string;
@@ -395,6 +396,10 @@ export interface CLIExecutor extends EventEmitter {
 		}>
 	>;
 	getHistory(sessionId: string, config: CLIConfig): Promise<CLIEvent[]>;
+	syncSessionSnapshotTotal?(
+		sessionId: string,
+		turnTokens: Record<string, { total?: number }>,
+	): void;
 
 	/** Deletes a session by ID. Returns true if successful. */
 	deleteSession(sessionId: string, config: CLIConfig): Promise<boolean>;

@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 
+const ELAPSED_TIMER_INTERVAL_MS = 100;
+
 /**
- * Hook: live elapsed timer that ticks every 500ms while active.
+ * Hook: live elapsed timer that ticks at 10 FPS while active.
  * Preserves accumulated time across brief inactive gaps so the timer
  * doesn't reset when `isActive` flickers (e.g. during sub-agent execution).
  *
@@ -35,8 +37,8 @@ export const useElapsedTimer = (isActive: boolean, startTime?: string | number):
 			wasActiveRef.current = true;
 			const id = setInterval(() => {
 				setElapsed(accumulatedRef.current + (Date.now() - segmentStartRef.current));
-			}, 500);
-			// Tick immediately so the display updates without waiting 1s
+			}, ELAPSED_TIMER_INTERVAL_MS);
+			// Tick immediately so the display updates without waiting for the first interval.
 			setElapsed(accumulatedRef.current + (Date.now() - segmentStartRef.current));
 			return () => clearInterval(id);
 		}

@@ -31,6 +31,11 @@ import {
 	mapQuestionRuntimePayloadToRequest,
 	parseSessionTodoItem,
 } from '../../common/schemas';
+import {
+	computeTurnUsage,
+	getCompletedDurationMs,
+	getSnapshotTotal,
+} from '../../common/tokenStats';
 import { logger } from '../../utils/logger';
 import { getPathBaseName, toFileUri } from '../../utils/path';
 import { LogNormalizer } from './LogNormalizer';
@@ -108,11 +113,6 @@ type OpenCodePart =
 
 function isAssistantMessage(info: Message): info is AssistantInfo {
 	return info.role === 'assistant';
-}
-
-function getTokenTotal(tokens: AssistantInfo['tokens']): number {
-	const runtimeTotal = Reflect.get(tokens as object, 'total');
-	return typeof runtimeTotal === 'number' ? runtimeTotal : tokens.input + tokens.output;
 }
 
 function isTaskToolName(name: string): boolean {
@@ -196,9 +196,13 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		string,
 		{ input: number; output: number; cacheRead: number }
 	>();
-	// Per-turn (keyed by userMessageId) accumulated duration and last total snapshot.
-	// Token total is a snapshot (last value wins), but duration must be summed across steps.
-	private readonly turnAccum = new Map<string, { total: number; durationMs: number }>();
+	// Per-turn (keyed by userMessageId) accumulated duration, latest token snapshot,
+	// and authoritative per-turn token usage derived from positive snapshot deltas.
+	private readonly turnAccum = new Map<
+		string,
+		{ total: number; usage: number; durationMs: number }
+	>();
+	private readonly sessionSnapshotTotals = new Map<string, number>();
 
 	private readonly _commandsCache = new TtlCache<Array<{ name: string; description?: string }>>(
 		5 * 60 * 1000,
@@ -1091,8 +1095,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			let lastProviderID: string | undefined;
 
 			// Track per-turn token snapshots keyed by parent user message ID.
-			// `total` from CLI is the context window snapshot — last value per turn wins.
-			// Duration is summed across steps within a turn.
+			// `total` behaves like a cumulative snapshot, so the latest value per turn
+			// is the source of truth and the UI derives per-message deltas.
 			const turnSnapshots = new Map<
 				string,
 				{ total: number; input: number; output: number; cacheRead: number; durationMs: number }
@@ -1125,25 +1129,18 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 						_totalModelDuration += completed - created;
 					}
 
-					// Collect snapshot for this turn (last value wins; delta computed on frontend)
+					// Collect the latest per-turn token snapshot (last value wins; duration sums across steps).
 					const turnKey = info.parentID || currentUserMessageId;
 					if (turnKey && (tokens.input > 0 || tokens.output > 0)) {
-						const total = getTokenTotal(tokens);
+						const total = getSnapshotTotal(tokens);
 						// Compute per-assistant-message duration
-						let msgDuration = 0;
 						const msgCreated = info.time?.created;
 						const msgCompleted = info.time?.completed;
-						if (
-							typeof msgCreated === 'number' &&
-							typeof msgCompleted === 'number' &&
-							msgCompleted > msgCreated
-						) {
-							msgDuration = msgCompleted - msgCreated;
-						}
-						// Update snapshot: total is last-wins, duration is summed
+						const msgDuration = getCompletedDurationMs(msgCreated, msgCompleted);
+						// Update snapshot: total is last-wins, duration is summed.
 						const existing = turnSnapshots.get(turnKey);
 						turnSnapshots.set(turnKey, {
-							total, // snapshot — last value wins (context window size)
+							total,
 							input: tokens.input,
 							output: tokens.output,
 							cacheRead: tokens.cache.read,
@@ -1328,7 +1325,9 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			// Emit turn_tokens with snapshot totals per user turn.
 			// `total` from CLI is the context window size — that's what we show per user message.
 			// Duration is summed across steps within a turn. Total is last-wins snapshot.
+			let lastTotal = 0;
 			for (const [turnKey, snap] of turnSnapshots) {
+				lastTotal = snap.total;
 				events.push({
 					type: 'turn_tokens' as const,
 					data: {
@@ -1341,6 +1340,10 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 					},
 					sessionId,
 				});
+			}
+
+			if (sessionId && lastTotal > 0) {
+				this.sessionSnapshotTotals.set(sessionId, lastTotal);
 			}
 
 			if (lastModelID) {
@@ -1357,6 +1360,21 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			return events;
 		} catch (_error) {
 			return [];
+		}
+	}
+
+	syncSessionSnapshotTotal(
+		sessionId: string,
+		turnTokens: Record<string, { total?: number }>,
+	): void {
+		let lastTotal = 0;
+		for (const turn of Object.values(turnTokens)) {
+			if (typeof turn?.total === 'number' && turn.total > 0) {
+				lastTotal = turn.total;
+			}
+		}
+		if (lastTotal > 0) {
+			this.sessionSnapshotTotals.set(sessionId, lastTotal);
 		}
 	}
 
@@ -2079,7 +2097,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			const userMessageId = info.parentID;
 			const input = tokens.input;
 			const output = tokens.output;
-			const total = getTokenTotal(tokens);
+			const total = getSnapshotTotal(tokens);
 			const cacheRead = tokens.cache.read;
 
 			// Detect token changes for session_updated emission (context bar, etc.)
@@ -2100,28 +2118,41 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				this.emit('event', { type: 'session_updated', data: { modelID, providerID }, sessionId });
 			}
 
-			// On step completion: emit turn_tokens with the SNAPSHOT total (not deltas).
-			// `total` from CLI is the context window size — that's what we show per user message.
+			// On step completion emit the latest per-turn snapshot plus authoritative
+			// per-turn token usage.
+			// accumulated inside this turn from positive snapshot deltas.
 			// Duration is summed across steps within a turn.
 			const completed = info.time.completed;
 			const hasCompleted = typeof completed === 'number';
 			const started = info.time.created;
-			const durationMs = hasCompleted && started > 0 ? completed - started : undefined;
+			const durationMs = getCompletedDurationMs(started, completed) || undefined;
 			const finish = (info as Record<string, unknown>).finish as string | undefined;
 			const isStepDone = hasCompleted || !!finish;
 
 			if (isStepDone) {
-				// Accumulate duration per user turn, but total is always a snapshot (last wins).
+				// Accumulate duration per user turn, keep the latest non-zero snapshot total,
+				// and derive actual per-turn usage from positive snapshot growth within the turn.
 				// Skip zero-total steps (empty/aborted messages) to avoid overwriting real data.
 				if (userMessageId) {
-					const prev = this.turnAccum.get(userMessageId) ?? { total: 0, durationMs: 0 };
+					const prev = this.turnAccum.get(userMessageId) ?? { total: 0, usage: 0, durationMs: 0 };
+					const sessionSnapshotTotal = sessionId
+						? (this.sessionSnapshotTotals.get(sessionId) ?? 0)
+						: 0;
+					const usage = computeTurnUsage(tokens, {
+						previousTurnSnapshotTotal: prev.total,
+						previousSessionSnapshotTotal: sessionSnapshotTotal,
+					});
 					this.turnAccum.set(userMessageId, {
-						total: total > 0 ? total : prev.total, // keep previous if current is 0
+						total: usage.totalTokens > 0 ? usage.totalTokens : prev.total,
+						usage: prev.usage + usage.usageTokens,
 						durationMs: prev.durationMs + (durationMs ?? 0),
 					});
+					if (usage.totalTokens > 0 && sessionId) {
+						this.sessionSnapshotTotals.set(sessionId, usage.nextSessionSnapshotTotal);
+					}
 				}
 
-				// Emit turn_tokens with snapshot total + accumulated duration
+				// Emit turn_tokens with snapshot total + accumulated usage + duration.
 				if (total > 0) {
 					const accum = userMessageId ? this.turnAccum.get(userMessageId) : undefined;
 					this.emit('event', {
@@ -2129,7 +2160,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 						data: {
 							inputTokens: input,
 							outputTokens: output,
-							totalTokens: total,
+							totalTokens: accum?.total ?? total,
+							...(typeof accum?.usage === 'number' ? { usageTokens: accum.usage } : {}),
 							cacheReadTokens: cacheRead,
 							...(userMessageId ? { userMessageId } : {}),
 							...(accum ? { durationMs: accum.durationMs } : durationMs ? { durationMs } : {}),
@@ -2616,6 +2648,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		this.lastEmittedStatus.clear();
 		this.lastMessageTokens.clear();
 		this.turnAccum.clear();
+		this.sessionSnapshotTotals.clear();
 		this.activeSessions.clear();
 		this.sessionMessages.clear();
 		this.deletedSessions.clear();
@@ -2643,6 +2676,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			}
 			this.sessionMessages.delete(sessionId);
 		}
+		this.sessionSnapshotTotals.delete(sessionId);
 	}
 
 	async dispose(): Promise<void> {

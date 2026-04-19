@@ -54,6 +54,7 @@ export interface TokenUsage {
 	input: number;
 	output: number;
 	total?: number;
+	usage?: number;
 	cacheRead?: number;
 	durationMs?: number;
 }
@@ -150,6 +151,7 @@ type MessageInput = Partial<StoredMessage> & {
 
 export interface ChatSession {
 	id: string;
+	title?: string;
 	/** Per-session primary agent override. Undefined means "build". */
 	agent?: string;
 	/** Per-session model override. Undefined means "use workspace default". */
@@ -330,9 +332,9 @@ function upsertSubtaskMessage(targetSession: ChatSession, incoming: SubtaskMessa
 		...incoming,
 		id: incoming.id,
 		type: 'subtask',
-		agent: incoming.agent || existing?.agent || 'subagent',
-		prompt: incoming.prompt || existing?.prompt || '',
-		description: incoming.description || existing?.description || 'Subtask',
+		agent: incoming.agent ?? existing?.agent ?? '',
+		prompt: incoming.prompt ?? existing?.prompt ?? '',
+		description: incoming.description ?? existing?.description ?? '',
 		status: incoming.status || existing?.status || 'running',
 		timestamp: incoming.timestamp || existing?.timestamp || new Date().toISOString(),
 	};
@@ -442,20 +444,20 @@ function handleStatusEvent(targetSession: ChatSession, payload: SessionEventPayl
 
 function handleTurnTokensEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
 	const t = payload as SessionTurnTokensPayload;
-	// Use explicit userMessageId from history replay, or fall back to last user message
-	const turnMsgId =
-		t.userMessageId || projectRuntimeMessages(targetSession).findLast(m => m.kind === 'user')?.id;
+	const turnMsgId = t.userMessageId;
 
 	if (turnMsgId) {
 		const existing = targetSession.turnTokens[turnMsgId];
-		// Snapshot overwrite: totalTokens from CLI is the context window size (last value wins).
+		// turn_tokens carries the latest snapshot total plus the authoritative
+		// per-turn token usage for this user message.
 		// Skip zero-total events (empty/aborted messages) to avoid overwriting real data.
-		// Duration is summed across steps (each step = separate API call).
+		// Duration is still summed across steps (each step = separate API call).
 		const hasRealTokens = t.totalTokens > 0;
 		targetSession.turnTokens[turnMsgId] = {
 			input: hasRealTokens ? t.inputTokens : (existing?.input ?? 0),
 			output: hasRealTokens ? t.outputTokens : (existing?.output ?? 0),
 			total: hasRealTokens ? t.totalTokens : (existing?.total ?? 0),
+			usage: typeof t.usageTokens === 'number' ? t.usageTokens : existing?.usage,
 			cacheRead: hasRealTokens ? t.cacheReadTokens : (existing?.cacheRead ?? 0),
 			durationMs: t.durationMs ?? existing?.durationMs,
 		};
@@ -466,6 +468,8 @@ function handleCompleteEvent(targetSession: ChatSession, payload: SessionEventPa
 	const complete = payload as import('../../common').SessionCompletePayload;
 	const completePartId = complete.partId;
 	const completedAt = complete.completedAt;
+	targetSession.streamingToolId =
+		targetSession.streamingToolId === complete.toolUseId ? null : targetSession.streamingToolId;
 
 	for (const parts of Object.values(targetSession.runtimeMessagePartsById)) {
 		for (const part of parts) {
@@ -475,6 +479,30 @@ function handleCompleteEvent(targetSession: ChatSession, payload: SessionEventPa
 				...(part.state || {}),
 				status: part.state?.status === 'error' ? 'error' : 'completed',
 			};
+		}
+	}
+
+	const hasRunningParts = Object.values(targetSession.runtimeMessagePartsById).some(parts =>
+		parts.some(part => {
+			if (part.type === 'tool') {
+				const status = part.state?.status;
+				return status === 'pending' || status === 'running' || status === undefined;
+			}
+			return typeof part.completedAt !== 'number' && part.state?.status !== 'completed';
+		}),
+	);
+
+	if (!hasRunningParts) {
+		targetSession.isProcessing = false;
+		targetSession.isAutoRetrying = false;
+		targetSession.retryInfo = null;
+		targetSession.toolActivity = null;
+		if (
+			!targetSession.status ||
+			targetSession.status === 'Working...' ||
+			targetSession.status === 'Retrying…'
+		) {
+			targetSession.status = 'Ready';
 		}
 	}
 
@@ -590,6 +618,10 @@ function handleMessageRecordEvent(targetSession: ChatSession, payload: SessionEv
 			(a, b) => (a.createdAt || 0) - (b.createdAt || 0) || a.id.localeCompare(b.id),
 		);
 	}
+
+	// Do not derive per-turn totals from message_record in live mode.
+	// The authoritative live snapshot comes from turn_tokens, while restored
+	// sessions already provide precomputed turnTokens via messages_reload.
 }
 
 function handleMessageRecordRemovedEvent(
@@ -705,6 +737,12 @@ function handlePermissionEvent(targetSession: ChatSession, payload: SessionEvent
 
 function handleQuestionEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
 	const question = payload as import('../../common').SessionQuestionPayload;
+	if (question.action === 'remove' && question.requestId) {
+		targetSession.pendingQuestions = targetSession.pendingQuestions.filter(
+			request => request.id !== question.requestId,
+		);
+		return;
+	}
 	targetSession.pendingQuestions = applyCollectionAction(
 		targetSession.pendingQuestions,
 		question.action,
@@ -873,9 +911,10 @@ function dispatchToSession(
 	}
 	if (eventType === 'session_info') {
 		const info = payload as {
-			data?: { tools?: string[]; mcpServers?: string[]; autoAccept?: boolean };
+			data?: { title?: string; tools?: string[]; mcpServers?: string[]; autoAccept?: boolean };
 			permissionAutoAccept?: { mode: 'default' | 'on' | 'off'; effective: boolean };
 		};
+		if (typeof info.data?.title === 'string') targetSession.title = info.data.title;
 		if (info.data?.tools) targetSession.availableTools = info.data.tools;
 		if (info.data?.mcpServers) targetSession.availableMcpServers = info.data.mcpServers;
 		if (typeof info.data?.autoAccept === 'boolean') {
@@ -890,6 +929,7 @@ function dispatchToSession(
 
 const createEmptySession = (id: string, timestamp: number): ChatSession => ({
 	id,
+	title: undefined,
 	agent: undefined,
 	model: undefined,
 	userMessagesById: {},

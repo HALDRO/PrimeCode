@@ -8,6 +8,7 @@
 import { useCallback, useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { extractCanonicalTaskResult, parseModelId } from '../../common';
+import { sumUsageValues } from '../../common/tokenStats';
 import {
 	getAvailableModelVariants,
 	getConfiguredAgentVariant,
@@ -112,12 +113,12 @@ export function projectRuntimeMessages(
 			toolUseId: overlay?.toolUseId ?? part.callId,
 			toolName: overlay?.toolName ?? part.toolName,
 			agent:
-				overlay?.agent ||
-				(typeof rawInput.subagent_type === 'string' ? rawInput.subagent_type : 'subagent'),
-			prompt: overlay?.prompt || (typeof rawInput.prompt === 'string' ? rawInput.prompt : ''),
+				overlay?.agent ??
+				(typeof rawInput.subagent_type === 'string' ? rawInput.subagent_type : ''),
+			prompt: overlay?.prompt ?? (typeof rawInput.prompt === 'string' ? rawInput.prompt : ''),
 			description:
-				overlay?.description ||
-				(typeof rawInput.description === 'string' ? rawInput.description : 'Subtask'),
+				overlay?.description ??
+				(typeof rawInput.description === 'string' ? rawInput.description : ''),
 			parentSessionId: overlay?.parentSessionId ?? session.id,
 			...(overlay?.childSessionId
 				? { childSessionId: overlay.childSessionId }
@@ -497,20 +498,32 @@ export const useChatActions = () => useChatStore((state: ChatState) => state.act
 const subagentTotalsCache = { messages: null as RenderMessage[] | null, result: 0 };
 export const useSubagentTokenTotals = () => {
 	const session = useChatStore((state: ChatState) => getActiveSession(state));
+	const sessionsById = useChatStore((state: ChatState) => state.sessionsById);
 	return useMemo(() => {
 		const messages = projectRuntimeMessages(session);
 		if (messages === subagentTotalsCache.messages) return subagentTotalsCache.result;
 		subagentTotalsCache.messages = messages;
-		let total = 0;
+		const usageValues: Array<number | undefined> = [];
 		for (const msg of messages) {
 			if (msg.kind === 'subtask') {
 				const ct = msg.childTokens;
-				if (ct?.total) total += ct.total;
+				if (ct?.total) {
+					usageValues.push(ct.total);
+					continue;
+				}
+				const childSessionId = (msg as { childSessionId?: string }).childSessionId;
+				if (!childSessionId) continue;
+				const childSession = sessionsById[childSessionId];
+				if (!childSession) continue;
+				for (const turn of Object.values(childSession.turnTokens)) {
+					usageValues.push(turn.usage);
+				}
 			}
 		}
+		const total = sumUsageValues(usageValues);
 		subagentTotalsCache.result = total;
 		return total;
-	}, [session]);
+	}, [session, sessionsById]);
 };
 
 /** Select active model ID derived from the latest assistant record with a model. */
@@ -630,8 +643,11 @@ export const usePendingQuestions = () =>
 // Tool-specific Selectors (active session)
 // ============================================
 
-export const useToolResultByToolId = (toolUseId: string | undefined) => {
-	const session = useChatStore((state: ChatState) => getActiveSession(state));
+export const useToolResultByToolId = (toolUseId: string | undefined, sessionId?: string) => {
+	const session = useChatStore((state: ChatState) => {
+		const targetId = sessionId || state.activeSessionId;
+		return targetId ? state.sessionsById[targetId] : undefined;
+	});
 
 	return useMemo(() => {
 		if (!session || !toolUseId) return undefined;

@@ -19,6 +19,7 @@ export interface TokenDelta {
 	totalTokens: number;
 	cacheReadTokens: number;
 	durationMs?: number;
+	isSnapshot?: boolean;
 }
 
 interface AccumulatedTokens {
@@ -27,6 +28,7 @@ interface AccumulatedTokens {
 	total: number;
 	cacheRead: number;
 	durationMs?: number;
+	lastSnapshotTotal?: number;
 }
 
 const ZERO_TOKENS: AccumulatedTokens = {
@@ -35,6 +37,7 @@ const ZERO_TOKENS: AccumulatedTokens = {
 	total: 0,
 	cacheRead: 0,
 	durationMs: 0,
+	lastSnapshotTotal: 0,
 };
 
 export class SubtaskManager {
@@ -160,12 +163,18 @@ export class SubtaskManager {
 
 	accumulateTokens(toolUseId: string, delta: TokenDelta): AccumulatedTokens {
 		const prev = this.tokenAccumulators.get(toolUseId) ?? { ...ZERO_TOKENS };
+		const usesSnapshotTotals = delta.isSnapshot === true;
+		const nextSnapshotTotal = Math.max(0, delta.totalTokens ?? 0);
+		const totalDelta = usesSnapshotTotals
+			? Math.max(0, nextSnapshotTotal - (prev.lastSnapshotTotal ?? 0))
+			: Math.max(0, delta.totalTokens ?? 0);
 		const accumulated: AccumulatedTokens = {
 			input: prev.input + (delta.inputTokens ?? 0),
 			output: prev.output + (delta.outputTokens ?? 0),
-			total: prev.total + (delta.totalTokens ?? 0),
+			total: prev.total + totalDelta,
 			cacheRead: prev.cacheRead + (delta.cacheReadTokens ?? 0),
 			durationMs: (prev.durationMs ?? 0) + (delta.durationMs ?? 0),
+			lastSnapshotTotal: usesSnapshotTotals ? nextSnapshotTotal : prev.lastSnapshotTotal,
 		};
 		this.tokenAccumulators.set(toolUseId, accumulated);
 		return accumulated;

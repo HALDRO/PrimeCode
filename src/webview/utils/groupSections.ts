@@ -6,10 +6,13 @@
  *              so the frontend components stay dumb renderers.
  */
 
+import { getTurnUsageDuration, getTurnUsageTokenCount } from '../../common/tokenStats';
 import {
 	type GroupedResponseItem,
 	groupToolMessages,
 	isBridgeMessage,
+	shouldTriggerCollapse,
+	type ToolGroup,
 } from '../components/chat/toolGrouping';
 import type { ChangedFile, RenderMessage, RenderUserMessage, TokenUsage } from '../store';
 
@@ -21,13 +24,21 @@ function groupRenderResponses(
 	const grouped: GroupedResponseItem[] = [];
 	let toolBuffer: RenderMessage[] = [];
 
-	const flushTools = () => {
+	const flushTools = (isBoundary: boolean) => {
 		if (toolBuffer.length === 0) return;
-		grouped.push(
-			...(groupToolMessages(toolBuffer, mcpServerNames, isProcessing) as
-				| RenderMessage[]
-				| RenderMessage[][]),
-		);
+		const flushed = groupToolMessages(toolBuffer, mcpServerNames, isProcessing && !isBoundary) as
+			| RenderMessage[]
+			| RenderMessage[][];
+		// Mark the last group array with shouldCollapse if flush was triggered by a boundary
+		if (isBoundary) {
+			for (let i = flushed.length - 1; i >= 0; i--) {
+				if (Array.isArray(flushed[i])) {
+					(flushed[i] as ToolGroup).shouldCollapse = true;
+					break;
+				}
+			}
+		}
+		grouped.push(...flushed);
 		toolBuffer = [];
 	};
 
@@ -40,11 +51,14 @@ function groupRenderResponses(
 			toolBuffer.push(response);
 			continue;
 		}
-		flushTools();
+		// Non-bridge, non-tool message: flush the buffer.
+		// If this message triggers collapse, mark the last flushed group.
+		flushTools(shouldTriggerCollapse(response));
 		grouped.push(response);
 	}
 
-	flushTools();
+	// Trailing group (live/streaming) — no boundary, no collapse
+	flushTools(false);
 	return grouped;
 }
 
@@ -189,25 +203,12 @@ export const groupMessagesIntoSections = (
 		sections.push(currentSection);
 	}
 
-	// Second pass: fill in isFirst/isLast, nextUserMessageTs, and convert
-	// cumulative token snapshots to per-turn deltas.
-	// CLI sends cumulative `total` (context window size at each step), so
-	// subtracting the previous turn's total gives the real tokens spent on
-	// this specific turn.
-	let prevTotal = 0;
+	// Second pass: fill in isFirst/isLast and nextUserMessageTs.
 	for (let i = 0; i < sections.length; i++) {
 		sections[i].stats.isFirst = i === 0;
 		sections[i].stats.isLast = i === sections.length - 1;
 		sections[i].stats.nextUserMessageTs =
 			i < sections.length - 1 ? new Date(sections[i + 1].userMessage.timestamp).getTime() : null;
-
-		// Convert cumulative snapshot → per-turn delta
-		const snap = sections[i].stats.tokenCount;
-		if (snap !== null && snap > 0) {
-			const delta = Math.max(0, snap - prevTotal);
-			prevTotal = snap;
-			sections[i].stats.tokenCount = delta > 0 ? delta : null;
-		}
 	}
 
 	return sections;
@@ -270,20 +271,13 @@ function computeSectionStats(
 		}
 	}
 
-	// Token count: only use real per-turn data from the backend. No fallback/heuristic.
-	let tokenCount: number | null = null;
+	// Token count: use only the authoritative per-turn usage figure from the backend.
 	const userMsgId = section.userMessage.id;
 	const realTokens = userMsgId ? turnTokens[userMsgId] : undefined;
-	const totalTokens = realTokens?.total;
-	if (typeof totalTokens === 'number' && totalTokens > 0) {
-		tokenCount = totalTokens;
-	}
+	const tokenCount = getTurnUsageTokenCount(realTokens);
 
 	// Duration: prefer real per-turn data from the backend
-	let durationMs: number | null = null;
-	if (realTokens?.durationMs && realTokens.durationMs > 0) {
-		durationMs = realTokens.durationMs;
-	}
+	const durationMs = getTurnUsageDuration(realTokens);
 
 	return {
 		isFirst: false, // filled in second pass
