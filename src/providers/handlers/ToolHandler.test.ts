@@ -7,7 +7,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { createMockExtensionContext } from '../../__mocks__/vscode';
-import { SessionGraph } from '../../core/SessionManager';
+import { SessionGraph, SessionManager } from '../../core/SessionManager';
 import { OutboundBridge } from '../../transport/OutboundBridge';
 import { ToolHandler } from './ToolHandler';
 import type { HandlerContext } from './types';
@@ -83,6 +83,7 @@ function createMockHandlerContext(
 			activateStopGuard: () => {},
 			clearStopGuard: () => {},
 		},
+		sessionManager: new SessionManager(),
 		services: {} as any,
 		sessionGraph: new SessionGraph(),
 		...overrides,

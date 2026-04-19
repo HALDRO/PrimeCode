@@ -174,7 +174,7 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({
 						)}
 					/>
 				</div>
-				{/* Plus button — opens native file dialog for files and images */}
+				{/* Plus button — opens native file dialog for files, folders, and images */}
 				<IconButton
 					icon={
 						<PlusIcon
@@ -184,7 +184,7 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({
 						/>
 					}
 					onClick={() => postMessage({ type: 'browseFiles' })}
-					title="Attach file or image"
+					title="Attach file, folder, or image"
 					size={22}
 					className="group/plus text-vscode-foreground opacity-70 hover:opacity-100"
 				/>

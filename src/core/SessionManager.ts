@@ -72,6 +72,35 @@ export class SessionState implements ISessionState {
 	}
 }
 
+export class SessionManager {
+	private readonly sessions = new Map<
+		string,
+		{ id: string; title?: string; parentID?: string; lastModified?: number; created?: number }
+	>();
+
+	setSession(session: {
+		id: string;
+		title?: string;
+		parentID?: string;
+		lastModified?: number;
+		created?: number;
+	}): void {
+		this.sessions.set(session.id, session);
+	}
+
+	getSession(sessionId: string) {
+		return this.sessions.get(sessionId);
+	}
+
+	removeSession(sessionId: string): void {
+		this.sessions.delete(sessionId);
+	}
+
+	clear(): void {
+		this.sessions.clear();
+	}
+}
+
 // ─── Session Graph ───────────────────────────────────────────────────────────
 
 interface ChildSessionEntry {

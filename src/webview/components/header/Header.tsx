@@ -24,8 +24,8 @@ import { useUIStore } from '../../store/uiStore';
 import { proxyEventSource } from '../../utils/proxyEventSource';
 import { proxyFetch } from '../../utils/proxyFetch';
 import { useVSCode } from '../../utils/vscode';
-import { CloseIcon, HistoryIcon, MessageIcon, PlusIcon, SettingsIcon } from '../icons';
-import { Button, ScrollContainer } from '../ui';
+import { CloseIcon, MessageIcon } from '../icons';
+import { ScrollContainer } from '../ui';
 import { HistoryDropdown } from './HistoryDropdown';
 
 /**
@@ -248,8 +248,8 @@ export const Header: React.FC = React.memo(() => {
 	const SSE_HEARTBEAT_TIMEOUT_MS = 15_000;
 
 	// Optimized selectors
-	const { showHistoryDropdown, setShowHistoryDropdown } = useHistoryDropdownState();
-	const { setActiveModal, setServerStatus, showConfirmDialog } = useUIActions();
+	const { showHistoryDropdown } = useHistoryDropdownState();
+	const { setServerStatus, showConfirmDialog } = useUIActions();
 	const { postMessage } = useVSCode();
 	const { switchSession, closeSession } = useChatActions();
 
@@ -462,18 +462,6 @@ export const Header: React.FC = React.memo(() => {
 		[doCloseSession, showConfirmDialog],
 	);
 
-	const handleCreateSession = useCallback(() => {
-		postMessage({ type: 'createSession' });
-	}, [postMessage]);
-
-	const handleHistoryToggle = useCallback(() => {
-		setShowHistoryDropdown(!showHistoryDropdown);
-	}, [setShowHistoryDropdown, showHistoryDropdown]);
-
-	const handleSettingsOpen = useCallback(() => {
-		setActiveModal('settings');
-	}, [setActiveModal]);
-
 	const handleStatusClick = useCallback(() => {
 		// Request structural details (owner/uptime/port) when opening the menu.
 		// Health/status are tracked directly in the webview.
@@ -591,7 +579,7 @@ export const Header: React.FC = React.memo(() => {
 					</ScrollContainer>
 				</div>
 
-				{/* Right side - Order: Status, New (Plus), History, Settings */}
+				{/* Right side - Status + overlay content */}
 				<div
 					className={cn(
 						'flex h-full items-center gap-(--header-gap) shrink-0 box-border',
@@ -633,40 +621,8 @@ export const Header: React.FC = React.memo(() => {
 							/>
 						)}
 					</div>
-
-					<Button
-						variant="icon"
-						size="icon"
-						onClick={handleCreateSession}
-						title="New Chat"
-						className="w-(--header-btn-size) h-(--header-btn-size)"
-					>
-						<PlusIcon size={18} />
-					</Button>
-
-					<div className="relative">
-						<Button
-							variant="icon"
-							size="icon"
-							onClick={handleHistoryToggle}
-							title="History"
-							className="w-(--header-btn-size) h-(--header-btn-size)"
-						>
-							<HistoryIcon size={18} />
-						</Button>
-						{showHistoryDropdown && <HistoryDropdown />}
-					</div>
-
-					<Button
-						variant="icon"
-						size="icon"
-						onClick={handleSettingsOpen}
-						title="Settings"
-						className="w-(--header-btn-size) h-(--header-btn-size)"
-					>
-						<SettingsIcon size={16} />
-					</Button>
 				</div>
+				{showHistoryDropdown && <HistoryDropdown />}
 			</header>
 		</>
 	);

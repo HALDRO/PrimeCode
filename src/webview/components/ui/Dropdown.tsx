@@ -52,6 +52,7 @@ interface DropdownContainerProps {
 	onClose: () => void;
 	position: DropdownPosition;
 	align: DropdownAlign;
+	viewportPadding: number;
 	width?: number;
 	minWidth: number;
 	maxWidth: number;
@@ -70,6 +71,7 @@ const DropdownContainer: React.FC<DropdownContainerProps> = ({
 	onClose,
 	position,
 	align,
+	viewportPadding,
 	width,
 	minWidth,
 	maxWidth,
@@ -192,8 +194,8 @@ const DropdownContainer: React.FC<DropdownContainerProps> = ({
 					['--dd-maxh' as string]: `${computedMaxHeight}px`,
 					transformOrigin,
 					width: 'fit-content',
-					maxWidth: `min(${maxWidth}px, calc(100vw - 24px))`,
-					minWidth: `min(${minWidth}px, calc(100vw - 24px))`,
+					maxWidth: `min(${maxWidth}px, calc(100vw - ${viewportPadding * 2}px))`,
+					minWidth: `min(${minWidth}px, calc(100vw - ${viewportPadding * 2}px))`,
 				} as React.CSSProperties
 			}
 			className={cn(
@@ -301,6 +303,7 @@ export interface DropdownItemRenderProps {
 
 interface DropdownMenuProps<T> {
 	title?: string;
+	titleBeforeSearch?: boolean;
 	headerAction?: ReactNode;
 	items?: DropdownMenuItem<T>[];
 	sections?: DropdownMenuSection<T>[];
@@ -325,6 +328,7 @@ interface DropdownMenuProps<T> {
 	maxWidth?: number;
 	maxHeight?: number;
 	maxHeightVh?: number;
+	viewportPadding?: number;
 	renderItem?: (item: DropdownMenuItem<T>, props: DropdownItemRenderProps) => ReactNode;
 	anchorElement?: HTMLElement | null;
 	anchorRect?: AnchorRectLike | null;
@@ -333,6 +337,7 @@ interface DropdownMenuProps<T> {
 
 export function DropdownMenu<T>({
 	title,
+	titleBeforeSearch = false,
 	headerAction,
 	items,
 	sections,
@@ -357,6 +362,7 @@ export function DropdownMenu<T>({
 	maxWidth = 340,
 	maxHeight = 720,
 	maxHeightVh = 70,
+	viewportPadding = 12,
 	renderItem,
 	anchorElement,
 	anchorRect,
@@ -558,9 +564,17 @@ export function DropdownMenu<T>({
 			maxWidth={maxWidth}
 			maxHeight={maxHeight}
 			maxHeightVh={maxHeightVh}
+			viewportPadding={viewportPadding}
 			anchorElement={anchorElement}
 			anchorRect={anchorRect}
 		>
+			{title && titleBeforeSearch && (
+				<div className="flex items-center justify-between shrink-0 h-(--tool-header-height) min-h-(--tool-header-height) px-(--dropdown-padding-x) border-b border-(--alpha-10) text-xs font-semibold text-(--alpha-50) uppercase tracking-[0.5px]">
+					<span>{title}</span>
+					{headerAction}
+				</div>
+			)}
+
 			{searchable && (
 				<div className="flex items-center shrink-0 h-(--tool-header-height) min-h-(--tool-header-height) px-(--dropdown-padding-x) border-b border-(--alpha-5)">
 					<input
@@ -586,7 +600,7 @@ export function DropdownMenu<T>({
 				</div>
 			)}
 
-			{title && (
+			{title && !titleBeforeSearch && (
 				<div className="flex items-center justify-between shrink-0 h-(--tool-header-height) min-h-(--tool-header-height) px-(--dropdown-padding-x) border-b border-(--alpha-10) text-xs font-semibold text-(--alpha-50) uppercase tracking-[0.5px]">
 					<span>{title}</span>
 					{headerAction}

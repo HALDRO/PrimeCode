@@ -4,7 +4,7 @@ import type { WebviewCommand } from '../../common/protocol';
 import type { ISessionState, ISettings } from '../../core/contracts';
 import type { OpenCodeExecutor } from '../../core/executor/OpenCode';
 import type { ServiceRegistry } from '../../core/ServiceRegistry';
-import type { SessionGraph } from '../../core/SessionManager';
+import type { SessionGraph, SessionManager } from '../../core/SessionManager';
 import type { OutboundBridge } from '../../transport/OutboundBridge';
 
 export interface HandlerContext {
@@ -14,6 +14,7 @@ export interface HandlerContext {
 	/** Typed outbound bridge for sending messages to webview. */
 	bridge: OutboundBridge;
 	sessionState: ISessionState;
+	sessionManager: SessionManager;
 	services: ServiceRegistry;
 	/** Unified parent↔child session graph. Shared between ChatProvider and all handlers. */
 	sessionGraph: SessionGraph;

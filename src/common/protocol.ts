@@ -335,6 +335,7 @@ export interface SessionMessagesReloadPayload {
 			input: number;
 			output: number;
 			total?: number;
+			usage?: number;
 			cacheRead?: number;
 			durationMs?: number;
 		}
@@ -355,6 +356,7 @@ export interface SessionMessageRemovedPayload {
 
 export interface SessionInfoData {
 	sessionId: string;
+	title?: string;
 	tools?: string[];
 	mcpServers?: string[];
 	autoAccept?: boolean;
@@ -384,9 +386,12 @@ export interface SessionTerminalPayload {
 
 export interface SessionTurnTokensPayload {
 	eventType: 'turn_tokens';
+	// Latest token snapshot plus authoritative per-turn usage for a single
+	// parent-session user message.
 	inputTokens: number;
 	outputTokens: number;
 	totalTokens: number;
+	usageTokens?: number;
 	cacheReadTokens: number;
 	durationMs?: number;
 	userMessageId?: string;
@@ -916,6 +921,10 @@ export type ConnectionDetailsMessage = BaseExtensionMessage<
 	ConnectionDetailsData
 >;
 
+export type OpenHistoryMessage = BaseExtensionMessage<'openHistory'>;
+
+export type OpenSettingsMessage = BaseExtensionMessage<'openSettings'>;
+
 // =============================================================================
 // Extension → Webview Union
 // =============================================================================
@@ -982,6 +991,8 @@ export type ExtensionMessage =
 	| SseClosedMessage
 	| ExtensionVersionMessage
 	| ConnectionDetailsMessage
+	| OpenHistoryMessage
+	| OpenSettingsMessage
 	| QueueEventMessage;
 
 // #############################################################################

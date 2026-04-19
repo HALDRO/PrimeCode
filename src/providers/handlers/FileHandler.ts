@@ -223,11 +223,10 @@ export class FileHandler implements WebviewMessageHandler {
 
 	private async onBrowseFiles(): Promise<void> {
 		const picks = await vscode.window.showOpenDialog({
+			canSelectFiles: true,
+			canSelectFolders: true,
 			canSelectMany: true,
 			openLabel: 'Attach',
-			filters: {
-				'All Files': ['*'],
-			},
 		});
 
 		if (!picks || picks.length === 0) return;

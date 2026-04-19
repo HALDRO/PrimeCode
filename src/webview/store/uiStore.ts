@@ -281,6 +281,14 @@ export const useUIStore = create<UIState>((set, get) => ({
 			const actions = get().actions;
 
 			switch (message.type) {
+				case 'openHistory':
+					set({ showHistoryDropdown: true });
+					break;
+
+				case 'openSettings':
+					actions.setActiveModal('settings');
+					break;
+
 				case 'workspaceFiles':
 					if (Array.isArray(message.data)) {
 						actions.setWorkspaceFiles(message.data as WorkspaceFile[]);

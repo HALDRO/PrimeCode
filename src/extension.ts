@@ -60,6 +60,47 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(disposable);
 	logger.info('Command primecode.openChat registered');
 
+	const ensureProviderReady = async (): Promise<ChatProvider | undefined> => {
+		if (!provider && !providerError) {
+			if (!providerPromise) {
+				providerPromise = initializeProvider(context);
+			}
+			provider = await providerPromise;
+		}
+		return provider;
+	};
+
+	const revealPrimeCode = async (): Promise<ChatProvider | undefined> => {
+		const resolvedProvider = await ensureProviderReady();
+		if (!resolvedProvider) {
+			if (providerError) {
+				vscode.window.showErrorMessage(`PrimeCode failed to initialize: ${providerError.message}`);
+			}
+			return undefined;
+		}
+		await vscode.commands.executeCommand('workbench.view.extension.primecode');
+		resolvedProvider.reveal();
+		return resolvedProvider;
+	};
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('primecode.newChat', async () => {
+			const resolvedProvider = await revealPrimeCode();
+			if (!resolvedProvider) return;
+			await resolvedProvider.createSessionFromCommand();
+		}),
+		vscode.commands.registerCommand('primecode.showHistory', async () => {
+			const resolvedProvider = await revealPrimeCode();
+			if (!resolvedProvider) return;
+			resolvedProvider.openHistoryPanel();
+		}),
+		vscode.commands.registerCommand('primecode.openSettings', async () => {
+			const resolvedProvider = await revealPrimeCode();
+			if (!resolvedProvider) return;
+			resolvedProvider.openSettingsPanel();
+		}),
+	);
+
 	// Initialize provider and other components
 	async function initializeProvider(
 		ctx: vscode.ExtensionContext,

@@ -18,7 +18,7 @@ import {
 import { OpenCodeExecutor } from '../core/executor/OpenCode';
 import type { CLIEvent } from '../core/executor/types';
 import type { ServiceRegistry } from '../core/ServiceRegistry';
-import { SessionGraph, SessionState } from '../core/SessionManager';
+import { SessionGraph, SessionManager, SessionState } from '../core/SessionManager';
 import { Settings } from '../core/Settings';
 import { SubtaskManager } from '../core/SubtaskManager';
 import { CommandRouter } from '../transport/CommandRouter';
@@ -135,11 +135,14 @@ function collectChangedFilePaths(
 
 export class ChatProvider implements vscode.WebviewViewProvider {
 	private view?: vscode.WebviewView;
+	private webviewDidLaunch = false;
+	private readonly deferredUiOpens: Array<'openHistory' | 'openSettings'> = [];
 	private cli: OpenCodeExecutor;
 	private settings: Settings;
 	private sessionState: SessionState;
 	private disposables: vscode.Disposable[] = [];
 	private sessionGraph = new SessionGraph();
+	private sessionManager = new SessionManager();
 
 	// Session / subtask tracking (delegated to SubtaskManager)
 	private readonly subtaskManager: SubtaskManager;
@@ -183,6 +186,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			cli: this.cli,
 			bridge: this.bridge,
 			sessionState: this.sessionState,
+			sessionManager: this.sessionManager,
 			services: this.services,
 			sessionGraph: this.sessionGraph,
 		};
@@ -513,7 +517,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			{
 				handleMessage: async (msg: WebviewCommand) => {
 					if (msg.type === 'webviewDidLaunch') {
+						this.webviewDidLaunch = true;
 						await this.sendInitialState();
+						this.flushDeferredUiOpens();
 						await this.syncAllOrDefer('webview-launch');
 						await this.sessionHandler.handleMessage(msg);
 						return;
@@ -674,6 +680,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		// Null out bridge view on dispose so messages are queued, not lost
 		webviewView.onDidDispose(() => {
 			logger.info('[ChatProvider] webview disposed — nulling bridge view');
+			this.webviewDidLaunch = false;
 			this.bridge.clearView();
 		});
 
@@ -1127,6 +1134,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			totalTokens: typeof payload?.totalTokens === 'number' ? payload.totalTokens : 0,
 			cacheReadTokens: typeof payload?.cacheReadTokens === 'number' ? payload.cacheReadTokens : 0,
 			durationMs: typeof payload?.durationMs === 'number' ? payload.durationMs : 0,
+			isSnapshot: true,
 		};
 		if (delta.totalTokens <= 0) return;
 
@@ -1140,9 +1148,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					? { durationMs: accumulated.durationMs }
 					: {}),
 				timestamp: new Date().toISOString(),
-				agent: 'subagent',
+				agent: '',
 				prompt: '',
-				description: 'Subtask',
+				description: '',
 				status: 'running',
 			},
 		});
@@ -1165,9 +1173,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				...(routing.parentMessageId ? { messageID: routing.parentMessageId } : {}),
 				childModelId,
 				timestamp: new Date().toISOString(),
-				agent: 'subagent',
+				agent: '',
 				prompt: '',
-				description: 'Subtask',
+				description: '',
 				status: 'running',
 			},
 		});
@@ -1322,7 +1330,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 								: { parentSessionId }),
 							agent: ChatProvider.safeString(input.subagent_type) || 'subagent',
 							prompt: ChatProvider.safeString(input.prompt) || '',
-							description: ChatProvider.safeString(input.description) || 'Subtask',
+							description: ChatProvider.safeString(input.description) || '',
 							toolInput: JSON.stringify(e.input),
 							rawInput: input,
 							status: 'running',
@@ -1347,7 +1355,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					toolName,
 					agent: ChatProvider.safeString(input.subagent_type) || 'subagent',
 					prompt: ChatProvider.safeString(input.prompt) || '',
-					description: ChatProvider.safeString(input.description) || 'Running subtask...',
+					description: ChatProvider.safeString(input.description) || '',
 					...(knownChildSessionId
 						? { childSessionId: knownChildSessionId, parentSessionId }
 						: { parentSessionId }),
@@ -1491,9 +1499,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 							: 'subagent',
 					prompt: typeof taskInput?.prompt === 'string' ? (taskInput.prompt as string) : '',
 					description:
-						typeof taskInput?.description === 'string'
-							? (taskInput.description as string)
-							: 'Subtask',
+						typeof taskInput?.description === 'string' ? (taskInput.description as string) : '',
 					status: e.is_error ? 'error' : 'completed',
 					result: content,
 					...(childSessionId ? { childSessionId } : {}),
@@ -1700,6 +1706,43 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.view.webview.postMessage(msg);
 	}
 
+	public reveal(): void {
+		this.view?.show?.(true);
+	}
+
+	public openHistoryPanel(): void {
+		this.openUiPanel('openHistory');
+	}
+
+	public openSettingsPanel(): void {
+		this.openUiPanel('openSettings');
+	}
+
+	private openUiPanel(type: 'openHistory' | 'openSettings'): void {
+		if (this.webviewDidLaunch) {
+			this.bridge.data(type);
+			return;
+		}
+
+		if (!this.deferredUiOpens.includes(type)) {
+			this.deferredUiOpens.push(type);
+		}
+	}
+
+	private flushDeferredUiOpens(): void {
+		if (this.deferredUiOpens.length === 0) return;
+
+		const pending = [...this.deferredUiOpens];
+		this.deferredUiOpens.length = 0;
+		for (const type of pending) {
+			this.bridge.data(type);
+		}
+	}
+
+	public async createSessionFromCommand(): Promise<void> {
+		await this.sessionHandler.handleMessage({ type: 'createSession' });
+	}
+
 	// ─── Child → Parent Transcript Routing ───────────────────────────────────
 
 	/** Safely extract a non-empty string from unknown LLM input. */
@@ -1731,9 +1774,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				...(routing.parentMessageId ? { messageID: routing.parentMessageId } : {}),
 				childSessionId,
 				parentSessionId: routing.parentSessionId,
-				agent: update.agent || 'subagent',
-				prompt: update.prompt || '',
-				description: update.description || 'Subtask',
+				agent: update.agent ?? '',
+				prompt: update.prompt ?? '',
+				description: update.description ?? '',
 				status: 'running',
 				...update,
 				timestamp: update.timestamp || new Date().toISOString(),

@@ -79,6 +79,43 @@ export const HistoryDropdown: React.FC = () => {
 	const [editValue, setEditValue] = useState('');
 	const [hoveredId, setHoveredId] = useState<string | null>(null);
 	const inputRef = useRef<HTMLInputElement>(null);
+	const anchorElementRef = useRef<HTMLDivElement>(null);
+	const [panelLayout, setPanelLayout] = useState<{
+		left: number;
+		right: number;
+		top: number;
+		width: number;
+		height: number;
+	} | null>(null);
+
+	useEffect(() => {
+		const computePanelLayout = () => {
+			const header = document.querySelector('header');
+			const headerBottom =
+				header instanceof HTMLElement ? header.getBoundingClientRect().bottom : 44;
+			const bottomInset = 10;
+			const rootStyles = getComputedStyle(document.documentElement);
+			const contentPadding = Number.parseFloat(rootStyles.getPropertyValue('--content-padding-x'));
+			const left = Number.isFinite(contentPadding) ? Math.round(contentPadding) : 8;
+			const right = left;
+			// DropdownMenu adds a 4px floating offset, so shift the anchor up by 4px
+			// to make the panel sit flush against the header.
+			const top = Math.min(window.innerHeight - 24, Math.max(0, headerBottom - 4));
+			const width = Math.max(window.innerWidth - left - right, 320);
+			const height = Math.max(window.innerHeight - top - bottomInset, 240);
+			setPanelLayout({
+				left,
+				right,
+				top,
+				width,
+				height,
+			});
+		};
+
+		computePanelLayout();
+		window.addEventListener('resize', computePanelLayout);
+		return () => window.removeEventListener('resize', computePanelLayout);
+	}, []);
 
 	const openSessionNumbers = useMemo(() => {
 		return new Map(sessionOrder.map((sessionId, index) => [sessionId, index + 1]));
@@ -282,36 +319,63 @@ export const HistoryDropdown: React.FC = () => {
 		);
 	};
 
+	if (!panelLayout) {
+		return null;
+	}
+
 	return (
-		<DropdownMenu
-			sections={sections}
-			searchable
-			searchPlaceholder="Search..."
-			searchAutoFocus
-			onSelect={handleSelect}
-			onClose={onClose}
-			onRename={handleRename}
-			onDelete={handleDelete}
-			keyHints={{ rename: true, delete: true }}
-			loading={isLoading}
-			emptyMessage="No conversations yet"
-			position="bottom"
-			align="right"
-			minWidth={320}
-			maxWidth={400}
-			renderItem={renderItem}
-			footer={
-				<div className="flex items-center justify-center gap-(--gap-5) px-(--gap-5) py-(--gap-1)">
-					<Button
-						variant="ghost"
-						size="xs"
-						onClick={handleClearAll}
-						className="text-sm text-(--alpha-60) hover:text-(--alpha-90) hover:bg-(--alpha-5) h-(--btn-height-sm) w-full"
-					>
-						Clear All Chats
-					</Button>
-				</div>
-			}
-		/>
+		<>
+			<div
+				ref={anchorElementRef}
+				aria-hidden="true"
+				className="fixed pointer-events-none"
+				style={{ left: panelLayout.left, top: panelLayout.top, width: 1, height: 1 }}
+			/>
+			<DropdownMenu
+				title="History"
+				titleBeforeSearch
+				sections={sections}
+				searchable
+				searchPlaceholder="Search..."
+				searchAutoFocus
+				onSelect={handleSelect}
+				onClose={onClose}
+				onRename={handleRename}
+				onDelete={handleDelete}
+				keyHints={{ rename: true, delete: true }}
+				loading={isLoading}
+				emptyMessage="No conversations yet"
+				position="bottom"
+				align="left"
+				anchorElement={anchorElementRef.current}
+				anchorRect={{
+					left: panelLayout.left,
+					right: window.innerWidth - panelLayout.right,
+					top: panelLayout.top,
+					bottom: panelLayout.top,
+					width: panelLayout.width,
+					height: 0,
+				}}
+				width={panelLayout.width}
+				minWidth={panelLayout.width}
+				maxWidth={panelLayout.width}
+				maxHeight={panelLayout.height}
+				maxHeightVh={95}
+				viewportPadding={8}
+				renderItem={renderItem}
+				footer={
+					<div className="flex items-center justify-center gap-(--gap-5) px-(--gap-5) py-(--gap-1)">
+						<Button
+							variant="ghost"
+							size="xs"
+							onClick={handleClearAll}
+							className="text-sm text-(--alpha-60) hover:text-(--alpha-90) hover:bg-(--alpha-5) h-(--btn-height-sm) w-full"
+						>
+							Clear All Chats
+						</Button>
+					</div>
+				}
+			/>
+		</>
 	);
 };

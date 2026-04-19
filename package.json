@@ -150,6 +150,24 @@
 				"icon": "public/icon.png"
 			},
 			{
+				"command": "primecode.newChat",
+				"title": "New Chat",
+				"category": "PrimeCode",
+				"icon": "$(add)"
+			},
+			{
+				"command": "primecode.showHistory",
+				"title": "History",
+				"category": "PrimeCode",
+				"icon": "$(history)"
+			},
+			{
+				"command": "primecode.openSettings",
+				"title": "Settings",
+				"category": "PrimeCode",
+				"icon": "$(settings-gear)"
+			},
+			{
 				"command": "primecode.addSelectionToPrompt",
 				"title": "Add Selection to Chat",
 				"category": "PrimeCode",
@@ -160,6 +178,15 @@
 			"commandPalette": [
 				{
 					"command": "primecode.openChat"
+				},
+				{
+					"command": "primecode.newChat"
+				},
+				{
+					"command": "primecode.showHistory"
+				},
+				{
+					"command": "primecode.openSettings"
 				},
 				{
 					"command": "primecode.addSelectionToPrompt"
@@ -208,6 +235,21 @@
 					"command": "primecode.openChat",
 					"group": "navigation@1",
 					"when": "view == workbench.explorer.fileView"
+				},
+				{
+					"command": "primecode.newChat",
+					"group": "navigation@2",
+					"when": "view == primecode.chat"
+				},
+				{
+					"command": "primecode.showHistory",
+					"group": "navigation@3",
+					"when": "view == primecode.chat"
+				},
+				{
+					"command": "primecode.openSettings",
+					"group": "navigation@4",
+					"when": "view == primecode.chat"
 				}
 			],
 			"touchBar": [
