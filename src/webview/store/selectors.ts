@@ -19,6 +19,7 @@ import {
 	type ChatSession,
 	type ChatState,
 	type CommitInfo,
+	type RenderCompactionMessage,
 	type RenderMessage,
 	type RenderSubtaskMessage,
 	type RenderUserMessage,
@@ -53,6 +54,50 @@ function getTaskResultFromNormalizedEntry(
 	return action.type === 'TaskResult' && typeof action.result === 'string'
 		? action.result
 		: undefined;
+}
+
+function getCompactionView(
+	messageId: string,
+	session: ChatSession,
+): RenderCompactionMessage | undefined {
+	const userParts = session.runtimeMessagePartsById[messageId] || [];
+	const compactionPart = userParts.find(part => part.type === 'compaction');
+	if (!compactionPart) return undefined;
+
+	const assistantRecord = session.runtimeMessageRecords.find(
+		record => record.role === 'assistant' && record.parentId === messageId,
+	);
+	const assistantParts = assistantRecord
+		? session.runtimeMessagePartsById[assistantRecord.id] || []
+		: [];
+	const summary = assistantParts
+		.filter(part => part.type === 'text' && typeof part.text === 'string' && !part.synthetic)
+		.map(part => part.text?.trim() || '')
+		.filter(Boolean)
+		.join('\n\n');
+	const hasIncompleteAssistantParts = assistantParts.some(
+		part => typeof part.completedAt !== 'number' && part.state?.status !== 'completed',
+	);
+
+	return {
+		type: 'compaction',
+		messageId,
+		auto: compactionPart.auto,
+		summary: summary || undefined,
+		partId: compactionPart.id,
+		...(assistantRecord ? { assistantMessageId: assistantRecord.id } : {}),
+		isStreaming: hasIncompleteAssistantParts,
+		completedAt: assistantRecord?.completedAt,
+	};
+}
+
+function getUserMessageText(messageId: string, session: ChatSession): string {
+	const parts = session.runtimeMessagePartsById[messageId] || [];
+	return parts
+		.filter(part => part.type === 'text' && typeof part.text === 'string' && !part.synthetic)
+		.map(part => part.text?.trim() || '')
+		.filter(Boolean)
+		.join('\n\n');
 }
 
 export function projectRuntimeMessages(
@@ -149,10 +194,12 @@ export function projectRuntimeMessages(
 	for (const message of Object.values(session.userMessagesById)) {
 		if (typeof message.id === 'string' && !runtimeUserMessageIds.has(message.id)) {
 			if (compactToolOutputs) continue;
+			const compaction = getCompactionView(message.id, session);
 			const renderUser: RenderUserMessage = {
 				...message,
 				id: message.id,
 				kind: 'user' as const,
+				...(compaction ? { compaction } : {}),
 			};
 			passthrough.push(renderUser);
 		}
@@ -269,11 +316,24 @@ export function projectRuntimeMessages(
 		if (record.role === 'user') {
 			if (!compactToolOutputs) {
 				const user = userMessagesById[record.id];
-				if (user?.id) {
+				const compaction = getCompactionView(record.id, session);
+				const fallbackContent = getUserMessageText(record.id, session);
+				if (user?.id || compaction || fallbackContent) {
 					const renderUser = {
-						...user,
-						id: user.id,
+						id: record.id,
+						type: 'user',
+						content: user?.content || fallbackContent,
+						model: user?.model || record.modelId || session.model || 'default',
+						timestamp:
+							user?.timestamp ||
+							(typeof record.createdAt === 'number'
+								? new Date(record.createdAt).toISOString()
+								: '1970-01-01T00:00:00.000Z'),
 						kind: 'user',
+						...(user?.agent ? { agent: user.agent } : {}),
+						...(user?.attachments ? { attachments: user.attachments } : {}),
+						...(user?.normalizedEntry ? { normalizedEntry: user.normalizedEntry } : {}),
+						...(compaction ? { compaction } : {}),
 					} satisfies RenderUserMessage;
 					runtimeProjected.push(renderUser);
 				}

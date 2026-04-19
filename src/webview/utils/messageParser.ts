@@ -18,6 +18,41 @@ interface TextSegment {
 	type: 'text' | 'command' | 'subagent';
 }
 
+const isBoundaryChar = (char: string | undefined): boolean => !char || /\s/.test(char);
+
+const collectTokenHighlights = (
+	text: string,
+	prefix: '/' | '@',
+	validNames: Set<string>,
+	type: MessageHighlight['type'],
+): MessageHighlight[] => {
+	const highlights: MessageHighlight[] = [];
+	const regex = new RegExp(`\\${prefix}([a-zA-Z][a-zA-Z0-9_-]*)`, 'g');
+	let match: RegExpExecArray | null;
+
+	// biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec pattern
+	while ((match = regex.exec(text)) !== null) {
+		const start = match.index;
+		const end = start + match[0].length;
+		const name = match[1].toLowerCase();
+		const prevChar = text[start - 1];
+		const nextChar = text[end];
+
+		if (!isBoundaryChar(prevChar) || !isBoundaryChar(nextChar) || !validNames.has(name)) {
+			continue;
+		}
+
+		highlights.push({
+			start,
+			end,
+			content: match[0],
+			type,
+		});
+	}
+
+	return highlights;
+};
+
 /**
  * Finds all commands (starting with /) and subagents (starting with @) in the text.
  * Returns a list of highlights sorted by position.
@@ -27,38 +62,10 @@ export function getMessageHighlights(
 	validCommands: Set<string>,
 	validSubagents: Set<string>,
 ): MessageHighlight[] {
-	const highlights: MessageHighlight[] = [];
-
-	// 1. Find slash commands
-	const cmdRegex = /\/([a-zA-Z][a-zA-Z0-9_-]*)/g;
-	let match: RegExpExecArray | null;
-	// biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec pattern
-	while ((match = cmdRegex.exec(text)) !== null) {
-		const commandName = match[1].toLowerCase();
-		if (validCommands.has(commandName)) {
-			highlights.push({
-				start: match.index,
-				end: match.index + match[0].length,
-				content: match[0],
-				type: 'command',
-			});
-		}
-	}
-
-	// 2. Find subagents (@name)
-	const agentRegex = /@([a-zA-Z0-9_-]+)/g;
-	// biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec pattern
-	while ((match = agentRegex.exec(text)) !== null) {
-		const agentName = match[1].toLowerCase();
-		if (validSubagents.has(agentName)) {
-			highlights.push({
-				start: match.index,
-				end: match.index + match[0].length,
-				content: match[0],
-				type: 'subagent',
-			});
-		}
-	}
+	const highlights = [
+		...collectTokenHighlights(text, '/', validCommands, 'command'),
+		...collectTokenHighlights(text, '@', validSubagents, 'subagent'),
+	];
 
 	// Sort by start position
 	return highlights.sort((a, b) => a.start - b.start);

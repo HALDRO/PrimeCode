@@ -18,9 +18,11 @@ const activeSubscriptions = new Map<string, ProxySSESubscription>();
 
 let isListening = false;
 
-const MAX_SSE_RETRIES = 3;
+const MAX_SSE_RETRIES = 10;
 const SSE_RETRY_BASE_MS = 750;
 const SSE_RETRY_JITTER_RATIO = 0.2;
+/** Cap the backoff delay to avoid absurdly long waits. */
+const SSE_RETRY_MAX_DELAY_MS = 30_000;
 
 function createSubscriptionId(): string {
 	if (typeof crypto.randomUUID === 'function') {
@@ -56,8 +58,9 @@ function scheduleReconnect(sub: ProxySSESubscription, reason?: string) {
 	}
 
 	const baseDelay = SSE_RETRY_BASE_MS * 2 ** sub.retryCount;
-	const jitter = baseDelay * SSE_RETRY_JITTER_RATIO * Math.random();
-	const delay = baseDelay + jitter;
+	const cappedDelay = Math.min(baseDelay, SSE_RETRY_MAX_DELAY_MS);
+	const jitter = cappedDelay * SSE_RETRY_JITTER_RATIO * Math.random();
+	const delay = cappedDelay + jitter;
 	sub.retryCount += 1;
 	sub.retryTimer = window.setTimeout(() => {
 		sub.retryTimer = null;

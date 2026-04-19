@@ -684,11 +684,8 @@ export const MessageItem = React.memo<{
 
 		switch (item.kind) {
 			case 'tool_use': {
-				const isCompactTool = item.toolName === 'Summarize Conversation';
 				return (
-					<div
-						className={isCompactTool ? 'my-8 mb-(--tool-block-margin)' : 'mb-(--tool-block-margin)'}
-					>
+					<div className="mb-(--tool-block-margin)">
 						<ToolCardMessage toolUse={item} sessionId={ctx.sessionId} />
 					</div>
 				);
@@ -696,6 +693,7 @@ export const MessageItem = React.memo<{
 			case 'subtask':
 				return <SubtaskItem message={item} ctx={ctx} />;
 			case 'assistant': {
+				if (item.agent === 'compaction') return null;
 				const assistantContent = (item as RenderAssistantMessage).content || '';
 				if (!assistantContent.trim()) return null;
 				const assistantAgent = item.agent;

@@ -76,7 +76,22 @@ export type SubtaskMessage = Omit<SessionSubtaskPayload['subtask'], 'id' | 'time
 /** Only user messages and subtasks — assistant/tool content lives in runtimeParts. */
 export type StoredMessage = UserMessage | SubtaskMessage;
 
-export type RenderUserMessage = Omit<UserMessage, 'id'> & { id: string; kind: 'user' };
+export type RenderUserMessage = Omit<UserMessage, 'id'> & {
+	id: string;
+	kind: 'user';
+	compaction?: RenderCompactionMessage;
+};
+
+export interface RenderCompactionMessage {
+	type: 'compaction';
+	messageId: string;
+	auto?: boolean;
+	summary?: string;
+	partId?: string;
+	assistantMessageId?: string;
+	isStreaming?: boolean;
+	completedAt?: number;
+}
 
 export type RenderSubtaskMessage = Omit<SubtaskMessage, 'id'> & {
 	id: string;
@@ -311,6 +326,31 @@ function upsertUserMessage(targetSession: ChatSession, incoming: UserMessage): v
 	};
 }
 
+function normalizeUserMessage(content: string): NormalizedEntry {
+	return {
+		timestamp: new Date().toISOString(),
+		entryType: 'UserMessage',
+		content,
+	};
+}
+
+function getCanonicalCompactionCommand(
+	targetSession: ChatSession,
+	messageId: string,
+): string | undefined {
+	const parts = targetSession.runtimeMessagePartsById[messageId] || [];
+	const hasCompaction = parts.some(part => part.type === 'compaction');
+	if (!hasCompaction) return undefined;
+
+	const text = parts
+		.filter(part => part.type === 'text' && typeof part.text === 'string' && !part.synthetic)
+		.map(part => part.text?.trim() || '')
+		.filter(Boolean)
+		.join('\n\n');
+
+	return text || '/compact';
+}
+
 function syncSessionModelFromUserMessages(targetSession: ChatSession): void {
 	const lastUserWithModel = projectRuntimeMessages(targetSession)
 		.reverse()
@@ -332,9 +372,9 @@ function upsertSubtaskMessage(targetSession: ChatSession, incoming: SubtaskMessa
 		...incoming,
 		id: incoming.id,
 		type: 'subtask',
-		agent: incoming.agent ?? existing?.agent ?? '',
-		prompt: incoming.prompt ?? existing?.prompt ?? '',
-		description: incoming.description ?? existing?.description ?? '',
+		agent: incoming.agent || existing?.agent || '',
+		prompt: incoming.prompt || existing?.prompt || '',
+		description: incoming.description || existing?.description || '',
 		status: incoming.status || existing?.status || 'running',
 		timestamp: incoming.timestamp || existing?.timestamp || new Date().toISOString(),
 	};
@@ -603,6 +643,29 @@ function handleFileDiffEvent(targetSession: ChatSession, payload: SessionEventPa
 
 function handleMessageRecordEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
 	const evt = payload as import('../../common').SessionMessageRecordPayload;
+	if (evt.message.role === 'user') {
+		const existing = targetSession.userMessagesById[evt.message.id];
+		const canonicalContent =
+			existing?.content || getCanonicalCompactionCommand(targetSession, evt.message.id) || '';
+		upsertUserMessage(targetSession, {
+			...(existing || {}),
+			id: evt.message.id,
+			type: 'user',
+			content: canonicalContent,
+			model: existing?.model || evt.message.modelId || targetSession.model || 'default',
+			...(existing?.agent || evt.message.agent
+				? { agent: existing?.agent || evt.message.agent }
+				: {}),
+			timestamp:
+				existing?.timestamp ||
+				(typeof evt.message.createdAt === 'number'
+					? new Date(evt.message.createdAt).toISOString()
+					: new Date().toISOString()),
+			...(existing?.attachments ? { attachments: existing.attachments } : {}),
+			...(canonicalContent ? { normalizedEntry: normalizeUserMessage(canonicalContent) } : {}),
+		});
+	}
+
 	const existingIdx = targetSession.runtimeMessageRecords.findIndex(m => m.id === evt.message.id);
 	if (existingIdx >= 0) {
 		targetSession.runtimeMessageRecords[existingIdx] = {
@@ -666,6 +729,24 @@ function _handleMessagePartEvent(targetSession: ChatSession, payload: SessionEve
 		list.push(nextPart);
 	}
 	targetSession.runtimeMessagePartsById[evt.part.messageId] = list;
+
+	if (evt.part.type === 'compaction') {
+		const existing = targetSession.userMessagesById[evt.part.messageId];
+		const canonicalContent = getCanonicalCompactionCommand(targetSession, evt.part.messageId);
+		if (canonicalContent) {
+			upsertUserMessage(targetSession, {
+				...(existing || {}),
+				id: evt.part.messageId,
+				type: 'user',
+				content: canonicalContent,
+				model: existing?.model || targetSession.model || 'default',
+				timestamp: existing?.timestamp || new Date().toISOString(),
+				normalizedEntry: normalizeUserMessage(canonicalContent),
+				...(existing?.agent ? { agent: existing.agent } : {}),
+				...(existing?.attachments ? { attachments: existing.attachments } : {}),
+			});
+		}
+	}
 }
 
 function handleMessagePartDeltaEvent(

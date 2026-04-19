@@ -594,6 +594,7 @@ export class SessionHandler implements WebviewMessageHandler {
 
 		for (const [childSessionId, snapshot] of childSnapshots) {
 			this.context.cli.syncSessionSnapshotTotal?.(childSessionId, snapshot.turnTokens);
+
 			this.context.bridge.emit(childSessionId, 'messages_reload', {
 				messages: snapshot.messages,
 				runtimeMessageRecords: snapshot.runtimeMessageRecords,

@@ -15,7 +15,13 @@ import type { HandlerContext, WebviewMessageHandler } from './types';
 
 const GITHUB_REPO = 'HALDRO/PrimeCode';
 
+/** Default timeout for proxy fetch requests (ms). */
+const PROXY_FETCH_TIMEOUT_MS = 30_000;
+
 export class UtilityHandler implements WebviewMessageHandler {
+	/** Active AbortControllers keyed by request ID for cancellation support. */
+	private readonly activeRequests = new Map<string, AbortController>();
+
 	constructor(private readonly context: HandlerContext) {}
 
 	public async handleMessage(msg: WebviewCommand): Promise<void> {
@@ -23,8 +29,7 @@ export class UtilityHandler implements WebviewMessageHandler {
 			case 'proxyFetch':
 				return this.handleProxyFetch(msg);
 			case 'proxyFetchAbort':
-				// TODO: implement AbortController support
-				return;
+				return this.handleProxyFetchAbort(msg);
 			case 'openCommandFile':
 			case 'openSkillFile':
 			case 'openSubagentFile':
@@ -51,12 +56,20 @@ export class UtilityHandler implements WebviewMessageHandler {
 	private async handleProxyFetch(msg: WebviewCommand): Promise<void> {
 		if (msg.type !== 'proxyFetch') return;
 		const { id, url, options } = msg;
+
+		const controller = new AbortController();
+		this.activeRequests.set(id, controller);
+
+		const timer = setTimeout(() => controller.abort(), PROXY_FETCH_TIMEOUT_MS);
+
 		try {
 			const response = await fetch(url, {
 				method: options?.method,
 				headers: options?.headers,
 				body: options?.body,
+				signal: controller.signal,
 			});
+			clearTimeout(timer);
 			const bodyText = await response.text();
 			const headers: Record<string, string> = {};
 			response.headers.forEach((value, key) => {
@@ -72,13 +85,30 @@ export class UtilityHandler implements WebviewMessageHandler {
 				bodyText,
 			});
 		} catch (error) {
-			logger.error('[UtilityHandler] proxyFetch failed:', error);
+			clearTimeout(timer);
+			if ((error as Error).name === 'AbortError') {
+				logger.warn('[UtilityHandler] proxyFetch timed out or aborted', { id, url });
+			} else {
+				logger.error('[UtilityHandler] proxyFetch failed:', { id, url, error });
+			}
 			this.context.bridge.send({
 				type: 'proxyFetchResult',
 				id,
 				ok: false,
 				error: String(error),
 			});
+		} finally {
+			this.activeRequests.delete(id);
+		}
+	}
+
+	private handleProxyFetchAbort(msg: WebviewCommand): void {
+		const id = (msg as { id?: string }).id;
+		if (!id) return;
+		const controller = this.activeRequests.get(id);
+		if (controller) {
+			controller.abort();
+			this.activeRequests.delete(id);
 		}
 	}
 

@@ -20,11 +20,12 @@ import { useSettingsStore } from '../../store/settingsStore';
 import { useUIActions } from '../../store/uiStore';
 import { formatDuration, formatTime, formatTokens } from '../../utils/format';
 import type { SectionStats } from '../../utils/groupSections';
+import { Markdown } from '../../utils/markdown';
 import { parseMessageSegments } from '../../utils/messageParser';
-
 import { useSessionMessage, useVSCode } from '../../utils/vscode';
-import { ClockIcon, TimerIcon, TokensIcon, Undo2Icon } from '../icons';
-import { type StatItem, StatsDisplay, Tooltip } from '../ui';
+import { ToolCard } from '../chat/ToolCard';
+import { ClockIcon, CopyIcon, TimerIcon, TokensIcon, Undo2Icon, WandIcon } from '../icons';
+import { IconButton, type StatItem, StatsDisplay, Tooltip } from '../ui';
 import { AttachmentsBar } from './AttachmentsBar';
 import { ChatInput } from './ChatInput';
 
@@ -64,6 +65,88 @@ interface MessageAttachments {
 	codeSnippets?: CodeSnippetAttachment[];
 	images?: ImageAttachment[];
 }
+
+interface MessageCompaction {
+	type: 'compaction';
+	messageId: string;
+	auto?: boolean;
+	summary?: string;
+	partId?: string;
+	assistantMessageId?: string;
+	isStreaming?: boolean;
+	completedAt?: number;
+}
+
+const CompactionCard = React.memo<{ compaction: MessageCompaction }>(({ compaction }) => {
+	const [manualExpanded, setManualExpanded] = useState<boolean | null>(null);
+	const hasSummary = Boolean(compaction.summary?.trim());
+	const expanded = manualExpanded ?? Boolean(compaction.isStreaming);
+
+	useEffect(() => {
+		setManualExpanded(null);
+	}, []);
+
+	const status = hasSummary
+		? compaction.isStreaming
+			? 'Updating conversation summary...'
+			: 'Conversation compacted into this summary.'
+		: 'Compacting conversation...';
+
+	return (
+		<ToolCard
+			headerLeft={
+				<>
+					<span className="toolcard-leading-icon flex items-center justify-center w-[18px] h-[18px] shrink-0 text-vscode-descriptionForeground">
+						<WandIcon size={14} className={cn(compaction.isStreaming && 'animate-pulse')} />
+					</span>
+					<div className="min-w-0 flex items-center gap-1.5 text-sm overflow-hidden">
+						<span className="font-medium text-vscode-foreground truncate">Compact</span>
+						<span className="text-vscode-descriptionForeground truncate">{status}</span>
+					</div>
+				</>
+			}
+			headerRight={
+				hasSummary ? (
+					<div
+						className="opacity-0 transition-opacity duration-150 ease-out group-hover:opacity-100"
+						onMouseDown={e => e.stopPropagation()}
+						onClick={e => e.stopPropagation()}
+					>
+						<IconButton
+							icon={<CopyIcon size={14} />}
+							onClick={e => {
+								e.stopPropagation();
+								void navigator.clipboard.writeText(compaction.summary || '');
+							}}
+							title="Copy summary"
+							size={20}
+						/>
+					</div>
+				) : undefined
+			}
+			isCollapsible={hasSummary}
+			expanded={hasSummary ? expanded : false}
+			onToggle={
+				hasSummary
+					? () => setManualExpanded(prev => !(prev ?? Boolean(compaction.isStreaming)))
+					: undefined
+			}
+			body={
+				hasSummary && expanded ? (
+					<div className="px-(--gap-4) py-(--gap-3) bg-vscode-editor-background/35 border-t border-(--tool-border-color)">
+						<Markdown
+							content={compaction.summary || ''}
+							isStreaming={compaction.isStreaming}
+							className="[&_p]:!text-sm [&_li]:!text-sm"
+						/>
+					</div>
+				) : undefined
+			}
+			className="mt-(--gap-2)"
+		/>
+	);
+});
+CompactionCard.displayName = 'CompactionCard';
 
 /**
  * Extract attachments from message. Only structured attachments are rendered as pinned resources.
@@ -287,8 +370,9 @@ const MessageTextWithCommands: React.FC<{
 					return (
 						<span
 							key={segmentKey}
-							className="text-warning rounded-sm pl-(--gap-0-5) pr-(--gap-1-5) -ml-(--gap-0-5) -mr-(--gap-1-5)"
+							className="rounded-sm pl-(--gap-0-5) pr-(--gap-1-5) -ml-(--gap-0-5) -mr-(--gap-1-5)"
 							style={{
+								color: 'var(--vscode-editorGutter-modifiedBackground)',
 								backgroundColor:
 									'color-mix(in srgb, var(--vscode-editorGutter-modifiedBackground) 15%, transparent)',
 							}}
@@ -362,6 +446,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 			images: attachedImages,
 			text: messageText,
 		} = useMemo(() => getMessageAttachments(message), [message]);
+		const compaction = message.compaction as MessageCompaction | undefined;
 
 		// Get human-readable model name from model ID
 		const allProxyModels = useMemo(() => proxyEndpoints.flatMap(ep => ep.models), [proxyEndpoints]);
@@ -665,6 +750,12 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 						</div>
 					</div>
 				</div>
+				{compaction && (
+					<CompactionCard
+						key={`${compaction.partId ?? compaction.assistantMessageId ?? compaction.messageId}:${compaction.completedAt ?? 'pending'}`}
+						compaction={compaction}
+					/>
+				)}
 			</div>
 		);
 	},

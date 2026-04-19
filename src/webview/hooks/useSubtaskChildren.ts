@@ -119,17 +119,6 @@ export function useSubtaskPreview(
 		const childSession = sessionsById[childSessionId];
 		if (!childSession) return { added: 0, removed: 0 };
 
-		const cumulative = childSession.cumulativeDiffs ?? [];
-		if (cumulative.length > 0) {
-			return cumulative.reduce(
-				(acc, diff) => ({
-					added: acc.added + (diff.additions ?? 0),
-					removed: acc.removed + (diff.deletions ?? 0),
-				}),
-				{ added: 0, removed: 0 },
-			);
-		}
-
 		const changedFiles = childSession.changedFiles ?? [];
 		return changedFiles.reduce(
 			(acc, file) => ({

@@ -185,8 +185,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	private readonly sessionMessages = new Map<string, Set<string>>();
 	/** Sessions explicitly deleted/closed — SSE events for these are skipped to save CPU. */
 	private readonly deletedSessions = new Set<string>();
-	/** Maps sessionID → pending compact tool_use ID, so SSE handler can emit matching tool_result. */
-	private readonly pendingCompactIds = new Map<string, string>();
 
 	/** Guards against concurrent ensureServer calls. */
 	private ensureServerPromise: Promise<void> | null = null;
@@ -202,6 +200,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		string,
 		{ total: number; usage: number; durationMs: number }
 	>();
+	/** Last observed user message ID per session for final turn_tokens fallback on stream finish. */
+	private readonly lastUserMessageIdBySession = new Map<string, string>();
 	private readonly sessionSnapshotTotals = new Map<string, number>();
 
 	private readonly _commandsCache = new TtlCache<Array<{ name: string; description?: string }>>(
@@ -1103,8 +1103,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			>();
 			// Track current user message ID for assistant messages without parentID
 			let currentUserMessageId: string | undefined;
-			// Track pending compaction tool_use ID so the next compaction assistant emits tool_result
-			let pendingCompactToolId: string | undefined;
 
 			const events = messages.flatMap((msg: SessionMessageEntry) => {
 				const { info, parts } = msg;
@@ -1147,39 +1145,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 							durationMs: (existing?.durationMs ?? 0) + msgDuration,
 						});
 					}
-
-					// Handle compaction assistant messages — absorb into tool_result
-					const assistantInfo = info as Record<string, unknown>;
-					if (assistantInfo.mode === 'compaction' && pendingCompactToolId) {
-						// Extract text from parts for the summary content
-						const textParts = parts
-							.map(p => this.normalizePart(p))
-							.filter(
-								(p): p is { type: 'text'; text: string } =>
-									p.type === 'text' && Boolean((p as { text?: string }).text),
-							)
-							.map(p => (p as { text: string }).text);
-						if (textParts.length > 0) {
-							// Emit tool_result with the summary text, then clear pending
-							const toolId = pendingCompactToolId;
-							pendingCompactToolId = undefined;
-							return [
-								{
-									type: 'tool_result' as const,
-									data: {
-										tool_use_id: toolId,
-										name: 'Summarize Conversation',
-										tool: 'Summarize Conversation',
-										content: textParts.join('\n'),
-										is_error: false,
-									},
-									sessionId,
-								},
-							];
-						}
-						// Empty compaction assistant (aborted) — skip entirely
-						return [];
-					}
 				}
 
 				// For user messages, collect file parts to reconstruct attachments
@@ -1187,31 +1152,10 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 					currentUserMessageId = info.id;
 					const { content, attachments, isCompaction } = this.extractUserMessageParts(parts);
 
-					// Compaction user messages — emit tool_use only, tool_result comes from next assistant
+					// Compaction is represented by native message_record/message_part events.
+					// Do not synthesize a fake tool card here.
 					if (isCompaction) {
-						const compactId = `compact-hist-${info.id}`;
-						// If there's already a pending compaction (retry), don't emit another tool_use
-						// Just update the pending ID so the next assistant's text goes to the right tool_result
-						if (pendingCompactToolId) {
-							pendingCompactToolId = compactId;
-							return [];
-						}
-						pendingCompactToolId = compactId;
-						return [
-							{
-								type: 'tool_use' as const,
-								data: {
-									id: compactId,
-									name: 'Summarize Conversation',
-									tool: 'Summarize Conversation',
-									toolUseId: compactId,
-									input: {},
-									state: 'completed',
-									timestamp,
-								},
-								sessionId,
-							},
-						];
+						return [];
 					}
 
 					return [
@@ -1445,26 +1389,13 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 		const parsed = parseModelId(config.model ?? '');
 		if (!parsed) {
-			this.emitToolResult('compact', 'Error: No model configured for compaction.', true, sid);
+			this.emit('event', {
+				type: 'error',
+				data: { message: 'Error: No model configured for compaction.' },
+				sessionId: sid,
+			});
 			return;
 		}
-
-		// Emit tool_use immediately in "running" state so the user sees a spinner card
-		const compactId = `compact-${Date.now()}`;
-		this.pendingCompactIds.set(sid, compactId);
-		this.emit('event', {
-			type: 'tool_use' as const,
-			data: {
-				id: compactId,
-				name: 'Summarize Conversation',
-				tool: 'Summarize Conversation',
-				toolUseId: compactId,
-				input: {},
-				state: 'running',
-				timestamp: new Date().toISOString(),
-			},
-			sessionId: sid,
-		});
 
 		// Ensure SSE stream is running — summarize triggers async server-side
 		// processing that emits message.part.updated, session.compacted, etc.
@@ -1477,10 +1408,12 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				providerID: parsed.providerId,
 				modelID: parsed.modelId,
 			});
-			// The session.compacted SSE event will emit tool_result when done.
 		} catch (error) {
-			this.pendingCompactIds.delete(sid);
-			this.emitToolResult('compact', `Error compacting session: ${String(error)}`, true, sid);
+			this.emit('event', {
+				type: 'error',
+				data: { message: `Error compacting session: ${String(error)}` },
+				sessionId: sid,
+			});
 		}
 	}
 
@@ -1965,6 +1898,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			case 'session.idle': {
 				const props = (envelope as { type: string; properties: { sessionID: string } }).properties;
 				if (props.sessionID) this.activeSessions.delete(props.sessionID);
+				this.emitFinalTurnTokensForSession(props.sessionID);
 				this.emit('event', {
 					type: 'finished',
 					data: { reason: 'idle' },
@@ -1998,55 +1932,9 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				break;
 			}
 			case 'session.compacted': {
-				// Compaction completed — emit tool_result to complete the running tool card
 				const props = (envelope as { type: string; properties: { sessionID: string } }).properties;
 				const sid = props.sessionID;
 				logger.info('[OpenCode] Session compacted', { sessionId: sid });
-
-				// Use the pending compact ID if we initiated it, otherwise create a new pair
-				const pendingId = this.pendingCompactIds.get(sid);
-				if (pendingId) {
-					// We already emitted tool_use in running state — just emit tool_result
-					this.pendingCompactIds.delete(sid);
-					this.emit('event', {
-						type: 'tool_result' as const,
-						data: {
-							tool_use_id: pendingId,
-							name: 'Summarize Conversation',
-							tool: 'Summarize Conversation',
-							content: 'Session context compacted successfully.',
-							is_error: false,
-						},
-						sessionId: sid,
-					});
-				} else {
-					// Auto-compaction from server (not user-initiated) — emit both tool_use + tool_result
-					const compactId = `compact-${Date.now()}`;
-					this.emit('event', {
-						type: 'tool_use' as const,
-						data: {
-							id: compactId,
-							name: 'Summarize Conversation',
-							tool: 'Summarize Conversation',
-							toolUseId: compactId,
-							input: {},
-							state: 'completed',
-							timestamp: new Date().toISOString(),
-						},
-						sessionId: sid,
-					});
-					this.emit('event', {
-						type: 'tool_result' as const,
-						data: {
-							tool_use_id: compactId,
-							name: 'Summarize Conversation',
-							tool: 'Summarize Conversation',
-							content: 'Session context compacted successfully.',
-							is_error: false,
-						},
-						sessionId: sid,
-					});
-				}
 				break;
 			}
 		}
@@ -2095,6 +1983,9 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			}
 			const { tokens } = info;
 			const userMessageId = info.parentID;
+			if (sessionId && typeof userMessageId === 'string' && userMessageId) {
+				this.lastUserMessageIdBySession.set(sessionId, userMessageId);
+			}
 			const input = tokens.input;
 			const output = tokens.output;
 			const total = getSnapshotTotal(tokens);
@@ -2171,6 +2062,9 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				}
 
 				if (hasCompleted && !this.finishedMessageIds.has(info.id)) {
+					if (sessionId) {
+						this.emitFinalTurnTokensForSession(sessionId);
+					}
 					this.finishedMessageIds.add(info.id);
 					this.emit('event', {
 						type: 'finished',
@@ -2180,6 +2074,28 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				}
 			}
 		}
+	}
+
+	private emitFinalTurnTokensForSession(sessionId?: string): void {
+		if (!sessionId) return;
+		const userMessageId = this.lastUserMessageIdBySession.get(sessionId);
+		if (!userMessageId) return;
+		const accum = this.turnAccum.get(userMessageId);
+		if (!accum || accum.total <= 0) return;
+
+		this.emit('event', {
+			type: 'turn_tokens',
+			data: {
+				inputTokens: 0,
+				outputTokens: 0,
+				totalTokens: accum.total,
+				usageTokens: accum.usage,
+				cacheReadTokens: 0,
+				userMessageId,
+				...(accum.durationMs > 0 ? { durationMs: accum.durationMs } : {}),
+			},
+			sessionId,
+		});
 	}
 
 	/**
@@ -2644,10 +2560,10 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		this.toolCallStates.clear();
 		this.messageRoles.clear();
 		this.messageAgents.clear();
-		this.pendingCompactIds.clear();
 		this.lastEmittedStatus.clear();
 		this.lastMessageTokens.clear();
 		this.turnAccum.clear();
+		this.lastUserMessageIdBySession.clear();
 		this.sessionSnapshotTotals.clear();
 		this.activeSessions.clear();
 		this.sessionMessages.clear();
@@ -2658,7 +2574,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	/** Remove per-message metadata for a given session to prevent unbounded Map growth. */
 	private cleanupSessionMessages(sessionId: string): void {
 		this.activeSessions.delete(sessionId);
-		this.pendingCompactIds.delete(sessionId);
 		this.lastEmittedStatus.delete(sessionId);
 		// Mark as deleted so future SSE events for this session are skipped early.
 		this.deletedSessions.add(sessionId);
@@ -2676,6 +2591,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			}
 			this.sessionMessages.delete(sessionId);
 		}
+		this.lastUserMessageIdBySession.delete(sessionId);
 		this.sessionSnapshotTotals.delete(sessionId);
 	}
 

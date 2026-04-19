@@ -16,6 +16,8 @@ import {
 } from '@codemirror/view';
 import { getMessageHighlights } from '../../utils/messageParser';
 
+const isBoundaryChar = (char: string | undefined): boolean => !char || /\s/.test(char);
+
 // ============================================================================
 // AnchorRect type (matches ui/Dropdown expectations)
 // ============================================================================
@@ -178,10 +180,10 @@ export function triggerDetector(callbacks: TriggerCallbacks): Extension {
 		const lastSlash = textBeforeCursor.lastIndexOf('/');
 		if (lastSlash >= 0) {
 			const prevChar = lastSlash > 0 ? textBeforeCursor[lastSlash - 1] : '';
-			// Only trigger if / is at start of text or preceded by whitespace
-			if (!prevChar || prevChar === ' ') {
+			// Only trigger if / forms a standalone token boundary.
+			if (isBoundaryChar(prevChar)) {
 				const token = textBeforeCursor.substring(lastSlash);
-				if (!token.includes(' ') && token.length > 0) {
+				if (/^\/[a-zA-Z0-9_-]*$/.test(token) && token.length > 0) {
 					const absolutePos = line.from + lastSlash;
 					const coords = update.view.coordsAtPos(absolutePos);
 					const rect = coords ? coordsToAnchorRect(coords) : null;
@@ -200,9 +202,9 @@ export function triggerDetector(callbacks: TriggerCallbacks): Extension {
 		const lastAt = textBeforeCursor.lastIndexOf('@');
 		if (lastAt >= 0) {
 			const prevChar = lastAt > 0 ? textBeforeCursor[lastAt - 1] : '';
-			if (!prevChar || prevChar === ' ') {
+			if (isBoundaryChar(prevChar)) {
 				const filter = textBeforeCursor.substring(lastAt + 1);
-				if (!filter.includes(' ')) {
+				if (/^[a-zA-Z0-9_-]*$/.test(filter)) {
 					const absolutePos = line.from + lastAt;
 					const coords = update.view.coordsAtPos(absolutePos);
 					const rect = coords ? coordsToAnchorRect(coords) : null;

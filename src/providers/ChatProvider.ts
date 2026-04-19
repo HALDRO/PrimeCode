@@ -767,10 +767,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			const parentSessionId = data.parentID;
 
 			if (childSessionId && parentSessionId) {
-				const pendingToolUseId = this.subtaskManager.getOldestPendingToolUseId(parentSessionId);
-				if (pendingToolUseId) {
-					this.linkKnownChildSession(pendingToolUseId, parentSessionId, childSessionId);
-				}
+				// Do not guess the task→child link from FIFO pending order.
+				// With parallel subtasks, session.created can arrive interleaved and bind the
+				// child session to the wrong task card, which then leaks diff/file counters
+				// across unrelated subtasks. We only establish the link from authoritative
+				// task metadata (tool_streaming/tool_result metadata.sessionId).
 			}
 			return;
 		}

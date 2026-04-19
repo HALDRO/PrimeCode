@@ -102,6 +102,7 @@ describe('SubtaskManager', () => {
 				total: 150,
 				cacheRead: 10,
 				durationMs: 0,
+				lastSnapshotTotal: 0,
 			});
 		});
 
@@ -159,6 +160,7 @@ describe('SubtaskManager', () => {
 				total: 0,
 				cacheRead: 0,
 				durationMs: 0,
+				lastSnapshotTotal: 0,
 			});
 		});
 	});

@@ -39,7 +39,11 @@ export const CollapseOverlay: React.FC<CollapseOverlayProps> = ({
 		>
 			<button
 				type="button"
-				onClick={onCollapse}
+				onMouseDown={event => event.stopPropagation()}
+				onClick={event => {
+					event.stopPropagation();
+					onCollapse();
+				}}
 				aria-label={label}
 				title={label}
 				className={cn(

@@ -365,6 +365,22 @@ export const Header: React.FC = React.memo(() => {
 
 		let disposed = false;
 		let timer: number | null = null;
+		let consecutiveFailures = 0;
+		const MAX_BACKOFF_MS = 60_000;
+
+		const getNextInterval = () => {
+			if (consecutiveFailures === 0) return HEALTH_POLL_INTERVAL_MS;
+			// Exponential backoff: 10s → 20s → 40s → 60s (capped)
+			return Math.min(HEALTH_POLL_INTERVAL_MS * 2 ** consecutiveFailures, MAX_BACKOFF_MS);
+		};
+
+		const scheduleNext = () => {
+			if (disposed) return;
+			if (timer !== null) window.clearTimeout(timer);
+			timer = window.setTimeout(() => {
+				void runCheck();
+			}, getNextInterval());
+		};
 
 		const runCheck = async () => {
 			try {
@@ -378,28 +394,35 @@ export const Header: React.FC = React.memo(() => {
 				if (disposed) return;
 
 				if (!response.ok) {
+					consecutiveFailures++;
 					setServerStatus('error');
+					scheduleNext();
 					return;
 				}
 
 				const payload = (await response.json()) as { healthy?: boolean };
 				if (disposed) return;
-				setServerStatus(payload.healthy === true ? 'connected' : 'error');
+				if (payload.healthy === true) {
+					consecutiveFailures = 0;
+					setServerStatus('connected');
+				} else {
+					consecutiveFailures++;
+					setServerStatus('error');
+				}
 			} catch {
 				if (disposed) return;
+				consecutiveFailures++;
 				setServerStatus('error');
 			}
+			scheduleNext();
 		};
 
 		void runCheck();
-		timer = window.setInterval(() => {
-			void runCheck();
-		}, HEALTH_POLL_INTERVAL_MS);
 
 		return () => {
 			disposed = true;
 			if (timer !== null) {
-				window.clearInterval(timer);
+				window.clearTimeout(timer);
 			}
 		};
 	}, [serverUrl, setServerStatus]);
