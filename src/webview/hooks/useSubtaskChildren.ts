@@ -70,9 +70,11 @@ export function useSubtaskPreview(
 	message?: RenderSubtaskMessage;
 	children: RenderMessage[];
 	groupedChildren: GroupedResponseItem[];
+	childSessionTitle: string | undefined;
 	totalDurationMs: number;
 	tokenStats: SubtaskTokenStats | null;
 	childModelId: string | undefined;
+	diffStats: { added: number; removed: number };
 	taskResultEntry: RenderSubtaskMessage['normalizedEntry'];
 	taskResultContent: string;
 } {
@@ -84,6 +86,7 @@ export function useSubtaskPreview(
 	);
 
 	const childSessionId = (message as { childSessionId?: string } | undefined)?.childSessionId;
+	const childSessionTitle = childSessionId ? sessionsById[childSessionId]?.title : undefined;
 	const shouldProjectTaskResult = hasCanonicalTaskResult(message);
 	const visiblePreview = useInlineChildSessionPreview(childSessionId, shouldProjectTaskResult);
 
@@ -111,6 +114,31 @@ export function useSubtaskPreview(
 	}, [message?.childTokens]);
 
 	const childModelId: string | undefined = message?.childModelId;
+	const diffStats = useMemo(() => {
+		if (!childSessionId) return { added: 0, removed: 0 };
+		const childSession = sessionsById[childSessionId];
+		if (!childSession) return { added: 0, removed: 0 };
+
+		const cumulative = childSession.cumulativeDiffs ?? [];
+		if (cumulative.length > 0) {
+			return cumulative.reduce(
+				(acc, diff) => ({
+					added: acc.added + (diff.additions ?? 0),
+					removed: acc.removed + (diff.deletions ?? 0),
+				}),
+				{ added: 0, removed: 0 },
+			);
+		}
+
+		const changedFiles = childSession.changedFiles ?? [];
+		return changedFiles.reduce(
+			(acc, file) => ({
+				added: acc.added + (file.linesAdded ?? 0),
+				removed: acc.removed + (file.linesRemoved ?? 0),
+			}),
+			{ added: 0, removed: 0 },
+		);
+	}, [sessionsById, childSessionId]);
 	const taskResultContent = shouldProjectTaskResult ? (message?.result ?? '').trim() : '';
 	const taskResultEntry = shouldProjectTaskResult ? message?.normalizedEntry : undefined;
 
@@ -118,9 +146,11 @@ export function useSubtaskPreview(
 		message,
 		children: visiblePreview,
 		groupedChildren,
+		childSessionTitle,
 		totalDurationMs,
 		tokenStats,
 		childModelId,
+		diffStats,
 		taskResultEntry,
 		taskResultContent,
 	};

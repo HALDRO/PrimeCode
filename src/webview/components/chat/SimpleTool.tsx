@@ -257,6 +257,7 @@ ThinkingMessage.displayName = 'ThinkingMessage';
 
 export {
 	type GroupedResponseItem,
+	getGroupedItemShouldCollapse,
 	groupToolMessages,
 	precomputeCollapseFlags,
 	shouldCollapseGroupedItem,
@@ -551,6 +552,7 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 		const searchEntries = useMemo(() => {
 			if (!isSearch || !fullText.trim()) return [];
 			const entries: Array<{ filePath: string; line?: number }> = [];
+			const seen = new Set<string>();
 			let currentFile = '';
 			for (const raw of lines) {
 				const trimmed = raw.trim();
@@ -565,16 +567,26 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 				// Grep match line: "  Line 42: content"
 				const lineMatch = trimmed.match(/^Line (\d+):/);
 				if (lineMatch && currentFile) {
+					const key = `${currentFile}:${lineMatch[1]}`;
+					if (seen.has(key)) continue;
+					seen.add(key);
 					entries.push({ filePath: currentFile, line: Number(lineMatch[1]) });
 					continue;
 				}
-				// Glob: bare file path (no spaces, has extension or slashes)
-				if (!trimmed.includes(' ') && (/[\\/]/.test(trimmed) || /\.\w{1,10}$/.test(trimmed))) {
+				// Glob: any path-like entry, including relative files with spaces.
+				if (
+					!trimmed.startsWith('Line ') &&
+					(/[\\/]/.test(trimmed) || /\.\w{1,10}$/.test(trimmed))
+				) {
+					if (seen.has(trimmed)) continue;
+					seen.add(trimmed);
 					entries.push({ filePath: trimmed });
 				}
 			}
 			return entries;
 		}, [isSearch, fullText, lines]);
+
+		const searchResultCount = searchEntries.length;
 
 		const hasBody = !isRead && fullText.trim().length > 0;
 
@@ -628,9 +640,9 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 									: `${nonEmptyLineCount} lines`}
 							</span>
 						)}
-						{!isRead && isSearch && nonEmptyLineCount > 0 && (
+						{!isRead && isSearch && (searchResultCount > 0 || hasBody) && (
 							<span className="text-sm whitespace-nowrap text-vscode-descriptionForeground animate-content-reveal">
-								{nonEmptyLineCount} results
+								{searchResultCount} results
 							</span>
 						)}
 						{!isRead && !isSearch && isTodoWrite && totalCount > 0 && (

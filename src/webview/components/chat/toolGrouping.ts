@@ -30,6 +30,7 @@ const MAX_BRIDGE_MESSAGE_LENGTH = 200;
  */
 export interface ToolGroup extends Array<RenderMessage> {
 	isLive?: boolean;
+	shouldCollapse?: boolean;
 }
 
 // -----------------------------------------------------------------------------
@@ -42,6 +43,9 @@ const isGroupableTool = (msg: RenderMessage, mcpServerNames: string[]): boolean 
 	}
 
 	const toolName = msg.toolName || '';
+	if (toolName.toLowerCase() === 'question') {
+		return false;
+	}
 
 	if (isMcpTool(toolName, mcpServerNames)) {
 		return false;
@@ -100,7 +104,7 @@ export const groupToolMessages = (
 	const result: (RenderMessage | RenderMessage[])[] = [];
 	let currentToolGroup: RenderMessage[] = [];
 
-	const flushGroup = (reason: 'boundary' | 'final') => {
+	const flushGroup = (reason: 'boundary' | 'final', collapseOnFlush = false) => {
 		if (currentToolGroup.length === 0) return;
 
 		const trailingBridges = stripTrailingBridges(currentToolGroup);
@@ -109,10 +113,10 @@ export const groupToolMessages = (
 		const canGroup = toolUseCount >= MIN_SIMPLE_TOOL_GROUP_SIZE;
 
 		if (canGroup) {
-			if (reason === 'final' && isStreaming) {
-				(currentToolGroup as ToolGroup).isLive = true;
-			}
-			result.push(currentToolGroup);
+			const group = currentToolGroup as ToolGroup;
+			group.isLive = reason === 'final' && isStreaming;
+			group.shouldCollapse = reason === 'boundary' && collapseOnFlush;
+			result.push(group);
 		} else {
 			result.push(...currentToolGroup);
 		}
@@ -135,8 +139,8 @@ export const groupToolMessages = (
 			continue;
 		}
 
-		// Hard boundary — flush and emit as-is
-		flushGroup('boundary');
+		// Hard boundary — flush first, then emit the trigger/boundary message outside the group.
+		flushGroup('boundary', shouldTriggerCollapse(msg));
 		result.push(msg);
 	}
 
@@ -148,7 +152,7 @@ export const groupToolMessages = (
 // Collapse helpers
 // -----------------------------------------------------------------------------
 
-const shouldTriggerCollapse = (msg: RenderMessage): boolean => {
+export const shouldTriggerCollapse = (msg: RenderMessage): boolean => {
 	if (msg.kind === 'assistant' || msg.kind === 'thinking') {
 		return true;
 	}
@@ -177,25 +181,11 @@ const shouldTriggerCollapse = (msg: RenderMessage): boolean => {
 
 export type GroupedResponseItem = RenderMessage | RenderMessage[];
 
-const itemTriggersCollapse = (item: GroupedResponseItem): boolean => {
-	if (Array.isArray(item)) {
-		return item.some(msg => !isBridgeMessage(msg) && shouldTriggerCollapse(msg));
-	}
-	return shouldTriggerCollapse(item);
-};
+export const getGroupedItemShouldCollapse = (item: GroupedResponseItem): boolean =>
+	Array.isArray(item) ? Boolean((item as ToolGroup).shouldCollapse) : false;
 
 export const shouldCollapseGroupedItem = (items: GroupedResponseItem[], index: number): boolean => {
-	const current = items[index];
-	if (!Array.isArray(current)) return false;
-	if (getToolUseCount(current) < MIN_SIMPLE_TOOL_GROUP_SIZE) return false;
-
-	for (let i = index + 1; i < items.length; i++) {
-		if (itemTriggersCollapse(items[i])) {
-			return true;
-		}
-	}
-
-	return false;
+	return getGroupedItemShouldCollapse(items[index]);
 };
 
 /**
@@ -204,20 +194,5 @@ export const shouldCollapseGroupedItem = (items: GroupedResponseItem[], index: n
  * This eliminates the O(n²) cost of calling shouldCollapseGroupedItem per item during render.
  */
 export const precomputeCollapseFlags = (items: GroupedResponseItem[]): boolean[] => {
-	const flags = new Array<boolean>(items.length);
-	let hasCollapseTriggerAhead = false;
-
-	for (let i = items.length - 1; i >= 0; i--) {
-		const current = items[i];
-		if (Array.isArray(current) && getToolUseCount(current) >= MIN_SIMPLE_TOOL_GROUP_SIZE) {
-			flags[i] = hasCollapseTriggerAhead;
-		} else {
-			flags[i] = false;
-		}
-		if (itemTriggersCollapse(current)) {
-			hasCollapseTriggerAhead = true;
-		}
-	}
-
-	return flags;
+	return items.map(getGroupedItemShouldCollapse);
 };

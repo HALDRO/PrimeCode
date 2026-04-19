@@ -11,7 +11,11 @@ import type { RenderMessage } from '../../store';
 
 type Message = RenderMessage;
 
-import { groupToolMessages, precomputeCollapseFlags } from './toolGrouping';
+import {
+	getGroupedItemShouldCollapse,
+	groupToolMessages,
+	precomputeCollapseFlags,
+} from './toolGrouping';
 
 // --- Helpers ---
 
@@ -520,7 +524,10 @@ describe('groupToolMessages', () => {
 			];
 
 			const grouped = groupToolMessages(msgs, NO_MCP);
+			const firstItem = grouped[0];
 			expect(Array.isArray(grouped[0])).toBe(true);
+			expect(grouped[1]).toBe(msgs[6]);
+			expect(getGroupedItemShouldCollapse(firstItem)).toBe(true);
 
 			const flags = precomputeCollapseFlags(grouped);
 			expect(flags[0]).toBe(true);
@@ -571,8 +578,10 @@ describe('groupToolMessages', () => {
 			];
 
 			const grouped = groupToolMessages(msgs, NO_MCP);
+			const firstItem = grouped[0];
 			expect(Array.isArray(grouped[0])).toBe(true);
 			expect((grouped[1] as Extract<Message, { kind: 'tool_use' }>).toolName).toBe('bash');
+			expect(getGroupedItemShouldCollapse(firstItem)).toBe(true);
 
 			const flags = precomputeCollapseFlags(grouped);
 			expect(flags[0]).toBe(true);
@@ -589,10 +598,41 @@ describe('groupToolMessages', () => {
 			];
 
 			const grouped = groupToolMessages(msgs, NO_MCP, false);
+			const firstItem = grouped[0];
 			expect(Array.isArray(grouped[0])).toBe(true);
+			expect(getGroupedItemShouldCollapse(firstItem)).toBe(false);
 
 			const flags = precomputeCollapseFlags(grouped);
 			expect(flags[0]).toBe(false);
+		});
+
+		it('should keep a live trailing group expanded until a real boundary message appears', () => {
+			const streaming = [
+				toolUse('1'),
+				toolResult('1r', 'tu-1'),
+				toolUse('2'),
+				toolResult('2r', 'tu-2'),
+				toolUse('3'),
+				toolResult('3r', 'tu-3'),
+				assistant('a1', 'Reading more...'),
+				toolUse('4'),
+				toolResult('4r', 'tu-4'),
+			];
+
+			const groupedWhileStreaming = groupToolMessages(streaming, NO_MCP, true);
+			const streamingFirstItem = groupedWhileStreaming[0];
+			expect(groupedWhileStreaming).toHaveLength(1);
+			expect(Array.isArray(groupedWhileStreaming[0])).toBe(true);
+			expect(getGroupedItemShouldCollapse(streamingFirstItem)).toBe(false);
+
+			const withBoundary = [...streaming, heavyTool('bash1', 'bash')];
+			const groupedAfterBoundary = groupToolMessages(withBoundary, NO_MCP, true);
+			const boundaryFirstItem = groupedAfterBoundary[0];
+			expect(Array.isArray(groupedAfterBoundary[0])).toBe(true);
+			expect((groupedAfterBoundary[1] as Extract<Message, { kind: 'tool_use' }>).toolName).toBe(
+				'bash',
+			);
+			expect(getGroupedItemShouldCollapse(boundaryFirstItem)).toBe(true);
 		});
 	});
 });

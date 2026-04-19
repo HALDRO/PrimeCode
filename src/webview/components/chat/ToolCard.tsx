@@ -41,7 +41,6 @@ import {
 import { FileTypeIcon } from '../icons/FileTypeIcon';
 import { Button, CollapseOverlay, IconButton, Tooltip } from '../ui';
 import { AccessGate } from './AccessGate';
-import { QuestionCard } from './QuestionCard';
 import {
 	getDiffContentHeight,
 	type ResolvedFileChange,
@@ -228,6 +227,7 @@ interface ToolCardMessageProps {
 	toolUse: ToolUse;
 	toolResult?: ToolResult;
 	defaultExpanded?: boolean;
+	sessionId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -427,14 +427,17 @@ const FileEditCard: React.FC<FileEditCardProps> = ({
 };
 
 export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
-	({ toolUse, toolResult: providedToolResult, defaultExpanded }) => {
+	({ toolUse, toolResult: providedToolResult, defaultExpanded, sessionId }) => {
 		const { postMessage } = useVSCode();
 		const mcpServers = useMcpServers();
 		const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
 
 		const { toolUseId, filePath, rawInput } = toolUse;
 		const toolName = toolUse.toolName ?? '';
-		const selectorToolResult = useToolResultByToolId(providedToolResult ? undefined : toolUseId);
+		const selectorToolResult = useToolResultByToolId(
+			providedToolResult ? undefined : toolUseId,
+			sessionId,
+		);
 		const syntheticToolResult: ToolResult | undefined =
 			providedToolResult ??
 			selectorToolResult ??
@@ -588,9 +591,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		if (!toolName) return null;
 		if (shouldHideWhileRunning) return null;
 
-		if (resolvedQuestionRequest) {
-			return <QuestionCard request={resolvedQuestionRequest} />;
-		}
+		if (resolvedQuestionRequest) return null;
 
 		if (category === 'inline') {
 			return (

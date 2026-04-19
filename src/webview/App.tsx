@@ -14,7 +14,7 @@ import { MessageItem } from './components/chat/MessageItem';
 import { NotificationOverlay } from './components/chat/NotificationOverlay.tsx';
 import { QuestionCard } from './components/chat/QuestionCard';
 import { QueuedMessageBanner } from './components/chat/QueuedMessageBanner';
-import { precomputeCollapseFlags } from './components/chat/SimpleTool';
+import { getGroupedItemShouldCollapse } from './components/chat/SimpleTool';
 import { Header } from './components/header/Header';
 import { ChevronDownIcon } from './components/icons';
 import { ChatInput } from './components/input/ChatInput.tsx';
@@ -94,6 +94,11 @@ function sectionChanged(prev: MessageSection, next: MessageSection): boolean {
 				const nId = n[n.length - 1]?.id;
 				if (pId !== nId) return true;
 				if ((p as { isLive?: boolean }).isLive !== (n as { isLive?: boolean }).isLive) return true;
+				if (
+					(p as { shouldCollapse?: boolean }).shouldCollapse !==
+					(n as { shouldCollapse?: boolean }).shouldCollapse
+				)
+					return true;
 			} else {
 				return true;
 			}
@@ -184,11 +189,6 @@ HiddenNativeScroller.displayName = 'HiddenNativeScroller';
 
 const MessageSectionComponent = React.memo<MessageSectionProps>(
 	({ section, isLastSection, sessionId }) => {
-		const collapseFlags = useMemo(
-			() => precomputeCollapseFlags(section.responses),
-			[section.responses],
-		);
-
 		const messageItemCtx = useMemo(() => buildMessageItemCtx(sessionId), [sessionId]);
 
 		return (
@@ -242,7 +242,7 @@ const MessageSectionComponent = React.memo<MessageSectionProps>(
 								key={key}
 								item={responseItem}
 								ctx={messageItemCtx}
-								collapseGroupedTools={collapseFlags[idx]}
+								collapseGroupedTools={getGroupedItemShouldCollapse(responseItem)}
 							/>
 						);
 					})}

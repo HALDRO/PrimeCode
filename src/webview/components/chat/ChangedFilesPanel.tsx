@@ -16,6 +16,7 @@ import {
 	type RenderMessage,
 	useChangedFilesState,
 	useChatActions,
+	useHasTodos,
 	useMcpServers,
 	useTodoState,
 } from '../../store';
@@ -34,7 +35,14 @@ import {
 	TodoPendingIcon,
 	TodoProgressIcon,
 } from '../icons';
-import { DropdownMenu, IconButton, PathChip, ScrollContainer, Tooltip } from '../ui';
+import {
+	DropdownMenu,
+	IconButton,
+	PathChip,
+	ScrollContainer,
+	SessionStatsDisplay,
+	Tooltip,
+} from '../ui';
 
 interface TodoItem {
 	id: string;
@@ -291,6 +299,22 @@ const TodoSection: React.FC = React.memo(() => {
 });
 TodoSection.displayName = 'TodoSection';
 
+const StandaloneStatsPanel: React.FC = React.memo(() => (
+	<div className="w-full box-border relative bg-transparent">
+		<div className="bg-(--panel-header-bg) rounded-t-lg border border-(--panel-header-border) border-b-0 @container/panel">
+			<div className="relative flex items-center h-(--tool-header-height) px-(--tool-header-padding) text-(--changed-files-font-size) font-(family-name:--vscode-font-family)">
+				<div className="shrink-0">
+					<TodoSection />
+				</div>
+				<div className="flex-1 min-w-0">
+					<SessionStatsDisplay mode="footer" className="border-0 h-auto px-0" />
+				</div>
+			</div>
+		</div>
+	</div>
+));
+StandaloneStatsPanel.displayName = 'StandaloneStatsPanel';
+
 function formatDiffCount(value: number, kind: 'added' | 'removed'): string {
 	if (value <= 0) {
 		return '0';
@@ -352,12 +376,17 @@ FileRow.displayName = 'FileRow';
 
 export const ChangedFilesPanel: React.FC = React.memo(() => {
 	const { changedFiles, cumulativeDiffs } = useChangedFilesState();
+	const hasTodos = useHasTodos();
 	// Official OpenCode treats session.diff as the authoritative review/files source.
 	// Keep changedFiles for live metadata, but do not require it for restored visibility.
 	const hasFiles = cumulativeDiffs.length > 0 || changedFiles.length > 0;
 
-	if (!hasFiles) {
+	if (!hasFiles && !hasTodos) {
 		return null;
+	}
+
+	if (!hasFiles) {
+		return <StandaloneStatsPanel />;
 	}
 
 	return <ChangedFilesPanelContent />;
