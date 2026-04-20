@@ -9,6 +9,7 @@ import { OverlayScrollbarsComponent } from 'overlayscrollbars-react';
 import React, { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ActionType, LspDiagnosticsByFile } from '../../../common/normalizedTypes';
 import { buildToolActionType, extractLspDiagnostics } from '../../../common/normalizedTypes';
+import { pathsReferToSameFile } from '../../../utils/path';
 import {
 	getMcpToolDisplayInfo,
 	isFileEditTool,
@@ -39,14 +40,10 @@ import {
 	WandIcon,
 } from '../icons';
 import { FileTypeIcon } from '../icons/FileTypeIcon';
-import { Button, CollapseOverlay, IconButton, Tooltip } from '../ui';
+import { Button, CollapseOverlay, IconButton, PathChip, Tooltip } from '../ui';
 import { AccessGate } from './AccessGate';
-import {
-	getDiffContentHeight,
-	type ResolvedFileChange,
-	resolveFileChanges,
-	SimpleDiff,
-} from './SimpleDiff';
+import type { DiffLine, ResolvedFileChange } from './SimpleDiff';
+import { getDiffContentHeight, resolveFileChanges, SimpleDiff } from './SimpleDiff';
 import { InlineToolLine, SimpleTool } from './SimpleTool';
 
 const TOOL_CARD_CLASSES = 'bg-(--tool-bg-header) border border-(--tool-border-color) rounded-lg';
@@ -110,15 +107,13 @@ const getToolCardCategory = (
 };
 
 export const shouldHideRunningFileEditTool = (
-	actionType: ActionType | null,
-	toolName: string,
+	_actionType: ActionType | null,
+	_toolName: string,
 	isRunning: boolean,
 	hasRenderableDiff: boolean,
 ): boolean => {
 	if (!isRunning || hasRenderableDiff) return false;
-	return (
-		actionType?.type === 'FileEdit' || actionType?.type === 'ApplyPatch' || isFileEditTool(toolName)
-	);
+	return false;
 };
 
 const ToolCardLeadingIcon: React.FC<{ children: ReactNode; className?: string }> = ({
@@ -234,32 +229,39 @@ interface ToolCardMessageProps {
 // LSP Diagnostics Display
 // ---------------------------------------------------------------------------
 
-/** Group diagnostics by message, collecting locations for each unique error */
-function groupDiagnosticsByMessage(
+function flattenDiagnostics(
 	diagnostics: LspDiagnosticsByFile,
-): Array<{ message: string; locations: Array<{ file: string; line: number; character: number }> }> {
-	const groups = new Map<string, Array<{ file: string; line: number; character: number }>>();
+): Array<{ file: string; line: number; character: number; message: string }> {
+	const seen = new Set<string>();
+	const entries: Array<{ file: string; line: number; character: number; message: string }> = [];
+
 	for (const [filePath, diags] of Object.entries(diagnostics)) {
 		for (const d of diags) {
-			const key = d.message;
-			if (!groups.has(key)) groups.set(key, []);
-			groups.get(key)?.push({
+			const line = d.range.start.line + 1;
+			const character = d.range.start.character + 1;
+			const key = `${filePath}:${line}:${character}:${d.message}`;
+			if (seen.has(key)) continue;
+			seen.add(key);
+			entries.push({
 				file: filePath,
-				// Convert 0-based LSP positions to 1-based for UI display
-				line: d.range.start.line + 1,
-				character: d.range.start.character + 1,
+				line,
+				character,
+				message: d.message,
 			});
 		}
 	}
-	return Array.from(groups.entries()).map(([message, locations]) => ({ message, locations }));
+
+	return entries;
 }
 
-/** Renders LSP error diagnostics below a file edit card, grouped by message */
-const DiagnosticsDisplay: React.FC<{ diagnostics: LspDiagnosticsByFile }> = ({ diagnostics }) => {
-	const groups = useMemo(() => groupDiagnosticsByMessage(diagnostics), [diagnostics]);
-	if (groups.length === 0) return null;
+const DiagnosticsDisplay: React.FC<{
+	diagnostics: LspDiagnosticsByFile;
+	postMessage: ReturnType<typeof useVSCode>['postMessage'];
+}> = ({ diagnostics, postMessage }) => {
+	const entries = useMemo(() => flattenDiagnostics(diagnostics), [diagnostics]);
+	if (entries.length === 0) return null;
 
-	const totalErrors = groups.reduce((sum, g) => sum + g.locations.length, 0);
+	const totalErrors = entries.length;
 
 	return (
 		<div className="mt-1">
@@ -269,19 +271,27 @@ const DiagnosticsDisplay: React.FC<{ diagnostics: LspDiagnosticsByFile }> = ({ d
 				isError
 			>
 				<div className="flex flex-col gap-0.5">
-					{groups.map(group => (
-						<div key={group.message} className="flex items-center gap-1.5 text-sm">
-							{group.locations.length > 1 && (
-								<span className="text-error font-medium whitespace-nowrap">
-									x{group.locations.length}
-								</span>
-							)}
-							{group.locations.length === 1 && (
-								<span className="text-error font-medium whitespace-nowrap">
-									[{group.locations[0].line}:{group.locations[0].character}]
-								</span>
-							)}
-							<span className="text-vscode-descriptionForeground truncate">{group.message}</span>
+					{entries.map(entry => (
+						<div
+							key={`${entry.file}:${entry.line}:${entry.character}:${entry.message}`}
+							className="flex items-center gap-1.5 min-w-0 text-sm"
+						>
+							<PathChip
+								path={entry.file}
+								title={`${entry.file}:${entry.line}:${entry.character}`}
+								onClick={() =>
+									postMessage({
+										type: 'openFile',
+										filePath: entry.file,
+										startLine: entry.line,
+										endLine: entry.line,
+									})
+								}
+							/>
+							<span className="text-error font-medium whitespace-nowrap">
+								[{entry.line}:{entry.character}]
+							</span>
+							<span className="text-vscode-descriptionForeground truncate">{entry.message}</span>
 						</div>
 					))}
 				</div>
@@ -289,6 +299,41 @@ const DiagnosticsDisplay: React.FC<{ diagnostics: LspDiagnosticsByFile }> = ({ d
 		</div>
 	);
 };
+
+function getDiagnosticsForFile(
+	filePath: string | undefined,
+	diagnostics: LspDiagnosticsByFile | undefined,
+): LspDiagnosticsByFile | undefined {
+	if (!filePath || !diagnostics) return undefined;
+	if (diagnostics[filePath]) {
+		return { [filePath]: diagnostics[filePath] };
+	}
+
+	for (const [diagnosticPath, items] of Object.entries(diagnostics)) {
+		if (pathsReferToSameFile(diagnosticPath, filePath)) {
+			return { [filePath]: items };
+		}
+	}
+
+	return undefined;
+}
+
+function getApplyPatchDiagnosticsForCard(params: {
+	change: ResolvedFileChange;
+	changeIndex: number;
+	totalChanges: number;
+	isApplyPatch: boolean;
+	diagnostics: LspDiagnosticsByFile | undefined;
+}): LspDiagnosticsByFile | undefined {
+	const { change, changeIndex, totalChanges, isApplyPatch, diagnostics } = params;
+	if (!diagnostics) return undefined;
+
+	if (!isApplyPatch || totalChanges <= 1) {
+		return getDiagnosticsForFile(change.filePath, diagnostics);
+	}
+
+	return changeIndex === totalChanges - 1 ? diagnostics : undefined;
+}
 
 // ---------------------------------------------------------------------------
 // FileEditCard — extracted from ToolCardMessage for clarity
@@ -303,6 +348,7 @@ interface FileEditCardProps {
 	onToggleDiff: () => void;
 	diagnostics: LspDiagnosticsByFile | undefined;
 	postMessage: ReturnType<typeof useVSCode>['postMessage'];
+	isRunning?: boolean;
 }
 
 const FileEditCard: React.FC<FileEditCardProps> = ({
@@ -314,6 +360,7 @@ const FileEditCard: React.FC<FileEditCardProps> = ({
 	onToggleDiff,
 	diagnostics,
 	postMessage,
+	isRunning = false,
 }) => {
 	const {
 		lines,
@@ -324,8 +371,9 @@ const FileEditCard: React.FC<FileEditCardProps> = ({
 		firstChangedLine,
 	} = change;
 	const hasContent = lines.length > 0 || hasDeleteChange;
+	const hasDiagnostics = Boolean(diagnostics && Object.keys(diagnostics).length > 0);
 
-	if (!hasContent) return null;
+	if (!hasContent && !isRunning && !hasDiagnostics) return null;
 
 	const maxHeight = TOOL_CARD_PREVIEW_MAX_HEIGHT;
 	const needsExpand = getDiffContentHeight(lines) > maxHeight;
@@ -382,7 +430,15 @@ const FileEditCard: React.FC<FileEditCardProps> = ({
 				body={
 					<div className="relative">
 						<div className={cn(accessRequest?.resolved === false ? 'pb-2' : undefined)}>
-							<SimpleDiff lines={lines} maxHeight={maxHeight} expanded={diffExpanded} />
+							{hasContent ? (
+								<SimpleDiff lines={lines} maxHeight={maxHeight} expanded={diffExpanded} />
+							) : (
+								<div className="bg-(--tool-bg-header) text-vscode-descriptionForeground text-sm px-3 py-2 italic">
+									{hasDiagnostics
+										? 'Diff unavailable, but LSP diagnostics were reported.'
+										: 'Preparing diff...'}
+								</div>
+							)}
 						</div>
 						<div
 							className={cn(
@@ -391,20 +447,22 @@ const FileEditCard: React.FC<FileEditCardProps> = ({
 								'group-hover:opacity-100',
 							)}
 						>
-							<IconButton
-								icon={<CopyIcon size={14} />}
-								onClick={e => {
-									e.stopPropagation();
-									const content = lines
-										.filter(l => l.type === 'added' || l.type === 'unchanged')
-										.map(l => l.content)
-										.join('\n');
-									navigator.clipboard.writeText(content);
-								}}
-								title="Copy"
-								size={20}
-								className="bg-(--surface-base)/80 backdrop-blur-sm"
-							/>
+							{hasContent ? (
+								<IconButton
+									icon={<CopyIcon size={14} />}
+									onClick={e => {
+										e.stopPropagation();
+										const content = lines
+											.filter((l: DiffLine) => l.type === 'added' || l.type === 'unchanged')
+											.map((l: DiffLine) => l.content)
+											.join('\n');
+										navigator.clipboard.writeText(content);
+									}}
+									title="Copy"
+									size={20}
+									className="bg-(--surface-base)/80 backdrop-blur-sm"
+								/>
+							) : null}
 						</div>
 					</div>
 				}
@@ -421,7 +479,7 @@ const FileEditCard: React.FC<FileEditCardProps> = ({
 					) : undefined
 				}
 			/>
-			{diagnostics && <DiagnosticsDisplay diagnostics={diagnostics} />}
+			{diagnostics && <DiagnosticsDisplay diagnostics={diagnostics} postMessage={postMessage} />}
 		</>
 	);
 };
@@ -484,7 +542,29 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 				}),
 			[actionType, effectiveMetadata, accessRequest, filePath],
 		);
+		const fallbackFileChanges = useMemo(() => {
+			if (!isDiffTool || fileChanges.length > 0) return [];
+			const fallbackPaths = new Set<string>();
+			if (filePath) fallbackPaths.add(filePath);
+			if (actionType?.type === 'FileEdit' && actionType.path) fallbackPaths.add(actionType.path);
+			if (actionType?.type === 'ApplyPatch') {
+				for (const file of actionType.files) {
+					if (file.path) fallbackPaths.add(file.path);
+				}
+			}
+			return Array.from(fallbackPaths).map(path => ({
+				filePath: path,
+				name: path.split(/[/\\]/).pop() || path,
+				lines: [],
+				hasDeleteChange: false,
+				stats: { added: 0, removed: 0 },
+				firstChangedLine: undefined,
+				status: 'update' as const,
+			}));
+		}, [actionType, fileChanges, filePath, isDiffTool]);
+		const displayFileChanges = fileChanges.length > 0 ? fileChanges : fallbackFileChanges;
 		const canRenderDiffCard = isDiffTool && fileChanges.length > 0;
+		const canRenderPendingDiffCard = isDiffTool && displayFileChanges.length > 0;
 		const hasAccessRequest = Boolean(accessRequest);
 		const category = getToolCardCategory(
 			toolName,
@@ -607,10 +687,10 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		}
 
 		// 1) Diff Card (File Edits / Apply Patch)
-		if (canRenderDiffCard) {
+		if (canRenderPendingDiffCard) {
 			return (
 				<div className="flex flex-col gap-1">
-					{fileChanges.map((change, i) => (
+					{displayFileChanges.map((change, i) => (
 						<FileEditCard
 							key={change.filePath || i}
 							change={change}
@@ -619,12 +699,15 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 							rawInput={rawInput}
 							diffExpanded={diffExpanded}
 							onToggleDiff={() => setDiffExpanded(prev => !prev)}
-							diagnostics={
-								change.filePath && diagnostics?.[change.filePath]
-									? { [change.filePath]: diagnostics[change.filePath] }
-									: undefined
-							}
+							diagnostics={getApplyPatchDiagnosticsForCard({
+								change,
+								changeIndex: i,
+								totalChanges: displayFileChanges.length,
+								isApplyPatch,
+								diagnostics,
+							})}
 							postMessage={postMessage}
+							isRunning={isRunning && !canRenderDiffCard}
 						/>
 					))}
 				</div>

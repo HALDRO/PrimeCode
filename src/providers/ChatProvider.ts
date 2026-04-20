@@ -4,8 +4,8 @@ import {
 	formatModelId,
 	mapPermissionRuntimePayloadToRequest,
 	mapQuestionRuntimePayloadToRequest,
-	remapLspDiagnosticsToFilePaths,
 } from '../common';
+import { remapLspDiagnosticsToFilePaths } from '../common/normalizedTypes';
 import { PERMISSION_CATEGORIES, type PermissionCategory } from '../common/permissions';
 import type { WebviewCommand } from '../common/protocol';
 import {
@@ -982,6 +982,19 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 						break;
 					}
 
+					const metadata =
+						e.metadata && typeof e.metadata === 'object'
+							? remapLspDiagnosticsToFilePaths(
+									e.metadata as Record<string, unknown>,
+									collectChangedFilePaths(
+										typeof e.name === 'string' ? e.name : 'unknown',
+										{},
+										e.metadata as Record<string, unknown>,
+									),
+									this.settings.getWorkspaceRoot(),
+								)
+							: undefined;
+
 					this.bridge.emit(targetSessionId, 'message_part', {
 						part: {
 							id:
@@ -1003,7 +1016,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 							state: {
 								status: 'running',
 								...(e.streamingOutput ? { output: e.streamingOutput } : {}),
-								...(e.metadata ? { metadata: e.metadata } : {}),
+								...(metadata ? { metadata } : {}),
 							},
 							normalizedEntry: event.normalizedEntry,
 						},

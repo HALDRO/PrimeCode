@@ -24,11 +24,23 @@ function groupRenderResponses(
 	const grouped: GroupedResponseItem[] = [];
 	let toolBuffer: RenderMessage[] = [];
 
+	const hasLiveToolInBuffer = () =>
+		toolBuffer.some(
+			(response): boolean =>
+				response.kind === 'tool_use' &&
+				(response.isRunning === true ||
+					response.status === 'pending' ||
+					response.status === 'running' ||
+					response.status === undefined),
+		);
+
 	const flushTools = (isBoundary: boolean) => {
 		if (toolBuffer.length === 0) return;
-		const flushed = groupToolMessages(toolBuffer, mcpServerNames, isProcessing && !isBoundary) as
-			| RenderMessage[]
-			| RenderMessage[][];
+		const flushed = groupToolMessages(
+			toolBuffer,
+			mcpServerNames,
+			!isBoundary && (isProcessing || hasLiveToolInBuffer()),
+		) as RenderMessage[] | RenderMessage[][];
 		// Mark the last group array with shouldCollapse if flush was triggered by a boundary
 		if (isBoundary) {
 			for (let i = flushed.length - 1; i >= 0; i--) {
