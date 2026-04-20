@@ -1301,7 +1301,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			this.context.sessionState.clearStopGuard(targetSessionForGuard);
 		}
 
-		const config = this.buildSendConfig(uiModel);
+		const config = await this.buildSendConfig(uiModel);
 		const restoreTargetId = explicitSessionId || this.context.sessionState.activeSessionId;
 
 		// Per-message agent override takes precedence over the global opencode.agent setting.
@@ -2108,7 +2108,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			// NOTE: msg.model is intentionally ignored — ChatInput should NOT pass
 			// the chat model here; Prompt Improver has its own model setting.
 			const improveModelFromSettings = this.context.settings.get('promptImprove.model');
-			const sendConfig = this.buildSendConfig();
+			const sendConfig = await this.buildSendConfig();
 			const resolvedModel =
 				(typeof improveModelFromSettings === 'string' && improveModelFromSettings.trim()
 					? improveModelFromSettings
@@ -2251,10 +2251,6 @@ export class SessionHandler implements WebviewMessageHandler {
 	// Utils
 	// =============================================================================
 
-	private getSelectedModelKey(): string {
-		return 'primecode.selectedModel.opencode';
-	}
-
 	private buildBaseConfig(): { provider: 'opencode'; workspaceRoot: string } {
 		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 		if (!workspaceRoot) {
@@ -2266,13 +2262,21 @@ export class SessionHandler implements WebviewMessageHandler {
 		};
 	}
 
-	private buildSendConfig(uiModel?: string): CLIConfig {
-		const { provider, workspaceRoot } = this.buildBaseConfig();
+	private async readWorkspaceDefaultModel(workspaceRoot: string): Promise<string | undefined> {
+		try {
+			const projectDefaults =
+				await this.context.services.openCodeClient.getProjectModelDefaults(workspaceRoot);
+			return projectDefaults.model && parseModelId(projectDefaults.model)
+				? projectDefaults.model
+				: undefined;
+		} catch {
+			return undefined;
+		}
+	}
 
-		const savedModel = this.context.extensionContext.workspaceState.get<string>(
-			this.getSelectedModelKey(),
-		);
-		const model = uiModel ?? savedModel;
+	private async buildSendConfig(uiModel?: string): Promise<CLIConfig> {
+		const { provider, workspaceRoot } = this.buildBaseConfig();
+		const model = uiModel ?? (await this.readWorkspaceDefaultModel(workspaceRoot));
 
 		const opencodeAgent = this.context.settings.get('opencode.agent');
 		const opencodeServerTimeout = this.context.settings.get('opencode.serverTimeout');

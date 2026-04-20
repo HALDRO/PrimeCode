@@ -686,6 +686,8 @@ const OpenCodeModelDataSchema = Type.Object({
 export const OpenCodeProviderDataSchema = Type.Object({
 	id: Type.String(),
 	name: Type.String(),
+	npm: Type.Optional(Type.String()),
+	baseUrl: Type.Optional(Type.String()),
 	source: Type.Optional(
 		Type.Union([
 			Type.Literal('env'),
@@ -694,6 +696,7 @@ export const OpenCodeProviderDataSchema = Type.Object({
 			Type.Literal('custom'),
 		]),
 	),
+	env: Type.Optional(Type.Array(Type.String())),
 	models: Type.Array(OpenCodeModelDataSchema),
 });
 export type OpenCodeProviderData = Static<typeof OpenCodeProviderDataSchema>;

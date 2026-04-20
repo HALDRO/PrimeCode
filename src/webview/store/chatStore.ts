@@ -1496,7 +1496,16 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 				produce((state: ChatState) => {
 					const now = Date.now();
 					if (!state.sessionsById[sessionId]) {
-						state.sessionsById[sessionId] = createEmptySession(sessionId, now);
+						// Inherit model from the previously active session so the new
+						// chat starts with the same model the user was already using.
+						const prevSession = state.activeSessionId
+							? state.sessionsById[state.activeSessionId]
+							: undefined;
+						const newSession = createEmptySession(sessionId, now);
+						if (prevSession?.model) {
+							newSession.model = prevSession.model;
+						}
+						state.sessionsById[sessionId] = newSession;
 						if (!state.sessionOrder.includes(sessionId)) {
 							state.sessionOrder.push(sessionId);
 						}

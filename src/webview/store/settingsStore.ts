@@ -26,6 +26,7 @@ import {
 	type CLIProviderType,
 	type DiscoveryStatus,
 	type ExtensionMessage,
+	getProxyEndpointProviderId,
 	type LspStatusData,
 	type MCPServersMap,
 	normalizeProxyBaseUrl,
@@ -52,7 +53,6 @@ import { vscode } from '../utils/vscode';
 import { handleSettingsData } from './settingsUtils';
 
 type PersistedSelectionState = {
-	selectedModel?: string;
 	modelVariants?: Record<string, string | undefined>;
 };
 
@@ -60,7 +60,6 @@ function readPersistedSelectionState(): PersistedSelectionState {
 	const raw = vscode.getState();
 	if (!raw || typeof raw !== 'object') return {};
 	const state = raw as {
-		selectedModel?: unknown;
 		modelVariants?: unknown;
 	};
 	let modelVariants: Record<string, string | undefined> | undefined;
@@ -76,7 +75,6 @@ function readPersistedSelectionState(): PersistedSelectionState {
 		) as Record<string, string | undefined>;
 	}
 	return {
-		selectedModel: typeof state.selectedModel === 'string' ? state.selectedModel : undefined,
 		modelVariants,
 	};
 }
@@ -85,7 +83,7 @@ function writePersistedSelectionState(input: PersistedSelectionState): void {
 	const current = vscode.getState();
 	const next =
 		current && typeof current === 'object' ? { ...(current as Record<string, unknown>) } : {};
-	if (input.selectedModel !== undefined) next.selectedModel = input.selectedModel;
+	delete next.selectedModel;
 	if (input.modelVariants !== undefined) next.modelVariants = input.modelVariants;
 	vscode.setState(next);
 }
@@ -526,7 +524,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 		isWindows: false,
 	},
 
-	selectedModel: persistedSelection.selectedModel ?? 'default',
+	selectedModel: 'default',
 	modelVariants: persistedSelection.modelVariants ?? {},
 	proxyEndpoints: [],
 
@@ -602,7 +600,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 		setSettings: settings => set(state => ({ ...state, ...settings })),
 		setSelectedModel: selectedModel => {
 			writePersistedSelectionState({
-				selectedModel,
 				modelVariants: get().modelVariants,
 			});
 			set({ selectedModel });
@@ -613,7 +610,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 				if (variant) next[modelId] = variant;
 				else delete next[modelId];
 				writePersistedSelectionState({
-					selectedModel: state.selectedModel,
 					modelVariants: next,
 				});
 				return { modelVariants: next };
@@ -988,12 +984,34 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 						const { providers, config } = message.data;
 						actions.setOpenCodeProviders(providers);
 						actions.setOpenCodeConfig({ isLoading: false, error: config?.error });
+
+						const state = get();
+						const currentModel = state.selectedModel;
+						if (currentModel && currentModel !== 'default' && providers.length > 0) {
+							const allAvailable = new Set<string>();
+							for (const p of providers) {
+								for (const m of p.models) {
+									allAvailable.add(`${p.id}/${m.id}`);
+								}
+							}
+							for (const ep of state.proxyEndpoints) {
+								for (const m of ep.models) {
+									if (ep.enabledModels.includes(m.id)) {
+										allAvailable.add(`${getProxyEndpointProviderId(ep.id)}/${m.id}`);
+									}
+								}
+							}
+							if (!allAvailable.has(currentModel) && allAvailable.size > 0) {
+								const firstAvailable = allAvailable.values().next().value;
+								if (firstAvailable) actions.setSelectedModel(firstAvailable);
+							}
+						}
 					}
 					break;
 
 				case 'openCodeModelSet':
 					if (message.data) {
-						actions.setSelectedModel(message.data.model);
+						actions.setSelectedModel(message.data.model ?? 'default');
 					}
 					break;
 

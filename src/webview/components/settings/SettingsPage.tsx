@@ -306,7 +306,6 @@ const MainSettings: React.FC = () => {
 		opencodeProviders,
 		availableProviders,
 		providerAuthState,
-		accessAutoApprove,
 		proxyUseSingleModel,
 		proxyHaikuModel,
 		proxySonnetModel,
@@ -398,27 +397,6 @@ const MainSettings: React.FC = () => {
 			<OpenCodeProvidersSection />
 
 			<PromptImproverSettings />
-
-			<GroupTitle>Permissions</GroupTitle>
-			<SettingsGroup>
-				<SettingRow
-					title="Auto-Approve Permissions"
-					tooltip="Automatically approve all permission requests across the workspace without prompting."
-					last
-				>
-					<Switch
-						checked={accessAutoApprove}
-						onChange={() => {
-							const newValue = !accessAutoApprove;
-							setSettings({ accessAutoApprove: newValue });
-							postMessage({
-								type: 'updateSettings',
-								settings: { 'access.autoApprove': newValue },
-							});
-						}}
-					/>
-				</SettingRow>
-			</SettingsGroup>
 
 			{/* Task-Specific Models - disabled, OpenCode handles model selection */}
 			{false && hasAnyModels && (

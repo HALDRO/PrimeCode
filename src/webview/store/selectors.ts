@@ -668,24 +668,15 @@ export const useChangedFilesState = () =>
 		})),
 	);
 
-/** Lightweight boolean check — does the session have any canonical todos? */
-const hasTodosCache = {
-	todos: null as ChatState['sessionsById'][string]['todos'] | null,
-	result: false,
-};
 export const useHasTodos = () =>
 	useChatStore((state: ChatState) => {
-		const todos = getActiveSession(state)?.todos ?? null;
-		if (todos === hasTodosCache.todos) return hasTodosCache.result;
-		hasTodosCache.todos = todos;
-		const result = Array.isArray(todos) && todos.length > 0;
-		hasTodosCache.result = result;
-		return result;
+		const todos = getActiveSession(state)?.todos;
+		return Array.isArray(todos) && todos.length > 0;
 	});
 
 /** Select canonical todo state from the active session */
 export const useTodoState = () =>
-	useChatStore(useShallow((state: ChatState) => getActiveSession(state)?.todos ?? null));
+	useChatStore((state: ChatState) => getActiveSession(state)?.todos ?? null);
 
 export const usePendingPermissions = () =>
 	useChatStore(
@@ -964,6 +955,10 @@ export const useDraftAgent = () =>
 /** Reactive selector for the active session's agent (build = undefined, plan = 'plan', etc.) */
 export const useSessionAgent = () =>
 	useChatStore((state: ChatState) => getActiveSession(state)?.agent);
+
+/** Reactive selector for the active session's model override. */
+export const useSessionModel = () =>
+	useChatStore((state: ChatState) => getActiveSession(state)?.model);
 
 /** Reactive selector for the effective model's thinking effort variant. */
 export const useSessionVariant = () => {

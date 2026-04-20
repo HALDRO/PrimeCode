@@ -531,24 +531,43 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 		return undefined;
 	}, [sectionCount]);
 
-	const prevSectionCountRef = useRef(sectionCount);
-	useEffect(() => {
-		const prev = prevSectionCountRef.current;
-		prevSectionCountRef.current = sectionCount;
+	// Stable primitive: id of the last section's user message.
+	// Changes only when a new message is sent or an edit replaces the last section.
+	const lastSectionUserMsgId = sections[sections.length - 1]?.userMessage.id;
 
-		if (sectionCount > prev && prev > 0 && !sessionSwitchRef.current && virtuosoRef.current) {
-			const targetIndex = sectionCount - 1;
+	const prevSectionCountRef = useRef(sectionCount);
+	const prevLastUserMsgIdRef = useRef(lastSectionUserMsgId);
+	useEffect(() => {
+		const prevCount = prevSectionCountRef.current;
+		prevSectionCountRef.current = sectionCount;
+		const prevMsgId = prevLastUserMsgIdRef.current;
+		prevLastUserMsgIdRef.current = lastSectionUserMsgId;
+
+		// Skip session switch — handled separately above
+		if (sessionSwitchRef.current) return undefined;
+
+		const shouldScroll =
+			// New section added (normal send)
+			(sectionCount > prevCount && prevCount > 0) ||
+			// Edit: last user message id changed (sections were replaced)
+			(lastSectionUserMsgId !== prevMsgId &&
+				prevMsgId !== undefined &&
+				lastSectionUserMsgId !== undefined &&
+				sectionCount > 0);
+
+		if (shouldScroll && virtuosoRef.current) {
+			userScrolledUpRef.current = false;
 			const raf = requestAnimationFrame(() => {
 				virtuosoRef.current?.scrollToIndex({
-					index: targetIndex,
-					align: 'start',
+					index: 'LAST',
+					align: 'end',
 					behavior: 'auto',
 				});
 			});
 			return () => cancelAnimationFrame(raf);
 		}
 		return undefined;
-	}, [sectionCount]);
+	}, [sectionCount, lastSectionUserMsgId]);
 
 	const handleScrollerRef = useCallback((el: HTMLElement | Window | null) => {
 		const div = el instanceof HTMLElement ? (el as HTMLDivElement) : null;

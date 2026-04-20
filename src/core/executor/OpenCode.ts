@@ -49,6 +49,31 @@ import type { CLIConfig, CLIEvent, CLIExecutor } from './types';
 /** Single entry from `client.session.messages()` response. */
 type SessionMessageEntry = { info: Message; parts: Part[] };
 
+function normalizeTodoItems(raw: unknown): import('../../common').SessionTodoItem[] {
+	if (!Array.isArray(raw) || raw.length === 0) return [];
+	return raw.flatMap((item, index) => {
+		const parsed = parseSessionTodoItem(item);
+		if (parsed) return [parsed];
+		if (!item || typeof item !== 'object') return [];
+		const record = item as Record<string, unknown>;
+		const content = typeof record.content === 'string' ? record.content : undefined;
+		if (!content) return [];
+		return [
+			{
+				id: typeof record.id === 'string' ? record.id : `todo-${index}-${content}`,
+				content,
+				status:
+					record.status === 'completed' ||
+					record.status === 'in_progress' ||
+					record.status === 'cancelled'
+						? record.status
+						: 'pending',
+				priority: typeof record.priority === 'string' ? record.priority : 'medium',
+			} satisfies import('../../common').SessionTodoItem,
+		];
+	});
+}
+
 type AssistantInfo = Extract<Message, { role: 'assistant' }>;
 
 /**
@@ -1773,10 +1798,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				type: 'todo',
 				data: {
 					sessionID: sessionId || '',
-					todos: todosRaw.flatMap(value => {
-						const todo = parseSessionTodoItem(value);
-						return todo ? [todo] : [];
-					}),
+					todos: normalizeTodoItems(todosRaw),
 				},
 				sessionId,
 			});

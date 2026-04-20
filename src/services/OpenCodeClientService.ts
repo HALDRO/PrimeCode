@@ -33,6 +33,7 @@ interface OpenCodeModelConfig {
 
 interface OpenCodeJsonConfig {
 	$schema?: string;
+	model?: string;
 	provider?: Record<
 		string,
 		{
@@ -43,6 +44,10 @@ interface OpenCodeJsonConfig {
 		}
 	>;
 	[key: string]: unknown;
+}
+
+export interface ProjectModelDefaults {
+	model?: string;
 }
 
 /**
@@ -102,7 +107,10 @@ interface OpenCodeProviderModel {
 interface OpenCodeProvider {
 	id: string;
 	name: string;
+	npm?: string;
+	baseUrl?: string;
 	source?: 'env' | 'api' | 'config' | 'custom';
+	env?: string[];
 	models: OpenCodeProviderModel[];
 }
 
@@ -171,9 +179,25 @@ export class OpenCodeClientService {
 		}
 	}
 
+	async getProjectModelDefaults(workspaceRoot: string): Promise<ProjectModelDefaults> {
+		const config = await this.readProjectConfig(workspaceRoot);
+		return {
+			model: typeof config.model === 'string' ? config.model : undefined,
+		};
+	}
+
+	async setProjectDefaultModel(workspaceRoot: string, model: string): Promise<void> {
+		const configPath = vscode.Uri.file(`${workspaceRoot}/opencode.json`);
+		const existing = await this.readProjectConfig(workspaceRoot);
+		existing.model = model;
+		const content = Buffer.from(this.compactJsonStringify(existing), 'utf-8');
+		await vscode.workspace.fs.writeFile(configPath, content);
+	}
+
 	async getConnectedProviders(
 		client: OpencodeClient,
 		_workspaceRoot?: string,
+		options?: { includeOpenAiCompatible?: boolean },
 	): Promise<OpenCodeProvider[]> {
 		const { data } = await client.provider.list();
 		if (!data) throw new Error('OpenCode /provider returned no data');
@@ -192,6 +216,18 @@ export class OpenCodeClientService {
 			})
 			.map(p => {
 				const rawSource = (p as Record<string, unknown>).source;
+				const rawNpm = (p as Record<string, unknown>).npm;
+				const rawOptions = (p as Record<string, unknown>).options;
+				const options =
+					rawOptions && typeof rawOptions === 'object'
+						? (rawOptions as Record<string, unknown>)
+						: undefined;
+				const rawBaseUrl =
+					typeof options?.baseURL === 'string'
+						? options.baseURL
+						: typeof options?.baseUrl === 'string'
+							? options.baseUrl
+							: undefined;
 				const source: OpenCodeProvider['source'] =
 					rawSource === 'env' ||
 					rawSource === 'api' ||
@@ -202,11 +238,23 @@ export class OpenCodeClientService {
 				return {
 					id: p.id,
 					name: p.name || p.id,
+					npm: typeof rawNpm === 'string' ? rawNpm : undefined,
+					baseUrl: rawBaseUrl ? normalizeProxyBaseUrl(rawBaseUrl) : undefined,
 					source,
+					env: Array.isArray(p.env) ? p.env : undefined,
 					models: Object.values(p.models).map(model => toProviderModel(model)),
 				};
 			})
+			.filter(
+				provider =>
+					options?.includeOpenAiCompatible !== false ||
+					provider.npm !== '@ai-sdk/openai-compatible',
+			)
 			.filter(p => p.id.length > 0);
+	}
+
+	async getUiConnectedProviders(client: OpencodeClient): Promise<OpenCodeProvider[]> {
+		return this.getConnectedProviders(client, undefined, { includeOpenAiCompatible: false });
 	}
 
 	async getSessionTodos(
@@ -215,9 +263,27 @@ export class OpenCodeClientService {
 		workspaceRoot: string,
 	): Promise<import('../common').SessionTodoItem[]> {
 		const result = await client.session.todo({ sessionID: sessionId, directory: workspaceRoot });
-		return ((result.data as unknown[]) || []).flatMap(value => {
+		const raw = (result.data as unknown[]) || [];
+		return raw.flatMap((value, index) => {
 			const todo = parseSessionTodoItem(value);
-			return todo ? [todo] : [];
+			if (todo) return [todo];
+			if (!value || typeof value !== 'object') return [];
+			const record = value as Record<string, unknown>;
+			const content = typeof record.content === 'string' ? record.content : undefined;
+			if (!content) return [];
+			return [
+				{
+					id: typeof record.id === 'string' ? record.id : `todo-${index}-${content}`,
+					content,
+					status:
+						record.status === 'completed' ||
+						record.status === 'in_progress' ||
+						record.status === 'cancelled'
+							? record.status
+							: 'pending',
+					priority: typeof record.priority === 'string' ? record.priority : 'medium',
+				} satisfies import('../common').SessionTodoItem,
+			];
 		});
 	}
 
@@ -384,20 +450,24 @@ export class OpenCodeClientService {
 		}
 	}
 
-	async syncProxyProviderToProjectConfig(
+	async upsertCustomProvider(
 		workspaceRoot: string,
-		providerId: string,
-		baseUrl: string,
-		apiKey: string,
-		enabledModels: EnrichedProxyModel[],
-		providerName?: string,
-		customHeaders?: Record<string, string>,
+		input: {
+			providerId: string;
+			name?: string;
+			npm: string;
+			baseUrl: string;
+			apiKey?: string;
+			headers?: Record<string, string>;
+			models?: EnrichedProxyModel[];
+		},
 	): Promise<void> {
 		const configPath = vscode.Uri.file(`${workspaceRoot}/opencode.json`);
 		const existing = await this.readProjectConfig(workspaceRoot);
+		const { providerId, name, npm, baseUrl, apiKey = '', headers, models = [] } = input;
 
 		const modelsRecord: Record<string, OpenCodeModelConfig> = {};
-		for (const m of enabledModels) {
+		for (const m of models) {
 			const config: OpenCodeModelConfig = {
 				name: m.name,
 				...DEFAULT_PROXY_MODEL_CAPABILITIES,
@@ -430,16 +500,25 @@ export class OpenCodeClientService {
 		const normalizedBaseUrl = normalizeProxyBaseUrl(baseUrl);
 
 		const providerSection = existing.provider ?? {};
-		providerSection[providerId] = {
-			...providerSection[providerId],
-			name: providerName || 'OpenAI Compatible',
-			npm: '@ai-sdk/openai-compatible',
+		const duplicateIds = this.findProxyProviderIdsByBaseUrl(providerSection, normalizedBaseUrl);
+		const canonicalProviderId = providerSection[providerId]
+			? providerId
+			: duplicateIds[0] || providerId;
+
+		for (const duplicateId of duplicateIds) {
+			if (duplicateId !== canonicalProviderId) {
+				delete providerSection[duplicateId];
+			}
+		}
+
+		providerSection[canonicalProviderId] = {
+			...providerSection[canonicalProviderId],
+			name: name || providerId,
+			npm,
 			options: {
 				baseURL: normalizedBaseUrl,
 				apiKey,
-				...(customHeaders && Object.keys(customHeaders).length > 0
-					? { headers: customHeaders }
-					: {}),
+				...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
 			},
 			models: modelsRecord,
 		};
@@ -464,12 +543,48 @@ export class OpenCodeClientService {
 		});
 	}
 
-	async removeProviderFromProjectConfig(workspaceRoot: string, providerId: string): Promise<void> {
+	async deleteCustomProvider(
+		workspaceRoot: string,
+		input: { providerId: string; baseUrl?: string },
+	): Promise<void> {
 		const configPath = vscode.Uri.file(`${workspaceRoot}/opencode.json`);
 		const existing = await this.readProjectConfig(workspaceRoot);
-		if (!existing.provider?.[providerId]) return;
-		delete existing.provider[providerId];
+		if (!existing.provider) return;
+		const { providerId, baseUrl } = input;
+
+		const idsToRemove = new Set<string>();
+		if (existing.provider[providerId]) idsToRemove.add(providerId);
+		if (baseUrl?.trim()) {
+			for (const id of this.findProxyProviderIdsByBaseUrl(
+				existing.provider,
+				normalizeProxyBaseUrl(baseUrl),
+			)) {
+				idsToRemove.add(id);
+			}
+		}
+		if (idsToRemove.size === 0) return;
+		for (const id of idsToRemove) {
+			delete existing.provider[id];
+		}
 		const content = Buffer.from(JSON.stringify(existing, null, 2), 'utf-8');
 		await vscode.workspace.fs.writeFile(configPath, content);
+	}
+
+	private findProxyProviderIdsByBaseUrl(
+		providerSection: NonNullable<OpenCodeJsonConfig['provider']>,
+		normalizedBaseUrl: string,
+	): string[] {
+		return Object.entries(providerSection)
+			.filter(([, provider]) => {
+				if (provider.npm !== '@ai-sdk/openai-compatible') return false;
+				const rawBaseUrl =
+					typeof provider.options?.baseURL === 'string'
+						? String(provider.options.baseURL)
+						: typeof provider.options?.baseUrl === 'string'
+							? String(provider.options.baseUrl)
+							: '';
+				return rawBaseUrl ? normalizeProxyBaseUrl(rawBaseUrl) === normalizedBaseUrl : false;
+			})
+			.map(([id]) => id);
 	}
 }

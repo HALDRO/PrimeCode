@@ -13,7 +13,9 @@ import {
 	useEditingMessageId,
 	useIsProcessing,
 	useMessageTurnTokens,
+	useModelSelection,
 	useRestoreCommits,
+	useSessionModel,
 	useUnrevertAvailable,
 } from '../../store';
 import { useSettingsStore } from '../../store/settingsStore';
@@ -412,6 +414,8 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 		const unrevertAvailable = useUnrevertAvailable();
 
 		const isProcessing = useIsProcessing();
+		const sessionModel = useSessionModel();
+		const { selectedModel } = useModelSelection();
 		const chatActions = useChatActions();
 		const { setEditingMessageId } = chatActions;
 		const activeModelID = useActiveModelID();
@@ -563,6 +567,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 				postSessionMessage({
 					type: 'sendMessage',
 					text,
+					model: sessionModel ?? selectedModel,
 					attachments: hasAttachments ? editAttachments : undefined,
 					...(message.id
 						? {
@@ -587,6 +592,8 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 				attachedFiles,
 				attachedImages,
 				attachedSnippets,
+				sessionModel,
+				selectedModel,
 			],
 		);
 

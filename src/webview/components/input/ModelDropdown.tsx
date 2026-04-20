@@ -11,8 +11,7 @@ import type React from 'react';
 import { useCallback, useMemo } from 'react';
 import { getProxyEndpointProviderId, OPENAI_COMPATIBLE_PROVIDER_ID } from '../../../common';
 import { cn } from '../../lib/cn';
-import { useModelDropdownState, useModelSelection } from '../../store';
-import { useVSCode } from '../../utils/vscode';
+import { useModelDropdownState, useModelSelection, useSessionModel } from '../../store';
 import { BrainSideIcon, ZapIcon } from '../icons';
 import { type DropdownItemRenderProps, DropdownMenu, type DropdownMenuItem } from '../ui';
 
@@ -45,21 +44,19 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 	activeModelId,
 	extraItems,
 }) => {
-	const { postMessage } = useVSCode();
 	const {
-		provider,
 		selectedModel,
 		proxyEndpoints,
 		opencodeProviders,
 		enabledOpenCodeModels,
 		disabledProviders,
 		setSessionModel,
-		getSessionModel,
 	} = useModelSelection();
 	const { setShowModelDropdown } = useModelDropdownState();
+	const sessionModel = useSessionModel();
 
 	// Use per-session model if set, otherwise fall back to workspace default
-	const effectiveModel = getSessionModel() ?? selectedModel;
+	const effectiveModel = sessionModel ?? selectedModel;
 
 	// Filter OpenCode models to only show enabled ones from non-disabled providers
 	const filteredOpencodeProviders = useMemo(() => {
@@ -97,18 +94,9 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 			}
 			// Persist per-session override (so different chats can use different models)
 			setSessionModel(model.id === 'default' ? undefined : model.id);
-
-			// Persist workspace default (so next new session starts with last used model)
-			if (provider === 'opencode') {
-				// ModelDropdown uses composite ID "provider/model" for OpenCode.
-				// We pass this directly to setOpenCodeModel handler in ChatProvider.
-				postMessage({ type: 'setOpenCodeModel', model: model.id });
-			} else {
-				postMessage({ type: 'selectModel', model: model.id });
-			}
 			onClose();
 		},
-		[postMessage, onClose, provider, setSessionModel, onSelectOverride],
+		[onClose, setSessionModel, onSelectOverride],
 	);
 
 	// Custom render for model items with purple dot for active model

@@ -20,7 +20,6 @@ export interface ModelOption {
 
 export function useModelOptions(includeDefault = true): ModelOption[] {
 	const opencodeProviders = useSettingsStore(s => s.opencodeProviders);
-	const availableProviders = useSettingsStore(s => s.availableProviders);
 	const enabledOpenCodeModels = useSettingsStore(s => s.enabledOpenCodeModels);
 	const disabledProviders = useSettingsStore(s => s.disabledProviders);
 	const proxyEndpoints = useSettingsStore(s => s.proxyEndpoints);
@@ -46,21 +45,6 @@ export function useModelOptions(includeDefault = true): ModelOption[] {
 			}
 		}
 
-		for (const provider of availableProviders) {
-			if (
-				disabledSet.has(provider.id) ||
-				provider.id === OPENAI_COMPATIBLE_PROVIDER_ID ||
-				isProxyEndpointProviderId(provider.id) ||
-				opencodeProviders.some(connected => connected.id === provider.id)
-			)
-				continue;
-			for (const model of provider.models ?? []) {
-				const compositeId = `${provider.id}/${model.id}`;
-				if (!enabledSet.has(compositeId)) continue;
-				opts.push({ value: compositeId, label: `${model.name || model.id} (${provider.name})` });
-			}
-		}
-
 		for (const endpoint of proxyEndpoints) {
 			const providerId = getProxyEndpointProviderId(endpoint.id);
 			if (disabledSet.has(providerId)) continue;
@@ -75,12 +59,5 @@ export function useModelOptions(includeDefault = true): ModelOption[] {
 		}
 
 		return opts;
-	}, [
-		opencodeProviders,
-		availableProviders,
-		enabledOpenCodeModels,
-		disabledProviders,
-		proxyEndpoints,
-		includeDefault,
-	]);
+	}, [opencodeProviders, enabledOpenCodeModels, disabledProviders, proxyEndpoints, includeDefault]);
 }

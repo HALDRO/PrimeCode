@@ -682,7 +682,10 @@ export type OpenCodeProvidersMessage = BaseExtensionMessage<
 		config: { isLoading?: boolean; error?: string };
 	}
 >;
-export type OpenCodeModelSetMessage = BaseExtensionMessage<'openCodeModelSet', { model: string }>;
+export type OpenCodeModelSetMessage = BaseExtensionMessage<
+	'openCodeModelSet',
+	{ model: string | null }
+>;
 export type OpenCodeAuthResultMessage = BaseExtensionMessage<
 	'openCodeAuthResult',
 	{ success: boolean; error?: string; providerId: string }
@@ -1184,6 +1187,7 @@ export interface SyncProxyModelsCommand {
 export interface RemoveProxyEndpointCommand {
 	type: 'removeProxyEndpoint';
 	providerId: string;
+	baseUrl?: string;
 }
 
 // =============================================================================

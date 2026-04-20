@@ -7,12 +7,12 @@ import {
 } from '../../common';
 import type { CommandOf, WebviewCommand } from '../../common/protocol';
 import type { EnrichedProxyModel } from '../../services/OpenCodeClientService';
+import { logger } from '../../utils/logger';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
 export class ProviderHandler implements WebviewMessageHandler {
 	constructor(private context: HandlerContext) {}
 
-	private static readonly LEGACY_SELECTED_MODEL_KEY = 'primecode.selectedModel';
 	private static readonly PROXY_MODELS_CACHE_KEY = 'primecode.proxyModels.cache';
 
 	/** Monotonic counter to discard results from stale concurrent reloads. */
@@ -22,35 +22,20 @@ export class ProviderHandler implements WebviewMessageHandler {
 		return `${ProviderHandler.PROXY_MODELS_CACHE_KEY}:${baseUrl}`;
 	}
 
-	private getSelectedModelKey(): string {
-		return 'primecode.selectedModel.opencode';
+	private async readProjectConfiguredModel(): Promise<string | undefined> {
+		const workspaceRoot = this.context.settings.getWorkspaceRoot();
+		if (!workspaceRoot) return undefined;
+		try {
+			const config =
+				await this.context.services.openCodeClient.getProjectModelDefaults(workspaceRoot);
+			return config.model && parseModelId(config.model) ? config.model : undefined;
+		} catch {
+			return undefined;
+		}
 	}
 
 	private async readSelectedModel(): Promise<string | undefined> {
-		const key = this.getSelectedModelKey();
-		const fromWorkspace = this.context.extensionContext.workspaceState.get<string>(key);
-		if (fromWorkspace) {
-			return parseModelId(fromWorkspace) ? fromWorkspace : undefined;
-		}
-
-		// Migration: copy from globalState → workspaceState (one-time per workspace)
-		const fromGlobal = this.context.extensionContext.globalState.get<string>(key);
-		if (fromGlobal && parseModelId(fromGlobal)) {
-			await this.context.extensionContext.workspaceState.update(key, fromGlobal);
-			return fromGlobal;
-		}
-
-		// Backward-compat: attempt to migrate from the legacy globalState key.
-		const legacy = this.context.extensionContext.globalState.get<string>(
-			ProviderHandler.LEGACY_SELECTED_MODEL_KEY,
-		);
-		if (!legacy) return undefined;
-
-		// OpenCode models are composite IDs: "provider/model".
-		if (!legacy.includes('/')) return undefined;
-
-		await this.context.extensionContext.workspaceState.update(key, legacy);
-		return legacy;
+		return this.readProjectConfiguredModel();
 	}
 
 	async handleMessage(msg: WebviewCommand): Promise<void> {
@@ -107,8 +92,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 
 	private async restoreSelectedModel(): Promise<void> {
 		const savedModel = await this.readSelectedModel();
-		if (!savedModel) return;
-		this.context.bridge.data('openCodeModelSet', { model: savedModel });
+		this.context.bridge.data('openCodeModelSet', { model: savedModel ?? null });
 	}
 
 	private async onCheckOpenCodeStatus(): Promise<void> {
@@ -138,10 +122,21 @@ export class ProviderHandler implements WebviewMessageHandler {
 			}
 
 			const workspaceRoot = this.context.settings.getWorkspaceRoot();
-			const providers = (await this.context.services.openCodeClient.getConnectedProviders(
+			void workspaceRoot;
+			const providers = (await this.context.services.openCodeClient.getUiConnectedProviders(
 				sdkClient,
-				workspaceRoot,
 			)) as OpenCodeProviderData[];
+
+			logger.info('[ProviderHandler] Loaded OpenCode providers', {
+				providers: providers.map(provider => ({
+					id: provider.id,
+					name: provider.name,
+					npm: provider.npm,
+					baseUrl: provider.baseUrl,
+					source: provider.source,
+					modelCount: provider.models.length,
+				})),
+			});
 
 			this.context.bridge.data('openCodeProviders', { providers, config: { isLoading: false } });
 		} catch (error) {
@@ -253,7 +248,9 @@ export class ProviderHandler implements WebviewMessageHandler {
 	private async onSetOpenCodeModel(msg: CommandOf<'setOpenCodeModel'>): Promise<void> {
 		const { model } = msg;
 		if (model && parseModelId(model)) {
-			await this.context.extensionContext.workspaceState.update(this.getSelectedModelKey(), model);
+			const workspaceRoot = this.context.settings.getWorkspaceRoot();
+			if (!workspaceRoot) return;
+			await this.context.services.openCodeClient.setProjectDefaultModel(workspaceRoot, model);
 			this.context.bridge.data('openCodeModelSet', { model });
 		}
 	}
@@ -261,7 +258,9 @@ export class ProviderHandler implements WebviewMessageHandler {
 	private async onSelectModel(msg: CommandOf<'selectModel'>): Promise<void> {
 		const { model } = msg;
 		if (model && parseModelId(model)) {
-			await this.context.extensionContext.workspaceState.update(this.getSelectedModelKey(), model);
+			const workspaceRoot = this.context.settings.getWorkspaceRoot();
+			if (!workspaceRoot) return;
+			await this.context.services.openCodeClient.setProjectDefaultModel(workspaceRoot, model);
 			this.context.bridge.send({ type: 'modelSelected', model });
 		}
 	}
@@ -433,15 +432,15 @@ export class ProviderHandler implements WebviewMessageHandler {
 				providerId || (endpointId ? getProxyEndpointProviderId(endpointId) : '');
 
 			if (!enabledModelIds?.length) {
-				await this.context.services.openCodeClient.syncProxyProviderToProjectConfig(
-					workspaceRoot,
-					resolvedProviderId,
+				await this.context.services.openCodeClient.upsertCustomProvider(workspaceRoot, {
+					providerId: resolvedProviderId,
+					name: providerName || 'OpenAI Compatible',
+					npm: '@ai-sdk/openai-compatible',
 					baseUrl,
 					apiKey,
-					[],
-					providerName,
-					customHeaders,
-				);
+					headers: customHeaders,
+					models: [],
+				});
 				const sdkClient = this.context.cli.getSdkClient();
 				if (sdkClient) {
 					await sdkClient.instance.dispose().catch((err: unknown) => {
@@ -491,15 +490,15 @@ export class ProviderHandler implements WebviewMessageHandler {
 				}
 			}
 
-			await this.context.services.openCodeClient.syncProxyProviderToProjectConfig(
-				workspaceRoot,
-				resolvedProviderId,
+			await this.context.services.openCodeClient.upsertCustomProvider(workspaceRoot, {
+				providerId: resolvedProviderId,
+				name: providerName || 'OpenAI Compatible',
+				npm: '@ai-sdk/openai-compatible',
 				baseUrl,
 				apiKey,
-				enrichedModels,
-				providerName,
-				customHeaders,
-			);
+				headers: customHeaders,
+				models: enrichedModels,
+			});
 
 			// Trigger OpenCode config reload
 			const sdkClient = this.context.cli.getSdkClient();
@@ -518,10 +517,10 @@ export class ProviderHandler implements WebviewMessageHandler {
 		if (!workspaceRoot || !msg.providerId) return;
 
 		try {
-			await this.context.services.openCodeClient.removeProviderFromProjectConfig(
-				workspaceRoot,
-				msg.providerId,
-			);
+			await this.context.services.openCodeClient.deleteCustomProvider(workspaceRoot, {
+				providerId: msg.providerId,
+				baseUrl: msg.baseUrl,
+			});
 			const sdkClient = this.context.cli.getSdkClient();
 			if (sdkClient) {
 				await sdkClient.instance.dispose().catch((err: unknown) => {

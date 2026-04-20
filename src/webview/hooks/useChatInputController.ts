@@ -21,6 +21,7 @@ import {
 	useModelSelection,
 	usePromptVersions,
 	useSessionAgent,
+	useSessionModel,
 	useSessionVariant,
 	useStoreInput,
 } from '../store';
@@ -114,9 +115,10 @@ export function useChatInputController(
 	// Use reactive selector so the button re-renders immediately when agent changes.
 	// getSessionAgent() is an imperative getter that doesn't subscribe to store updates.
 	const selectedAgent = useSessionAgent();
+	const sessionModel = useSessionModel();
 	const reactiveSessionVariant = useSessionVariant();
 	const validSessionVariant = useMemo(() => {
-		const effectiveModel = getSessionModel() ?? selectedModel;
+		const effectiveModel = sessionModel ?? selectedModel;
 		const variants = getAvailableModelVariants(opencodeProviders, effectiveModel, proxyEndpoints);
 		const agentId = selectedAgent ?? 'build';
 		const configured = getConfiguredAgentVariant({
@@ -133,12 +135,12 @@ export function useChatInputController(
 		});
 	}, [
 		agentItems,
-		getSessionModel,
 		opencodeProviders,
 		proxyEndpoints,
 		reactiveSessionVariant,
 		selectedAgent,
 		selectedModel,
+		sessionModel,
 		subagentItems,
 	]);
 
@@ -240,15 +242,14 @@ export function useChatInputController(
 		const hasAttachments =
 			builtAttachments.files || builtAttachments.codeSnippets || builtAttachments.images;
 		// Send the effective model (what the user sees in the dropdown), not just
-		// the per-session override.  When getSessionModel() is undefined the UI
-		// displays selectedModel, so we must send the same value to avoid the
-		// extension falling back to a potentially-stale globalState default.
-		const sessionModel = getSessionModel() ?? selectedModel;
+		// the per-session override. When there is no session override, the UI
+		// displays selectedModel, so we must send that exact value.
+		const effectiveModel = sessionModel ?? selectedModel;
 
 		// Lock in the effective model per-session on first send so that model
 		// changes in other tabs don't retroactively affect this session's display.
-		if (!getSessionModel() && sessionModel && sessionModel !== 'default') {
-			setSessionModel(sessionModel);
+		if (!sessionModel && effectiveModel && effectiveModel !== 'default') {
+			setSessionModel(effectiveModel);
 		}
 
 		// Parse @agent from text as fallback when selectedAgent is not set via InputToolbar.
@@ -271,7 +272,7 @@ export function useChatInputController(
 			type: 'sendMessage',
 			text: inputValue.trim(),
 			agent,
-			model: sessionModel,
+			model: effectiveModel,
 			...(validSessionVariant ? { variant: validSessionVariant } : {}),
 			attachments: hasAttachments ? builtAttachments : undefined,
 		});
@@ -291,9 +292,9 @@ export function useChatInputController(
 		clearRevertedMessages,
 		updateSession,
 		clearPromptVersions,
-		getSessionModel,
 		setSessionModel,
 		selectedModel,
+		sessionModel,
 		validAgentNames.has,
 	]);
 
@@ -336,11 +337,11 @@ export function useChatInputController(
 
 	// Model display name
 	const modelDisplayName = useMemo(() => {
-		const effectiveModel = getSessionModel() ?? selectedModel;
+		const effectiveModel = sessionModel ?? selectedModel;
 		if (effectiveModel === 'default') return 'Default';
 		const allProxyModels = proxyEndpoints.flatMap(ep => ep.models);
 		return resolveModelDisplayName(effectiveModel, opencodeProviders, allProxyModels);
-	}, [getSessionModel, selectedModel, proxyEndpoints, opencodeProviders]);
+	}, [sessionModel, selectedModel, proxyEndpoints, opencodeProviders]);
 
 	return {
 		inputValue,
