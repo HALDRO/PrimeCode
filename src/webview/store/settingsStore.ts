@@ -164,6 +164,169 @@ const handleLoadingMeta = (
 	}
 };
 
+const handleResourceListMessage = (
+	message: ExtensionMessage,
+	actions: SettingsActions,
+): boolean => {
+	switch (message.type) {
+		case 'commandsList': {
+			if (!message.data) return true;
+			const { custom, cli, isLoading, error, meta } = message.data as {
+				custom: ParsedCommand[];
+				cli?: Array<{ name: string; description?: string; source?: string }>;
+				isLoading: boolean;
+				error?: string;
+				meta?: { operation?: string; message?: string };
+			};
+			actions.setCommands({ custom, ...(cli !== undefined && { cli }), isLoading, error });
+			handleLoadingMeta(meta, error, actions.setResourceOps);
+			return true;
+		}
+		case 'skillsList': {
+			if (!message.data) return true;
+			const { skills, isLoading, error, meta } = message.data as {
+				skills: import('../../common').ParsedSkill[];
+				isLoading: boolean;
+				error?: string;
+				meta?: { operation?: string; message?: string };
+			};
+			actions.setSkills({ items: skills, isLoading, error });
+			handleLoadingMeta(meta, error, actions.setResourceOps);
+			return true;
+		}
+		case 'subagentsList': {
+			if (!message.data) return true;
+			const { subagents, isLoading, error, meta } = message.data as {
+				subagents: import('../../common').ParsedSubagent[];
+				isLoading: boolean;
+				error?: string;
+				meta?: { operation?: string; message?: string };
+			};
+			actions.setSubagents({ items: subagents, isLoading, error });
+			handleLoadingMeta(meta, error, actions.setResourceOps);
+			return true;
+		}
+		case 'agentsList': {
+			if (!message.data) return true;
+			const { agents, isLoading, error } = message.data as {
+				agents: SettingsState['agents']['items'];
+				isLoading: boolean;
+				error?: string;
+			};
+			actions.setAgents({ items: agents, isLoading, error });
+			return true;
+		}
+		case 'pluginsList': {
+			if (!message.data) return true;
+			const { plugins, isLoading, error } = message.data as {
+				plugins: string[];
+				isLoading: boolean;
+				error?: string;
+			};
+			actions.setPlugins({ items: plugins, isLoading, error });
+			return true;
+		}
+		case 'ruleList': {
+			if (!message.data?.rules) return true;
+			actions.setRules(message.data.rules);
+			const meta = (message.data as { meta?: { operation?: string; message?: string } })?.meta;
+			handleLoadingMeta(meta, undefined, actions.setResourceOps);
+			return true;
+		}
+		case 'ruleUpdated': {
+			if (message.data?.rule) {
+				actions.updateRule(message.data.rule);
+			}
+			return true;
+		}
+		default:
+			return false;
+	}
+};
+
+const handleSettingsRuntimeMessage = (
+	message: ExtensionMessage,
+	actions: SettingsActions,
+	getState: () => SettingsState,
+	setState: (partial: Partial<SettingsState>) => void,
+): boolean => {
+	switch (message.type) {
+		case 'settingsData':
+			if (message.data) {
+				handleSettingsData(message.data as Record<string, unknown>, actions, {
+					proxyEndpoints: getState().proxyEndpoints,
+				});
+			}
+			return true;
+		case 'workspaceInfo':
+			if (message.data?.name) {
+				actions.setSettings({ workspaceName: message.data.name });
+			}
+			return true;
+		case 'projectUpdated':
+			if (message.data?.project?.name) {
+				actions.setSettings({ workspaceName: message.data.project.name });
+			}
+			return true;
+		case 'platformInfo':
+			if (message.data) {
+				actions.setSettings({ platformInfo: message.data as PlatformInfo });
+			}
+			return true;
+		case 'modelSelected':
+			if (message.model) {
+				actions.setSelectedModel(message.model);
+			}
+			return true;
+		case 'cliDiagnostics':
+			if (message.data) {
+				actions.setCLIDiagnostics(message.data);
+			}
+			return true;
+		case 'extensionVersion':
+			if (message.data) {
+				setState({ extensionVersion: message.data as ExtensionVersionInfo });
+			}
+			return true;
+		case 'discoveryStatus':
+			if (message.data) {
+				actions.setDiscoveryStatus(message.data);
+			}
+			return true;
+		case 'permissionsUpdated':
+			if (message.data?.policies) {
+				actions.setPolicies(message.data.policies);
+			}
+			return true;
+		case 'accessData':
+			if (message.data) {
+				const access = Array.isArray(message.data)
+					? (message.data as Access[])
+					: [message.data as Access];
+				actions.setAccess(access);
+			}
+			return true;
+		case 'openCodeStatus':
+			if (message.data) {
+				const status = message.data;
+				actions.setOpenCodeStatus({
+					isChecking: false,
+					installed: status.installed,
+					version: status.version ?? undefined,
+					error: status.error,
+				});
+			}
+			return true;
+		case 'lspStatus':
+			if (message.data) {
+				actions.setLspStatus((message.data as { items?: LspStatusData[] }).items ?? []);
+			}
+			return true;
+		default:
+			return false;
+	}
+};
+
 // Extension version info
 export interface ExtensionVersionInfo {
 	current: string;
@@ -799,102 +962,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
 		handleExtensionMessage: (message: ExtensionMessage) => {
 			const actions = get().actions;
+			if (handleResourceListMessage(message, actions)) {
+				return;
+			}
+			if (handleSettingsRuntimeMessage(message, actions, get, partial => set(partial))) {
+				return;
+			}
 
 			switch (message.type) {
-				case 'commandsList':
-					if (message.data) {
-						const { custom, cli, isLoading, error, meta } = message.data as {
-							custom: ParsedCommand[];
-							cli?: Array<{ name: string; description?: string; source?: string }>;
-							isLoading: boolean;
-							error?: string;
-							meta?: { operation?: string; message?: string };
-						};
-						actions.setCommands({ custom, ...(cli !== undefined && { cli }), isLoading, error });
-						handleLoadingMeta(meta, error, actions.setResourceOps);
-					}
-					break;
-
-				case 'skillsList':
-					if (message.data) {
-						const { skills, isLoading, error, meta } = message.data as {
-							skills: import('../../common').ParsedSkill[];
-							isLoading: boolean;
-							error?: string;
-							meta?: { operation?: string; message?: string };
-						};
-						actions.setSkills({ items: skills, isLoading, error });
-						handleLoadingMeta(meta, error, actions.setResourceOps);
-					}
-					break;
-
-				case 'subagentsList':
-					if (message.data) {
-						const { subagents, isLoading, error, meta } = message.data as {
-							subagents: import('../../common').ParsedSubagent[];
-							isLoading: boolean;
-							error?: string;
-							meta?: { operation?: string; message?: string };
-						};
-						actions.setSubagents({ items: subagents, isLoading, error });
-						handleLoadingMeta(meta, error, actions.setResourceOps);
-					}
-					break;
-
-				case 'agentsList':
-					if (message.data) {
-						const { agents, isLoading, error } = message.data as {
-							agents: SettingsState['agents']['items'];
-							isLoading: boolean;
-							error?: string;
-						};
-						actions.setAgents({ items: agents, isLoading, error });
-					}
-					break;
-
-				case 'pluginsList':
-					if (message.data) {
-						const { plugins, isLoading, error } = message.data as {
-							plugins: string[];
-							isLoading: boolean;
-							error?: string;
-						};
-						actions.setPlugins({ items: plugins, isLoading, error });
-					}
-					break;
-
-				case 'settingsData':
-					if (message.data) {
-						handleSettingsData(message.data as Record<string, unknown>, actions, {
-							proxyEndpoints: get().proxyEndpoints,
-						});
-					}
-					break;
-
-				case 'workspaceInfo':
-					if (message.data?.name) {
-						actions.setSettings({ workspaceName: message.data.name });
-					}
-					break;
-
-				case 'projectUpdated':
-					if (message.data?.project?.name) {
-						actions.setSettings({ workspaceName: message.data.project.name });
-					}
-					break;
-
-				case 'platformInfo':
-					if (message.data) {
-						actions.setSettings({ platformInfo: message.data as PlatformInfo });
-					}
-					break;
-
-				case 'modelSelected':
-					if (message.model) {
-						actions.setSelectedModel(message.model);
-					}
-					break;
-
 				case 'proxyModels':
 					if (message.data) {
 						const { models, enabledModelIds, error, baseUrl, endpointId } = message.data;
@@ -910,72 +985,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 								},
 							});
 						}
-					}
-					break;
-
-				case 'cliDiagnostics':
-					if (message.data) {
-						actions.setCLIDiagnostics(message.data);
-					}
-					break;
-
-				case 'extensionVersion':
-					if (message.data) {
-						set({ extensionVersion: message.data as ExtensionVersionInfo });
-					}
-					break;
-
-				case 'discoveryStatus':
-					if (message.data) {
-						actions.setDiscoveryStatus(message.data);
-					}
-					break;
-
-				case 'ruleList':
-					if (message.data?.rules) {
-						actions.setRules(message.data.rules);
-						const meta = (message.data as { meta?: { operation?: string; message?: string } })
-							?.meta;
-						handleLoadingMeta(meta, undefined, actions.setResourceOps);
-					}
-					break;
-
-				case 'ruleUpdated':
-					if (message.data?.rule) {
-						actions.updateRule(message.data.rule);
-					}
-					break;
-
-				case 'permissionsUpdated':
-					if (message.data?.policies) {
-						actions.setPolicies(message.data.policies);
-					}
-					break;
-
-				case 'accessData':
-					if (message.data) {
-						const access = Array.isArray(message.data)
-							? (message.data as Access[])
-							: [message.data as Access];
-						actions.setAccess(access);
-					}
-					break;
-
-				case 'openCodeStatus':
-					if (message.data) {
-						const status = message.data;
-						actions.setOpenCodeStatus({
-							isChecking: false,
-							installed: status.installed,
-							version: status.version ?? undefined,
-							error: status.error,
-						});
-					}
-					break;
-
-				case 'lspStatus':
-					if (message.data) {
-						actions.setLspStatus((message.data as { items?: LspStatusData[] }).items ?? []);
 					}
 					break;
 

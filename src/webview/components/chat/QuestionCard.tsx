@@ -7,7 +7,7 @@
  */
 
 import type React from 'react';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { QuestionInfo, SessionQuestionRequest } from '../../../common';
 import { cn } from '../../lib/cn';
 import { useSessionMessage } from '../../utils/vscode';
@@ -151,6 +151,11 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ request }) => {
 	const [step, setStep] = useState(0);
 	const [expanded, setExpanded] = useState(!resolved);
 
+	// Auto-collapse when the question becomes resolved (user answered).
+	useEffect(() => {
+		if (resolved) setExpanded(false);
+	}, [resolved]);
+
 	const [selections, setSelections] = useState<string[][]>(() =>
 		questions.map((question: QuestionInfo, index: number) => {
 			const answerParts = savedAnswers?.[index] ?? [];
@@ -214,8 +219,8 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ request }) => {
 	const activeSelections = resolved ? resolvedSelections : (selections[step] ?? []);
 	const activeCustomInput = resolved ? customAnswer : (customInputs[step] ?? '');
 	const summaryText = resolved
-		? savedAnswers
-				?.map(answer => answer.join(', '))
+		? questions
+				.map(question => question.header || question.question)
 				.filter(Boolean)
 				.join(' · ') || 'Answered'
 		: '';
@@ -260,7 +265,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ request }) => {
 							</span>
 						</span>
 						<span className="text-sm font-medium text-vscode-foreground shrink-0">Question</span>
-						{!expanded && summaryText && (
+						{summaryText && (
 							<>
 								<span className="text-sm text-vscode-descriptionForeground">·</span>
 								<span className="text-sm leading-none text-vscode-foreground opacity-60 min-w-0 truncate">
@@ -293,11 +298,6 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ request }) => {
 									Question {step + 1} of {questions.length}
 								</span>
 								<StepDots total={questions.length} current={step} onDotClick={setStep} />
-							</div>
-						)}
-						{q.header && (
-							<div className="text-xs font-medium text-vscode-foreground/50 uppercase tracking-wide mb-1">
-								{q.header}
 							</div>
 						)}
 						<div className="text-sm text-vscode-foreground mb-2 whitespace-pre-wrap">

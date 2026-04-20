@@ -2283,9 +2283,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		const { callID, tool: name = 'unknown', state, messageID, id: partId } = part;
 		const status = state?.status;
 
-		// Skip question tool — it's handled separately via question.asked SSE event
-		// and rendered as a dedicated QuestionCard, not as a generic tool card.
-		if (name.toLowerCase() === 'question') return;
+		// Question tool parts are emitted so ToolCard can render QuestionCard inline.
+		// The interactive overlay is handled separately via question.asked SSE event.
 
 		const current = this.toolCallStates.get(callID);
 		const inputObj = (state?.input ?? {}) as Record<string, unknown>;

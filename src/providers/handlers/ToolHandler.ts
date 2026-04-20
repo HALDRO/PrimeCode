@@ -345,9 +345,7 @@ export class ToolHandler implements WebviewMessageHandler {
 
 		const targetSessionId = sessionId;
 
-		// Reply to OpenCode's question API with answers array
-		await this.context.cli.respondToQuestion({ requestId, answers });
-
+		// Remove from pending immediately so the card disappears on submit.
 		if (targetSessionId) {
 			this.context.bridge.emit(targetSessionId, 'question', {
 				action: 'remove',
@@ -355,6 +353,9 @@ export class ToolHandler implements WebviewMessageHandler {
 				answers,
 			});
 		}
+
+		// Reply to OpenCode's question API with answers array
+		await this.context.cli.respondToQuestion({ requestId, answers });
 	}
 
 	private async onQuestionReject(msg: CommandOf<'questionReject'>): Promise<void> {
@@ -365,8 +366,7 @@ export class ToolHandler implements WebviewMessageHandler {
 
 		const targetSessionId = sessionId;
 
-		await this.context.cli.rejectQuestion(requestId);
-
+		// Remove from pending immediately.
 		if (targetSessionId) {
 			this.context.bridge.emit(targetSessionId, 'question', {
 				action: 'remove',
@@ -374,5 +374,7 @@ export class ToolHandler implements WebviewMessageHandler {
 				rejected: true,
 			});
 		}
+
+		await this.context.cli.rejectQuestion(requestId);
 	}
 }

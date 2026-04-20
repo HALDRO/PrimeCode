@@ -12,7 +12,6 @@ import { ChangedFilesPanel } from './components/chat/ChangedFilesPanel';
 import { GenerationStatus } from './components/chat/GenerationStatus';
 import { MessageItem } from './components/chat/MessageItem';
 import { NotificationOverlay } from './components/chat/NotificationOverlay.tsx';
-import { QuestionCard } from './components/chat/QuestionCard';
 import { QueuedMessageBanner } from './components/chat/QueuedMessageBanner';
 import { getGroupedItemShouldCollapse } from './components/chat/SimpleTool';
 import { Header } from './components/header/Header';
@@ -31,7 +30,6 @@ import {
 	useIsProcessing,
 	useMcpServers,
 	useMessages,
-	usePendingQuestions,
 	useRevertedFromMessageId,
 	useTurnTokens,
 } from './store';
@@ -322,7 +320,6 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 	const messages = useMessages();
 	const mcpServers = useMcpServers();
 	const isProcessing = useIsProcessing();
-	const pendingQuestions = usePendingQuestions();
 	const revertedFromMessageId = useRevertedFromMessageId();
 	const { changedFiles, cumulativeDiffs } = useChangedFilesState();
 	const turnTokens = useTurnTokens();
@@ -639,14 +636,6 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 					</button>
 				)}
 			</div>
-
-			{pendingQuestions.length > 0 && (
-				<div className="px-(--content-padding-x) pb-(--message-gap) pt-2 shrink-0 max-h-[40vh] overflow-y-auto flex flex-col gap-2">
-					{pendingQuestions.map(question => (
-						<QuestionCard key={question.id} request={question} />
-					))}
-				</div>
-			)}
 		</div>
 	);
 });

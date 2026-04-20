@@ -687,8 +687,21 @@ export const usePendingPermissions = () =>
 
 export const usePendingQuestions = () =>
 	useChatStore(
-		useShallow((state: ChatState) => getActiveSession(state)?.pendingQuestions ?? EMPTY_QUESTIONS),
+		useShallow((state: ChatState) => {
+			const questions = getActiveSession(state)?.pendingQuestions ?? EMPTY_QUESTIONS;
+			if (questions.length === 0) return EMPTY_QUESTIONS;
+			const pending = questions.filter(q => !('resolved' in q && q.resolved));
+			return pending.length === 0 ? EMPTY_QUESTIONS : pending;
+		}),
 	);
+
+export const useQuestionRequestByToolUseId = (toolUseId: string | undefined) =>
+	useChatStore((state: ChatState) => {
+		if (!toolUseId) return undefined;
+		return getActiveSession(state)?.pendingQuestions.find(
+			request => request.tool?.callID === toolUseId,
+		);
+	});
 
 // ============================================
 // Tool-specific Selectors (active session)

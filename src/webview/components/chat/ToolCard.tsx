@@ -25,6 +25,7 @@ import {
 	type ToolResultView,
 	useAccessRequestByToolUseId,
 	useMcpServers,
+	useQuestionRequestByToolUseId,
 	useToolResultByToolId,
 } from '../../store';
 import { formatDuration, formatToolName } from '../../utils/format';
@@ -42,6 +43,7 @@ import {
 import { FileTypeIcon } from '../icons/FileTypeIcon';
 import { Button, CollapseOverlay, IconButton, PathChip, Tooltip } from '../ui';
 import { AccessGate } from './AccessGate';
+import { QuestionCard } from './QuestionCard';
 import type { DiffLine, ResolvedFileChange } from './SimpleDiff';
 import { getDiffContentHeight, resolveFileChanges, SimpleDiff } from './SimpleDiff';
 import { InlineToolLine, SimpleTool } from './SimpleTool';
@@ -514,6 +516,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 				: undefined);
 		const toolResult = syntheticToolResult;
 		const accessRequest = useAccessRequestByToolUseId(toolUseId);
+		const pendingQuestionFromStore = useQuestionRequestByToolUseId(toolUseId);
 		const normalizedEntry = toolUse.normalizedEntry;
 
 		const isError = toolResult?.isError ?? false;
@@ -578,10 +581,15 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		const isBash = category === 'bash';
 		const isWebSearch = category === 'websearch';
 		const isWebFetch = category === 'webfetch';
-		const resolvedQuestionRequest = useMemo(() => {
+		const isRunning =
+			toolUse.status === 'pending' ||
+			toolUse.status === 'running' ||
+			(toolUse.isRunning ?? !toolResult);
+		const questionRequest = useMemo(() => {
 			if (!isQuestionTool) return undefined;
 
-			const rawQuestions = (rawInput as { questions?: unknown })?.questions;
+			const input = rawInput as Record<string, unknown> | undefined;
+			const rawQuestions = input?.questions;
 			if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) return undefined;
 
 			const questions = rawQuestions.filter(
@@ -604,6 +612,8 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 					)
 				: undefined;
 
+			const isCompleted = !isRunning && Boolean(toolResult);
+
 			return {
 				id: toolUseId,
 				sessionID: '',
@@ -612,15 +622,10 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 					messageID: toolUseId,
 					callID: toolUseId,
 				},
-				resolved: true,
+				resolved: isCompleted,
 				...(answers ? { answers } : {}),
 			} satisfies import('../../../common').SessionQuestionRequest;
-		}, [effectiveMetadata, isQuestionTool, rawInput, toolUseId]);
-
-		const isRunning =
-			toolUse.status === 'pending' ||
-			toolUse.status === 'running' ||
-			(toolUse.isRunning ?? !toolResult);
+		}, [effectiveMetadata, isQuestionTool, rawInput, toolUseId, isRunning, toolResult]);
 		const shouldHideWhileRunning = shouldHideRunningFileEditTool(
 			actionType,
 			toolName,
@@ -671,7 +676,13 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		if (!toolName) return null;
 		if (shouldHideWhileRunning) return null;
 
-		if (resolvedQuestionRequest) return null;
+		if (isQuestionTool) {
+			// Prefer store's pending question (has correct requestId "que...").
+			// Fall back to questionRequest from tool input for resolved state.
+			const effectiveRequest = pendingQuestionFromStore ?? questionRequest;
+			if (!effectiveRequest) return null;
+			return <QuestionCard request={effectiveRequest} />;
+		}
 
 		if (category === 'inline') {
 			return (
