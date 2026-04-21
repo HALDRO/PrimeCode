@@ -1,7 +1,5 @@
 import * as vscode from 'vscode';
 import {
-	extractCanonicalTaskResult,
-	formatModelId,
 	mapPermissionRuntimePayloadToRequest,
 	mapQuestionRuntimePayloadToRequest,
 } from '../common';
@@ -20,7 +18,6 @@ import type { CLIEvent } from '../core/executor/types';
 import type { ServiceRegistry } from '../core/ServiceRegistry';
 import { SessionGraph, SessionManager, SessionState } from '../core/SessionManager';
 import { Settings } from '../core/Settings';
-import { SubtaskManager } from '../core/SubtaskManager';
 import { CommandRouter } from '../transport/CommandRouter';
 
 import { OutboundBridge } from '../transport/OutboundBridge';
@@ -46,7 +43,7 @@ function buildTaskMessagePart(
 	toolUseId: string,
 	toolName: string,
 	normalizedEntry: CLIEvent['normalizedEntry'],
-	status: 'pending' | 'running' | 'completed' | 'error',
+	status: 'pending' | 'running' | 'completed' | 'error' | 'cancelled',
 	input?: Record<string, unknown>,
 	metadata?: Record<string, unknown>,
 ): import('../common').SessionMessagePartPayload['part'] {
@@ -144,8 +141,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private sessionGraph = new SessionGraph();
 	private sessionManager = new SessionManager();
 
-	// Session / subtask tracking (delegated to SubtaskManager)
-	private readonly subtaskManager: SubtaskManager;
 	private readonly activeThinkingPartIds = new Map<string, { partId: string; startTime: number }>();
 	private readonly activeAssistantPartIds = new Map<string, string>();
 	/** Per-session tool call counter — reset on 'finished' for turn summary log. */
@@ -176,7 +171,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.settings = new Settings();
 		this.sessionState = new SessionState();
 		this.cli = new OpenCodeExecutor();
-		this.subtaskManager = new SubtaskManager(this.sessionGraph);
 
 		// Initialize Handlers — single shared context
 		// RestoreHandler is created first so registerCheckpoint can be wired into the context
@@ -767,11 +761,16 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			const parentSessionId = data.parentID;
 
 			if (childSessionId && parentSessionId) {
-				// Do not guess the task→child link from FIFO pending order.
-				// With parallel subtasks, session.created can arrive interleaved and bind the
-				// child session to the wrong task card, which then leaks diff/file counters
-				// across unrelated subtasks. We only establish the link from authoritative
-				// task metadata (tool_streaming/tool_result metadata.sessionId).
+				// Resolve deferred link: if task metadata arrived before session_created,
+				// the pending link is waiting to be resolved. Without this, the child
+				// session stays orphaned in the UI when events arrive out of order.
+				const resolved = this.sessionGraph.resolvePendingLink(childSessionId);
+				if (resolved) {
+					const toolUseId = this.sessionGraph.getOriginatingToolCall(childSessionId);
+					if (toolUseId) {
+						this.linkKnownChildSession(toolUseId, parentSessionId, childSessionId);
+					}
+				}
 			}
 			return;
 		}
@@ -806,11 +805,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 		if (event.type === 'permission_replied') {
 			const reply = event.data;
-			const replyTargetSessionId = this.sessionGraph.isChild(targetSessionId)
-				? (this.sessionGraph.getParent(targetSessionId) ?? targetSessionId)
-				: targetSessionId;
 			if (reply.requestID) {
-				this.bridge.emit(replyTargetSessionId, 'permission', {
+				this.bridge.emit(targetSessionId, 'permission', {
 					action: 'remove',
 					requestId: reply.requestID,
 					response: reply.reply,
@@ -821,11 +817,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 		if (event.type === 'question_replied') {
 			const reply = event.data;
-			const replyTargetSessionId = this.sessionGraph.isChild(targetSessionId)
-				? (this.sessionGraph.getParent(targetSessionId) ?? targetSessionId)
-				: targetSessionId;
 			if (reply.requestID) {
-				this.bridge.emit(replyTargetSessionId, 'question', {
+				this.bridge.emit(targetSessionId, 'question', {
 					action: 'remove',
 					requestId: reply.requestID,
 					answers: reply.answers,
@@ -916,13 +909,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			}
 
 			case 'turn_tokens': {
-				if (isChildSession) {
-					this.syncChildSubtaskTotalsFromTurnTokens(
-						targetSessionId,
-						event.data as unknown as Record<string, unknown> | undefined,
-					);
-					break;
-				}
 				this.bridge.emit(targetSessionId, 'turn_tokens', event.data);
 				break;
 			}
@@ -932,13 +918,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				this.completeActiveThinking(targetSessionId);
 				const finishedPartId = this.activeAssistantPartIds.get(targetSessionId);
 				if (finishedPartId) {
-					if (!isChildSession) {
-						this.bridge.emit(targetSessionId, 'complete', {
-							partId: finishedPartId,
-							toolUseId: finishedPartId,
-							completedAt: now,
-						});
-					}
+					this.bridge.emit(targetSessionId, 'complete', {
+						partId: finishedPartId,
+						toolUseId: finishedPartId,
+						completedAt: now,
+					});
 					this.activeAssistantPartIds.delete(targetSessionId);
 				}
 
@@ -975,7 +959,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 						if (e.metadata) {
 							const meta = e.metadata as Record<string, unknown>;
 							const childSessionId = ChatProvider.safeString(meta.sessionId);
-							if (childSessionId && this.subtaskManager.isRegistered(e.id)) {
+							if (childSessionId) {
 								this.linkKnownChildSession(e.id, targetSessionId, childSessionId);
 							}
 						}
@@ -1054,20 +1038,13 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					normalizedEntry: event.normalizedEntry,
 				};
 
-				if (isChildSession) {
-					this.updateSubtaskLifecycle(targetSessionId, {
-						status: 'error',
-						timestamp: new Date().toISOString(),
-					});
-				} else {
-					this.bridge.emit(targetSessionId, 'notification', {
-						notification: errorData,
-					});
-					this.bridge.emit(targetSessionId, 'status', {
-						status: 'error',
-						statusText: 'Error',
-					});
-				}
+				this.bridge.emit(targetSessionId, 'notification', {
+					notification: errorData,
+				});
+				this.bridge.emit(targetSessionId, 'status', {
+					status: 'error',
+					statusText: 'Error',
+				});
 				break;
 			}
 			default:
@@ -1093,132 +1070,13 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		if (!updatedSessionId || !this.sessionGraph.isChild(updatedSessionId)) {
 			return;
 		}
-
-		const record = event.data as Record<string, unknown> | undefined;
-		this.syncChildSubtaskStatus(updatedSessionId, record);
-		this.syncChildSubtaskModel(updatedSessionId, record);
-	}
-
-	private syncChildSubtaskStatus(
-		updatedSessionId: string,
-		record: Record<string, unknown> | undefined,
-	): void {
-		const status = record?.status as
-			| { type?: string; attempt?: number; message?: string; next?: number }
-			| undefined;
-		if (status?.type === 'retry') {
-			this.updateSubtaskLifecycle(updatedSessionId, {
-				status: 'running',
-				retryInfo: {
-					attempt: typeof status.attempt === 'number' ? status.attempt : 1,
-					message: typeof status.message === 'string' ? status.message : 'Retrying…',
-					nextRetryAt:
-						typeof status.next === 'number' ? new Date(status.next).toISOString() : undefined,
-				},
-				timestamp: new Date().toISOString(),
-			});
-			return;
-		}
-		if (status?.type === 'busy') {
-			this.updateSubtaskLifecycle(updatedSessionId, {
-				status: 'running',
-				retryInfo: undefined,
-				timestamp: new Date().toISOString(),
-			});
-			return;
-		}
-		if (status?.type === 'idle') {
-			this.updateSubtaskLifecycle(updatedSessionId, {
-				retryInfo: undefined,
-				timestamp: new Date().toISOString(),
-			});
-		}
-	}
-
-	private syncChildSubtaskTotalsFromTurnTokens(
-		childSessionId: string,
-		payload: Record<string, unknown> | undefined,
-	): void {
-		const routing = this.subtaskManager.resolveRouting(childSessionId);
-		if (!routing) return;
-
-		const delta = {
-			inputTokens: typeof payload?.inputTokens === 'number' ? payload.inputTokens : 0,
-			outputTokens: typeof payload?.outputTokens === 'number' ? payload.outputTokens : 0,
-			totalTokens: typeof payload?.totalTokens === 'number' ? payload.totalTokens : 0,
-			cacheReadTokens: typeof payload?.cacheReadTokens === 'number' ? payload.cacheReadTokens : 0,
-			durationMs: typeof payload?.durationMs === 'number' ? payload.durationMs : 0,
-			isSnapshot: true,
-		};
-		if (delta.totalTokens <= 0) return;
-
-		const accumulated = this.subtaskManager.accumulateTokens(routing.toolUseId, delta);
-		this.bridge.emit(routing.parentSessionId, 'subtask', {
-			subtask: {
-				id: routing.toolUseId,
-				...(routing.parentMessageId ? { messageID: routing.parentMessageId } : {}),
-				childTokens: accumulated,
-				...(typeof accumulated.durationMs === 'number' && accumulated.durationMs > 0
-					? { durationMs: accumulated.durationMs }
-					: {}),
-				timestamp: new Date().toISOString(),
-				agent: '',
-				prompt: '',
-				description: '',
-				status: 'running',
-			},
-		});
-	}
-
-	private syncChildSubtaskModel(
-		updatedSessionId: string,
-		record: Record<string, unknown> | undefined,
-	): void {
-		const childModelId = formatModelId(
-			record && typeof record.providerID === 'string' ? record.providerID : undefined,
-			record && typeof record.modelID === 'string' ? record.modelID : undefined,
-		);
-		if (!childModelId) return;
-		const routing = this.subtaskManager.resolveRouting(updatedSessionId);
-		if (!routing) return;
-		this.bridge.emit(routing.parentSessionId, 'subtask', {
-			subtask: {
-				id: routing.toolUseId,
-				...(routing.parentMessageId ? { messageID: routing.parentMessageId } : {}),
-				childModelId,
-				timestamp: new Date().toISOString(),
-				agent: '',
-				prompt: '',
-				description: '',
-				status: 'running',
-			},
-		});
-	}
-
-	private getMetadataModelId(metadata: Record<string, unknown> | undefined): string | undefined {
-		const metadataModel =
-			metadata?.model && typeof metadata.model === 'object'
-				? (metadata.model as Record<string, unknown>)
-				: undefined;
-		return formatModelId(
-			metadataModel && typeof metadataModel.providerID === 'string'
-				? metadataModel.providerID
-				: undefined,
-			metadataModel && typeof metadataModel.modelID === 'string'
-				? metadataModel.modelID
-				: undefined,
-		);
 	}
 
 	private handlePermissionRuntimeEvent(event: CLIEvent, targetSessionId: string): void {
-		const isChildPermission = this.sessionGraph.isChild(targetSessionId);
-		const permissionTargetSessionId = isChildPermission
-			? (this.sessionGraph.getParent(targetSessionId) ?? targetSessionId)
-			: targetSessionId;
-		const request = mapPermissionRuntimePayloadToRequest(event.data, permissionTargetSessionId);
+		const request = mapPermissionRuntimePayloadToRequest(event.data, targetSessionId);
 		if (!request) return;
 
-		this.bridge.emit(permissionTargetSessionId, 'permission', {
+		this.bridge.emit(targetSessionId, 'permission', {
 			action: 'upsert',
 			request,
 		});
@@ -1229,12 +1087,12 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			void this.cli
 				.respondToPermission({ requestId, approved, alwaysAllow })
 				.catch(error => logger.error('[ChatProvider] auto-response failed:', error));
-			this.bridge.emit(permissionTargetSessionId, 'permission', {
+			this.bridge.emit(targetSessionId, 'permission', {
 				action: 'remove',
 				requestId,
 				response: approved ? (alwaysAllow ? 'always' : 'once') : 'reject',
 			});
-			this.bridge.emit(permissionTargetSessionId, 'access', {
+			this.bridge.emit(targetSessionId, 'access', {
 				action: 'response',
 				requestId,
 				approved,
@@ -1243,7 +1101,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		};
 
 		const isAutoApprove = Boolean(this.settings.get('access.autoApprove'));
-		const isAutoAccept = this.toolHandler.isAutoAccept(permissionTargetSessionId);
+		const isAutoAccept = this.toolHandler.isAutoAccept(targetSessionId);
 		if (isAutoApprove || isAutoAccept) {
 			autoRespond(true);
 			return;
@@ -1267,27 +1125,16 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	}
 
 	private handleQuestionRuntimeEvent(event: CLIEvent, targetSessionId: string): void {
-		const isChildQuestion = this.sessionGraph.isChild(targetSessionId);
-		const questionTargetSessionId = isChildQuestion
-			? (this.sessionGraph.getParent(targetSessionId) ?? targetSessionId)
-			: targetSessionId;
-		const childToolUseId = isChildQuestion
-			? this.subtaskManager.getToolUseId(targetSessionId)
-			: undefined;
-		const request = mapQuestionRuntimePayloadToRequest(
-			event.data,
-			questionTargetSessionId,
-			childToolUseId,
-		);
+		const request = mapQuestionRuntimePayloadToRequest(event.data, targetSessionId);
 		if (!request) return;
 
-		this.bridge.emit(questionTargetSessionId, 'question', {
+		this.bridge.emit(targetSessionId, 'question', {
 			action: 'upsert',
 			request,
 		});
 	}
 
-	private handleToolUse(event: CLIEvent, targetSessionId: string, isChildSession: boolean): void {
+	private handleToolUse(event: CLIEvent, targetSessionId: string, _isChildSession: boolean): void {
 		const now = Date.now();
 		const e = event.data as Record<string, unknown>;
 		const toolUseId = (e.id as string) || `tool-${now}`;
@@ -1308,9 +1155,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			const input = (e.input as Record<string, unknown>) || {};
 			const metadata = (e.metadata as Record<string, unknown> | undefined) ?? undefined;
 			const knownChildSessionId = ChatProvider.safeString(metadata?.sessionId);
-			const metadataModelId = this.getMetadataModelId(metadata);
 
-			const emitTaskPart = (status: 'pending' | 'running' | 'completed' | 'error') => {
+			const emitTaskPart = (
+				status: 'pending' | 'running' | 'completed' | 'error' | 'cancelled',
+			) => {
 				this.bridge.emit(parentSessionId, 'message_part', {
 					part: buildTaskMessagePart(
 						e,
@@ -1326,211 +1174,45 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			};
 
 			emitTaskPart('running');
-
-			// Re-emitted tool_use with input that was missing on first emission.
-			// Update the existing subtask card with prompt/description/agent.
-			if (this.subtaskManager.isRegistered(toolUseId)) {
-				if (knownChildSessionId) {
-					this.linkKnownChildSession(toolUseId, parentSessionId, knownChildSessionId);
-				}
-				const hasInput = Object.keys(input).length > 0;
-				if (hasInput) {
-					this.bridge.emit(parentSessionId, 'subtask', {
-						subtask: {
-							id: toolUseId,
-							...(typeof e.messageID === 'string' ? { messageID: e.messageID } : {}),
-							...(knownChildSessionId
-								? { childSessionId: knownChildSessionId, parentSessionId }
-								: { parentSessionId }),
-							agent: ChatProvider.safeString(input.subagent_type) || 'subagent',
-							prompt: ChatProvider.safeString(input.prompt) || '',
-							description: ChatProvider.safeString(input.description) || '',
-							toolInput: JSON.stringify(e.input),
-							rawInput: input,
-							status: 'running',
-							...(metadataModelId ? { childModelId: metadataModelId } : {}),
-							timestamp: new Date().toISOString(),
-						},
-					});
-				}
-				return;
+			if (knownChildSessionId) {
+				this.linkKnownChildSession(toolUseId, parentSessionId, knownChildSessionId);
 			}
-
-			// Create the subtask card immediately and register the subtask.
-			// Post the message BEFORE registerSubtask — registerSubtask with a
-			// known childSessionId immediately links the child, which means child
-			// events will start routing via subtaskTranscript right away.
-			this.bridge.emit(parentSessionId, 'subtask', {
-				subtask: {
-					id: toolUseId,
-					partId: toolUseId,
-					...(typeof e.messageID === 'string' ? { messageID: e.messageID } : {}),
-					toolUseId,
-					toolName,
-					agent: ChatProvider.safeString(input.subagent_type) || 'subagent',
-					prompt: ChatProvider.safeString(input.prompt) || '',
-					description: ChatProvider.safeString(input.description) || '',
-					...(knownChildSessionId
-						? { childSessionId: knownChildSessionId, parentSessionId }
-						: { parentSessionId }),
-					status: 'running',
-					startTime: new Date().toISOString(),
-					toolInput: e.input ? JSON.stringify(e.input) : '',
-					rawInput: input,
-					isRunning: true,
-					...(metadataModelId ? { childModelId: metadataModelId } : {}),
-					timestamp: new Date().toISOString(),
-					normalizedEntry: event.normalizedEntry,
-				},
-			});
-
-			this.subtaskManager.registerSubtask(
-				toolUseId,
-				parentSessionId,
-				knownChildSessionId,
-				typeof e.messageID === 'string' ? e.messageID : undefined,
-			);
 
 			return;
 		}
 
-		if (isChildSession) {
-			// Emit tool activity to the PARENT session so the subtask card
-			// can show what the child agent is doing (e.g. "Writing file: foo.ts").
-			const parentSessionId = this.sessionGraph.getParent(targetSessionId);
-			if (parentSessionId) {
-				const canonicalName = resolveToolName(toolName) ?? toolName;
-				const label = getToolActivityLabel(canonicalName);
-				this.bridge.emit(parentSessionId, 'status', {
-					status: 'busy',
-					statusText: label,
-					toolActivity: {
-						toolName: canonicalName,
-						label,
-						toolUseId,
-					},
-				});
-			}
-		} else {
-			// Emit tool-specific activity status so the UI can show granular progress
-			// (e.g. "Writing file...", "Running command...") instead of generic "Working...".
-			const canonicalName = resolveToolName(toolName) ?? toolName;
-			const label = getToolActivityLabel(canonicalName);
-			this.bridge.emit(targetSessionId, 'status', {
-				status: 'busy',
-				statusText: label,
-				toolActivity: {
-					toolName: canonicalName,
-					label,
-					toolUseId,
-				},
-			});
-		}
+		const canonicalName = resolveToolName(toolName) ?? toolName;
+		const label = getToolActivityLabel(canonicalName);
+		this.bridge.emit(targetSessionId, 'status', {
+			status: 'busy',
+			statusText: label,
+			toolActivity: {
+				toolName: canonicalName,
+				label,
+				toolUseId,
+			},
+		});
 	}
 
 	private handleToolResult(
 		event: CLIEvent,
 		targetSessionId: string,
-		isChildSession: boolean,
+		_isChildSession: boolean,
 	): void {
 		const now = Date.now();
 		const e = event.data as Record<string, unknown>;
 		const toolUseId = (e.tool_use_id as string) || (e.id as string) || `tool-${now}`;
 		const toolName = (e.name as string) || (e.tool as string) || 'unknown';
 
-		// Clear tool activity on tool completion.
-		if (!isChildSession) {
-			this.bridge.emit(targetSessionId, 'status', {
-				status: 'busy',
-				statusText: 'Working...',
-				toolActivity: null,
-			});
-		} else {
-			// For child sessions, clear tool activity on the parent session.
-			const parentSessionId = this.sessionGraph.getParent(targetSessionId);
-			if (parentSessionId) {
-				this.bridge.emit(parentSessionId, 'status', {
-					status: 'busy',
-					statusText: 'Working...',
-					toolActivity: null,
-				});
-			}
-		}
+		// Clear tool activity on tool completion for the session that owns it.
+		this.bridge.emit(targetSessionId, 'status', {
+			status: 'busy',
+			statusText: 'Working...',
+			toolActivity: null,
+		});
 
 		if (isTaskTool(toolName)) {
-			const metadata =
-				e.metadata && typeof e.metadata === 'object'
-					? (e.metadata as Record<string, unknown>)
-					: undefined;
-			const taskInput =
-				e.input && typeof e.input === 'object' ? (e.input as Record<string, unknown>) : undefined;
-			const metadataModelId = this.getMetadataModelId(metadata);
-			const content =
-				typeof e.content === 'string'
-					? extractCanonicalTaskResult(e.content as string)
-					: e.content
-						? JSON.stringify(e.content)
-						: '';
-			const metadataChildSessionId = ChatProvider.safeString(metadata?.sessionId);
-			const storedParent = this.subtaskManager.getParentSession(toolUseId);
-
-			const childSessionId =
-				this.subtaskManager.getChildSessionId(toolUseId) ??
-				this.sessionGraph.getChildByTaskId(toolUseId) ??
-				metadataChildSessionId;
-
-			const parentSessionId =
-				(childSessionId && this.sessionGraph.getParent(childSessionId)) ||
-				storedParent ||
-				event.sessionId;
-			if (childSessionId && parentSessionId) {
-				this.linkKnownChildSession(toolUseId, parentSessionId, childSessionId);
-			}
-			if (!parentSessionId) return;
-			const resolvedParentSessionId = parentSessionId;
-
-			this.bridge.emit(resolvedParentSessionId, 'message_part', {
-				part: buildTaskMessagePart(
-					e,
-					resolvedParentSessionId,
-					toolUseId,
-					toolName,
-					event.normalizedEntry,
-					e.is_error ? 'error' : 'completed',
-					taskInput,
-					metadata,
-				),
-			});
-
-			this.bridge.emit(resolvedParentSessionId, 'subtask', {
-				subtask: {
-					id: toolUseId,
-					partId: toolUseId,
-					...(typeof e.messageID === 'string' ? { messageID: e.messageID } : {}),
-					agent:
-						typeof taskInput?.subagent_type === 'string'
-							? (taskInput.subagent_type as string)
-							: 'subagent',
-					prompt: typeof taskInput?.prompt === 'string' ? (taskInput.prompt as string) : '',
-					description:
-						typeof taskInput?.description === 'string' ? (taskInput.description as string) : '',
-					status: e.is_error ? 'error' : 'completed',
-					result: content,
-					...(childSessionId ? { childSessionId } : {}),
-					parentSessionId: resolvedParentSessionId,
-					...(metadataModelId ? { childModelId: metadataModelId } : {}),
-					timestamp:
-						typeof e.timestamp === 'string' ? (e.timestamp as string) : new Date().toISOString(),
-					normalizedEntry: event.normalizedEntry,
-				},
-			});
-			this.bridge.emit(resolvedParentSessionId, 'complete', {
-				partId: toolUseId,
-				toolUseId,
-				completedAt:
-					typeof e.timestamp === 'string' ? new Date(e.timestamp as string).getTime() : undefined,
-			});
-			this.subtaskManager.completeSubtask(toolUseId);
+			this.handleTaskToolResult(event, toolUseId, toolName);
 			return;
 		}
 
@@ -1610,42 +1292,40 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			}
 		}
 
-		if (!isChildSession) {
-			const messageId = typeof e.messageID === 'string' ? e.messageID : toolUseId;
-			const partId = typeof e.partId === 'string' ? e.partId : toolUseId;
-			const metadata =
-				e.metadata && typeof e.metadata === 'object'
-					? remapLspDiagnosticsToFilePaths(
-							e.metadata as Record<string, unknown>,
-							toolInputRaw && typeof toolInputRaw === 'object'
-								? collectChangedFilePaths(
-										toolName,
-										toolInputRaw as Record<string, unknown>,
-										e.metadata as Record<string, unknown>,
-									)
-								: [],
-							this.settings.getWorkspaceRoot(),
-						)
-					: undefined;
-			this.bridge.emit(targetSessionId, 'message_part', {
-				part: {
-					id: partId,
-					messageId: messageId,
-					sessionId: targetSessionId,
-					type: 'tool',
-					callId: toolUseId,
-					toolName,
-					state: {
-						status: e.is_error ? 'error' : 'completed',
-						...(typeof e.content === 'string' ? { output: e.content as string } : {}),
-						...(typeof e.title === 'string' ? { title: e.title } : {}),
-						...(metadata ? { metadata } : {}),
-						...(e.input ? { input: e.input } : {}),
-					},
-					normalizedEntry: event.normalizedEntry,
+		const messageId = typeof e.messageID === 'string' ? e.messageID : toolUseId;
+		const partId = typeof e.partId === 'string' ? e.partId : toolUseId;
+		const metadata =
+			e.metadata && typeof e.metadata === 'object'
+				? remapLspDiagnosticsToFilePaths(
+						e.metadata as Record<string, unknown>,
+						toolInputRaw && typeof toolInputRaw === 'object'
+							? collectChangedFilePaths(
+									toolName,
+									toolInputRaw as Record<string, unknown>,
+									e.metadata as Record<string, unknown>,
+								)
+							: [],
+						this.settings.getWorkspaceRoot(),
+					)
+				: undefined;
+		this.bridge.emit(targetSessionId, 'message_part', {
+			part: {
+				id: partId,
+				messageId,
+				sessionId: targetSessionId,
+				type: 'tool',
+				callId: toolUseId,
+				toolName,
+				state: {
+					status: e.is_error ? 'error' : 'completed',
+					...(typeof e.content === 'string' ? { output: e.content as string } : {}),
+					...(typeof e.title === 'string' ? { title: e.title } : {}),
+					...(metadata ? { metadata } : {}),
+					...(e.input ? { input: e.input } : {}),
 				},
-			});
-		}
+				normalizedEntry: event.normalizedEntry,
+			},
+		});
 
 		// Compact tool lifecycle summary — one line per completed tool
 		logger.debug('[ChatProvider] Tool completed', {
@@ -1653,6 +1333,48 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			toolUseId,
 			toolName,
 			isError: Boolean(e.is_error),
+		});
+	}
+
+	private handleTaskToolResult(event: CLIEvent, toolUseId: string, toolName: string): void {
+		const e = event.data as Record<string, unknown>;
+		const metadata =
+			e.metadata && typeof e.metadata === 'object'
+				? (e.metadata as Record<string, unknown>)
+				: undefined;
+		const taskInput =
+			e.input && typeof e.input === 'object' ? (e.input as Record<string, unknown>) : undefined;
+		const metadataChildSessionId = ChatProvider.safeString(metadata?.sessionId);
+
+		const childSessionId = this.sessionGraph.getChildByTaskId(toolUseId) ?? metadataChildSessionId;
+
+		const parentSessionId =
+			(childSessionId && this.sessionGraph.getParent(childSessionId)) || event.sessionId;
+		if (childSessionId && parentSessionId) {
+			this.linkKnownChildSession(toolUseId, parentSessionId, childSessionId);
+		}
+		if (!parentSessionId) return;
+
+		this.bridge.emit(parentSessionId, 'message_part', {
+			part: buildTaskMessagePart(
+				e,
+				parentSessionId,
+				toolUseId,
+				toolName,
+				event.normalizedEntry,
+				e.is_error ? 'error' : 'completed',
+				taskInput,
+				metadata,
+			),
+		});
+		if (childSessionId) {
+			this.linkKnownChildSession(toolUseId, parentSessionId, childSessionId);
+		}
+		this.bridge.emit(parentSessionId, 'complete', {
+			partId: toolUseId,
+			toolUseId,
+			completedAt:
+				typeof e.timestamp === 'string' ? new Date(e.timestamp as string).getTime() : undefined,
 		});
 	}
 
@@ -1769,33 +1491,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		parentSessionId: string,
 		childSessionId: string,
 	): void {
-		const linked = this.subtaskManager.linkChildSession(childSessionId, toolUseId, parentSessionId);
-		if (!linked) return;
+		this.sessionGraph.registerChild(childSessionId, parentSessionId, toolUseId, 'metadata');
 		this.completeActiveThinking(parentSessionId);
-	}
-
-	private updateSubtaskLifecycle(
-		childSessionId: string,
-		update: Partial<import('../common').SessionSubtaskPayload['subtask']> & {
-			timestamp?: string;
-		},
-	): void {
-		const routing = this.subtaskManager.resolveRouting(childSessionId);
-		if (!routing) return;
-		this.bridge.emit(routing.parentSessionId, 'subtask', {
-			subtask: {
-				id: routing.toolUseId,
-				...(routing.parentMessageId ? { messageID: routing.parentMessageId } : {}),
-				childSessionId,
-				parentSessionId: routing.parentSessionId,
-				agent: update.agent ?? '',
-				prompt: update.prompt ?? '',
-				description: update.description ?? '',
-				status: 'running',
-				...update,
-				timestamp: update.timestamp || new Date().toISOString(),
-			},
-		});
 	}
 
 	// ─── Thinking Block Lifecycle ────────────────────────────────────────────
@@ -1806,15 +1503,12 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		if (activeThinking) {
 			const { partId } = activeThinking;
 			const completedAt = Date.now();
-			if (!this.sessionGraph.isChild(sessionId)) {
-				this.bridge.emit(sessionId, 'complete', { partId, toolUseId: partId, completedAt });
-			}
+			this.bridge.emit(sessionId, 'complete', { partId, toolUseId: partId, completedAt });
 			this.activeThinkingPartIds.delete(sessionId);
 		}
 	}
 
 	dispose(): void {
-		this.subtaskManager.clearAll();
 		for (const disposable of this.disposables) {
 			disposable.dispose();
 		}

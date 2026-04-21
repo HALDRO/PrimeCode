@@ -13,7 +13,7 @@ import { isMcpTool } from '../../constants';
 import { cn } from '../../lib/cn';
 import {
 	projectRuntimeMessages,
-	type RenderMessage,
+	type RenderNode,
 	useChangedFilesState,
 	useChatActions,
 	useHasTodos,
@@ -57,13 +57,13 @@ interface CopyMenuItem {
 
 // ─── Copy helpers (shared logic, no duplication) ───
 
-function getActiveMessages(): RenderMessage[] | undefined {
+function getActiveMessages(): RenderNode[] | undefined {
 	const state = useChatStore.getState();
 	const session = state.activeSessionId ? state.sessionsById[state.activeSessionId] : undefined;
 	return session ? projectRuntimeMessages(session) : undefined;
 }
 
-function findLastUserIndex(msgs: RenderMessage[]): number {
+function findLastUserIndex(msgs: RenderNode[]): number {
 	for (let i = msgs.length - 1; i >= 0; i--) {
 		if (msgs[i].kind === 'user') return i;
 	}
@@ -71,7 +71,7 @@ function findLastUserIndex(msgs: RenderMessage[]): number {
 }
 
 /** Check if a tool_use should be included in copy output (MCP, WebSearch, WebFetch) */
-function isCopyableToolResult(m: RenderMessage, mcpServerNames: string[]): boolean {
+function isCopyableToolResult(m: RenderNode, mcpServerNames: string[]): boolean {
 	if (m.kind !== 'tool_use') return false;
 	const name = m.toolName?.toLowerCase() ?? '';
 	if (name === 'websearch' || name === 'webfetch') return true;
@@ -79,7 +79,7 @@ function isCopyableToolResult(m: RenderMessage, mcpServerNames: string[]): boole
 }
 
 function formatMessage(
-	m: RenderMessage,
+	m: RenderNode,
 	mode: 'last' | 'all',
 	mcpServerNames: string[],
 ): string | undefined {
@@ -87,8 +87,16 @@ function formatMessage(
 	if (m.kind === 'assistant' && m.content) {
 		return mode === 'all' ? `## Assistant\n${m.content}` : m.content;
 	}
-	if (m.kind === 'subtask' && m.result) {
-		return mode === 'all' ? `## Agent: ${m.agent}\n${m.result}` : `[${m.agent}] ${m.result}`;
+	if (m.kind === 'task_card') {
+		const parts: string[] = [];
+		if (m.result) {
+			parts.push(
+				mode === 'all'
+					? `## Agent: ${m.agent ?? 'SubAgent'}\n${m.result}`
+					: `[${m.agent ?? 'SubAgent'}] ${m.result}`,
+			);
+		}
+		return parts.length > 0 ? parts.join('\n\n') : undefined;
 	}
 	// Include completed tool output from MCP, WebSearch, WebFetch
 	if (m.kind === 'tool_use' && isCopyableToolResult(m, mcpServerNames)) {
@@ -102,7 +110,7 @@ function formatMessage(
 }
 
 function formatMessages(
-	msgs: RenderMessage[],
+	msgs: RenderNode[],
 	mode: 'last' | 'all',
 	mcpServerNames: string[],
 ): string {
@@ -119,27 +127,30 @@ function formatMessages(
  * Uses the same unified diff source as SimpleDiff component (metadata.diff).
  * Falls back to tool_use filePath header when no diff content available.
  */
-function buildPatches(msgs: RenderMessage[]): string {
-	// Build a map of toolUseId → tool metadata for quick lookup
+function buildPatches(msgs: RenderNode[]): string {
 	const resultMap = new Map<string, Record<string, unknown>>();
-	for (const m of msgs) {
+
+	const visit = (m: RenderNode) => {
 		if (m.kind === 'tool_use' && m.toolUseId && m.metadata) {
 			resultMap.set(m.toolUseId, m.metadata as Record<string, unknown>);
 		}
-	}
+	};
+	for (const m of msgs) visit(m);
 
 	const patches: string[] = [];
-	for (const m of msgs) {
-		if (m.kind !== 'tool_use') continue;
-		const meta = resultMap.get(m.toolUseId);
-		if (!meta) continue;
-		// Extract unified diff from metadata — same source as SimpleDiff
-		const diff = meta.diff;
-		if (typeof diff === 'string' && diff.trim()) {
-			patches.push(diff.trim());
+	const visitPatches = (m: RenderNode) => {
+		if (m.kind === 'tool_use') {
+			if (!m.toolUseId) return;
+			const meta = resultMap.get(m.toolUseId);
+			if (!meta) return;
+			const diff = meta.diff;
+			if (typeof diff === 'string' && diff.trim()) {
+				patches.push(diff.trim());
+			}
 		}
-		// No unified diff available — skip (no manual reconstruction)
-	}
+	};
+	for (const m of msgs) visitPatches(m);
+
 	return patches.join('\n\n');
 }
 

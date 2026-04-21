@@ -7,9 +7,9 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { RenderMessage } from '../../store';
+import type { RenderNode } from '../../store';
 
-type Message = RenderMessage;
+type Message = RenderNode;
 
 import {
 	getGroupedItemShouldCollapse,
@@ -19,7 +19,7 @@ import {
 
 // --- Helpers ---
 
-const toolUse = (id: string, toolName = 'read'): RenderMessage =>
+const toolUse = (id: string, toolName = 'read'): RenderNode =>
 	({
 		kind: 'tool_use',
 		type: 'tool_use',
@@ -29,9 +29,9 @@ const toolUse = (id: string, toolName = 'read'): RenderMessage =>
 		toolUseId: `tu-${id}`,
 		toolInput: '{}',
 		rawInput: {},
-	}) as RenderMessage;
+	}) as RenderNode;
 
-const toolResult = (id: string, toolUseId: string, toolName = 'read'): RenderMessage =>
+const toolResult = (id: string, toolUseId: string, toolName = 'read'): RenderNode =>
 	({
 		kind: 'tool_use',
 		type: 'tool_use',
@@ -43,9 +43,9 @@ const toolResult = (id: string, toolUseId: string, toolName = 'read'): RenderMes
 		rawInput: {},
 		resultContent: 'done',
 		status: 'completed',
-	}) as RenderMessage;
+	}) as RenderNode;
 
-const assistant = (id: string, content = 'Let me continue...'): RenderMessage =>
+const assistant = (id: string, content = 'Let me continue...'): RenderNode =>
 	({
 		kind: 'assistant',
 		type: 'assistant',
@@ -53,9 +53,9 @@ const assistant = (id: string, content = 'Let me continue...'): RenderMessage =>
 		timestamp: new Date().toISOString(),
 		content,
 		partId: id,
-	}) as RenderMessage;
+	}) as RenderNode;
 
-const thinking = (id: string, content = 'Thinking...'): RenderMessage =>
+const thinking = (id: string, content = 'Thinking...'): RenderNode =>
 	({
 		kind: 'thinking',
 		type: 'thinking',
@@ -63,9 +63,9 @@ const thinking = (id: string, content = 'Thinking...'): RenderMessage =>
 		timestamp: new Date().toISOString(),
 		content,
 		partId: id,
-	}) as RenderMessage;
+	}) as RenderNode;
 
-const heavyTool = (id: string, toolName = 'bash'): RenderMessage =>
+const heavyTool = (id: string, toolName = 'bash'): RenderNode =>
 	({
 		kind: 'tool_use',
 		type: 'tool_use',
@@ -75,20 +75,21 @@ const heavyTool = (id: string, toolName = 'bash'): RenderMessage =>
 		toolUseId: `tu-${id}`,
 		toolInput: '{}',
 		rawInput: {},
-	}) as RenderMessage;
+	}) as RenderNode;
 
-const subtask = (id: string): RenderMessage =>
+const taskCard = (id: string): RenderNode =>
 	({
-		kind: 'subtask',
-		type: 'subtask',
+		kind: 'task_card',
 		id,
 		timestamp: new Date().toISOString(),
 		agent: 'subagent',
 		prompt: 'Analyze the codebase',
 		description: 'Find and analyze components',
 		status: 'running',
-		message: undefined as never,
-	}) as unknown as RenderMessage;
+		toolCallId: id,
+		parentSessionId: 'root',
+		childSummary: { childCount: 0, diffStats: { added: 0, removed: 0 } },
+	}) as RenderNode;
 
 const NO_MCP: string[] = [];
 
@@ -97,12 +98,12 @@ const NO_MCP: string[] = [];
 describe('groupToolMessages', () => {
 	describe('basic grouping (unchanged behavior)', () => {
 		it('should return empty array for no messages', () => {
-			expect(groupToolMessages([], NO_MCP)).toEqual([]);
+			expect(groupToolMessages([], NO_MCP, false)).toEqual([]);
 		});
 
 		it('should not group fewer than 3 tool_use messages', () => {
 			const msgs = [toolUse('1'), toolResult('1r', 'tu-1'), toolUse('2'), toolResult('2r', 'tu-2')];
-			const result = groupToolMessages(msgs, NO_MCP);
+			const result = groupToolMessages(msgs, NO_MCP, false);
 			// All individual — no arrays
 			expect(result.every(r => !Array.isArray(r))).toBe(true);
 			expect(result).toHaveLength(4);
@@ -118,11 +119,11 @@ describe('groupToolMessages', () => {
 				toolResult('3r', 'tu-3'),
 				assistant('a1', 'Done.'),
 			];
-			const result = groupToolMessages(msgs, NO_MCP);
+			const result = groupToolMessages(msgs, NO_MCP, false);
 			// First item should be a grouped array, last is the assistant
 			expect(Array.isArray(result[0])).toBe(true);
 			expect((result[0] as Message[]).length).toBe(6); // 3 tool_use + 3 tool_result
-			expect((result[1] as Message).type).toBe('assistant');
+			expect((result[1] as Message).kind).toBe('assistant');
 		});
 
 		it('should group trailing tools even without boundary (e.g. subtask transcripts)', () => {
@@ -134,7 +135,7 @@ describe('groupToolMessages', () => {
 				toolUse('3'),
 				toolResult('3r', 'tu-3'),
 			];
-			const result = groupToolMessages(msgs, NO_MCP);
+			const result = groupToolMessages(msgs, NO_MCP, false);
 			// Trailing tools are now grouped (fixes subtask transcript grouping)
 			expect(result).toHaveLength(1);
 			expect(Array.isArray(result[0])).toBe(true);
@@ -148,7 +149,7 @@ describe('groupToolMessages', () => {
 				heavyTool('h3', 'write'),
 				assistant('a1'),
 			];
-			const result = groupToolMessages(msgs, NO_MCP);
+			const result = groupToolMessages(msgs, NO_MCP, false);
 			expect(result.every(r => !Array.isArray(r))).toBe(true);
 		});
 	});
@@ -165,11 +166,11 @@ describe('groupToolMessages', () => {
 				toolResult('3r', 'tu-3'),
 				assistant('a2', 'All done.'),
 			];
-			const result = groupToolMessages(msgs, NO_MCP);
+			const result = groupToolMessages(msgs, NO_MCP, false);
 			expect(result).toHaveLength(2);
 			expect(Array.isArray(result[0])).toBe(true);
 			expect((result[0] as Message[]).length).toBe(7);
-			expect((result[1] as Message).type).toBe('assistant');
+			expect((result[1] as Message).kind).toBe('assistant');
 		});
 
 		it('should absorb thinking between tool runs into the group', () => {
@@ -185,11 +186,11 @@ describe('groupToolMessages', () => {
 				toolResult('4r', 'tu-4'),
 				assistant('a1', 'Done.'),
 			];
-			const result = groupToolMessages(msgs, NO_MCP);
+			const result = groupToolMessages(msgs, NO_MCP, false);
 			expect(result).toHaveLength(2);
 			expect(Array.isArray(result[0])).toBe(true);
 			expect((result[0] as Message[]).length).toBe(9);
-			expect((result[1] as Message).type).toBe('assistant');
+			expect((result[1] as Message).kind).toBe('assistant');
 		});
 
 		it('should absorb short assistant between two tool groups into one merged group', () => {
@@ -209,11 +210,11 @@ describe('groupToolMessages', () => {
 				toolResult('6r', 'tu-6'),
 				assistant('a2', 'Done.'),
 			];
-			const result = groupToolMessages(msgs, NO_MCP);
+			const result = groupToolMessages(msgs, NO_MCP, false);
 			expect(result).toHaveLength(2);
 			expect(Array.isArray(result[0])).toBe(true);
 			expect((result[0] as Message[]).length).toBe(13);
-			expect((result[1] as Message).type).toBe('assistant');
+			expect((result[1] as Message).kind).toBe('assistant');
 		});
 
 		it('should keep assistant before heavy tool as separate item', () => {
@@ -227,12 +228,12 @@ describe('groupToolMessages', () => {
 				assistant('a1', 'Now editing...'),
 				heavyTool('h1', 'edit'),
 			];
-			const result = groupToolMessages(msgs, NO_MCP);
+			const result = groupToolMessages(msgs, NO_MCP, false);
 			// Group of 3 tools, then assistant, then heavy tool
 			expect(result).toHaveLength(3);
 			expect(Array.isArray(result[0])).toBe(true);
 			expect((result[0] as Message[]).length).toBe(6);
-			expect((result[1] as Message).type).toBe('assistant');
+			expect((result[1] as Message).kind).toBe('assistant');
 			expect((result[2] as Message).id).toBe('h1');
 		});
 
@@ -246,18 +247,18 @@ describe('groupToolMessages', () => {
 				toolResult('3r', 'tu-3'),
 				assistant('a1', 'All done, no more tools.'),
 			];
-			const result = groupToolMessages(msgs, NO_MCP);
+			const result = groupToolMessages(msgs, NO_MCP, false);
 			// Group of 3 tools, then the trailing assistant
 			expect(result).toHaveLength(2);
 			expect(Array.isArray(result[0])).toBe(true);
-			expect((result[1] as Message).type).toBe('assistant');
+			expect((result[1] as Message).kind).toBe('assistant');
 		});
 	});
 
 	describe('edge cases', () => {
 		it('should handle assistant-only messages (no tools at all)', () => {
 			const msgs = [assistant('a1'), assistant('a2')];
-			const result = groupToolMessages(msgs, NO_MCP);
+			const result = groupToolMessages(msgs, NO_MCP, false);
 			expect(result).toHaveLength(2);
 			expect(result.every(r => !Array.isArray(r))).toBe(true);
 		});
@@ -272,9 +273,9 @@ describe('groupToolMessages', () => {
 				toolUse('3'),
 				toolResult('3r', 'tu-3'),
 			];
-			const result = groupToolMessages(msgs, NO_MCP);
+			const result = groupToolMessages(msgs, NO_MCP, false);
 			// Assistant first (no prior group to absorb into), then trailing tools grouped
-			expect((result[0] as Message).type).toBe('assistant');
+			expect((result[0] as Message).kind).toBe('assistant');
 			expect(result).toHaveLength(2);
 			expect(Array.isArray(result[1])).toBe(true);
 			expect((result[1] as Message[]).length).toBe(6);
@@ -291,7 +292,7 @@ describe('groupToolMessages', () => {
 				}) as Message;
 
 			const msgs = [mcpTool('m1'), mcpTool('m2'), mcpTool('m3'), assistant('a1')];
-			const result = groupToolMessages(msgs, NO_MCP);
+			const result = groupToolMessages(msgs, NO_MCP, false);
 			expect(result.every(r => !Array.isArray(r))).toBe(true);
 		});
 
@@ -306,11 +307,11 @@ describe('groupToolMessages', () => {
 				toolResult('3r', 'tu-3'),
 				assistant('a2', 'Done.'),
 			];
-			const result = groupToolMessages(msgs, NO_MCP);
+			const result = groupToolMessages(msgs, NO_MCP, false);
 			expect(result).toHaveLength(2);
 			expect(Array.isArray(result[0])).toBe(true);
 			expect((result[0] as Message[]).length).toBe(7);
-			expect((result[1] as Message).type).toBe('assistant');
+			expect((result[1] as Message).kind).toBe('assistant');
 		});
 	});
 
@@ -389,7 +390,7 @@ describe('groupToolMessages', () => {
 			expect(result).toHaveLength(2);
 			expect(Array.isArray(result[0])).toBe(true);
 			expect((result[0] as Message[]).length).toBe(6);
-			expect((result[1] as Message).type).toBe('assistant');
+			expect((result[1] as Message).kind).toBe('assistant');
 		});
 
 		it('should NOT absorb trailing assistant when NOT streaming (final state)', () => {
@@ -409,7 +410,7 @@ describe('groupToolMessages', () => {
 			expect(result).toHaveLength(2);
 			expect(Array.isArray(result[0])).toBe(true);
 			expect((result[0] as Message[]).length).toBe(6);
-			expect((result[1] as Message).type).toBe('assistant');
+			expect((result[1] as Message).kind).toBe('assistant');
 		});
 
 		it('should strip trailing assistant consistently in both streaming and non-streaming', () => {
@@ -430,14 +431,14 @@ describe('groupToolMessages', () => {
 			expect(streaming).toHaveLength(2);
 			expect(Array.isArray(streaming[0])).toBe(true);
 			expect((streaming[0] as Message[]).length).toBe(6);
-			expect((streaming[1] as Message).type).toBe('assistant');
+			expect((streaming[1] as Message).kind).toBe('assistant');
 
 			// Non-streaming: same result
 			const final = groupToolMessages(msgs, NO_MCP, false);
 			expect(final).toHaveLength(2);
 			expect(Array.isArray(final[0])).toBe(true);
 			expect((final[0] as Message[]).length).toBe(6);
-			expect((final[1] as Message).type).toBe('assistant');
+			expect((final[1] as Message).kind).toBe('assistant');
 		});
 
 		it('should keep mid-group assistant but strip trailing assistant', () => {
@@ -459,13 +460,13 @@ describe('groupToolMessages', () => {
 			expect(streaming).toHaveLength(2);
 			expect(Array.isArray(streaming[0])).toBe(true);
 			expect((streaming[0] as Message[]).length).toBe(9);
-			expect((streaming[1] as Message).type).toBe('assistant');
+			expect((streaming[1] as Message).kind).toBe('assistant');
 
 			// Non-streaming: same result
 			const final = groupToolMessages(msgs, NO_MCP, false);
 			expect(final).toHaveLength(2);
 			expect((final[0] as Message[]).length).toBe(9);
-			expect((final[1] as Message).type).toBe('assistant');
+			expect((final[1] as Message).kind).toBe('assistant');
 		});
 
 		it('should keep group stable when more tools arrive after absorbed assistant during streaming', () => {
@@ -520,10 +521,10 @@ describe('groupToolMessages', () => {
 				toolResult('2r', 'tu-2'),
 				toolUse('3'),
 				toolResult('3r', 'tu-3'),
-				subtask('s1'),
+				taskCard('s1'),
 			];
 
-			const grouped = groupToolMessages(msgs, NO_MCP);
+			const grouped = groupToolMessages(msgs, NO_MCP, false);
 			const firstItem = grouped[0];
 			expect(Array.isArray(grouped[0])).toBe(true);
 			expect(grouped[1]).toBe(msgs[6]);
@@ -549,7 +550,7 @@ describe('groupToolMessages', () => {
 				toolResult('r4-res', 'tu-r4'),
 			];
 
-			const grouped = groupToolMessages(msgs, NO_MCP);
+			const grouped = groupToolMessages(msgs, NO_MCP, false);
 
 			// bash start stays standalone
 			expect(grouped[0]).toBe(msgs[0]);
@@ -577,7 +578,7 @@ describe('groupToolMessages', () => {
 				heavyTool('bash1', 'bash'),
 			];
 
-			const grouped = groupToolMessages(msgs, NO_MCP);
+			const grouped = groupToolMessages(msgs, NO_MCP, false);
 			const firstItem = grouped[0];
 			expect(Array.isArray(grouped[0])).toBe(true);
 			expect((grouped[1] as Extract<Message, { kind: 'tool_use' }>).toolName).toBe('bash');

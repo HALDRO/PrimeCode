@@ -595,47 +595,6 @@ export const ConversationMessageSchema = Type.Union([
 
 export type ConversationMessage = Static<typeof ConversationMessageSchema>;
 
-export const SubtaskMessageSchema = Type.Object({
-	id: Type.Optional(Type.String()),
-	timestamp: Type.String(),
-	type: Type.Literal('subtask'),
-	agent: Type.String(),
-	prompt: Type.String(),
-	description: Type.String(),
-	parentSessionId: Type.Optional(Type.String()),
-	childSessionId: Type.Optional(Type.String()),
-	command: Type.Optional(Type.String()),
-	status: Type.Union([
-		Type.Literal('running'),
-		Type.Literal('completed'),
-		Type.Literal('error'),
-		Type.Literal('cancelled'),
-	]),
-	contextId: Type.Optional(Type.String()),
-	result: Type.Optional(Type.String()),
-	messageID: Type.Optional(Type.String()),
-	startTime: Type.Optional(Type.String()),
-	durationMs: Type.Optional(Type.Number()),
-	childTokens: Type.Optional(
-		Type.Object({
-			input: Type.Number(),
-			output: Type.Number(),
-			total: Type.Number(),
-			cacheRead: Type.Optional(Type.Number()),
-			durationMs: Type.Optional(Type.Number()),
-		}),
-	),
-	childModelId: Type.Optional(Type.String()),
-	retryInfo: Type.Optional(
-		Type.Object({
-			attempt: Type.Number(),
-			message: Type.String(),
-			nextRetryAt: Type.Optional(Type.String()),
-		}),
-	),
-});
-export type SubtaskMessage = Static<typeof SubtaskMessageSchema>;
-
 export const ConversationIndexEntrySchema = Type.Object({
 	filename: Type.String(),
 	sessionId: Type.String(),

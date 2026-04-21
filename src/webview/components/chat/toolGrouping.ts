@@ -6,7 +6,7 @@
 
 import type { NormalizedEntry } from '../../../common/normalizedTypes';
 import { isMcpTool, isNonGroupableTool } from '../../constants';
-import type { RenderMessage } from '../../store';
+import type { RenderNode } from '../../store';
 
 // -----------------------------------------------------------------------------
 // Constants
@@ -28,7 +28,7 @@ const MAX_BRIDGE_MESSAGE_LENGTH = 200;
  * and survives array recreation across render cycles, eliminating the
  * expand→collapse→expand flickering caused by lost object identity.
  */
-export interface ToolGroup extends Array<RenderMessage> {
+export interface ToolGroup extends Array<RenderNode> {
 	isLive?: boolean;
 	shouldCollapse?: boolean;
 }
@@ -37,8 +37,18 @@ export interface ToolGroup extends Array<RenderMessage> {
 // Internal helpers
 // -----------------------------------------------------------------------------
 
-const isGroupableTool = (msg: RenderMessage, mcpServerNames: string[]): boolean => {
+const isGroupableTool = (msg: RenderNode, mcpServerNames: string[]): boolean => {
 	if (msg.kind !== 'tool_use') {
+		return false;
+	}
+
+	const entry = (msg as { normalizedEntry?: NormalizedEntry }).normalizedEntry;
+	if (
+		entry?.entryType &&
+		typeof entry.entryType === 'object' &&
+		'actionType' in entry.entryType &&
+		entry.entryType.actionType.type === 'TaskResult'
+	) {
 		return false;
 	}
 
@@ -54,7 +64,7 @@ const isGroupableTool = (msg: RenderMessage, mcpServerNames: string[]): boolean 
 	return !isNonGroupableTool(toolName);
 };
 
-const getToolUseCount = (msgs: RenderMessage[]): number => {
+const getToolUseCount = (msgs: RenderNode[]): number => {
 	const uniqueToolUseIds = new Set<string>();
 	for (const msg of msgs) {
 		if (msg.kind !== 'tool_use') continue;
@@ -64,7 +74,7 @@ const getToolUseCount = (msgs: RenderMessage[]): number => {
 	return uniqueToolUseIds.size;
 };
 
-export const isBridgeMessage = (msg: RenderMessage): boolean => {
+export const isBridgeMessage = (msg: RenderNode): boolean => {
 	if (msg.kind === 'thinking') return true;
 	if (msg.kind === 'assistant') {
 		const content = (msg as { content?: string }).content || '';
@@ -73,8 +83,8 @@ export const isBridgeMessage = (msg: RenderMessage): boolean => {
 	return false;
 };
 
-const stripTrailingBridges = (group: RenderMessage[]): RenderMessage[] => {
-	const stripped: RenderMessage[] = [];
+const stripTrailingBridges = (group: RenderNode[]): RenderNode[] => {
+	const stripped: RenderNode[] = [];
 	while (group.length > 0 && isBridgeMessage(group[group.length - 1])) {
 		const msg = group.pop();
 		if (msg) stripped.unshift(msg);
@@ -97,12 +107,12 @@ const stripTrailingBridges = (group: RenderMessage[]): RenderMessage[] => {
  * preview mode in SimpleToolGroup.
  */
 export const groupToolMessages = (
-	msgs: RenderMessage[],
+	msgs: RenderNode[],
 	mcpServerNames: string[],
 	isStreaming = false,
-): (RenderMessage | RenderMessage[])[] => {
-	const result: (RenderMessage | RenderMessage[])[] = [];
-	let currentToolGroup: RenderMessage[] = [];
+): (RenderNode | RenderNode[])[] => {
+	const result: (RenderNode | RenderNode[])[] = [];
+	let currentToolGroup: RenderNode[] = [];
 
 	const flushGroup = (reason: 'boundary' | 'final', collapseOnFlush = false) => {
 		if (currentToolGroup.length === 0) return;
@@ -152,12 +162,12 @@ export const groupToolMessages = (
 // Collapse helpers
 // -----------------------------------------------------------------------------
 
-export const shouldTriggerCollapse = (msg: RenderMessage): boolean => {
+export const shouldTriggerCollapse = (msg: RenderNode): boolean => {
 	if (msg.kind === 'assistant' || msg.kind === 'thinking') {
 		return true;
 	}
 
-	if (msg.kind === 'subtask') {
+	if (msg.kind === 'task_card') {
 		return true;
 	}
 
@@ -179,7 +189,7 @@ export const shouldTriggerCollapse = (msg: RenderMessage): boolean => {
 	return false;
 };
 
-export type GroupedResponseItem = RenderMessage | RenderMessage[];
+export type GroupedResponseItem = RenderNode | RenderNode[];
 
 export const getGroupedItemShouldCollapse = (item: GroupedResponseItem): boolean =>
 	Array.isArray(item) ? Boolean((item as ToolGroup).shouldCollapse) : false;

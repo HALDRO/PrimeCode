@@ -64,7 +64,6 @@ export type SessionEventType =
 	| 'todo'
 	| 'permission'
 	| 'user_message'
-	| 'subtask'
 	| 'notification'
 	| 'question';
 
@@ -107,43 +106,7 @@ export interface SessionUserMessagePayload {
 	};
 }
 
-export interface SessionSubtaskPayload {
-	eventType: 'subtask';
-	subtask: {
-		id: string;
-		timestamp?: string;
-		agent: string;
-		prompt: string;
-		description: string;
-		parentSessionId?: string;
-		childSessionId?: string;
-		command?: string;
-		status: 'running' | 'completed' | 'error' | 'cancelled';
-		partId?: string;
-		toolUseId?: string;
-		toolName?: string;
-		toolInput?: string;
-		rawInput?: Record<string, unknown>;
-		isRunning?: boolean;
-		isError?: boolean;
-		content?: string;
-		contextId?: string;
-		result?: string;
-		messageID?: string;
-		startTime?: string | number;
-		durationMs?: number;
-		childTokens?: {
-			input: number;
-			output: number;
-			total: number;
-			cacheRead?: number;
-			durationMs?: number;
-		};
-		childModelId?: string;
-		retryInfo?: SubtaskRetryInfo;
-		normalizedEntry?: import('./normalizedTypes').NormalizedEntry;
-	};
-}
+export type SessionLinkSource = 'metadata' | 'session_parentID' | 'deferred' | 'restored';
 
 export interface SessionNotificationPayload {
 	eventType: 'notification';
@@ -197,7 +160,7 @@ export interface SessionMessagePartPayload {
 		callId?: string;
 		toolName?: string;
 		state?: {
-			status?: 'pending' | 'running' | 'completed' | 'error';
+			status?: 'pending' | 'running' | 'completed' | 'error' | 'cancelled';
 			input?: unknown;
 			output?: string;
 			title?: string;
@@ -312,7 +275,7 @@ export interface SessionAccessPayload {
 
 export interface SessionMessagesReloadPayload {
 	eventType: 'messages_reload';
-	messages: Array<SessionUserMessagePayload['message'] | SessionSubtaskPayload['subtask']>;
+	messages: SessionUserMessagePayload['message'][];
 	runtimeMessageRecords?: SessionMessageRecordPayload['message'][];
 	runtimeMessageParts?: SessionMessagePartPayload['part'][];
 	changedFiles?: Array<{
@@ -357,6 +320,7 @@ export interface SessionMessageRemovedPayload {
 export interface SessionInfoData {
 	sessionId: string;
 	title?: string;
+	parentSessionId?: string;
 	tools?: string[];
 	mcpServers?: string[];
 	autoAccept?: boolean;
@@ -485,7 +449,6 @@ export type SessionEventPayload =
 	| SessionTodoPayload
 	| SessionPermissionPayload
 	| SessionUserMessagePayload
-	| SessionSubtaskPayload
 	| SessionNotificationPayload
 	| SessionQuestionPayload;
 

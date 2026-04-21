@@ -5,9 +5,9 @@
  * Uses stable empty-array refs (EMPTY_MESSAGES, etc.) to prevent infinite re-renders with useShallow.
  */
 
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { extractCanonicalTaskResult, parseModelId } from '../../common';
+import { parseModelId } from '../../common';
 import { sumUsageValues } from '../../common/tokenStats';
 import {
 	getAvailableModelVariants,
@@ -19,9 +19,11 @@ import {
 	type ChatSession,
 	type ChatState,
 	type CommitInfo,
+	type RenderAssistantMessage,
 	type RenderCompactionMessage,
-	type RenderMessage,
-	type RenderSubtaskMessage,
+	type RenderNode,
+	type RenderTaskCardNode,
+	type RenderToolUseMessage,
 	type RenderUserMessage,
 	type TokenUsage,
 	type ToolResultView,
@@ -32,29 +34,13 @@ import type { TransientNotification } from './uiStore';
 import { type UIState, useUIStore } from './uiStore';
 
 // Stable empty array references to prevent infinite re-renders with useShallow
-const EMPTY_MESSAGES: RenderMessage[] = [];
+const EMPTY_MESSAGES: RenderNode[] = [];
 const EMPTY_COMMITS: CommitInfo[] = [];
 const EMPTY_CHANGED_FILES: ChangedFile[] = [];
 const EMPTY_CUMULATIVE_DIFFS: ChatSession['cumulativeDiffs'] = [];
 const EMPTY_NOTIFICATIONS: TransientNotification[] = [];
 const EMPTY_PERMISSIONS: import('../../common').SessionPermissionRequest[] = [];
 const EMPTY_QUESTIONS: import('../../common').SessionQuestionRequest[] = [];
-
-function getTaskResultFromNormalizedEntry(
-	entry: RenderSubtaskMessage['normalizedEntry'] | undefined,
-): string | undefined {
-	if (
-		!entry?.entryType ||
-		typeof entry.entryType !== 'object' ||
-		!('actionType' in entry.entryType)
-	) {
-		return undefined;
-	}
-	const action = entry.entryType.actionType;
-	return action.type === 'TaskResult' && typeof action.result === 'string'
-		? action.result
-		: undefined;
-}
 
 function getCompactionView(
 	messageId: string,
@@ -100,18 +86,8 @@ function getUserMessageText(messageId: string, session: ChatSession): string {
 		.join('\n\n');
 }
 
-export function projectRuntimeMessages(
-	session: ChatSession | undefined,
-	options?: {
-		materializeTaskCards?: boolean;
-		compactToolOutputs?: boolean;
-		excludeTerminalAssistantText?: boolean;
-	},
-): RenderMessage[] {
+export function projectRuntimeMessages(session: ChatSession | undefined): RenderNode[] {
 	if (!session) return EMPTY_MESSAGES;
-	const materializeTaskCards = options?.materializeTaskCards !== false;
-	const compactToolOutputs = options?.compactToolOutputs === true;
-	const excludeTerminalAssistantText = options?.excludeTerminalAssistantText === true;
 
 	const runtimeUserMessageIds = new Set(
 		session.runtimeMessageRecords
@@ -119,81 +95,9 @@ export function projectRuntimeMessages(
 			.map(message => message.id),
 	);
 
-	const passthrough: RenderMessage[] = [];
-	const subtasksByParentMessageId = new Map<string, RenderSubtaskMessage[]>();
-	const subtaskOverlayById = session.subtasksById;
-	const createDerivedSubtask = (
-		part: ChatSession['runtimeMessagePartsById'][string][number],
-		timestamp: string,
-		messageID: string,
-	): RenderSubtaskMessage | undefined => {
-		if (!materializeTaskCards) return undefined;
-		if (part.type !== 'tool' || !part.callId || part.toolName !== 'task') return undefined;
-		const overlay = subtaskOverlayById[part.callId];
-		const rawInput =
-			(part.state?.input as Record<string, unknown> | undefined) ?? overlay?.rawInput ?? {};
-		const taskMetadata = part.state?.metadata as Record<string, unknown> | undefined;
-		const canonicalResult =
-			getTaskResultFromNormalizedEntry(overlay?.normalizedEntry) ??
-			getTaskResultFromNormalizedEntry(part.normalizedEntry) ??
-			(typeof part.state?.output === 'string'
-				? extractCanonicalTaskResult(part.state.output)
-				: undefined);
-		const childTokens = overlay?.childTokens;
-		const durationMs = overlay?.durationMs ?? childTokens?.durationMs;
-		const status =
-			overlay?.status ??
-			(part.state?.status === 'completed'
-				? 'completed'
-				: part.state?.status === 'error'
-					? 'error'
-					: 'running');
-		return {
-			id: part.callId,
-			kind: 'subtask',
-			type: 'subtask',
-			timestamp: overlay?.timestamp ?? timestamp,
-			partId: overlay?.partId ?? part.id,
-			messageID,
-			toolUseId: overlay?.toolUseId ?? part.callId,
-			toolName: overlay?.toolName ?? part.toolName,
-			agent:
-				overlay?.agent ??
-				(typeof rawInput.subagent_type === 'string' ? rawInput.subagent_type : ''),
-			prompt: overlay?.prompt ?? (typeof rawInput.prompt === 'string' ? rawInput.prompt : ''),
-			description:
-				overlay?.description ??
-				(typeof rawInput.description === 'string' ? rawInput.description : ''),
-			parentSessionId: overlay?.parentSessionId ?? session.id,
-			...(overlay?.childSessionId
-				? { childSessionId: overlay.childSessionId }
-				: typeof taskMetadata?.sessionId === 'string'
-					? { childSessionId: taskMetadata.sessionId }
-					: {}),
-			status,
-			...(overlay?.command ? { command: overlay.command } : {}),
-			...(overlay?.contextId ? { contextId: overlay.contextId } : {}),
-			...((overlay?.result ?? canonicalResult)
-				? { result: overlay?.result ?? canonicalResult }
-				: {}),
-			...(overlay?.startTime ? { startTime: overlay.startTime } : {}),
-			...(typeof durationMs === 'number' ? { durationMs } : {}),
-			...(childTokens ? { childTokens } : {}),
-			...(overlay?.childModelId ? { childModelId: overlay.childModelId } : {}),
-			...(overlay?.retryInfo ? { retryInfo: overlay.retryInfo } : {}),
-			toolInput: overlay?.toolInput ?? JSON.stringify(rawInput),
-			rawInput,
-			isRunning: status === 'running',
-			...(overlay?.normalizedEntry
-				? { normalizedEntry: overlay.normalizedEntry }
-				: part.normalizedEntry
-					? { normalizedEntry: part.normalizedEntry }
-					: {}),
-		};
-	};
+	const passthrough: RenderNode[] = [];
 	for (const message of Object.values(session.userMessagesById)) {
 		if (typeof message.id === 'string' && !runtimeUserMessageIds.has(message.id)) {
-			if (compactToolOutputs) continue;
 			const compaction = getCompactionView(message.id, session);
 			const renderUser: RenderUserMessage = {
 				...message,
@@ -206,7 +110,7 @@ export function projectRuntimeMessages(
 	}
 	const userMessagesById = session.userMessagesById;
 
-	const runtimeProjected: RenderMessage[] = [];
+	const runtimeProjected: RenderNode[] = [];
 	const seenMessageIds = new Set<string>();
 	const projectParts = (
 		messageId: string,
@@ -240,11 +144,6 @@ export function projectRuntimeMessages(
 					timestamp,
 					...(record?.agent ? { agent: record.agent } : {}),
 				});
-				const anchoredSubtasks = subtasksByParentMessageId.get(messageId);
-				if (anchoredSubtasks?.length) {
-					runtimeProjected.push(...anchoredSubtasks);
-					subtasksByParentMessageId.delete(messageId);
-				}
 				continue;
 			}
 
@@ -267,13 +166,6 @@ export function projectRuntimeMessages(
 			}
 
 			if (part.type === 'tool' && part.callId) {
-				const derivedSubtask = createDerivedSubtask(part, timestamp, messageId);
-				if (derivedSubtask) {
-					const existing = subtasksByParentMessageId.get(messageId);
-					if (existing) existing.push(derivedSubtask);
-					else subtasksByParentMessageId.set(messageId, [derivedSubtask]);
-					continue;
-				}
 				const isRunning =
 					!partCompleted &&
 					(part.state?.status === 'pending' ||
@@ -287,16 +179,12 @@ export function projectRuntimeMessages(
 					toolUseId: part.callId,
 					toolInput: JSON.stringify(part.state?.input || {}),
 					rawInput: (part.state?.input as Record<string, unknown>) ?? {},
-					...(compactToolOutputs ? {} : { streamingOutput: part.state?.output }),
+					streamingOutput: part.state?.output,
 					isRunning,
 					timestamp,
 					...(part.state?.status ? { status: part.state.status } : {}),
 					...(part.state?.title ? { title: part.state.title } : {}),
-					...(compactToolOutputs
-						? {}
-						: part.state?.output
-							? { resultContent: part.state.output }
-							: {}),
+					...(part.state?.output ? { resultContent: part.state.output } : {}),
 					...(part.state?.metadata
 						? { metadata: part.state.metadata as Record<string, unknown> }
 						: {}),
@@ -304,39 +192,31 @@ export function projectRuntimeMessages(
 				});
 			}
 		}
-
-		const anchoredSubtasks = subtasksByParentMessageId.get(messageId);
-		if (anchoredSubtasks?.length) {
-			runtimeProjected.push(...anchoredSubtasks);
-			subtasksByParentMessageId.delete(messageId);
-		}
 	};
 
 	for (const record of session.runtimeMessageRecords) {
 		if (record.role === 'user') {
-			if (!compactToolOutputs) {
-				const user = userMessagesById[record.id];
-				const compaction = getCompactionView(record.id, session);
-				const fallbackContent = getUserMessageText(record.id, session);
-				if (user?.id || compaction || fallbackContent) {
-					const renderUser = {
-						id: record.id,
-						type: 'user',
-						content: user?.content || fallbackContent,
-						model: user?.model || record.modelId || session.model || 'default',
-						timestamp:
-							user?.timestamp ||
-							(typeof record.createdAt === 'number'
-								? new Date(record.createdAt).toISOString()
-								: '1970-01-01T00:00:00.000Z'),
-						kind: 'user',
-						...(user?.agent ? { agent: user.agent } : {}),
-						...(user?.attachments ? { attachments: user.attachments } : {}),
-						...(user?.normalizedEntry ? { normalizedEntry: user.normalizedEntry } : {}),
-						...(compaction ? { compaction } : {}),
-					} satisfies RenderUserMessage;
-					runtimeProjected.push(renderUser);
-				}
+			const user = userMessagesById[record.id];
+			const compaction = getCompactionView(record.id, session);
+			const fallbackContent = getUserMessageText(record.id, session);
+			if (user?.id || compaction || fallbackContent) {
+				const renderUser = {
+					id: record.id,
+					type: 'user',
+					content: user?.content || fallbackContent,
+					model: user?.model || record.modelId || session.model || 'default',
+					timestamp:
+						user?.timestamp ||
+						(typeof record.createdAt === 'number'
+							? new Date(record.createdAt).toISOString()
+							: '1970-01-01T00:00:00.000Z'),
+					kind: 'user',
+					...(user?.agent ? { agent: user.agent } : {}),
+					...(user?.attachments ? { attachments: user.attachments } : {}),
+					...(user?.normalizedEntry ? { normalizedEntry: user.normalizedEntry } : {}),
+					...(compaction ? { compaction } : {}),
+				} satisfies RenderUserMessage;
+				runtimeProjected.push(renderUser);
 			}
 			seenMessageIds.add(record.id);
 			continue;
@@ -353,20 +233,132 @@ export function projectRuntimeMessages(
 	// Preserve store arrival order. Live streaming can emit multiple parts with the
 	// same timestamps, and sorting here reorders tool/text blocks versus the order
 	// established by runtimeMessageRecords and runtimeMessagePartsById.
-	const result = [...passthrough, ...runtimeProjected];
+	return [...passthrough, ...runtimeProjected];
+}
 
-	if (excludeTerminalAssistantText) {
-		for (let i = result.length - 1; i >= 0; i--) {
-			const message = result[i];
-			if (message.kind === 'assistant') {
-				result.splice(i, 1);
-				break;
-			}
-			if (message.kind !== 'thinking') break;
+/** Compute diff stats from a child session's changedFiles — pure, no hooks. */
+function getChildDiffStats(
+	state: ChatState,
+	childSessionId: string | undefined,
+): { added: number; removed: number } {
+	if (!childSessionId) return { added: 0, removed: 0 };
+	const childSession = state.sessionsById[childSessionId];
+	if (!childSession) return { added: 0, removed: 0 };
+	return childSession.changedFiles.reduce(
+		(acc, file) => ({
+			added: acc.added + (file.linesAdded ?? 0),
+			removed: acc.removed + (file.linesRemoved ?? 0),
+		}),
+		{ added: 0, removed: 0 },
+	);
+}
+
+/**
+ * Flat projection of a single session's messages into RenderNode[].
+ * Task tool_use nodes are materialized as task_card with childSessionId
+ * and lightweight childSummary — NO recursive child transcript embedding.
+ * Child session content is rendered by React components (TaskCardItem)
+ * that subscribe to child sessions independently via useChildSessionMessages().
+ */
+export function projectSessionMessages(
+	state: ChatState,
+	sessionId: string | undefined,
+): RenderNode[] {
+	if (!sessionId) return EMPTY_MESSAGES;
+	const session = state.sessionsById[sessionId];
+	if (!session) return EMPTY_MESSAGES;
+
+	const baseItems = projectRuntimeMessages(session);
+
+	// Echo suppression: after a completed task_card, the LLM typically emits
+	// an assistant text that paraphrases the task result. Since the task card
+	// already shows the result, this echo is redundant. We skip the first
+	// assistant text after a completed task_card. Thinking blocks pass through.
+	const items: RenderNode[] = [];
+	let afterCompletedTask = false;
+	for (const item of baseItems) {
+		if (item.kind === 'tool_use' && (item.toolName || '').toLowerCase() === 'task') {
+			const toolCallId = item.toolUseId;
+			const taskInput = item.rawInput ?? {};
+			const childSessionId =
+				typeof item.metadata?.sessionId === 'string' ? item.metadata.sessionId : undefined;
+			const childSessionState = childSessionId ? state.sessionsById[childSessionId] : undefined;
+			const derivedTaskStatus: RenderTaskCardNode['status'] = (() => {
+				const taskStatus = item.status as RenderToolUseMessage['status'] | undefined;
+				if (taskStatus === 'error') return 'error';
+				if (taskStatus === 'completed') return 'completed';
+				if (taskStatus === 'cancelled') return 'cancelled';
+				if (childSessionState?.status === 'Stopped' && !childSessionState.isProcessing) {
+					return 'cancelled';
+				}
+				if (taskStatus === 'pending') return 'pending';
+				return 'running';
+			})();
+			const nestedChildCount = childSessionId
+				? (state.childSessionIdsByParentId[childSessionId]?.length ?? 0)
+				: 0;
+			const diffStats = getChildDiffStats(state, childSessionId);
+			const metadataModel =
+				item.metadata && typeof item.metadata.model === 'object'
+					? (item.metadata.model as { providerID?: string; modelID?: string })
+					: undefined;
+			const childModelId =
+				metadataModel?.providerID && metadataModel?.modelID
+					? `${metadataModel.providerID}/${metadataModel.modelID}`
+					: childSessionState?.model;
+			const result =
+				item.status === 'completed' && typeof item.resultContent === 'string'
+					? item.resultContent.trim()
+					: undefined;
+			const childTokens = childSessionId ? aggregateSessionTokens(childSessionState) : undefined;
+			const node: RenderTaskCardNode = {
+				kind: 'task_card',
+				id: toolCallId,
+				toolCallId,
+				parentSessionId: sessionId,
+				parentMessageId: undefined,
+				timestamp: item.timestamp,
+				status: derivedTaskStatus,
+				agent: typeof taskInput.subagent_type === 'string' ? taskInput.subagent_type : undefined,
+				description: typeof taskInput.description === 'string' ? taskInput.description : undefined,
+				prompt: typeof taskInput.prompt === 'string' ? taskInput.prompt : undefined,
+				result,
+				startTime: item.timestamp,
+				childSessionId,
+				childSummary: {
+					title:
+						childSessionState?.title ??
+						(typeof taskInput.description === 'string' ? taskInput.description : undefined),
+					modelId: childModelId,
+					durationMs: childTokens?.durationMs,
+					tokens: childTokens,
+					diffStats,
+					childCount: nestedChildCount,
+				},
+			};
+			items.push(node);
+			if (derivedTaskStatus === 'completed') afterCompletedTask = true;
+			continue;
 		}
+
+		// Suppress the first assistant text after a completed task card (LLM echo).
+		// Thinking blocks between the task card and the echo pass through.
+		if (afterCompletedTask) {
+			if (item.kind === 'thinking') {
+				items.push(item);
+				continue;
+			}
+			if (item.kind === 'assistant') {
+				afterCompletedTask = false;
+				continue;
+			}
+			afterCompletedTask = false;
+		}
+
+		items.push(item);
 	}
 
-	return result;
+	return items.length > 0 ? items : EMPTY_MESSAGES;
 }
 
 function getActiveSession(state: ChatState): ChatSession | undefined {
@@ -376,10 +368,16 @@ function getActiveSession(state: ChatState): ChatSession | undefined {
 }
 
 export const useSessionContextMetrics = () => {
-	const session = useChatStore((state: ChatState) => getActiveSession(state));
+	const activeSessionId = useChatStore((state: ChatState) => state.activeSessionId);
+	const lastActive = useChatStore((state: ChatState) =>
+		activeSessionId ? state.sessionsById[activeSessionId]?.lastActive : 0,
+	);
 	const contextLimit = useModelContextWindow();
 
 	return useMemo(() => {
+		void lastActive;
+		const state = useChatStore.getState();
+		const session = state.sessionsById[activeSessionId ?? ''];
 		if (!session) {
 			return {
 				context: undefined,
@@ -430,13 +428,19 @@ export const useSessionContextMetrics = () => {
 				usage: contextLimit > 0 ? Math.min((total / contextLimit) * 100, 100) : null,
 			},
 		};
-	}, [session, contextLimit]);
+	}, [activeSessionId, lastActive, contextLimit]);
 };
 
 export const useDerivedSessionStats = () => {
-	const session = useChatStore((state: ChatState) => getActiveSession(state));
+	const activeSessionId = useChatStore((state: ChatState) => state.activeSessionId);
+	const lastActive = useChatStore((state: ChatState) =>
+		activeSessionId ? state.sessionsById[activeSessionId]?.lastActive : 0,
+	);
 
 	return useMemo(() => {
+		void lastActive;
+		const state = useChatStore.getState();
+		const session = state.sessionsById[activeSessionId ?? ''];
 		if (!session) {
 			return {
 				requestCount: 0,
@@ -474,8 +478,8 @@ export const useDerivedSessionStats = () => {
 		}
 
 		let subagentCount = 0;
-		for (const message of projectRuntimeMessages(session)) {
-			if (message.kind === 'subtask') {
+		for (const item of projectSessionMessages(state, session.id)) {
+			if (item.kind === 'task_card') {
 				subagentCount += 1;
 			}
 		}
@@ -485,24 +489,121 @@ export const useDerivedSessionStats = () => {
 			totalDuration,
 			subagentCount,
 		};
-	}, [session]);
+	}, [activeSessionId, lastActive]);
 };
 
 // ============================================
 // Chat Store Selectors
 // ============================================
 
-/** Select messages array for active session */
+/**
+ * Lightweight structural comparator for projected message arrays.
+ * Checks length, IDs, kinds, timestamps, and subtask-specific fields
+ * (status, tokens, diffStats) — enough to detect meaningful changes
+ * without the cost of a full deep-equal traversal.
+ */
+function messagesStructurallyEqual(prev: RenderNode[], next: RenderNode[]): boolean {
+	if (prev.length !== next.length) return false;
+	for (let i = 0; i < prev.length; i++) {
+		const p = prev[i];
+		const n = next[i];
+		if (p.id !== n.id || p.kind !== n.kind || p.timestamp !== n.timestamp) return false;
+		// For subtask nodes, check fields that change during streaming
+		if (p.kind === 'task_card' && n.kind === 'task_card') {
+			const pt = p as RenderTaskCardNode;
+			const nt = n as RenderTaskCardNode;
+			const ps = pt.childSummary;
+			const ns = nt.childSummary;
+			if (
+				pt.status !== nt.status ||
+				ps.tokens?.total !== ns.tokens?.total ||
+				ps.diffStats.added !== ns.diffStats.added ||
+				ps.diffStats.removed !== ns.diffStats.removed ||
+				ps.childCount !== ns.childCount ||
+				pt.result !== nt.result
+			) {
+				return false;
+			}
+		}
+		// For assistant messages, check streaming state and content length
+		if (p.kind === 'assistant' && n.kind === 'assistant') {
+			const pa = p as RenderAssistantMessage;
+			const na = n as RenderAssistantMessage;
+			if (pa.isStreaming !== na.isStreaming || pa.content.length !== na.content.length) {
+				return false;
+			}
+		}
+		// For tool_use, check running state
+		if (p.kind === 'tool_use' && n.kind === 'tool_use') {
+			const pt = p as RenderToolUseMessage;
+			const nt = n as RenderToolUseMessage;
+			if (pt.isRunning !== nt.isRunning || pt.status !== nt.status) return false;
+		}
+	}
+	return true;
+}
+
+/** Select messages array for active session.
+ * Subscribes to session's lastActive — re-renders when the session changes.
+ * No tree-wide subscription: child sessions are rendered by their own components. */
 export const useMessages = () => {
-	const session = useChatStore((state: ChatState) => getActiveSession(state));
-	return useMemo(() => projectRuntimeMessages(session), [session]);
+	const activeSessionId = useChatStore((state: ChatState) => state.activeSessionId);
+	const lastActive = useChatStore((state: ChatState) =>
+		activeSessionId ? state.sessionsById[activeSessionId]?.lastActive : 0,
+	);
+	const prevRef = useRef<RenderNode[]>(EMPTY_MESSAGES);
+
+	return useMemo(() => {
+		void lastActive;
+		const state = useChatStore.getState();
+		const next = projectSessionMessages(state, activeSessionId);
+		if (messagesStructurallyEqual(prevRef.current, next)) return prevRef.current;
+		prevRef.current = next;
+		return next;
+	}, [activeSessionId, lastActive]);
 };
 
 /** Select whether active session has any messages (lightweight — avoids subscribing to full array) */
 export const useHasMessages = () => {
-	const session = useChatStore((state: ChatState) => getActiveSession(state));
-	return useMemo(() => projectRuntimeMessages(session).length > 0, [session]);
+	const activeSessionId = useChatStore((state: ChatState) => state.activeSessionId);
+	const lastActive = useChatStore((state: ChatState) =>
+		activeSessionId ? state.sessionsById[activeSessionId]?.lastActive : 0,
+	);
+	return useMemo(() => {
+		void lastActive;
+		const state = useChatStore.getState();
+		const session = state.sessionsById[activeSessionId ?? ''];
+		return projectRuntimeMessages(session).length > 0;
+	}, [activeSessionId, lastActive]);
 };
+
+/**
+ * Subscribe to a child session's projected messages independently.
+ * Each TaskCardItem calls this hook with its childSessionId — the component
+ * re-renders only when that specific child session changes, not the whole tree.
+ */
+export const useChildSessionMessages = (childSessionId: string | undefined) => {
+	const lastActive = useChatStore((state: ChatState) =>
+		childSessionId ? state.sessionsById[childSessionId]?.lastActive : 0,
+	);
+	const prevRef = useRef<RenderNode[]>(EMPTY_MESSAGES);
+
+	return useMemo(() => {
+		void lastActive;
+		if (!childSessionId) return EMPTY_MESSAGES;
+		const state = useChatStore.getState();
+		const next = projectSessionMessages(state, childSessionId);
+		if (messagesStructurallyEqual(prevRef.current, next)) return prevRef.current;
+		prevRef.current = next;
+		return next;
+	}, [childSessionId, lastActive]);
+};
+
+/** Subscribe to a child session's title independently. */
+export const useChildSessionTitle = (childSessionId: string | undefined) =>
+	useChatStore((state: ChatState) =>
+		childSessionId ? state.sessionsById[childSessionId]?.title : undefined,
+	);
 
 /** Select processing state for active session */
 export const useIsProcessing = () =>
@@ -553,37 +654,33 @@ export const useStoreInput = () =>
 /** Select chat actions only (stable references) */
 export const useChatActions = () => useChatStore((state: ChatState) => state.actions);
 
-/** Aggregate subagent token totals from subtask messages in active session.
- * Memoized by messages ref to avoid O(N) scan on every store change. */
-const subagentTotalsCache = { messages: null as RenderMessage[] | null, result: 0 };
+/** Aggregate subagent token totals from task_card summaries.
+ * Each TaskCardItem independently renders its child — we only need
+ * the top-level childSummary.tokens for the parent session stats. */
 export const useSubagentTokenTotals = () => {
-	const session = useChatStore((state: ChatState) => getActiveSession(state));
-	const sessionsById = useChatStore((state: ChatState) => state.sessionsById);
+	const activeSessionId = useChatStore((state: ChatState) => state.activeSessionId);
+	const lastActive = useChatStore((state: ChatState) =>
+		activeSessionId ? state.sessionsById[activeSessionId]?.lastActive : 0,
+	);
+	const prevRef = useRef(0);
+
 	return useMemo(() => {
-		const messages = projectRuntimeMessages(session);
-		if (messages === subagentTotalsCache.messages) return subagentTotalsCache.result;
-		subagentTotalsCache.messages = messages;
+		void lastActive;
+		const state = useChatStore.getState();
+		const items = projectSessionMessages(state, activeSessionId);
 		const usageValues: Array<number | undefined> = [];
-		for (const msg of messages) {
-			if (msg.kind === 'subtask') {
-				const ct = msg.childTokens;
-				if (ct?.total) {
-					usageValues.push(ct.total);
-					continue;
-				}
-				const childSessionId = (msg as { childSessionId?: string }).childSessionId;
-				if (!childSessionId) continue;
-				const childSession = sessionsById[childSessionId];
-				if (!childSession) continue;
-				for (const turn of Object.values(childSession.turnTokens)) {
-					usageValues.push(turn.usage);
-				}
+		for (const msg of items) {
+			if (msg.kind !== 'task_card') continue;
+			const node = msg as RenderTaskCardNode;
+			if (node.childSummary.tokens?.total) {
+				usageValues.push(node.childSummary.tokens.total);
 			}
 		}
-		const total = sumUsageValues(usageValues);
-		subagentTotalsCache.result = total;
-		return total;
-	}, [session, sessionsById]);
+		const next = sumUsageValues(usageValues);
+		if (next === prevRef.current) return prevRef.current;
+		prevRef.current = next;
+		return next;
+	}, [activeSessionId, lastActive]);
 };
 
 /** Select active model ID derived from the latest assistant record with a model. */
@@ -615,8 +712,15 @@ export const useMessageTurnTokens = (messageId: string | undefined) =>
 
 /** Whether the last message is an assistant message that is actively streaming */
 export const useIsLastMessageStreaming = () => {
-	const session = useChatStore((state: ChatState) => getActiveSession(state));
+	const activeSessionId = useChatStore((state: ChatState) => state.activeSessionId);
+	const lastActive = useChatStore((state: ChatState) =>
+		activeSessionId ? state.sessionsById[activeSessionId]?.lastActive : 0,
+	);
+
 	return useMemo(() => {
+		void lastActive;
+		const state = useChatStore.getState();
+		const session = state.sessionsById[activeSessionId ?? ''];
 		if (!session || !session.isProcessing) return false;
 		const msgs = projectRuntimeMessages(session);
 		for (let i = msgs.length - 1; i >= 0; i--) {
@@ -627,7 +731,7 @@ export const useIsLastMessageStreaming = () => {
 			if (msg.kind === 'user') return false;
 		}
 		return false;
-	}, [session]);
+	}, [activeSessionId, lastActive]);
 };
 
 /** Context usage percentage, rounded to 1% to reduce rerender frequency */
@@ -1001,3 +1105,134 @@ export const useSessionVariant = () => {
 /** Reactive selector for the active session's auto-accept permissions toggle. */
 export const useSessionAutoAccept = () =>
 	useChatStore((state: ChatState) => getActiveSession(state)?.autoAccept ?? false);
+
+// ============================================
+// Relation Selectors
+// ============================================
+
+const EMPTY_CHILDREN: string[] = [];
+
+/** Get direct child session IDs for a given parent session. */
+export const useSessionChildren = (sessionId: string | undefined) =>
+	useChatStore((state: ChatState) =>
+		sessionId ? (state.childSessionIdsByParentId[sessionId] ?? EMPTY_CHILDREN) : EMPTY_CHILDREN,
+	);
+
+/** Get the child session ID spawned by a task tool call. */
+export const useTaskChildSession = (toolCallId: string | undefined) =>
+	useChatStore((state: ChatState) => {
+		if (!toolCallId) return undefined;
+		for (const session of Object.values(state.sessionsById)) {
+			for (const parts of Object.values(session.runtimeMessagePartsById)) {
+				for (const part of parts) {
+					if (part.type !== 'tool' || part.callId !== toolCallId) continue;
+					const metadata =
+						part.state?.metadata && typeof part.state.metadata === 'object'
+							? (part.state.metadata as { sessionId?: string })
+							: undefined;
+					if (typeof metadata?.sessionId === 'string') {
+						return metadata.sessionId;
+					}
+				}
+			}
+		}
+		return undefined;
+	});
+
+/** Get the originating tool call ID for a child session. */
+export const useOriginatingToolCall = (sessionId: string | undefined) =>
+	useChatStore((state: ChatState) =>
+		sessionId ? state.originatingToolCallBySessionId[sessionId] : undefined,
+	);
+
+/** Get descendant count for a session from derived relations. */
+export const useDescendantCount = (sessionId: string | undefined) =>
+	useChatStore((state: ChatState) => (sessionId ? countSessionDescendants(state, sessionId) : 0));
+
+/** Get all descendants of a session (BFS traversal over store graph). */
+export function useSessionDescendants(sessionId: string | undefined): string[] {
+	return useChatStore(
+		useCallback(
+			(state: ChatState) => {
+				if (!sessionId) return EMPTY_CHILDREN;
+				const result: string[] = [];
+				const queue = [sessionId];
+				const visited = new Set<string>();
+				visited.add(sessionId);
+				let head = 0;
+				while (head < queue.length) {
+					const current = queue[head++];
+					if (!current) break;
+					const children = state.childSessionIdsByParentId[current];
+					if (!children) continue;
+					for (const childId of children) {
+						if (visited.has(childId)) continue;
+						visited.add(childId);
+						result.push(childId);
+						queue.push(childId);
+					}
+				}
+				return result.length > 0 ? result : EMPTY_CHILDREN;
+			},
+			[sessionId],
+		),
+	);
+}
+
+/** Get lineage (ancestry chain) from a session up to root. */
+export function useSessionLineage(sessionId: string | undefined): string[] {
+	return useChatStore(
+		useCallback(
+			(state: ChatState) => {
+				if (!sessionId) return EMPTY_CHILDREN;
+				const lineage: string[] = [];
+				let current = sessionId;
+				let depth = 0;
+				while (depth < 50) {
+					const parentId = state.sessionsById[current]?.parentSessionId;
+					if (!parentId) break;
+					lineage.push(parentId);
+					current = parentId;
+					depth++;
+				}
+				return lineage.length > 0 ? lineage : EMPTY_CHILDREN;
+			},
+			[sessionId],
+		),
+	);
+}
+
+function aggregateSessionTokens(session: ChatSession | undefined): TokenUsage | undefined {
+	if (!session) return undefined;
+	let input = 0;
+	let output = 0;
+	let cacheRead = 0;
+	let total = 0;
+	let durationMs = 0;
+	for (const usage of Object.values(session.turnTokens)) {
+		input += usage.input ?? 0;
+		output += usage.output ?? 0;
+		cacheRead += usage.cacheRead ?? 0;
+		total += usage.total ?? usage.usage ?? 0;
+		durationMs += usage.durationMs ?? 0;
+	}
+	if (input === 0 && output === 0 && total === 0 && cacheRead === 0 && durationMs === 0) {
+		return undefined;
+	}
+	return { input, output, total, cacheRead, durationMs };
+}
+
+function countSessionDescendants(state: ChatState, sessionId: string): number {
+	let count = 0;
+	const queue = [...(state.childSessionIdsByParentId[sessionId] ?? [])];
+	const visited = new Set<string>();
+	let head = 0;
+	while (head < queue.length) {
+		const current = queue[head++];
+		if (!current || visited.has(current)) continue;
+		visited.add(current);
+		count += 1;
+		queue.push(...(state.childSessionIdsByParentId[current] ?? []));
+	}
+	return count;
+}

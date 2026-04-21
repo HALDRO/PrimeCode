@@ -10,14 +10,14 @@ vi.mock('../components/chat/SimpleTool', () => ({
 	groupToolMessages: (msgs: unknown[]) => msgs,
 }));
 
-import type { ChangedFile, RenderMessage } from '../store';
+import type { ChangedFile, RenderNode } from '../store';
 import { groupMessagesIntoSections } from './groupSections';
 
-type Message = RenderMessage;
+type Message = RenderNode;
 
 // --- Helpers ---
 
-const userMsg = (id: string, content = 'hello'): RenderMessage =>
+const userMsg = (id: string, content = 'hello'): RenderNode =>
 	({
 		kind: 'user',
 		message: undefined as never,
@@ -25,9 +25,9 @@ const userMsg = (id: string, content = 'hello'): RenderMessage =>
 		id,
 		timestamp: new Date().toISOString(),
 		content,
-	}) as RenderMessage;
+	}) as RenderNode;
 
-const assistantMsg = (id: string, content = 'reply'): RenderMessage =>
+const assistantMsg = (id: string, content = 'reply'): RenderNode =>
 	({
 		kind: 'assistant',
 		type: 'assistant',
@@ -35,9 +35,9 @@ const assistantMsg = (id: string, content = 'reply'): RenderMessage =>
 		partId: id,
 		timestamp: new Date().toISOString(),
 		content,
-	}) as RenderMessage;
+	}) as RenderNode;
 
-const hiddenMsg = (id: string): RenderMessage =>
+const hiddenMsg = (id: string): RenderNode =>
 	({
 		kind: 'assistant',
 		type: 'assistant',
@@ -46,9 +46,9 @@ const hiddenMsg = (id: string): RenderMessage =>
 		timestamp: new Date().toISOString(),
 		content: 'hidden',
 		hidden: true,
-	}) as RenderMessage;
+	}) as RenderNode;
 
-const toolUseMsg = (id: string): RenderMessage =>
+const toolUseMsg = (id: string): RenderNode =>
 	({
 		kind: 'tool_use',
 		type: 'tool_use',
@@ -58,7 +58,25 @@ const toolUseMsg = (id: string): RenderMessage =>
 		toolUseId: `tu-${id}`,
 		toolInput: '{}',
 		rawInput: {},
-	}) as RenderMessage;
+	}) as RenderNode;
+
+const taskCardMsg = (id: string, description = 'nested task'): RenderNode =>
+	({
+		kind: 'task_card',
+		id,
+		toolCallId: id,
+		parentSessionId: 'root',
+		timestamp: new Date().toISOString(),
+		agent: 'general',
+		prompt: 'do nested work',
+		description,
+		status: 'completed',
+		childSummary: {
+			description,
+			childCount: 0,
+			diffStats: { added: 0, removed: 0 },
+		},
+	}) as RenderNode;
 
 // --- Tests ---
 
@@ -122,6 +140,16 @@ describe('groupMessagesIntoSections', () => {
 			expect(result[0].userMessage.id).toBe('u1');
 			// a0 is prepended as an orphan response, a1 is the normal response
 			expect(result[0].responses).toHaveLength(2);
+		});
+
+		it('keeps nested task-card responses inside the owning user section', () => {
+			const msgs = [userMsg('u1'), taskCardMsg('s1'), taskCardMsg('s2')];
+			const result = groupMessagesIntoSections(msgs, [], null);
+
+			expect(result).toHaveLength(1);
+			expect(result[0].responses).toHaveLength(2);
+			expect((result[0].responses[0] as Message).kind).toBe('task_card');
+			expect((result[0].responses[1] as Message).kind).toBe('task_card');
 		});
 	});
 

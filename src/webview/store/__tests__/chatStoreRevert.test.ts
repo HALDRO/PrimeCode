@@ -412,7 +412,7 @@ describe('chatStore revert/unrevert state', () => {
 			const session = getSession('s1');
 			// Should keep messages before u2 only
 			const rendered = projectRuntimeMessages(session);
-			expect(rendered).toHaveLength(1);
+			expect(rendered.filter(message => message.kind === 'user')).toHaveLength(1);
 			expect(rendered[0].id).toBe('u1');
 		});
 
@@ -422,7 +422,9 @@ describe('chatStore revert/unrevert state', () => {
 			const { actions } = useChatStore.getState();
 			actions.clearRevertedMessages('s1');
 
-			expect(projectRuntimeMessages(getSession('s1'))).toHaveLength(2);
+			expect(
+				projectRuntimeMessages(getSession('s1')).filter(message => message.kind === 'user'),
+			).toHaveLength(1);
 		});
 
 		it('should clear revertedFromMessageId when messageId not found', () => {
@@ -449,8 +451,10 @@ describe('chatStore revert/unrevert state', () => {
 
 			const session = getSession('s1');
 			const rendered = projectRuntimeMessages(session);
-			expect(rendered).toHaveLength(2);
-			expect(rendered.map(m => m.id)).toEqual(['u1', 'u2']);
+			expect(rendered.filter(message => message.kind === 'user').map(m => m.id)).toEqual([
+				'u1',
+				'u2',
+			]);
 		});
 
 		it('should clear revertedFromMessageId', () => {

@@ -4,7 +4,6 @@ import type {
 	ConversationIndexEntry,
 	OpenCodeProviderData,
 	SessionEventPayload,
-	SessionSubtaskPayload,
 	SessionTodoItem,
 	SessionUserMessagePayload,
 } from '../../common';
@@ -18,13 +17,7 @@ import {
 import { IMPROVE_PROMPT_DEFAULT_TEMPLATE } from '../../common/promptImprover';
 import type { CommandOf, QueuedMessageData, WebviewCommand } from '../../common/protocol';
 import { parseSessionTodoItem, parseSessionUpdatedRuntimePayload } from '../../common/schemas';
-import {
-	addTimestamp,
-	computeTurnUsage,
-	getBoundsDurationMs,
-	getCompletedDurationMs,
-	sumUsageValues,
-} from '../../common/tokenStats';
+import { computeTurnUsage, getCompletedDurationMs } from '../../common/tokenStats';
 import {
 	computeDiffLineStats,
 	extractPatchFilePaths,
@@ -42,7 +35,6 @@ import type { HandlerContext, WebviewMessageHandler } from './types';
 
 type CanonicalSdkMessage = Parameters<typeof mapSdkMessageToRecord>[0];
 type CanonicalSdkPart = Parameters<typeof mapSdkPartToPayload>[0];
-type ReplayChildTokens = { input: number; output: number; total: number; cacheRead: number };
 type ReplayTurnTokens = {
 	inputTokens: number;
 	outputTokens: number;
@@ -482,14 +474,20 @@ export class SessionHandler implements WebviewMessageHandler {
 		const entries = messagesResult.data ?? [];
 		const explicitLinks: Map<
 			string,
-			{ childSessionId: string; agent: string; prompt: string; description: string }
+			{
+				childSessionId: string;
+				agent: string;
+				prompt: string;
+				description: string;
+				result?: string;
+			}
 		> = this.extractExplicitTaskLinksFromEntries(entries, sessionId);
 		const parentTurnTokens = this.buildTurnTokenMap(entries);
 
 		const childSnapshots = new Map<
 			string,
 			{
-				messages: Array<SessionUserMessagePayload['message'] | SessionSubtaskPayload['subtask']>;
+				messages: SessionUserMessagePayload['message'][];
 				runtimeMessageRecords: import('../../common').SessionMessageRecordPayload['message'][];
 				runtimeMessageParts: import('../../common').SessionMessagePartPayload['part'][];
 				changedFiles: Array<{
@@ -514,12 +512,6 @@ export class SessionHandler implements WebviewMessageHandler {
 				restoreCommits: CommitInfo[];
 			}
 		>();
-		const childDurations = new Map<string, number>();
-		const childTokensMap = new Map<
-			string,
-			{ input: number; output: number; total: number; cacheRead: number }
-		>();
-		const childModelIdMap = new Map<string, string>();
 		const visitedChildSessionIds = new Set<string>();
 		const pendingChildSessionIds = new Set<string>(
 			Array.from(explicitLinks.values(), link => link.childSessionId),
@@ -535,7 +527,6 @@ export class SessionHandler implements WebviewMessageHandler {
 			if (visitedChildSessionIds.has(nextChildSessionId)) continue;
 			visitedChildSessionIds.add(nextChildSessionId);
 
-			const childSession = allSessions.find(session => session.id === nextChildSessionId);
 			const childMessagesResult = await sdkClient.session.messages({
 				sessionID: nextChildSessionId,
 				directory: config.workspaceRoot,
@@ -564,22 +555,7 @@ export class SessionHandler implements WebviewMessageHandler {
 						pendingChildSessionIds.add(nestedChild.id);
 					}
 				}
-				const canonicalDuration = this.computeCanonicalSessionDuration(childEntries, {
-					fallbackCreatedAt: childSession?.created,
-					fallbackUpdatedAt: childSession?.lastModified,
-				});
-				if (typeof canonicalDuration === 'number' && canonicalDuration > 0) {
-					childDurations.set(nextChildSessionId, canonicalDuration);
-				}
 				const childTurnTokens = this.buildTurnTokenMap(childEntries);
-				const childTotals = this.computeCanonicalChildTokenTotals(childTurnTokens);
-				if (childTotals) {
-					childTokensMap.set(nextChildSessionId, childTotals);
-				}
-				const childModelId = this.extractCanonicalModelId(childEntries);
-				if (childModelId) {
-					childModelIdMap.set(nextChildSessionId, childModelId);
-				}
 				childSnapshots.set(
 					nextChildSessionId,
 					this.buildCanonicalSessionSnapshot(nextChildSessionId, childEntries, childTurnTokens),
@@ -632,34 +608,12 @@ export class SessionHandler implements WebviewMessageHandler {
 		}
 
 		for (const [toolUseId, link] of explicitLinks) {
-			const childSessionId = link.childSessionId;
-			const childTokens = childTokensMap.get(childSessionId);
-			const durationMs = childDurations.get(childSessionId);
-			const childModelId = childModelIdMap.get(childSessionId);
-			if (!childTokens && !durationMs && !childModelId) continue;
-
-			this.context.bridge.emit(sessionId, 'subtask', {
-				subtask: {
-					id: toolUseId,
-					agent: link.agent,
-					prompt: link.prompt,
-					description: link.description,
-					parentSessionId: sessionId,
-					childSessionId,
-					status: 'completed',
-					...(childTokens
-						? {
-								childTokens: {
-									...childTokens,
-									...(typeof durationMs === 'number' && durationMs > 0 ? { durationMs } : {}),
-								},
-							}
-						: {}),
-					...(typeof durationMs === 'number' && durationMs > 0 ? { durationMs } : {}),
-					...(childModelId ? { childModelId } : {}),
-					timestamp: new Date().toISOString(),
-				},
-			});
+			this.context.sessionGraph.registerChild(
+				link.childSessionId,
+				sessionId,
+				toolUseId,
+				'restored',
+			);
 		}
 
 		if (
@@ -773,10 +727,25 @@ export class SessionHandler implements WebviewMessageHandler {
 	private extractExplicitTaskLinksFromEntries(
 		entries: Array<{ info: CanonicalSdkMessage; parts: CanonicalSdkPart[] }>,
 		parentSessionId: string,
-	): Map<string, { childSessionId: string; agent: string; prompt: string; description: string }> {
+	): Map<
+		string,
+		{
+			childSessionId: string;
+			agent: string;
+			prompt: string;
+			description: string;
+			result?: string;
+		}
+	> {
 		const explicitLinks = new Map<
 			string,
-			{ childSessionId: string; agent: string; prompt: string; description: string }
+			{
+				childSessionId: string;
+				agent: string;
+				prompt: string;
+				description: string;
+				result?: string;
+			}
 		>();
 		for (const entry of entries) {
 			for (const part of entry.parts) {
@@ -797,6 +766,8 @@ export class SessionHandler implements WebviewMessageHandler {
 					state?.input && typeof state.input === 'object'
 						? (state.input as Record<string, unknown>)
 						: undefined;
+				const toolOutput = typeof state?.output === 'string' ? state.output : undefined;
+				const result = toolOutput ? extractCanonicalTaskResult(toolOutput) : undefined;
 
 				explicitLinks.set(toolUseId, {
 					childSessionId,
@@ -804,84 +775,12 @@ export class SessionHandler implements WebviewMessageHandler {
 						typeof toolInput?.subagent_type === 'string' ? toolInput.subagent_type : 'subagent',
 					prompt: typeof toolInput?.prompt === 'string' ? toolInput.prompt : '',
 					description: typeof toolInput?.description === 'string' ? toolInput.description : '',
+					...(result ? { result } : {}),
 				});
 				this.context.sessionGraph.registerChild(childSessionId, parentSessionId, toolUseId);
 			}
 		}
 		return explicitLinks;
-	}
-
-	private computeCanonicalChildTokenTotals(
-		turnTokensByUser: Map<string, ReplayTurnTokens>,
-	): ReplayChildTokens | undefined {
-		let input = 0;
-		let output = 0;
-		let cacheRead = 0;
-		const usageValues: Array<number | undefined> = [];
-
-		for (const turn of turnTokensByUser.values()) {
-			input += turn.inputTokens;
-			output += turn.outputTokens;
-			usageValues.push(turn.usageTokens);
-			cacheRead += turn.cacheReadTokens;
-		}
-		const total = sumUsageValues(usageValues);
-
-		if (total <= 0) {
-			return undefined;
-		}
-
-		return { input, output, total, cacheRead };
-	}
-
-	private computeCanonicalSessionDuration(
-		entries: Array<{ info: CanonicalSdkMessage; parts: CanonicalSdkPart[] }>,
-		fallbacks?: { fallbackCreatedAt?: number; fallbackUpdatedAt?: number },
-	): number | undefined {
-		if (
-			typeof fallbacks?.fallbackCreatedAt === 'number' &&
-			typeof fallbacks?.fallbackUpdatedAt === 'number' &&
-			fallbacks.fallbackUpdatedAt > fallbacks.fallbackCreatedAt
-		) {
-			return getCompletedDurationMs(fallbacks.fallbackCreatedAt, fallbacks.fallbackUpdatedAt);
-		}
-
-		let bounds: { earliestTs?: number; latestTs?: number } = {};
-
-		for (const entry of entries) {
-			const created = entry.info.time?.created;
-			const completed = Reflect.get(entry.info.time as object, 'completed');
-			bounds = addTimestamp(bounds, created);
-			bounds = addTimestamp(bounds, typeof completed === 'number' ? completed : undefined);
-
-			for (const part of entry.parts) {
-				const partTime =
-					'time' in part && part.time && typeof part.time === 'object'
-						? (part.time as { start?: number; end?: number; created?: number })
-						: undefined;
-				for (const ts of [partTime?.created, partTime?.start, partTime?.end]) {
-					bounds = addTimestamp(bounds, ts);
-				}
-			}
-		}
-
-		return getBoundsDurationMs(bounds);
-	}
-
-	private extractCanonicalModelId(
-		entries: Array<{ info: CanonicalSdkMessage; parts: CanonicalSdkPart[] }>,
-	): string | undefined {
-		for (let i = entries.length - 1; i >= 0; i--) {
-			const info = entries[i]?.info as { modelID?: unknown; providerID?: unknown } | undefined;
-			const compositeModelId = formatModelId(
-				typeof info?.providerID === 'string' ? info.providerID : undefined,
-				typeof info?.modelID === 'string' ? info.modelID : undefined,
-			);
-			if (compositeModelId) {
-				return compositeModelId;
-			}
-		}
-		return undefined;
 	}
 
 	private async onCreateSession(): Promise<void> {
@@ -1259,18 +1158,6 @@ export class SessionHandler implements WebviewMessageHandler {
 				const toolUseId = this.context.sessionGraph.getEntry(sid)?.taskToolCallId;
 				const parentSessionId = this.context.sessionGraph.getParent(sid);
 				if (toolUseId && parentSessionId) {
-					this.context.bridge.emit(parentSessionId, 'subtask', {
-						subtask: {
-							id: toolUseId,
-							agent: '',
-							prompt: '',
-							description: '',
-							status: 'cancelled',
-							childSessionId: sid,
-							parentSessionId,
-							timestamp: new Date().toISOString(),
-						},
-					});
 					this.context.bridge.emit(parentSessionId, 'complete', {
 						partId: toolUseId,
 						toolUseId,
@@ -1681,7 +1568,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		entries: Array<{ info: CanonicalSdkMessage; parts: CanonicalSdkPart[] }>,
 		turnTokensByUser: Map<string, ReplayTurnTokens>,
 	): {
-		messages: Array<SessionUserMessagePayload['message'] | SessionSubtaskPayload['subtask']>;
+		messages: SessionUserMessagePayload['message'][];
 		runtimeMessageRecords: import('../../common').SessionMessageRecordPayload['message'][];
 		runtimeMessageParts: import('../../common').SessionMessagePartPayload['part'][];
 		changedFiles: Array<{
@@ -1712,8 +1599,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		>;
 		restoreCommits: CommitInfo[];
 	} {
-		const messages: Array<SessionUserMessagePayload['message'] | SessionSubtaskPayload['subtask']> =
-			[];
+		const messages: SessionUserMessagePayload['message'][] = [];
 		const runtimeMessageRecords: import('../../common').SessionMessageRecordPayload['message'][] =
 			[];
 		const runtimeMessageParts: import('../../common').SessionMessagePartPayload['part'][] = [];
@@ -2485,13 +2371,41 @@ export class SessionHandler implements WebviewMessageHandler {
 		}
 	}
 
+	private collectDescendantSessionIds(rootSessionId: string): string[] {
+		const result: string[] = [];
+		const queue = [...this.context.sessionGraph.getChildren(rootSessionId)];
+		const visited = new Set<string>();
+
+		let head = 0;
+		while (head < queue.length) {
+			const current = queue[head++];
+			if (!current || visited.has(current)) continue;
+			visited.add(current);
+			result.push(current);
+			queue.push(...this.context.sessionGraph.getChildren(current));
+		}
+
+		return result;
+	}
+
 	private syncSessionRuntimeState(sessionId: string): void {
+		const sessionIds = [sessionId, ...this.collectDescendantSessionIds(sessionId)];
+		for (const currentSessionId of sessionIds) {
+			this.syncSingleSessionRuntimeState(currentSessionId);
+		}
+	}
+
+	private syncSingleSessionRuntimeState(sessionId: string): void {
 		const autoAcceptState = this.context.getSessionAutoAcceptState?.(sessionId);
-		const sessionTitle = this.context.sessionManager.getSession(sessionId)?.title;
+		const sessionInfo = this.context.sessionManager.getSession(sessionId);
+		const sessionTitle = sessionInfo?.title;
 		this.context.bridge.emit(sessionId, 'session_info', {
 			data: {
 				sessionId,
 				...(typeof sessionTitle === 'string' && sessionTitle.trim() ? { title: sessionTitle } : {}),
+				...(typeof sessionInfo?.parentID === 'string'
+					? { parentSessionId: sessionInfo.parentID }
+					: {}),
 				autoAccept:
 					autoAcceptState?.effective ?? this.context.getSessionAutoAccept?.(sessionId) ?? false,
 			},

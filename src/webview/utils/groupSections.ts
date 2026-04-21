@@ -14,15 +14,15 @@ import {
 	shouldTriggerCollapse,
 	type ToolGroup,
 } from '../components/chat/toolGrouping';
-import type { ChangedFile, RenderMessage, RenderUserMessage, TokenUsage } from '../store';
+import type { ChangedFile, RenderNode, RenderUserMessage, TokenUsage } from '../store';
 
 function groupRenderResponses(
-	responses: RenderMessage[],
+	responses: RenderNode[],
 	mcpServerNames: string[],
 	isProcessing = false,
 ): GroupedResponseItem[] {
 	const grouped: GroupedResponseItem[] = [];
-	let toolBuffer: RenderMessage[] = [];
+	let toolBuffer: RenderNode[] = [];
 
 	const hasLiveToolInBuffer = () =>
 		toolBuffer.some(
@@ -40,7 +40,7 @@ function groupRenderResponses(
 			toolBuffer,
 			mcpServerNames,
 			!isBoundary && (isProcessing || hasLiveToolInBuffer()),
-		) as RenderMessage[] | RenderMessage[][];
+		) as (RenderNode | RenderNode[])[];
 		// Mark the last group array with shouldCollapse if flush was triggered by a boundary
 		if (isBoundary) {
 			for (let i = flushed.length - 1; i >= 0; i--) {
@@ -116,7 +116,7 @@ export interface MessageSection {
  * components receive them as props and don't need to scan the store themselves.
  */
 export const groupMessagesIntoSections = (
-	msgs: RenderMessage[],
+	msgs: RenderNode[],
 	mcpServerNames: string[],
 	revertedFromMessageId: string | null,
 	changedFiles: ChangedFile[] = [],
@@ -133,7 +133,7 @@ export const groupMessagesIntoSections = (
 	// Collect sections with their raw (ungrouped) responses
 	const sections: MessageSection[] = [];
 	let currentSection: MessageSection | null = null;
-	let currentResponses: RenderMessage[] = [];
+	let currentResponses: RenderNode[] = [];
 	let sectionIndex = 0;
 	let pastRevertPoint = false;
 
@@ -161,7 +161,7 @@ export const groupMessagesIntoSections = (
 	// messages, assistant messages from fast responses, error messages). These are
 	// stored as "orphan" responses and will be attached to the first user section
 	// so they are never silently dropped.
-	const orphanedMessages: RenderMessage[] = [];
+	const orphanedMessages: RenderNode[] = [];
 
 	for (const msg of visibleMsgs) {
 		if (msg.kind === 'user') {
@@ -229,7 +229,7 @@ export const groupMessagesIntoSections = (
 /** Compute stats for a single section from its raw responses */
 function computeSectionStats(
 	section: MessageSection,
-	rawResponses: RenderMessage[],
+	rawResponses: RenderNode[],
 	changedFilesMap: Map<string, ChangedFile[]>,
 	isLast: boolean,
 	turnTokens: Record<string, TokenUsage> = {},

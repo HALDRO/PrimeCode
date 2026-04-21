@@ -25,14 +25,12 @@ import type {
 	SessionNotificationPayload,
 	SessionRestorePayload,
 	SessionStatusPayload,
-	SessionSubtaskPayload,
 	SessionTurnTokensPayload,
 	SessionUserMessagePayload,
 } from '../../common';
 import { generateId } from '../../common';
 import type { NormalizedEntry } from '../../common/normalizedTypes';
 import type { QueuedMessageData } from '../../common/protocol';
-import { projectRuntimeMessages } from './selectors';
 import { useUIStore } from './uiStore';
 
 export type { CommitInfo };
@@ -67,14 +65,7 @@ export type UserMessage = Omit<SessionUserMessagePayload['message'], 'id' | 'tim
 	type: 'user';
 };
 
-export type SubtaskMessage = Omit<SessionSubtaskPayload['subtask'], 'id' | 'timestamp'> & {
-	id: string;
-	timestamp: string;
-	type: 'subtask';
-};
-
-/** Only user messages and subtasks — assistant/tool content lives in runtimeParts. */
-export type StoredMessage = UserMessage | SubtaskMessage;
+export type StoredMessage = UserMessage;
 
 export type RenderUserMessage = Omit<UserMessage, 'id'> & {
 	id: string;
@@ -93,10 +84,31 @@ export interface RenderCompactionMessage {
 	completedAt?: number;
 }
 
-export type RenderSubtaskMessage = Omit<SubtaskMessage, 'id'> & {
+export interface RenderTaskCardNode {
+	kind: 'task_card';
 	id: string;
-	kind: 'subtask';
-};
+	toolCallId: string;
+	parentSessionId: string;
+	parentMessageId?: string;
+	timestamp: string;
+	status: 'pending' | 'running' | 'completed' | 'error' | 'cancelled';
+	agent?: string;
+	description?: string;
+	prompt?: string;
+	result?: string;
+	startTime?: string | number;
+	retryInfo?: { attempt: number; message: string; nextRetryAt?: string };
+	/** Child session ID — used by TaskCardItem to subscribe to child session independently. */
+	childSessionId?: string;
+	childSummary: {
+		title?: string;
+		modelId?: string;
+		durationMs?: number;
+		tokens?: TokenUsage;
+		diffStats: { added: number; removed: number };
+		childCount: number;
+	};
+}
 
 export interface RenderAssistantMessage {
 	kind: 'assistant';
@@ -132,7 +144,7 @@ export interface RenderToolUseMessage {
 	rawInput: Record<string, unknown>;
 	streamingOutput?: string;
 	isRunning?: boolean;
-	status?: 'pending' | 'running' | 'completed' | 'error';
+	status?: 'pending' | 'running' | 'completed' | 'error' | 'cancelled';
 	title?: string;
 	resultContent?: string;
 	metadata?: Record<string, unknown>;
@@ -153,9 +165,9 @@ export interface ToolResultView {
 	timestamp?: string;
 }
 
-export type RenderMessage =
+export type RenderNode =
 	| RenderUserMessage
-	| RenderSubtaskMessage
+	| RenderTaskCardNode
 	| RenderAssistantMessage
 	| RenderThinkingMessage
 	| RenderToolUseMessage;
@@ -167,12 +179,12 @@ type MessageInput = Partial<StoredMessage> & {
 export interface ChatSession {
 	id: string;
 	title?: string;
+	parentSessionId?: string;
 	/** Per-session primary agent override. Undefined means "build". */
 	agent?: string;
 	/** Per-session model override. Undefined means "use workspace default". */
 	model?: string;
 	userMessagesById: Record<string, UserMessage>;
-	subtasksById: Record<string, SubtaskMessage>;
 	runtimeMessageRecords: RuntimeMessageRecord[];
 	runtimeMessagePartsById: Record<string, RuntimeMessagePart[]>;
 	input: string;
@@ -227,6 +239,12 @@ export interface ChatState {
 	improvingPromptRequestId: string | null;
 	/** Stores both prompt versions (original + improved) for toggle support. */
 	promptVersions: { original: string; improved: string; showingImproved: boolean } | null;
+
+	/** parentSessionId → child session IDs. Lightweight derived index. */
+	childSessionIdsByParentId: Record<string, string[]>;
+	/** childSessionId → toolCallId. Lightweight derived index. */
+	originatingToolCallBySessionId: Record<string, string>;
+
 	actions: ChatActions;
 }
 
@@ -284,15 +302,6 @@ export interface ChatActions {
 	clearRestoreCommits: (sessionId?: string) => void;
 	setRestoreCommits: (commits: CommitInfo[], sessionId?: string) => void;
 	setUnrevertAvailable: (available: boolean, sessionId?: string) => void;
-
-	// Subtask actions (session-aware — do NOT rely on activeSessionId)
-	startSubtask: (subtask: SubtaskMessage, sessionId?: string) => void;
-	updateSubtask: (
-		subtaskId: string,
-		status: 'completed' | 'error',
-		result?: string,
-		sessionId?: string,
-	) => void;
 
 	// Revert marker (session-explicit — no activeSessionId fallback)
 	markRevertedFromMessageId: (id: string | null, sessionId?: string) => void;
@@ -352,77 +361,20 @@ function getCanonicalCompactionCommand(
 }
 
 function syncSessionModelFromUserMessages(targetSession: ChatSession): void {
-	const lastUserWithModel = projectRuntimeMessages(targetSession)
+	const lastUserWithModel = Object.values(targetSession.userMessagesById)
 		.reverse()
-		.find(
-			(message): message is RenderUserMessage & { model: string } =>
-				message.kind === 'user' &&
-				typeof message.model === 'string' &&
-				message.model.trim().length > 0,
-		);
+		.find(message => typeof message.model === 'string' && message.model.trim().length > 0);
 	if (!lastUserWithModel?.model) return;
 	targetSession.model = lastUserWithModel.model;
 }
 
-function upsertSubtaskMessage(targetSession: ChatSession, incoming: SubtaskMessage): void {
-	if (!incoming.id) return;
-	const existing = targetSession.subtasksById[incoming.id];
-	targetSession.subtasksById[incoming.id] = {
-		...(existing || {}),
-		...incoming,
-		id: incoming.id,
-		type: 'subtask',
-		agent: incoming.agent || existing?.agent || '',
-		prompt: incoming.prompt || existing?.prompt || '',
-		description: incoming.description || existing?.description || '',
-		status: incoming.status || existing?.status || 'running',
-		timestamp: incoming.timestamp || existing?.timestamp || new Date().toISOString(),
-	};
-}
-
-function removeProjectedMessage(targetSession: ChatSession, message: RenderMessage): void {
-	if (message.kind === 'user' || message.kind === 'subtask') {
-		delete targetSession.userMessagesById[message.id];
-		delete targetSession.subtasksById[message.id];
-		delete targetSession.runtimeMessagePartsById[message.id];
-		delete targetSession.turnTokens[message.id];
-		targetSession.runtimeMessageRecords = targetSession.runtimeMessageRecords.filter(
-			record => record.id !== message.id,
-		);
-		return;
+function getOrderedUserMessageIds(targetSession: ChatSession): string[] {
+	const entries: Array<{ id: string; timestampMs: number }> = [];
+	for (const message of Object.values(targetSession.userMessagesById)) {
+		entries.push({ id: message.id, timestampMs: Date.parse(message.timestamp) || 0 });
 	}
-
-	if (message.kind === 'assistant' || message.kind === 'thinking') {
-		for (const [messageId, parts] of Object.entries(targetSession.runtimeMessagePartsById)) {
-			const nextParts = parts.filter(part => part.id !== message.partId);
-			if (nextParts.length === parts.length) continue;
-			if (nextParts.length === 0) {
-				delete targetSession.runtimeMessagePartsById[messageId];
-				targetSession.runtimeMessageRecords = targetSession.runtimeMessageRecords.filter(
-					record => record.id !== messageId,
-				);
-			} else {
-				targetSession.runtimeMessagePartsById[messageId] = nextParts;
-			}
-			break;
-		}
-		return;
-	}
-
-	if (message.kind === 'tool_use') {
-		for (const [messageId, parts] of Object.entries(targetSession.runtimeMessagePartsById)) {
-			const nextParts = parts.filter(part => part.callId !== message.toolUseId);
-			if (nextParts.length === parts.length) continue;
-			if (nextParts.length === 0) {
-				delete targetSession.runtimeMessagePartsById[messageId];
-				targetSession.runtimeMessageRecords = targetSession.runtimeMessageRecords.filter(
-					record => record.id !== messageId,
-				);
-			} else {
-				targetSession.runtimeMessagePartsById[messageId] = nextParts;
-			}
-		}
-	}
+	entries.sort((a, b) => a.timestampMs - b.timestampMs || a.id.localeCompare(b.id));
+	return entries.map(entry => entry.id);
 }
 
 // =============================================================================
@@ -446,19 +398,6 @@ function handleUserMessageEvent(targetSession: ChatSession, payload: SessionEven
 	if (message.agent) {
 		targetSession.agent = message.agent === 'build' ? undefined : message.agent;
 	}
-}
-
-function handleSubtaskEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
-	const subtaskData = (payload as SessionSubtaskPayload).subtask;
-	const subtaskId = subtaskData.id ?? '';
-	const subtaskTimestamp = subtaskData.timestamp ?? '';
-	const subtask: SubtaskMessage = {
-		type: 'subtask',
-		...subtaskData,
-		id: subtaskId,
-		timestamp: subtaskTimestamp,
-	};
-	upsertSubtaskMessage(targetSession, subtask);
 }
 
 function handleStatusEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
@@ -544,16 +483,6 @@ function handleCompleteEvent(targetSession: ChatSession, payload: SessionEventPa
 		) {
 			targetSession.status = 'Ready';
 		}
-	}
-
-	// Mark completed subtasks in a second pass.
-	for (const msg of projectRuntimeMessages(targetSession)) {
-		if (msg.kind !== 'subtask' || !msg.id) continue;
-		const partId = (targetSession.subtasksById[msg.id] as { partId?: string } | undefined)?.partId;
-		if (partId !== completePartId) continue;
-		const stored = targetSession.subtasksById[msg.id];
-		if (!stored || stored.type !== 'subtask') continue;
-		stored.status = stored.status === 'running' ? 'completed' : stored.status;
 	}
 }
 
@@ -696,12 +625,15 @@ function handleMessageRecordRemovedEvent(
 		m => m.id !== evt.messageId,
 	);
 	delete targetSession.userMessagesById[evt.messageId];
-	delete targetSession.subtasksById[evt.messageId];
 	delete targetSession.turnTokens[evt.messageId];
 	delete targetSession.runtimeMessagePartsById[evt.messageId];
 }
 
-function _handleMessagePartEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
+function _handleMessagePartEvent(
+	targetSession: ChatSession,
+	payload: SessionEventPayload,
+	state?: ChatState,
+): void {
 	const evt = payload as import('../../common').SessionMessagePartPayload;
 	const list = targetSession.runtimeMessagePartsById[evt.part.messageId] || [];
 	const idx = list.findIndex(
@@ -729,6 +661,18 @@ function _handleMessagePartEvent(targetSession: ChatSession, payload: SessionEve
 		list.push(nextPart);
 	}
 	targetSession.runtimeMessagePartsById[evt.part.messageId] = list;
+
+	if (
+		state &&
+		evt.part.type === 'tool' &&
+		evt.part.callId &&
+		evt.part.toolName?.toLowerCase() === 'task'
+	) {
+		const metadata = evt.part.state?.metadata as { sessionId?: string } | undefined;
+		if (metadata?.sessionId) {
+			state.originatingToolCallBySessionId[metadata.sessionId] = evt.part.callId;
+		}
+	}
 
 	if (evt.part.type === 'compaction') {
 		const existing = targetSession.userMessagesById[evt.part.messageId];
@@ -831,30 +775,27 @@ function handleQuestionEvent(targetSession: ChatSession, payload: SessionEventPa
 	);
 }
 
-function handleMessagesReloadEvent(targetSession: ChatSession, payload: SessionEventPayload): void {
+function handleMessagesReloadEvent(
+	targetSession: ChatSession,
+	payload: SessionEventPayload,
+	state?: ChatState,
+): void {
 	const r = payload as SessionMessagesReloadPayload;
 	targetSession.runtimeMessageRecords = [];
 	targetSession.runtimeMessagePartsById = {};
 	targetSession.userMessagesById = {};
-	targetSession.subtasksById = {};
 	targetSession.changedFiles = r.changedFiles || [];
 	targetSession.cumulativeDiffs = r.cumulativeDiffs || [];
 	targetSession.turnTokens = {};
 	targetSession.restoreCommits = r.restoreCommits || [];
-	const displayMessages = (r.messages || [])
-		.map(m => ({
-			...m,
-			id: m.id || generateId('msg'),
-			timestamp: m.timestamp || new Date().toISOString(),
-		}))
-		.map(m =>
-			'content' in m ? { type: 'user' as const, ...m } : { type: 'subtask' as const, ...m },
-		);
+	const displayMessages = (r.messages || []).map(m => ({
+		...m,
+		id: m.id || generateId('msg'),
+		timestamp: m.timestamp || new Date().toISOString(),
+		type: 'user' as const,
+	}));
 	for (const message of displayMessages) {
-		if (message.type === 'user') upsertUserMessage(targetSession, message as UserMessage);
-		else if (message.type === 'subtask') {
-			upsertSubtaskMessage(targetSession, message as SubtaskMessage);
-		}
+		upsertUserMessage(targetSession, message as UserMessage);
 	}
 	for (const record of r.runtimeMessageRecords || []) {
 		targetSession.runtimeMessageRecords.push(record);
@@ -868,6 +809,13 @@ function handleMessagesReloadEvent(targetSession: ChatSession, payload: SessionE
 		const list = targetSession.runtimeMessagePartsById[part.messageId] || [];
 		list.push({ ...part });
 		targetSession.runtimeMessagePartsById[part.messageId] = list;
+
+		if (state && part.type === 'tool' && part.callId && part.toolName?.toLowerCase() === 'task') {
+			const metadata = part.state?.metadata as { sessionId?: string } | undefined;
+			if (metadata?.sessionId) {
+				state.originatingToolCallBySessionId[metadata.sessionId] = part.callId;
+			}
+		}
 	}
 	targetSession.turnTokens = r.turnTokens || {};
 	syncSessionModelFromUserMessages(targetSession);
@@ -879,7 +827,7 @@ function handleDeleteMessagesAfterEvent(
 ): void {
 	const d = payload as SessionDeleteMessagesAfterPayload;
 	if (d.messageId) {
-		const idx = projectRuntimeMessages(targetSession).findIndex(m => m.id === d.messageId);
+		const idx = getOrderedUserMessageIds(targetSession).indexOf(d.messageId);
 		if (idx !== -1) {
 			// Don't delete messages — just mark them as reverted so they can be
 			// restored on unrevert. The UI will dim everything after this ID.
@@ -908,12 +856,6 @@ function handleMessageRemovedEvent(targetSession: ChatSession, payload: SessionE
 	}
 	if (rm.partId || rm.messageId) {
 		if (rm.messageId) delete targetSession.userMessagesById[rm.messageId];
-		for (const [subtaskId, subtask] of Object.entries(targetSession.subtasksById)) {
-			const partId = (subtask as { partId?: string }).partId;
-			if (subtaskId === rm.messageId || partId === rm.partId) {
-				delete targetSession.subtasksById[subtaskId];
-			}
-		}
 	}
 }
 
@@ -953,10 +895,12 @@ function extractNotification(
 }
 
 const DISPATCH_HANDLERS: Partial<
-	Record<SessionEventType, (session: ChatSession, payload: SessionEventPayload) => void>
+	Record<
+		SessionEventType,
+		(session: ChatSession, payload: SessionEventPayload, state?: ChatState) => void
+	>
 > = {
 	user_message: handleUserMessageEvent,
-	subtask: handleSubtaskEvent,
 	message_record: handleMessageRecordEvent,
 	message_record_removed: handleMessageRecordRemovedEvent,
 	message_part: _handleMessagePartEvent,
@@ -984,18 +928,37 @@ function dispatchToSession(
 	targetSession: ChatSession,
 	eventType: SessionEventType,
 	payload: SessionEventPayload,
+	state?: ChatState,
 ): void {
 	const handler = DISPATCH_HANDLERS[eventType];
 	if (handler) {
-		handler(targetSession, payload);
+		handler(targetSession, payload, state);
 		return;
 	}
 	if (eventType === 'session_info') {
 		const info = payload as {
-			data?: { title?: string; tools?: string[]; mcpServers?: string[]; autoAccept?: boolean };
+			data?: {
+				title?: string;
+				parentSessionId?: string;
+				tools?: string[];
+				mcpServers?: string[];
+				autoAccept?: boolean;
+			};
 			permissionAutoAccept?: { mode: 'default' | 'on' | 'off'; effective: boolean };
 		};
 		if (typeof info.data?.title === 'string') targetSession.title = info.data.title;
+		if (typeof info.data?.parentSessionId === 'string') {
+			targetSession.parentSessionId = info.data.parentSessionId;
+			if (state) {
+				const siblings = state.childSessionIdsByParentId[info.data.parentSessionId] || [];
+				if (!siblings.includes(targetSession.id)) {
+					state.childSessionIdsByParentId[info.data.parentSessionId] = [
+						...siblings,
+						targetSession.id,
+					];
+				}
+			}
+		}
 		if (info.data?.tools) targetSession.availableTools = info.data.tools;
 		if (info.data?.mcpServers) targetSession.availableMcpServers = info.data.mcpServers;
 		if (typeof info.data?.autoAccept === 'boolean') {
@@ -1014,7 +977,6 @@ const createEmptySession = (id: string, timestamp: number): ChatSession => ({
 	agent: undefined,
 	model: undefined,
 	userMessagesById: {},
-	subtasksById: {},
 	runtimeMessageRecords: [],
 	runtimeMessagePartsById: {},
 	input: '',
@@ -1059,18 +1021,6 @@ function prepareEventPayload(
 				...event.message,
 				id: event.message.id || generateId('msg'),
 				timestamp: event.message.timestamp || new Date(timestamp).toISOString(),
-			},
-		};
-	}
-
-	if (eventType === 'subtask') {
-		const event = payload as SessionSubtaskPayload;
-		return {
-			...event,
-			subtask: {
-				...event.subtask,
-				id: event.subtask.id || generateId('subtask'),
-				timestamp: event.subtask.timestamp || new Date(timestamp).toISOString(),
 			},
 		};
 	}
@@ -1123,6 +1073,10 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 	isImprovingPrompt: false,
 	improvingPromptRequestId: null,
 	promptVersions: null,
+
+	// ─── Lightweight relation indices ─────────────────────────────────────
+	childSessionIdsByParentId: {},
+	originatingToolCallBySessionId: {},
 
 	actions: {
 		handleExtensionMessage: (message: ExtensionMessage) => {
@@ -1201,6 +1155,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 								targetSession,
 								event.eventType,
 								prepareEventPayload(event.eventType, event.payload, now),
+								state,
 							);
 						}
 					}),
@@ -1324,7 +1279,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 					const targetSession = state.sessionsById[targetId];
 					targetSession.lastActive = now;
 
-					dispatchToSession(targetSession, eventType, preparedPayload);
+					dispatchToSession(targetSession, eventType, preparedPayload, state);
 				}),
 			);
 		},
@@ -1357,6 +1312,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 							targetSession,
 							event.eventType,
 							prepareEventPayload(event.eventType, event.payload, now),
+							state,
 						);
 					}
 					for (const sessionId of touchedSessions) {
@@ -1387,9 +1343,6 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 					timestamp: messageTimestamp,
 				} as StoredMessage;
 				if (message.type === 'user') upsertUserMessage(s, message as UserMessage);
-				if (message.type === 'subtask') {
-					upsertSubtaskMessage(s, message as SubtaskMessage);
-				}
 			}),
 
 		updateSession: (updates, sessionId) =>
@@ -1411,7 +1364,6 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 		clearMessages: sessionId =>
 			mutateSession(set, sessionId ?? get().activeSessionId, Date.now(), s => {
 				s.userMessagesById = {};
-				s.subtasksById = {};
 				s.runtimeMessageRecords = [];
 				s.runtimeMessagePartsById = {};
 				s.turnTokens = {};
@@ -1420,7 +1372,6 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 		updateMessage: (id, updates, sessionId) =>
 			mutateSession(set, sessionId ?? get().activeSessionId, Date.now(), s => {
 				if (s.userMessagesById[id]) Object.assign(s.userMessagesById[id], updates);
-				if (s.subtasksById[id]) Object.assign(s.subtasksById[id], updates);
 			}),
 
 		setEditingMessageId: id => set({ editingMessageId: id }),
@@ -1443,13 +1394,27 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
 		deleteMessagesAfterId: (id, sessionId) =>
 			mutateSession(set, sessionId ?? get().activeSessionId, Date.now(), s => {
-				const projected = projectRuntimeMessages(s);
-				const idx = projected.findIndex(m => m.id === id);
+				const orderedIds = getOrderedUserMessageIds(s);
+				const idx = orderedIds.indexOf(id);
 				if (idx !== -1) {
-					const removed = projected.slice(idx + 1);
-					for (const msg of removed) {
-						if (!msg.id) continue;
-						removeProjectedMessage(s, msg);
+					const idsToRemove = new Set(orderedIds.slice(idx + 1));
+					const allIdsToRemove = new Set<string>(idsToRemove);
+
+					s.runtimeMessageRecords = s.runtimeMessageRecords.filter(record => {
+						if (
+							idsToRemove.has(record.id) ||
+							(record.parentId && idsToRemove.has(record.parentId))
+						) {
+							allIdsToRemove.add(record.id);
+							return false;
+						}
+						return true;
+					});
+
+					for (const messageId of allIdsToRemove) {
+						delete s.userMessagesById[messageId];
+						delete s.runtimeMessagePartsById[messageId];
+						delete s.turnTokens[messageId];
 					}
 					s.revertedFromMessageId = null;
 				}
@@ -1463,10 +1428,6 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 					else s.runtimeMessagePartsById[messageId] = next;
 				}
 				delete s.userMessagesById[partId];
-				for (const [subtaskId, subtask] of Object.entries(s.subtasksById)) {
-					const subtaskPartId = (subtask as { partId?: string }).partId;
-					if (subtaskPartId === partId || subtaskId === partId) delete s.subtasksById[subtaskId];
-				}
 			}),
 
 		markRevertedFromMessageId: (id, sessionId) =>
@@ -1477,13 +1438,27 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 		clearRevertedMessages: sessionId =>
 			mutateSession(set, sessionId ?? get().activeSessionId, Date.now(), s => {
 				if (!s.revertedFromMessageId) return;
-				const projected = projectRuntimeMessages(s);
-				const idx = projected.findIndex(m => m.id === s.revertedFromMessageId);
+				const orderedIds = getOrderedUserMessageIds(s);
+				const idx = orderedIds.indexOf(s.revertedFromMessageId);
 				if (idx !== -1) {
-					const removed = projected.slice(idx);
-					for (const msg of removed) {
-						if (!msg.id) continue;
-						removeProjectedMessage(s, msg);
+					const idsToRemove = new Set(orderedIds.slice(idx));
+					const allIdsToRemove = new Set<string>(idsToRemove);
+
+					s.runtimeMessageRecords = s.runtimeMessageRecords.filter(record => {
+						if (
+							idsToRemove.has(record.id) ||
+							(record.parentId && idsToRemove.has(record.parentId))
+						) {
+							allIdsToRemove.add(record.id);
+							return false;
+						}
+						return true;
+					});
+
+					for (const messageId of allIdsToRemove) {
+						delete s.userMessagesById[messageId];
+						delete s.runtimeMessagePartsById[messageId];
+						delete s.turnTokens[messageId];
 					}
 					s.revertedFromMessageId = null;
 				} else {
@@ -1537,7 +1512,22 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 			set(
 				produce((state: ChatState) => {
 					if (state.sessionOrder.length > 1) {
+						const session = state.sessionsById[sessionId];
+						const parentId = session?.parentSessionId;
+
 						delete state.sessionsById[sessionId];
+						delete state.childSessionIdsByParentId[sessionId];
+						delete state.originatingToolCallBySessionId[sessionId];
+
+						if (parentId && state.childSessionIdsByParentId[parentId]) {
+							state.childSessionIdsByParentId[parentId] = state.childSessionIdsByParentId[
+								parentId
+							].filter(id => id !== sessionId);
+							if (state.childSessionIdsByParentId[parentId].length === 0) {
+								delete state.childSessionIdsByParentId[parentId];
+							}
+						}
+
 						state.sessionOrder = state.sessionOrder.filter(id => id !== sessionId);
 						if (state.activeSessionId === sessionId) {
 							state.activeSessionId = state.sessionOrder[state.sessionOrder.length - 1];
@@ -1588,27 +1578,6 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 		setUnrevertAvailable: (available, sessionId) =>
 			get().actions.updateSession({ unrevertAvailable: available }, sessionId),
 
-		startSubtask: (subtask, sessionId) =>
-			mutateSession(set, sessionId, Date.now(), s => {
-				upsertSubtaskMessage(s, subtask as SubtaskMessage);
-			}),
-
-		updateSubtask: (subtaskId, status, result, sessionId) => {
-			set(
-				produce((state: ChatState) => {
-					const now = Date.now();
-					// Use explicit sessionId when provided (avoids O(N) scan over all sessions)
-					const sid = sessionId && state.sessionsById[sessionId] ? sessionId : undefined;
-					if (!sid) return;
-					const msg = state.sessionsById[sid].subtasksById[subtaskId];
-					if (!msg || msg.type !== 'subtask') return;
-					msg.status = status;
-					msg.result = result;
-					state.sessionsById[sid].lastActive = now;
-				}),
-			);
-		},
-
 		setImprovingPrompt: (isImproving, requestId = null) => {
 			set({ isImprovingPrompt: isImproving, improvingPromptRequestId: requestId });
 		},
@@ -1629,14 +1598,10 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
 		setSessionMessages: (sessionId, messages) =>
 			mutateSession(set, sessionId, Date.now(), s => {
-				const displayMessages = messages.filter(m => m.type === 'user' || m.type === 'subtask');
+				const displayMessages = messages.filter(m => m.type === 'user');
 				s.userMessagesById = {};
-				s.subtasksById = {};
 				for (const message of displayMessages) {
 					if (message.type === 'user') upsertUserMessage(s, message as UserMessage);
-					if (message.type === 'subtask') {
-						upsertSubtaskMessage(s, message as SubtaskMessage);
-					}
 				}
 				const lastUserWithAgent = [...displayMessages]
 					.reverse()
@@ -1647,7 +1612,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
 		deleteMessagesAfterMessageId: (sessionId, messageId) =>
 			mutateSession(set, sessionId, Date.now(), s => {
-				const idx = projectRuntimeMessages(s).findIndex(m => m.id === messageId);
+				const idx = getOrderedUserMessageIds(s).indexOf(messageId);
 				if (idx !== -1) s.revertedFromMessageId = messageId;
 			}),
 
