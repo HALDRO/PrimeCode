@@ -225,6 +225,14 @@ export interface ChatSession {
 	todos: import('../../common').SessionTodoItem[];
 	pendingPermissions: import('../../common').SessionPermissionRequest[];
 	pendingQuestions: import('../../common').SessionQuestionRequest[];
+	/** User message IDs that are compaction messages. Used to reliably hide
+	 *  compaction assistant text during live streaming (race-condition-proof).
+	 *  Uses Record instead of Set because Immer doesn't support Set without enableMapSet(). */
+	compactionUserMessageIds: Record<string, true>;
+	/** Assistant message IDs that belong to compaction turns. Derived from
+	 *  compactionUserMessageIds + message_record parentId linkage.
+	 *  Uses Record instead of Set because Immer doesn't support Set without enableMapSet(). */
+	compactionAssistantMessageIds: Record<string, true>;
 }
 
 export interface ChatState {
@@ -276,6 +284,7 @@ export interface ChatActions {
 	/** Deletes all messages AFTER the given id, keeping the message itself. */
 	deleteMessagesAfterId: (id: string, sessionId?: string) => void;
 	removeMessageByPartId: (partId: string, sessionId?: string) => void;
+	removeUserMessage: (messageId: string, sessionId?: string) => void;
 	setEditingMessageId: (id: string | null) => void;
 	/** Save a draft for a message being edited (survives cancel) */
 	setEditDraft: (messageId: string, text: string) => void;
@@ -602,6 +611,16 @@ function handleMessageRecordEvent(targetSession: ChatSession, payload: SessionEv
 			...evt.message,
 		};
 	} else targetSession.runtimeMessageRecords.push(evt.message);
+
+	// Track compaction assistant messages for reliable filtering during streaming.
+	if (
+		evt.message.role === 'assistant' &&
+		(evt.message.agent === 'compaction' ||
+			(evt.message.parentId && evt.message.parentId in targetSession.compactionUserMessageIds))
+	) {
+		targetSession.compactionAssistantMessageIds[evt.message.id] = true;
+	}
+
 	if (
 		targetSession.runtimeMessageRecords.length > 1 &&
 		!(targetSession as ChatSession & { __deferRecordSort?: boolean }).__deferRecordSort
@@ -627,6 +646,8 @@ function handleMessageRecordRemovedEvent(
 	delete targetSession.userMessagesById[evt.messageId];
 	delete targetSession.turnTokens[evt.messageId];
 	delete targetSession.runtimeMessagePartsById[evt.messageId];
+	delete targetSession.compactionUserMessageIds[evt.messageId];
+	delete targetSession.compactionAssistantMessageIds[evt.messageId];
 }
 
 function _handleMessagePartEvent(
@@ -675,6 +696,20 @@ function _handleMessagePartEvent(
 	}
 
 	if (evt.part.type === 'compaction') {
+		targetSession.compactionUserMessageIds[evt.part.messageId] = true;
+
+		// Repair live ordering races: assistant summary records can arrive before the
+		// user-side compaction part, so re-link any already-known assistant children
+		// once this message is definitively classified as compaction.
+		for (const record of targetSession.runtimeMessageRecords) {
+			if (
+				record.role === 'assistant' &&
+				(record.agent === 'compaction' || record.parentId === evt.part.messageId)
+			) {
+				targetSession.compactionAssistantMessageIds[record.id] = true;
+			}
+		}
+
 		const existing = targetSession.userMessagesById[evt.part.messageId];
 		const canonicalContent = getCanonicalCompactionCommand(targetSession, evt.part.messageId);
 		if (canonicalContent) {
@@ -784,6 +819,8 @@ function handleMessagesReloadEvent(
 	targetSession.runtimeMessageRecords = [];
 	targetSession.runtimeMessagePartsById = {};
 	targetSession.userMessagesById = {};
+	targetSession.compactionUserMessageIds = {};
+	targetSession.compactionAssistantMessageIds = {};
 	targetSession.changedFiles = r.changedFiles || [];
 	targetSession.cumulativeDiffs = r.cumulativeDiffs || [];
 	targetSession.turnTokens = {};
@@ -810,6 +847,10 @@ function handleMessagesReloadEvent(
 		list.push({ ...part });
 		targetSession.runtimeMessagePartsById[part.messageId] = list;
 
+		if (part.type === 'compaction') {
+			targetSession.compactionUserMessageIds[part.messageId] = true;
+		}
+
 		if (state && part.type === 'tool' && part.callId && part.toolName?.toLowerCase() === 'task') {
 			const metadata = part.state?.metadata as { sessionId?: string } | undefined;
 			if (metadata?.sessionId) {
@@ -818,6 +859,16 @@ function handleMessagesReloadEvent(
 		}
 	}
 	targetSession.turnTokens = r.turnTokens || {};
+	// Derive compactionAssistantMessageIds from records + compactionUserMessageIds.
+	for (const record of targetSession.runtimeMessageRecords) {
+		if (
+			record.role === 'assistant' &&
+			(record.agent === 'compaction' ||
+				(record.parentId && record.parentId in targetSession.compactionUserMessageIds))
+		) {
+			targetSession.compactionAssistantMessageIds[record.id] = true;
+		}
+	}
 	syncSessionModelFromUserMessages(targetSession);
 }
 
@@ -1002,6 +1053,8 @@ const createEmptySession = (id: string, timestamp: number): ChatSession => ({
 	todos: [],
 	pendingPermissions: [],
 	pendingQuestions: [],
+	compactionUserMessageIds: {},
+	compactionAssistantMessageIds: {},
 });
 
 function resolveTargetSessionId(state: ChatState, sessionId?: string): string | undefined {
@@ -1428,6 +1481,18 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 					else s.runtimeMessagePartsById[messageId] = next;
 				}
 				delete s.userMessagesById[partId];
+			}),
+
+		removeUserMessage: (messageId, sessionId) =>
+			mutateSession(set, sessionId ?? get().activeSessionId, Date.now(), s => {
+				delete s.userMessagesById[messageId];
+				delete s.turnTokens[messageId];
+				delete s.runtimeMessagePartsById[messageId];
+				s.runtimeMessageRecords = s.runtimeMessageRecords.filter(
+					record => record.id !== messageId && record.parentId !== messageId,
+				);
+				delete s.compactionUserMessageIds[messageId];
+				delete s.compactionAssistantMessageIds[messageId];
 			}),
 
 		markRevertedFromMessageId: (id, sessionId) =>

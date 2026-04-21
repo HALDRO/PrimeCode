@@ -147,6 +147,7 @@ export interface SessionMessageRecordPayload {
 export interface SessionMessageRecordRemovedPayload {
 	eventType: 'message_record_removed';
 	messageId: string;
+	sessionId?: string;
 }
 
 export interface SessionMessagePartPayload {
@@ -994,6 +995,9 @@ export interface SendMessageCommand {
 	model?: string;
 	sessionId?: string;
 	messageID?: string;
+	/** Client-generated message ID for optimistic UI — the extension reuses this
+	 *  instead of generating a new one so the upsert in chatStore deduplicates. */
+	clientMessageID?: string;
 	editMode?: 'revert' | 'history_only';
 	/** Agent override for this message (e.g. 'plan', 'build'). */
 	agent?: string;

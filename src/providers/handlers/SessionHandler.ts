@@ -897,6 +897,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			model: uiModel,
 			sessionId,
 			messageID,
+			clientMessageID,
 			editMode,
 			attachments,
 			agent,
@@ -937,6 +938,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			attachments,
 			resolvedAgent,
 			variant,
+			clientMessageID,
 		);
 	}
 
@@ -1180,6 +1182,7 @@ export class SessionHandler implements WebviewMessageHandler {
 		attachments?: CommandOf<'sendMessage'>['attachments'],
 		agent?: string,
 		variant?: string,
+		clientMessageID?: string,
 	): Promise<void> {
 		// Clear stop guard for the target session — user is explicitly sending
 		// a new message, so SSE 'busy' events should be allowed through again.
@@ -1208,6 +1211,7 @@ export class SessionHandler implements WebviewMessageHandler {
 					attachments,
 					agent,
 					`Invalid model selection: "${selectedModel}". Expected format "provider/model". Please choose another model.`,
+					clientMessageID,
 				);
 				return;
 			}
@@ -1227,6 +1231,7 @@ export class SessionHandler implements WebviewMessageHandler {
 							attachments,
 							agent,
 							`Model "${selectedModel}" is unavailable. Please reconnect the provider or choose another model.`,
+							clientMessageID,
 						);
 						return;
 					}
@@ -1321,7 +1326,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			// and the UI already removed messages after it via deleteMessagesAfterId.
 			// Reusing the old ID would cause the server to have a different ID than the UI.
 			const prefix = isOpenCode ? 'msg' : 'user';
-			const userMessageId = generateId(prefix);
+			const userMessageId = clientMessageID || generateId(prefix);
 			const hasAttachments =
 				attachments?.files?.length ||
 				attachments?.codeSnippets?.length ||
@@ -1369,6 +1374,7 @@ export class SessionHandler implements WebviewMessageHandler {
 				attachments,
 				agent,
 				error instanceof Error ? error.message : 'Failed to start CLI',
+				clientMessageID,
 			);
 
 			if (activeId) {
@@ -2318,8 +2324,15 @@ export class SessionHandler implements WebviewMessageHandler {
 		attachments: CommandOf<'sendMessage'>['attachments'] | undefined,
 		agent: string | undefined,
 		content: string,
+		clientMessageID?: string,
 	): void {
 		if (sessionId) {
+			if (clientMessageID) {
+				this.context.bridge.emit(sessionId, 'message_record_removed', {
+					messageId: clientMessageID,
+					sessionId,
+				});
+			}
 			this.context.bridge.queue.update('cancelled', sessionId, [], text, attachments, agent);
 			this.context.bridge.emit(sessionId, 'notification', {
 				notification: {

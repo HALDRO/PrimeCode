@@ -5,7 +5,7 @@
  */
 
 import { useCallback, useEffect, useMemo } from 'react';
-import { resolveModelDisplayName } from '../../common';
+import { generateId, resolveModelDisplayName } from '../../common';
 import {
 	getAvailableModelVariants,
 	getConfiguredAgentVariant,
@@ -13,6 +13,7 @@ import {
 } from '../lib/modelVariants';
 import {
 	useChatActions,
+	useChatStore,
 	useDraftAgent,
 	useDraftAttachments,
 	useImprovingPromptRequestId,
@@ -90,6 +91,7 @@ export function useChatInputController(
 
 	const storeInput = useStoreInput();
 	const {
+		addMessage,
 		updateSession,
 		clearRevertedMessages,
 		setImprovingPrompt,
@@ -188,8 +190,29 @@ export function useChatInputController(
 		clearDraftState();
 	}, [draftAttachments, draftAgent, attachments, clearDraftState, setSelectedAgent]);
 
+	const ensureSessionForSend = useCallback(async (): Promise<string | undefined> => {
+		const existing = useChatStore.getState().activeSessionId;
+		if (existing) return existing;
+
+		postMessage({ type: 'createSession' });
+
+		return await new Promise<string | undefined>(resolve => {
+			const timeoutId = window.setTimeout(() => {
+				unsubscribe();
+				resolve(useChatStore.getState().activeSessionId);
+			}, 3000);
+
+			const unsubscribe = useChatStore.subscribe(state => {
+				if (!state.activeSessionId) return;
+				window.clearTimeout(timeoutId);
+				unsubscribe();
+				resolve(state.activeSessionId);
+			});
+		});
+	}, [postMessage]);
+
 	// Send message
-	const handleSend = useCallback(() => {
+	const handleSend = useCallback(async () => {
 		const hasContent =
 			inputValue.trim() ||
 			attachments.codeSnippets.length > 0 ||
@@ -268,9 +291,37 @@ export function useChatInputController(
 			}
 		}
 
+		// Generate a stable message ID on the client so we can show the user
+		// message bubble immediately (optimistic UI) and let the extension
+		// reuse the same ID — upsertUserMessage in chatStore will merge.
+		const clientMessageID = generateId('msg');
+		const targetSessionId = await ensureSessionForSend();
+		const canRenderOptimistically = Boolean(targetSessionId);
+
+		// Optimistic: show user message bubble instantly, before the extension
+		// round-trip completes (model validation, session creation, etc.).
+		if (canRenderOptimistically) {
+			addMessage(
+				{
+					id: clientMessageID,
+					type: 'user',
+					content: inputValue.trim(),
+					model: effectiveModel,
+					timestamp: new Date().toISOString(),
+					...(agent ? { agent } : {}),
+					...(hasAttachments ? { attachments: builtAttachments } : {}),
+				},
+				targetSessionId,
+			);
+			// Mark session as processing so the UI shows the loading state right away.
+			updateSession({ isProcessing: true }, targetSessionId);
+		}
+
 		postSessionMessage({
 			type: 'sendMessage',
 			text: inputValue.trim(),
+			...(targetSessionId ? { sessionId: targetSessionId } : {}),
+			clientMessageID,
 			agent,
 			model: effectiveModel,
 			...(validSessionVariant ? { variant: validSessionVariant } : {}),
@@ -296,6 +347,8 @@ export function useChatInputController(
 		selectedModel,
 		sessionModel,
 		validAgentNames.has,
+		addMessage,
+		ensureSessionForSend,
 	]);
 
 	const handleStop = useCallback(

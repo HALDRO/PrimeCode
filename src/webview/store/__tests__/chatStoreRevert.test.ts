@@ -7,12 +7,13 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { SessionRestorePayload } from '../../../common/protocol';
 import {
+	type RenderTaskCardNode,
 	type RuntimeMessagePart,
 	type RuntimeMessageRecord,
 	type UserMessage,
 	useChatStore,
 } from '../chatStore';
-import { projectRuntimeMessages } from '../selectors';
+import { projectRuntimeMessages, projectSessionMessages } from '../selectors';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -255,6 +256,97 @@ describe('chatStore revert/unrevert state', () => {
 				],
 			});
 			expect(session.draftAgent).toBe('build');
+		});
+	});
+
+	describe('task child session live linking', () => {
+		it('should expose childSessionId before task completion when metadata arrives later', () => {
+			createSession('parent');
+			createSession('child');
+
+			const { actions } = useChatStore.getState();
+
+			actions.dispatch('parent', 'message_part', {
+				eventType: 'message_part',
+				part: {
+					id: 'task-1',
+					messageId: 'task-1',
+					sessionId: 'parent',
+					type: 'tool',
+					callId: 'task-1',
+					toolName: 'task',
+					state: {
+						status: 'running',
+						input: {
+							description: 'child task',
+							prompt: 'do child work',
+							subagent_type: 'general',
+						},
+					},
+				},
+			});
+
+			let parentItems = projectSessionMessages(useChatStore.getState(), 'parent');
+			let card = parentItems[0] as RenderTaskCardNode;
+			expect(card.kind).toBe('task_card');
+			expect(card.childSessionId).toBeUndefined();
+
+			actions.dispatch('parent', 'message_part', {
+				eventType: 'message_part',
+				part: {
+					id: 'task-1',
+					messageId: 'task-1',
+					sessionId: 'parent',
+					type: 'tool',
+					callId: 'task-1',
+					toolName: 'task',
+					state: {
+						status: 'running',
+						metadata: {
+							sessionId: 'child',
+						},
+					},
+				},
+			});
+
+			actions.dispatch('child', 'session_info', {
+				eventType: 'session_info',
+				data: {
+					sessionId: 'child',
+					parentSessionId: 'parent',
+					title: 'Child',
+				},
+			});
+
+			actions.dispatch('child', 'message_record', {
+				eventType: 'message_record',
+				message: {
+					id: 'child-assistant',
+					sessionId: 'child',
+					role: 'assistant',
+					createdAt: 1,
+				},
+			});
+
+			actions.dispatch('child', 'message_part', {
+				eventType: 'message_part',
+				part: {
+					id: 'child-part',
+					messageId: 'child-assistant',
+					sessionId: 'child',
+					type: 'text',
+					text: 'streaming child output',
+					createdAt: 1,
+				},
+			});
+
+			parentItems = projectSessionMessages(useChatStore.getState(), 'parent');
+			card = parentItems[0] as RenderTaskCardNode;
+			expect(card.childSessionId).toBe('child');
+
+			const childItems = projectSessionMessages(useChatStore.getState(), 'child');
+			expect(childItems).toHaveLength(1);
+			expect(childItems[0]?.kind).toBe('assistant');
 		});
 	});
 

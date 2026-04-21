@@ -196,7 +196,10 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	private eventRestartTimer: ReturnType<typeof setTimeout> | null = null;
 
 	/** Unified tool call lifecycle state — replaces separate seenToolCalls/taskToolsPendingInput/completedToolCalls Sets. */
-	private readonly toolCallStates = new Map<string, { completed: boolean; hasInput: boolean }>();
+	private readonly toolCallStates = new Map<
+		string,
+		{ completed: boolean; hasInput: boolean; taskFingerprint?: string }
+	>();
 	private readonly messageRoles = new Map<string, 'user' | 'assistant'>();
 	/** Maps messageID → agent name (e.g. 'plan', 'build') from assistant messages. */
 	private readonly messageAgents = new Map<string, string>();
@@ -2000,7 +2003,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (isAssistantMessage(info)) {
 			// SDK Message type doesn't expose `mode`, but the runtime object carries it.
 			const mode = (info as Message & { mode?: string }).mode;
-			if (mode && mode !== 'compaction') {
+			if (mode) {
 				this.messageAgents.set(info.id, mode);
 			}
 			const { tokens } = info;
@@ -2278,6 +2281,22 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		this.emit('event', { type: 'normalized_log', ...evt });
 	}
 
+	private getTaskToolFingerprint(
+		state:
+			| {
+					input?: unknown;
+					title?: string;
+					metadata?: unknown;
+			  }
+			| undefined,
+	): string {
+		return JSON.stringify({
+			input: state?.input ?? null,
+			title: state?.title ?? null,
+			metadata: state?.metadata ?? null,
+		});
+	}
+
 	private handleToolPart(part: OpenCodePart, sessionId?: string): void {
 		if (part.type !== 'tool' || !part.callID) return;
 		const { callID, tool: name = 'unknown', state, messageID, id: partId } = part;
@@ -2289,26 +2308,41 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		const current = this.toolCallStates.get(callID);
 		const inputObj = (state?.input ?? {}) as Record<string, unknown>;
 		const hasInputNow = Object.keys(inputObj).length > 0;
+		const isTask = isTaskToolName(name);
+		const nextTaskFingerprint = isTask ? this.getTaskToolFingerprint(state) : undefined;
 
 		if (status === 'pending' || status === 'running') {
 			const isFirstSeen = !current;
 			const awaitingInput = current && !current.hasInput && hasInputNow;
+			const taskStateChanged =
+				isTask && current && current.taskFingerprint !== undefined
+					? current.taskFingerprint !== nextTaskFingerprint
+					: false;
 
-			if (isFirstSeen || awaitingInput) {
+			if (isFirstSeen || awaitingInput || taskStateChanged) {
 				// First emission OR re-emit when input arrives (was missing on initial pending).
+				// Task tools can continue receiving partial input/title/metadata updates after the
+				// first emission, so re-emit them whenever their visible state changes.
 				this.emitToolUse(callID, name, state, status, messageID, partId, sessionId);
-				this.toolCallStates.set(callID, { completed: false, hasInput: hasInputNow });
+				this.toolCallStates.set(callID, {
+					completed: false,
+					hasInput: hasInputNow,
+					...(isTask ? { taskFingerprint: nextTaskFingerprint } : {}),
+				});
 			} else if (status === 'running' && current && !current.completed) {
 				// Intermediate update for a running tool.
 				const meta = asRecord(state?.metadata);
-				const isTask = isTaskToolName(name);
 
 				// For task tools: when metadata.sessionId appears (OpenCode CLI calls
 				// ctx.metadata() after Session.create()), re-emit as tool_use so
 				// ChatProvider can extract the child session ID and link it.
 				if (isTask && getMetadataSessionId(meta)) {
 					this.emitToolUse(callID, name, state, status, messageID, partId, sessionId);
-					this.toolCallStates.set(callID, { completed: false, hasInput: hasInputNow });
+					this.toolCallStates.set(callID, {
+						completed: false,
+						hasInput: hasInputNow,
+						...(isTask ? { taskFingerprint: nextTaskFingerprint } : {}),
+					});
 				} else if (meta && Object.keys(meta).length > 0) {
 					// Non-task tools: forward metadata as streaming update (e.g. bash output).
 					this.emit('event', {
@@ -2328,8 +2362,11 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 
 		if ((status === 'completed' || status === 'error') && !current?.completed) {
-			this.toolCallStates.set(callID, { completed: true, hasInput: hasInputNow });
-			const isTask = isTaskToolName(name);
+			this.toolCallStates.set(callID, {
+				completed: true,
+				hasInput: hasInputNow,
+				...(isTask ? { taskFingerprint: nextTaskFingerprint } : {}),
+			});
 			const description = isTask ? getTaskDescription(state?.input) : '';
 			const outputText = typeof state?.output === 'string' ? state.output : '';
 

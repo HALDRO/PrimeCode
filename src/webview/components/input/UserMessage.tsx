@@ -9,6 +9,7 @@ import {
 	type RenderUserMessage,
 	useActiveModelID,
 	useChatActions,
+	useCompactionMessage,
 	useEditDraft,
 	useEditingMessageId,
 	useIsProcessing,
@@ -82,11 +83,20 @@ interface MessageCompaction {
 const CompactionCard = React.memo<{ compaction: MessageCompaction }>(({ compaction }) => {
 	const [manualExpanded, setManualExpanded] = useState<boolean | null>(null);
 	const hasSummary = Boolean(compaction.summary?.trim());
+	const hasLiveBody = hasSummary || Boolean(compaction.isStreaming);
+	// Once the user manually toggles, respect their choice.
+	// Otherwise auto-expand only while actively streaming.
 	const expanded = manualExpanded ?? Boolean(compaction.isStreaming);
 
+	// When streaming finishes, auto-collapse unless user explicitly expanded.
+	const prevStreamingRef = useRef(compaction.isStreaming);
 	useEffect(() => {
-		setManualExpanded(null);
-	}, []);
+		if (prevStreamingRef.current && !compaction.isStreaming && manualExpanded === null) {
+			// Streaming just ended — collapse automatically
+			setManualExpanded(false);
+		}
+		prevStreamingRef.current = compaction.isStreaming;
+	}, [compaction.isStreaming, manualExpanded]);
 
 	const status = hasSummary
 		? compaction.isStreaming
@@ -102,7 +112,6 @@ const CompactionCard = React.memo<{ compaction: MessageCompaction }>(({ compacti
 						<WandIcon size={14} className={cn(compaction.isStreaming && 'animate-pulse')} />
 					</span>
 					<div className="min-w-0 flex items-center gap-1.5 text-sm overflow-hidden">
-						<span className="font-medium text-vscode-foreground truncate">Compact</span>
 						<span className="text-vscode-descriptionForeground truncate">{status}</span>
 					</div>
 				</>
@@ -126,21 +135,25 @@ const CompactionCard = React.memo<{ compaction: MessageCompaction }>(({ compacti
 					</div>
 				) : undefined
 			}
-			isCollapsible={hasSummary}
-			expanded={hasSummary ? expanded : false}
+			isCollapsible={hasLiveBody}
+			expanded={hasLiveBody ? expanded : false}
 			onToggle={
-				hasSummary
+				hasLiveBody
 					? () => setManualExpanded(prev => !(prev ?? Boolean(compaction.isStreaming)))
 					: undefined
 			}
 			body={
-				hasSummary && expanded ? (
+				hasLiveBody && expanded ? (
 					<div className="px-(--gap-4) py-(--gap-3) bg-vscode-editor-background/35 border-t border-(--tool-border-color)">
-						<Markdown
-							content={compaction.summary || ''}
-							isStreaming={compaction.isStreaming}
-							className="[&_p]:!text-sm [&_li]:!text-sm"
-						/>
+						{hasSummary ? (
+							<Markdown
+								content={compaction.summary || ''}
+								isStreaming={compaction.isStreaming}
+								className="[&_p]:!text-sm [&_li]:!text-sm"
+							/>
+						) : (
+							<div className="text-sm text-vscode-descriptionForeground">Preparing summary...</div>
+						)}
 					</div>
 				) : undefined
 			}
@@ -450,7 +463,8 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 			images: attachedImages,
 			text: messageText,
 		} = useMemo(() => getMessageAttachments(message), [message]);
-		const compaction = message.compaction as MessageCompaction | undefined;
+		const liveCompaction = useCompactionMessage(message.id) as MessageCompaction | undefined;
+		const compaction = liveCompaction ?? (message.compaction as MessageCompaction | undefined);
 
 		// Get human-readable model name from model ID
 		const allProxyModels = useMemo(() => proxyEndpoints.flatMap(ep => ep.models), [proxyEndpoints]);
@@ -675,6 +689,19 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 			);
 		}
 
+		// When a compaction card is present, hide the regular message bubble
+		// and only show the CompactionCard.
+		if (compaction) {
+			return (
+				<div className="w-full mb-(--message-gap) px-0">
+					<CompactionCard
+						key={compaction.partId ?? compaction.assistantMessageId ?? compaction.messageId}
+						compaction={compaction}
+					/>
+				</div>
+			);
+		}
+
 		return (
 			<div className="w-full mb-(--message-gap) px-0">
 				<div
@@ -757,12 +784,6 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 						</div>
 					</div>
 				</div>
-				{compaction && (
-					<CompactionCard
-						key={`${compaction.partId ?? compaction.assistantMessageId ?? compaction.messageId}:${compaction.completedAt ?? 'pending'}`}
-						compaction={compaction}
-					/>
-				)}
 			</div>
 		);
 	},

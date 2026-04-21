@@ -48,33 +48,49 @@ function getCompactionView(
 ): RenderCompactionMessage | undefined {
 	const userParts = session.runtimeMessagePartsById[messageId] || [];
 	const compactionPart = userParts.find(part => part.type === 'compaction');
-	if (!compactionPart) return undefined;
 
 	const assistantRecord = session.runtimeMessageRecords.find(
-		record => record.role === 'assistant' && record.parentId === messageId,
+		record =>
+			record.role === 'assistant' &&
+			record.parentId === messageId &&
+			(record.agent === 'compaction' || compactionPart !== undefined),
 	);
+	if (!compactionPart && !assistantRecord) return undefined;
+
 	const assistantParts = assistantRecord
 		? session.runtimeMessagePartsById[assistantRecord.id] || []
 		: [];
 	const summary = assistantParts
-		.filter(part => part.type === 'text' && typeof part.text === 'string' && !part.synthetic)
+		.filter(part => part.type === 'text' && typeof part.text === 'string')
 		.map(part => part.text?.trim() || '')
 		.filter(Boolean)
 		.join('\n\n');
-	const hasIncompleteAssistantParts = assistantParts.some(
-		part => typeof part.completedAt !== 'number' && part.state?.status !== 'completed',
-	);
+	const compactionPartCompleted = typeof compactionPart?.completedAt === 'number';
+	// Use record-level completedAt as the primary signal for streaming state.
+	// Falling back to part-level checks only when no assistant record exists yet
+	// (i.e. compaction just started and we only have the user-side compaction part).
+	const isStreaming = assistantRecord
+		? typeof assistantRecord.completedAt !== 'number'
+		: Boolean(compactionPart && !compactionPartCompleted);
 
 	return {
 		type: 'compaction',
 		messageId,
-		auto: compactionPart.auto,
+		auto: compactionPart?.auto,
 		summary: summary || undefined,
-		partId: compactionPart.id,
+		partId: compactionPart?.id,
 		...(assistantRecord ? { assistantMessageId: assistantRecord.id } : {}),
-		isStreaming: hasIncompleteAssistantParts,
+		isStreaming,
 		completedAt: assistantRecord?.completedAt,
 	};
+}
+
+function isCompactionAssistantRecord(
+	record: ChatSession['runtimeMessageRecords'][number] | undefined,
+	session: ChatSession,
+): boolean {
+	if (!record || record.role !== 'assistant') return false;
+	return Boolean(session.compactionAssistantMessageIds[record.id]);
 }
 
 function getUserMessageText(messageId: string, session: ChatSession): string {
@@ -95,6 +111,9 @@ export function projectRuntimeMessages(session: ChatSession | undefined): Render
 			.map(message => message.id),
 	);
 
+	// Use the pre-computed compaction tracking sets from the store.
+	// These are populated atomically when compaction parts/records arrive,
+	// eliminating race conditions between SSE events.
 	const passthrough: RenderNode[] = [];
 	for (const message of Object.values(session.userMessagesById)) {
 		if (typeof message.id === 'string' && !runtimeUserMessageIds.has(message.id)) {
@@ -117,6 +136,10 @@ export function projectRuntimeMessages(session: ChatSession | undefined): Render
 		record?: ChatSession['runtimeMessageRecords'][number],
 	): void => {
 		seenMessageIds.add(messageId);
+		// Skip compaction assistant messages entirely — their text is shown
+		// inside the CompactionCard, not as standalone chat bubbles.
+		if (isCompactionAssistantRecord(record, session)) return;
+
 		// Keep the original arrival order from the store. During streaming, later tool
 		// updates can share timestamps with earlier text parts, and re-sorting here
 		// makes assistant text jump below tool cards and breaks tool grouping.
@@ -199,7 +222,14 @@ export function projectRuntimeMessages(session: ChatSession | undefined): Render
 			const user = userMessagesById[record.id];
 			const compaction = getCompactionView(record.id, session);
 			const fallbackContent = getUserMessageText(record.id, session);
-			if (user?.id || compaction || fallbackContent) {
+			const hasUserAttachments = Boolean(
+				user?.attachments?.files?.length ||
+					user?.attachments?.codeSnippets?.length ||
+					user?.attachments?.images?.length,
+			);
+			// Avoid rendering an empty runtime bubble for system-generated user records
+			// while we are still waiting for the compaction part to arrive.
+			if (compaction || fallbackContent || hasUserAttachments || user?.content?.trim()) {
 				const renderUser = {
 					id: record.id,
 					type: 'user',
@@ -508,6 +538,23 @@ function messagesStructurallyEqual(prev: RenderNode[], next: RenderNode[]): bool
 		const p = prev[i];
 		const n = next[i];
 		if (p.id !== n.id || p.kind !== n.kind || p.timestamp !== n.timestamp) return false;
+		if (p.kind === 'user' && n.kind === 'user') {
+			const pu = p as RenderUserMessage;
+			const nu = n as RenderUserMessage;
+			const pc = pu.compaction;
+			const nc = nu.compaction;
+			if (pu.content !== nu.content) return false;
+			if (Boolean(pc) !== Boolean(nc)) return false;
+			if (
+				pc &&
+				nc &&
+				(pc.isStreaming !== nc.isStreaming ||
+					pc.completedAt !== nc.completedAt ||
+					(pc.summary?.length ?? 0) !== (nc.summary?.length ?? 0))
+			) {
+				return false;
+			}
+		}
 		// For subtask nodes, check fields that change during streaming
 		if (p.kind === 'task_card' && n.kind === 'task_card') {
 			const pt = p as RenderTaskCardNode;
@@ -516,6 +563,9 @@ function messagesStructurallyEqual(prev: RenderNode[], next: RenderNode[]): bool
 			const ns = nt.childSummary;
 			if (
 				pt.status !== nt.status ||
+				pt.childSessionId !== nt.childSessionId ||
+				ps.title !== ns.title ||
+				ps.modelId !== ns.modelId ||
 				ps.tokens?.total !== ns.tokens?.total ||
 				ps.diffStats.added !== ns.diffStats.added ||
 				ps.diffStats.removed !== ns.diffStats.removed ||
@@ -709,6 +759,35 @@ export const useMessageTurnTokens = (messageId: string | undefined) =>
 		if (!messageId) return undefined;
 		return getActiveSession(state)?.turnTokens[messageId];
 	});
+
+/** Select live compaction view for a user message in the active session. */
+export const useCompactionMessage = (messageId: string | undefined) => {
+	const activeSessionId = useChatStore((state: ChatState) => state.activeSessionId);
+	const lastActive = useChatStore((state: ChatState) =>
+		activeSessionId ? state.sessionsById[activeSessionId]?.lastActive : 0,
+	);
+	const prevRef = useRef<RenderCompactionMessage | undefined>(undefined);
+
+	return useMemo(() => {
+		void lastActive;
+		if (!messageId) return undefined;
+		const state = useChatStore.getState();
+		const session = activeSessionId ? state.sessionsById[activeSessionId] : undefined;
+		const next = session ? getCompactionView(messageId, session) : undefined;
+		const prev = prevRef.current;
+		const isEqual =
+			prev?.messageId === next?.messageId &&
+			prev?.partId === next?.partId &&
+			prev?.assistantMessageId === next?.assistantMessageId &&
+			prev?.auto === next?.auto &&
+			prev?.isStreaming === next?.isStreaming &&
+			prev?.completedAt === next?.completedAt &&
+			(prev?.summary ?? '') === (next?.summary ?? '');
+		if (isEqual) return prev;
+		prevRef.current = next;
+		return next;
+	}, [activeSessionId, lastActive, messageId]);
+};
 
 /** Whether the last message is an assistant message that is actively streaming */
 export const useIsLastMessageStreaming = () => {

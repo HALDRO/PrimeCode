@@ -850,6 +850,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		if (event.type === 'message_record_removed') {
 			this.bridge.emit(targetSessionId, 'message_record_removed', {
 				messageId: event.data.messageID,
+				sessionId: targetSessionId,
 			});
 			return;
 		}
@@ -961,6 +962,31 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 							const childSessionId = ChatProvider.safeString(meta.sessionId);
 							if (childSessionId) {
 								this.linkKnownChildSession(e.id, targetSessionId, childSessionId);
+								this.bridge.emit(targetSessionId, 'message_part', {
+									part: {
+										id:
+											typeof e.partId === 'string'
+												? e.partId
+												: typeof e.id === 'string'
+													? e.id
+													: `tool-${Date.now()}`,
+										messageId:
+											typeof e.messageID === 'string'
+												? e.messageID
+												: typeof e.id === 'string'
+													? e.id
+													: `tool-${Date.now()}`,
+										sessionId: targetSessionId,
+										type: 'tool',
+										callId: e.id,
+										toolName: typeof e.name === 'string' ? e.name : 'task',
+										state: {
+											status: 'running',
+											metadata: meta,
+										},
+										normalizedEntry: event.normalizedEntry,
+									},
+								});
 							}
 						}
 						break;

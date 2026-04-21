@@ -38,6 +38,8 @@ function createSession(
 		todos: [],
 		pendingPermissions: [],
 		pendingQuestions: [],
+		compactionUserMessageIds: {},
+		compactionAssistantMessageIds: {},
 		...overrides,
 	};
 }
@@ -269,6 +271,35 @@ describe('projectSessionMessages — flat projection with childSessionId', () =>
 		const card = items[0] as RenderTaskCardNode;
 		expect(card.kind).toBe('task_card');
 		expect(card.childSessionId).toBeUndefined();
+	});
+
+	it('updates task_card as soon as child metadata appears during streaming', () => {
+		const state = createBaseState();
+		const parts = state.sessionsById.root.runtimeMessagePartsById['a-root'];
+		if (parts?.[0]?.state) {
+			parts[0].state.status = 'running';
+			parts[0].state.output = undefined;
+			parts[0].state.metadata = {};
+		}
+
+		let items = projectSessionMessages(state, 'root');
+		let card = items[0] as RenderTaskCardNode;
+		expect(card.childSessionId).toBeUndefined();
+		expect(card.childSummary.title).toBe('child task');
+
+		if (parts?.[0]?.state) {
+			parts[0].state.metadata = {
+				sessionId: 'child',
+				model: { providerID: 'kiro', modelID: 'kيرو-claude-opus-4-6' },
+			};
+		}
+		state.sessionsById.child.title = 'Research compaction in PrimeCode';
+
+		items = projectSessionMessages(state, 'root');
+		card = items[0] as RenderTaskCardNode;
+		expect(card.childSessionId).toBe('child');
+		expect(card.childSummary.title).toBe('Research compaction in PrimeCode');
+		expect(card.childSummary.modelId).toBe('kiro/kиро-claude-opus-4-6');
 	});
 
 	it('includes non-task tool_use items as-is', () => {
