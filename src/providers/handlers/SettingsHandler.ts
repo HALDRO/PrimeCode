@@ -1,6 +1,7 @@
 import {
+	getCustomEndpointDedupeKey,
+	getProxyEndpointProtocol,
 	isProxyEndpointProviderId,
-	normalizeProxyBaseUrl,
 	OPENAI_COMPATIBLE_PROVIDER_ID,
 } from '../../common';
 import type { CommandOf, WebviewCommand } from '../../common/protocol';
@@ -135,14 +136,17 @@ export class SettingsHandler implements WebviewMessageHandler {
 
 			const existingEndpoints = settings['proxy.endpoints'] ?? [];
 			const existingById = new Map(existingEndpoints.map(ep => [ep.id, ep]));
-			// Index by canonical baseUrl (normalizeProxyBaseUrl) so that
+			// Index by canonical (baseUrl + protocol) key so that
 			// "http://host:8080", "http://host:8080/", "http://host:8080/v1"
-			// all resolve to the same key. This is the same normalization used
-			// when writing to opencode.json and when fetching proxy models.
-			const existingByBaseUrl = new Map(
+			// all resolve to the same key within the same protocol.
+			// Two endpoints with the same URL but different protocols are distinct.
+			const existingByBaseUrlKey = new Map<string, (typeof existingEndpoints)[number]>(
 				existingEndpoints
 					.filter(ep => ep.baseUrl?.trim())
-					.map(ep => [normalizeProxyBaseUrl(ep.baseUrl), ep]),
+					.map(ep => {
+						const protocol = getProxyEndpointProtocol((ep as Record<string, unknown>).protocol);
+						return [getCustomEndpointDedupeKey(protocol, ep.baseUrl), ep];
+					}),
 			);
 			const mergedSettings = { ...settings };
 
@@ -156,16 +160,15 @@ export class SettingsHandler implements WebviewMessageHandler {
 					? provider.id.replace(`${OPENAI_COMPATIBLE_PROVIDER_ID}-`, '')
 					: provider.id;
 
-				// Skip if already exists by ID or by canonical baseUrl (prevents
-				// duplicates when the same endpoint is in both VS Code settings
-				// and opencode.json with different IDs or slightly different URLs)
-				const canonicalBaseUrl = provider.baseUrl?.trim()
-					? normalizeProxyBaseUrl(provider.baseUrl)
+				// Skip if already exists by ID or by canonical (baseUrl + protocol) key
+				// (prevents duplicates when the same endpoint is in both VS Code settings
+				// and opencode.json with different IDs or slightly different URLs).
+				// Two endpoints with the same URL but different protocols are distinct.
+				const protocol = getProxyEndpointProtocol(provider.protocol);
+				const baseUrlKey = provider.baseUrl?.trim()
+					? getCustomEndpointDedupeKey(protocol, provider.baseUrl)
 					: '';
-				if (
-					existingById.has(endpointId) ||
-					(canonicalBaseUrl && existingByBaseUrl.has(canonicalBaseUrl))
-				) {
+				if (existingById.has(endpointId) || (baseUrlKey && existingByBaseUrlKey.has(baseUrlKey))) {
 					continue;
 				}
 
@@ -174,6 +177,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 					name: provider.name,
 					baseUrl: provider.baseUrl,
 					apiKey: provider.apiKey,
+					protocol,
 					enabledModels: provider.models.map(m => m.id),
 					modelVariants: Object.fromEntries(
 						provider.models.flatMap(m =>
@@ -182,8 +186,8 @@ export class SettingsHandler implements WebviewMessageHandler {
 					),
 				};
 				mergedEndpoints.push(newEndpoint);
-				if (canonicalBaseUrl) {
-					existingByBaseUrl.set(canonicalBaseUrl, newEndpoint);
+				if (baseUrlKey) {
+					existingByBaseUrlKey.set(baseUrlKey, newEndpoint);
 				}
 			}
 

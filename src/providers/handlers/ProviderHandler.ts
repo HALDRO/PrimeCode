@@ -1,7 +1,12 @@
 import * as vscode from 'vscode';
 import {
+	buildCustomEndpointAuthHeaders,
+	getCustomEndpointDefaultName,
+	getCustomEndpointModelsUrl,
+	getCustomEndpointNpm,
+	getProxyEndpointProtocol,
 	getProxyEndpointProviderId,
-	normalizeProxyBaseUrl,
+	normalizeCustomEndpointBaseUrl,
 	type OpenCodeProviderData,
 	parseModelId,
 } from '../../common';
@@ -268,11 +273,12 @@ export class ProviderHandler implements WebviewMessageHandler {
 	private async onLoadProxyModels(msg: CommandOf<'loadProxyModels'>): Promise<void> {
 		const endpointId = msg.endpointId;
 		const customHeaders = msg.headers;
+		const protocol = getProxyEndpointProtocol(msg.protocol);
 
 		const baseUrlRaw = msg.baseUrl;
 		const apiKeyRaw = msg.apiKey;
 
-		const baseUrl = normalizeProxyBaseUrl(baseUrlRaw);
+		const baseUrl = normalizeCustomEndpointBaseUrl(protocol, baseUrlRaw);
 		const apiKey = apiKeyRaw.trim();
 
 		if (!baseUrl || baseUrl === '/v1') {
@@ -299,7 +305,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 
 		let url: URL;
 		try {
-			url = new URL(`${baseUrl}/models`);
+			url = new URL(getCustomEndpointModelsUrl(protocol, baseUrl));
 		} catch {
 			this.context.bridge.data('proxyModels', {
 				enabled: Boolean(cached?.length),
@@ -316,7 +322,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 				method: 'GET',
 				headers: {
 					Accept: 'application/json',
-					...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+					...buildCustomEndpointAuthHeaders(protocol, apiKey),
 					...(customHeaders ?? {}),
 				},
 			});
@@ -351,9 +357,10 @@ export class ProviderHandler implements WebviewMessageHandler {
 				)
 				.map(item => {
 					const id = String(item.id ?? '');
+					const displayName = typeof item.display_name === 'string' ? item.display_name : undefined;
 					return {
 						id,
-						name: id,
+						name: displayName || id,
 						contextLength: toPositiveInt(
 							item.context_length ??
 								item.context_window ??
@@ -418,8 +425,14 @@ export class ProviderHandler implements WebviewMessageHandler {
 			providerName,
 			headers: customHeaders,
 			enabledModelIds: rawEnabledIds,
+			protocol: rawProtocol,
 		} = msg;
 		if (!baseUrl?.trim()) return;
+
+		const protocol = getProxyEndpointProtocol(rawProtocol);
+
+		const npm = getCustomEndpointNpm(protocol);
+		const defaultName = getCustomEndpointDefaultName(protocol);
 
 		try {
 			const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -434,8 +447,8 @@ export class ProviderHandler implements WebviewMessageHandler {
 			if (!enabledModelIds?.length) {
 				await this.context.services.openCodeClient.upsertCustomProvider(workspaceRoot, {
 					providerId: resolvedProviderId,
-					name: providerName || 'OpenAI Compatible',
-					npm: '@ai-sdk/openai-compatible',
+					name: providerName || defaultName,
+					npm,
 					baseUrl,
 					apiKey,
 					headers: customHeaders,
@@ -452,7 +465,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 
 			// Build enriched models from the cached proxy models (preserves /v1/models metadata),
 			// falling back to models.dev for any missing fields.
-			const normalizedBaseUrl = normalizeProxyBaseUrl(baseUrl) || baseUrl;
+			const normalizedBaseUrl = normalizeCustomEndpointBaseUrl(protocol, baseUrl) || baseUrl;
 			const cached = this.context.extensionContext.globalState.get<EnrichedProxyModel[]>(
 				this.getProxyModelsCacheKey(normalizedBaseUrl),
 			);
@@ -492,8 +505,8 @@ export class ProviderHandler implements WebviewMessageHandler {
 
 			await this.context.services.openCodeClient.upsertCustomProvider(workspaceRoot, {
 				providerId: resolvedProviderId,
-				name: providerName || 'OpenAI Compatible',
-				npm: '@ai-sdk/openai-compatible',
+				name: providerName || defaultName,
+				npm,
 				baseUrl,
 				apiKey,
 				headers: customHeaders,

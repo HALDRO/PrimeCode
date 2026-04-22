@@ -45,6 +45,7 @@ export type {
 	ToolActivityInfo,
 	WebviewCommand,
 } from './protocol';
+export * from './proxyEndpoints';
 // Schemas: runtime-validated types (TypeBox) — exported first as source of truth for Rule, ParsedCommand, etc.
 export * from './schemas';
 // Unified tool name registry (shared between extension and webview)
@@ -100,27 +101,6 @@ export function generateId(prefix: string): string {
 
 	return `${prefix}_${hex}${secureRandomBase62(14)}`;
 }
-
-/**
- * Normalize a user-provided proxy base URL to the canonical form expected by
- * `@ai-sdk/openai-compatible`, which appends `/chat/completions` directly.
- *
- * Handles common user mistakes:
- *   http://host:port            → http://host:port/v1
- *   http://host:port/           → http://host:port/v1
- *   http://host:port///         → http://host:port/v1
- *   http://host:port/v1         → http://host:port/v1
- *   http://host:port/v1/        → http://host:port/v1
- *   http://host:port/v1/models  → http://host:port/v1
- *   http://host:port/v1/chat/completions → http://host:port/v1
- */
-export function normalizeProxyBaseUrl(raw: string): string {
-	return `${raw
-		.trim()
-		.replace(/\/+$/, '')
-		.replace(/\/v1(?:\/.*)?$/, '')}/v1`;
-}
-
 export function asRecord(value: unknown): Record<string, unknown> {
 	return value && typeof value === 'object' && !Array.isArray(value)
 		? (value as Record<string, unknown>)

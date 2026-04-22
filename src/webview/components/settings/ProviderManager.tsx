@@ -9,6 +9,7 @@
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import {
+	getProxyEndpointProtocol,
 	getProxyEndpointProviderId,
 	isNonDisconnectableProviderId,
 	isProxyEndpointProviderId,
@@ -288,6 +289,7 @@ export const ProviderManager: React.FC = () => {
 			name: endpoint.name,
 			baseUrl: endpoint.baseUrl,
 			apiKey: endpoint.apiKey,
+			protocol: getProxyEndpointProtocol(endpoint.protocol),
 			enabledModels: endpoint.enabledModels,
 			...(endpoint.headers && Object.keys(endpoint.headers).length > 0
 				? { headers: endpoint.headers }
@@ -303,6 +305,7 @@ export const ProviderManager: React.FC = () => {
 			name: '',
 			baseUrl: '',
 			apiKey: '',
+			protocol: 'openai-compatible' as const,
 			enabledModels: [],
 			models: [],
 			testStatus: { isLoading: false, success: null, error: null, lastTested: null },
@@ -315,7 +318,7 @@ export const ProviderManager: React.FC = () => {
 
 	const handleUpdateEndpointField = (
 		endpointId: string,
-		field: 'name' | 'baseUrl' | 'apiKey',
+		field: 'name' | 'baseUrl' | 'apiKey' | 'protocol',
 		value: string,
 	) => {
 		updateProxyEndpoint(endpointId, { [field]: value });
@@ -343,6 +346,7 @@ export const ProviderManager: React.FC = () => {
 			apiKey: endpoint.apiKey,
 			endpointId,
 			headers: endpoint.headers,
+			protocol: getProxyEndpointProtocol(endpoint.protocol),
 		});
 	};
 
@@ -365,6 +369,7 @@ export const ProviderManager: React.FC = () => {
 			providerId: getProxyEndpointProviderId(endpointId),
 			providerName: endpoint.name || undefined,
 			headers: endpoint.headers,
+			protocol: getProxyEndpointProtocol(endpoint.protocol),
 		});
 	};
 
@@ -619,7 +624,7 @@ export const ProviderManager: React.FC = () => {
 				</div>
 			) : (
 				<div className="mx-(--gap-1) mb-(--gap-6)">
-					<EmptyState>Add an extra OpenAI-compatible endpoint</EmptyState>
+					<EmptyState>Add a custom API endpoint</EmptyState>
 				</div>
 			)}
 		</div>
@@ -630,7 +635,7 @@ interface CustomEndpointConfigProps {
 	enabled: boolean;
 	endpoint: import('../../store/settingsStore').ProxyEndpointState;
 	onToggle: () => void;
-	onFieldChange: (field: 'name' | 'baseUrl' | 'apiKey', value: string) => void;
+	onFieldChange: (field: 'name' | 'baseUrl' | 'apiKey' | 'protocol', value: string) => void;
 	onHeadersChange: (headers: Record<string, string>) => void;
 	onBlur: () => void;
 	onFetchModels: () => void;
@@ -700,6 +705,19 @@ const CustomEndpointConfig: React.FC<CustomEndpointConfigProps> = ({
 					onChange={e => onFieldChange('name', e.target.value)}
 					onBlur={onBlur}
 					placeholder="e.g. Ollama"
+					className="flex-1 max-w-(--input-width-lg)"
+				/>
+			</SettingRow>
+			<SettingRow title="Protocol">
+				<Select
+					value={endpoint.protocol ?? 'openai-compatible'}
+					onChange={e =>
+						onFieldChange('protocol', e.target.value as 'openai-compatible' | 'anthropic')
+					}
+					options={[
+						{ value: 'openai-compatible', label: 'OpenAI Compatible' },
+						{ value: 'anthropic', label: 'Anthropic' },
+					]}
 					className="flex-1 max-w-(--input-width-lg)"
 				/>
 			</SettingRow>

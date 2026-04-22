@@ -7,6 +7,7 @@
  *              Single source of truth for the postMessage protocol.
  */
 
+import type { ProxyEndpointProtocol } from './proxyEndpoints';
 import type {
 	Access,
 	CommitInfo,
@@ -1140,6 +1141,7 @@ export interface LoadProxyModelsCommand {
 	apiKey: string;
 	endpointId?: string;
 	headers?: Record<string, string>;
+	protocol?: ProxyEndpointProtocol;
 }
 export interface SyncProxyModelsCommand {
 	type: 'syncProxyModels';
@@ -1150,6 +1152,7 @@ export interface SyncProxyModelsCommand {
 	providerId?: string;
 	providerName?: string;
 	headers?: Record<string, string>;
+	protocol?: ProxyEndpointProtocol;
 }
 export interface RemoveProxyEndpointCommand {
 	type: 'removeProxyEndpoint';

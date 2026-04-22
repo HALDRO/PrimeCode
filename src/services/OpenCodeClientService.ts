@@ -6,7 +6,12 @@
 
 import type { Model as ModelV2, OpencodeClient } from '@opencode-ai/sdk/v2/client';
 import * as vscode from 'vscode';
-import { normalizeProxyBaseUrl } from '../common';
+import {
+	getCustomEndpointProtocolFromNpm,
+	isCustomEndpointNpm,
+	normalizeCustomEndpointBaseUrl,
+	type ProxyEndpointProtocol,
+} from '../common';
 import {
 	mapQuestionRuntimePayloadToRequest,
 	parseSessionPermissionRequest,
@@ -83,6 +88,7 @@ export interface ProjectProxyProviderConfig {
 	name: string;
 	baseUrl: string;
 	apiKey: string;
+	protocol: ProxyEndpointProtocol;
 	models: EnrichedProxyModel[];
 }
 
@@ -235,11 +241,15 @@ export class OpenCodeClientService {
 					rawSource === 'custom'
 						? rawSource
 						: undefined;
+				const npm = typeof rawNpm === 'string' ? rawNpm : undefined;
 				return {
 					id: p.id,
 					name: p.name || p.id,
-					npm: typeof rawNpm === 'string' ? rawNpm : undefined,
-					baseUrl: rawBaseUrl ? normalizeProxyBaseUrl(rawBaseUrl) : undefined,
+					npm,
+					baseUrl:
+						rawBaseUrl && npm
+							? normalizeCustomEndpointBaseUrl(getCustomEndpointProtocolFromNpm(npm), rawBaseUrl)
+							: rawBaseUrl,
 					source,
 					env: Array.isArray(p.env) ? p.env : undefined,
 					models: Object.values(p.models).map(model => toProviderModel(model)),
@@ -247,8 +257,7 @@ export class OpenCodeClientService {
 			})
 			.filter(
 				provider =>
-					options?.includeOpenAiCompatible !== false ||
-					provider.npm !== '@ai-sdk/openai-compatible',
+					options?.includeOpenAiCompatible !== false || !isCustomEndpointNpm(provider.npm),
 			)
 			.filter(p => p.id.length > 0);
 	}
@@ -364,7 +373,7 @@ export class OpenCodeClientService {
 	): Promise<ProjectProxyProviderConfig | undefined> {
 		const config = await this.readProjectConfig(workspaceRoot);
 		const provider = config.provider?.[providerId];
-		if (!provider || provider.npm !== '@ai-sdk/openai-compatible') return undefined;
+		if (!provider || !isCustomEndpointNpm(provider.npm)) return undefined;
 
 		const rawBaseUrl =
 			typeof provider.options?.baseURL === 'string' ? String(provider.options.baseURL) : '';
@@ -383,17 +392,19 @@ export class OpenCodeClientService {
 			},
 		}));
 
+		const protocol = getCustomEndpointProtocolFromNpm(provider.npm);
 		return {
 			id: providerId,
 			name: provider.name || providerId,
-			baseUrl: normalizeProxyBaseUrl(rawBaseUrl),
+			baseUrl: normalizeCustomEndpointBaseUrl(protocol, rawBaseUrl),
 			apiKey: rawApiKey,
+			protocol,
 			models,
 		};
 	}
 
 	/**
-	 * Read ALL OpenAI-compatible proxy providers from opencode.json.
+	 * Read ALL custom endpoint proxy providers from opencode.json.
 	 * Used for reverse-syncing config file providers into the settings UI.
 	 */
 	async getAllProjectProxyProviders(workspaceRoot: string): Promise<ProjectProxyProviderConfig[]> {
@@ -402,7 +413,8 @@ export class OpenCodeClientService {
 
 		const results: ProjectProxyProviderConfig[] = [];
 		for (const [providerId, provider] of Object.entries(config.provider)) {
-			if (provider.npm !== '@ai-sdk/openai-compatible') continue;
+			if (!isCustomEndpointNpm(provider.npm)) continue;
+			const protocol = getCustomEndpointProtocolFromNpm(provider.npm);
 
 			const rawBaseUrl =
 				typeof provider.options?.baseURL === 'string' ? String(provider.options.baseURL) : '';
@@ -424,8 +436,9 @@ export class OpenCodeClientService {
 			results.push({
 				id: providerId,
 				name: provider.name || providerId,
-				baseUrl: normalizeProxyBaseUrl(rawBaseUrl),
+				baseUrl: normalizeCustomEndpointBaseUrl(protocol, rawBaseUrl),
 				apiKey: rawApiKey,
+				protocol,
 				models,
 			});
 		}
@@ -465,6 +478,7 @@ export class OpenCodeClientService {
 		const configPath = vscode.Uri.file(`${workspaceRoot}/opencode.json`);
 		const existing = await this.readProjectConfig(workspaceRoot);
 		const { providerId, name, npm, baseUrl, apiKey = '', headers, models = [] } = input;
+		const protocol = getCustomEndpointProtocolFromNpm(npm);
 
 		const modelsRecord: Record<string, OpenCodeModelConfig> = {};
 		for (const m of models) {
@@ -497,10 +511,14 @@ export class OpenCodeClientService {
 			modelsRecord[m.id] = config;
 		}
 
-		const normalizedBaseUrl = normalizeProxyBaseUrl(baseUrl);
+		const normalizedBaseUrl = normalizeCustomEndpointBaseUrl(protocol, baseUrl);
 
 		const providerSection = existing.provider ?? {};
-		const duplicateIds = this.findProxyProviderIdsByBaseUrl(providerSection, normalizedBaseUrl);
+		const duplicateIds = this.findProxyProviderIdsByBaseUrl(
+			providerSection,
+			normalizedBaseUrl,
+			npm,
+		);
 		const canonicalProviderId = providerSection[providerId]
 			? providerId
 			: duplicateIds[0] || providerId;
@@ -555,9 +573,11 @@ export class OpenCodeClientService {
 		const idsToRemove = new Set<string>();
 		if (existing.provider[providerId]) idsToRemove.add(providerId);
 		if (baseUrl?.trim()) {
+			const providerProtocol = getCustomEndpointProtocolFromNpm(existing.provider[providerId]?.npm);
 			for (const id of this.findProxyProviderIdsByBaseUrl(
 				existing.provider,
-				normalizeProxyBaseUrl(baseUrl),
+				normalizeCustomEndpointBaseUrl(providerProtocol, baseUrl),
+				existing.provider[providerId]?.npm,
 			)) {
 				idsToRemove.add(id);
 			}
@@ -573,17 +593,23 @@ export class OpenCodeClientService {
 	private findProxyProviderIdsByBaseUrl(
 		providerSection: NonNullable<OpenCodeJsonConfig['provider']>,
 		normalizedBaseUrl: string,
+		targetNpm?: string,
 	): string[] {
 		return Object.entries(providerSection)
 			.filter(([, provider]) => {
-				if (provider.npm !== '@ai-sdk/openai-compatible') return false;
+				if (!isCustomEndpointNpm(provider.npm)) return false;
+				// Only match providers with the same npm/protocol
+				if (targetNpm && provider.npm !== targetNpm) return false;
+				const protocol = getCustomEndpointProtocolFromNpm(provider.npm);
 				const rawBaseUrl =
 					typeof provider.options?.baseURL === 'string'
 						? String(provider.options.baseURL)
 						: typeof provider.options?.baseUrl === 'string'
 							? String(provider.options.baseUrl)
 							: '';
-				return rawBaseUrl ? normalizeProxyBaseUrl(rawBaseUrl) === normalizedBaseUrl : false;
+				if (!rawBaseUrl) return false;
+				const candidateUrl = normalizeCustomEndpointBaseUrl(protocol, rawBaseUrl);
+				return candidateUrl === normalizedBaseUrl;
 			})
 			.map(([id]) => id);
 	}

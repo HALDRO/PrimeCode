@@ -26,12 +26,14 @@ import {
 	type CLIProviderType,
 	type DiscoveryStatus,
 	type ExtensionMessage,
+	getCustomEndpointDedupeKey,
+	getProxyEndpointProtocol,
 	getProxyEndpointProviderId,
 	type LspStatusData,
 	type MCPServersMap,
-	normalizeProxyBaseUrl,
 	type OpenCodeProviderData,
 	type PlatformInfo,
+	type ProxyEndpointProtocol,
 	type Rule,
 } from '../../common';
 import type { PermissionPolicies } from '../../common/permissions';
@@ -354,6 +356,7 @@ export interface ProxyEndpointState {
 	name: string;
 	baseUrl: string;
 	apiKey: string;
+	protocol: ProxyEndpointProtocol;
 	enabledModels: string[];
 	headers?: Record<string, string>;
 	modelVariants?: Record<string, string[]>;
@@ -799,14 +802,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 				// If the endpoint doesn't exist yet (proxyModels arrived before settingsData),
 				// also check by canonical baseUrl to avoid creating a duplicate when
 				// settingsData arrives later with a different ID for the same endpoint.
-				// Uses normalizeProxyBaseUrl — the same normalization used when writing
-				// to opencode.json and when fetching proxy models.
+				// Two endpoints with the same URL but different protocols are distinct.
 				const rawUpdateUrl = updates.baseUrl?.trim();
 				if (rawUpdateUrl) {
-					const canonicalUpdateUrl = normalizeProxyBaseUrl(rawUpdateUrl);
+					const updateProtocol = getProxyEndpointProtocol(updates.protocol);
+					const updateKey = getCustomEndpointDedupeKey(updateProtocol, rawUpdateUrl);
 					const existingByUrl = state.proxyEndpoints.find(ep => {
 						const rawEpUrl = ep.baseUrl?.trim();
-						return rawEpUrl ? normalizeProxyBaseUrl(rawEpUrl) === canonicalUpdateUrl : false;
+						if (!rawEpUrl) return false;
+						return (
+							getCustomEndpointDedupeKey(getProxyEndpointProtocol(ep.protocol), rawEpUrl) ===
+							updateKey
+						);
 					});
 					if (existingByUrl) {
 						return {
@@ -825,6 +832,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 							name: '',
 							baseUrl: '',
 							apiKey: '',
+							protocol: 'openai-compatible' as const,
 							enabledModels: [],
 							models: [],
 							testStatus: {

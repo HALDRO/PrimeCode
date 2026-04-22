@@ -1,4 +1,4 @@
-import { normalizeProxyBaseUrl } from '../../common';
+import { getCustomEndpointDedupeKey, getProxyEndpointProtocol } from '../../common';
 import type { ProxyEndpointState, SettingsActions, SettingsState } from './settingsStore';
 
 // Helper for settings data mapping
@@ -17,13 +17,11 @@ export const handleSettingsData = (
 		const currentById = new Map(
 			(currentState?.proxyEndpoints ?? []).map(endpoint => [endpoint.id, endpoint]),
 		);
-		// Deduplicate endpoints: first by ID, then by canonical baseUrl
-		// (normalizeProxyBaseUrl). This is the same normalization used when
-		// writing to opencode.json and when fetching proxy models, so
-		// "http://host:8080", "http://host:8080/", "http://host:8080/v1"
-		// all resolve to the same canonical form.
+		// Deduplicate endpoints: first by ID, then by canonical (baseUrl + protocol)
+		// pair. Two endpoints with the same URL but different protocols (e.g.
+		// OpenAI Compatible vs Anthropic) are considered distinct.
 		const seenIds = new Set<string>();
-		const seenBaseUrls = new Set<string>();
+		const seenBaseUrlKeys = new Set<string>();
 		mappedSettings.proxyEndpoints = (settings['proxy.endpoints'] as Record<string, unknown>[])
 			.filter(endpoint => {
 				if (typeof endpoint.id !== 'string') return false;
@@ -32,9 +30,10 @@ export const handleSettingsData = (
 				seenIds.add(id);
 				const rawUrl = String(endpoint.baseUrl ?? '').trim();
 				if (rawUrl) {
-					const canonical = normalizeProxyBaseUrl(rawUrl);
-					if (seenBaseUrls.has(canonical)) return false;
-					seenBaseUrls.add(canonical);
+					const protocol = getProxyEndpointProtocol(endpoint.protocol);
+					const key = getCustomEndpointDedupeKey(protocol, rawUrl);
+					if (seenBaseUrlKeys.has(key)) return false;
+					seenBaseUrlKeys.add(key);
 				}
 				return true;
 			})
@@ -46,6 +45,7 @@ export const handleSettingsData = (
 					name: String(endpoint.name ?? ''),
 					baseUrl: String(endpoint.baseUrl ?? ''),
 					apiKey: String(endpoint.apiKey ?? ''),
+					protocol: getProxyEndpointProtocol(endpoint.protocol),
 					enabledModels: Array.isArray(endpoint.enabledModels)
 						? endpoint.enabledModels.filter((value): value is string => typeof value === 'string')
 						: [],
