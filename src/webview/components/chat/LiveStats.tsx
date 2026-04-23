@@ -70,7 +70,7 @@ export const LiveMessageStats = React.memo<LiveMessageStatsProps>(
 		const liveTurnTokens = useMessageTurnTokens(messageId);
 		const liveElapsed = useElapsedTimer(isProcessing, messageTimestamp);
 
-		// Simple token display: live usage if available, otherwise static (pre-computed from store).
+		// Simple token display: live total if available, otherwise static (pre-computed from store).
 		// No refs, no caching, no complex fallback chains.
 		const liveUsage =
 			typeof liveTurnTokens?.usage === 'number' && liveTurnTokens.usage > 0
@@ -80,7 +80,7 @@ export const LiveMessageStats = React.memo<LiveMessageStatsProps>(
 
 		// Duration priority chain
 		const durationMs = getDisplayDurationMs({
-			liveDurationMs: liveTurnTokens?.durationMs,
+			liveDurationMs: undefined,
 			statsDurationMs: stats.durationMs ?? undefined,
 			isProcessing,
 			liveElapsedMs: liveElapsed,

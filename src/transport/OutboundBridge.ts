@@ -139,7 +139,28 @@ export class OutboundBridge {
 	}
 
 	// =========================================================================
-	// Session Events — typed helpers
+	// SDK Events — pass-through to webview (new architecture)
+	// =========================================================================
+
+	/**
+	 * Send an SDK event directly to the webview.
+	 * The webview's coalescing layer handles batching and stale delta tracking.
+	 */
+	public sendSdkEvent(event: unknown): void {
+		this.send({ type: 'sdk_event', event });
+	}
+
+	/**
+	 * Send multiple SDK events as a single batch to avoid per-event re-renders.
+	 * Used by session restore to send hundreds of events atomically.
+	 */
+	public sendSdkEventBatch(events: unknown[]): void {
+		if (events.length === 0) return;
+		this.send({ type: 'sdk_event_batch', events });
+	}
+
+	// =========================================================================
+	// Session Events — typed helpers (legacy, used during migration)
 	// =========================================================================
 
 	public emit<T extends SessionEventType>(

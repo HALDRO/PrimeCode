@@ -7,7 +7,6 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
-import type { ExtensionMessage } from '../common';
 import { ChangedFilesPanel } from './components/chat/ChangedFilesPanel';
 import { GenerationStatus } from './components/chat/GenerationStatus';
 import { MessageItem } from './components/chat/MessageItem';
@@ -33,38 +32,92 @@ import {
 	useRevertedFromMessageId,
 	useTurnTokens,
 } from './store';
+import type { WebviewSdkEvent } from './store/eventReducer';
 import { useSettingsStore } from './store/settingsStore';
 import { useUIStore } from './store/uiStore';
 import { groupMessagesIntoSections, type MessageSection } from './utils/groupSections';
 import { vscode } from './utils/vscode';
 
-const COALESCABLE_EVENT_TYPES = new Set(['message', 'status', 'stats', 'turn_tokens']);
-
-let pendingSessionEvents: import('../common').SessionEventMessage[] = [];
+let queue: WebviewSdkEvent[] = [];
+let buffer: WebviewSdkEvent[] = [];
+const coalesced = new Map<string, number>();
 let pendingFrameId: number | null = null;
 
-function flushPendingSessionEvents(): void {
-	pendingFrameId = null;
-	if (pendingSessionEvents.length === 0) return;
-	const events = pendingSessionEvents;
-	pendingSessionEvents = [];
-	useChatStore.getState().actions.dispatchBatch(events);
+function coalescingKey(event: WebviewSdkEvent): string | null {
+	switch (event.type) {
+		case 'session.status':
+			return `session.status:${event.properties.sessionID}`;
+		case 'message.part.updated':
+			return `message.part.updated:${event.properties.part.messageID}:${event.properties.part.id}`;
+		default:
+			return null;
+	}
 }
 
-const handleExtensionMessage = (message: ExtensionMessage): void => {
-	if (message.type === 'session_event' && COALESCABLE_EVENT_TYPES.has(message.eventType)) {
-		pendingSessionEvents.push(message);
-		if (pendingFrameId === null) {
-			pendingFrameId = window.requestAnimationFrame(flushPendingSessionEvents);
+function enqueue(event: WebviewSdkEvent): void {
+	const key = coalescingKey(event);
+	if (key) {
+		const existing = coalesced.get(key);
+		if (existing !== undefined) {
+			queue[existing] = event;
+			return;
 		}
-		useUIStore.getState().actions.handleExtensionMessage(message);
-		useSettingsStore.getState().actions.handleExtensionMessage(message);
+		coalesced.set(key, queue.length);
+	}
+	queue.push(event);
+	if (pendingFrameId === null) {
+		pendingFrameId = window.requestAnimationFrame(flush);
+	}
+}
+
+function flush(): void {
+	pendingFrameId = null;
+	if (queue.length === 0) return;
+	const events = queue;
+	queue = buffer;
+	buffer = events;
+	queue.length = 0;
+	coalesced.clear();
+	useChatStore.getState().actions.applyBatch(events);
+	buffer.length = 0;
+}
+
+const handleExtensionMessage = (message: unknown): void => {
+	const msg = message as { type?: string; [key: string]: unknown };
+
+	if (msg.type === 'sdk_event') {
+		const sdkEvent = (msg as { event: WebviewSdkEvent }).event;
+		enqueue(sdkEvent);
+		useUIStore
+			.getState()
+			.actions.handleExtensionMessage(message as import('../common').ExtensionMessage);
+		useSettingsStore
+			.getState()
+			.actions.handleExtensionMessage(message as import('../common').ExtensionMessage);
+		return;
+	}
+
+	if (msg.type === 'sdk_event_batch') {
+		const events = (msg as { events: WebviewSdkEvent[] }).events;
+		for (const event of events) {
+			enqueue(event);
+		}
+		useUIStore
+			.getState()
+			.actions.handleExtensionMessage(message as import('../common').ExtensionMessage);
+		useSettingsStore
+			.getState()
+			.actions.handleExtensionMessage(message as import('../common').ExtensionMessage);
 		return;
 	}
 
 	useChatStore.getState().actions.handleExtensionMessage(message);
-	useUIStore.getState().actions.handleExtensionMessage(message);
-	useSettingsStore.getState().actions.handleExtensionMessage(message);
+	useUIStore
+		.getState()
+		.actions.handleExtensionMessage(message as import('../common').ExtensionMessage);
+	useSettingsStore
+		.getState()
+		.actions.handleExtensionMessage(message as import('../common').ExtensionMessage);
 };
 
 /**
@@ -664,9 +717,7 @@ export const App: React.FC = () => {
 				cancelAnimationFrame(pendingFrameId);
 				pendingFrameId = null;
 			}
-			if (pendingSessionEvents.length > 0) {
-				flushPendingSessionEvents();
-			}
+			flush();
 		};
 	}, []);
 

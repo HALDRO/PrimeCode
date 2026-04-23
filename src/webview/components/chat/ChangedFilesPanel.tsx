@@ -12,10 +12,9 @@ import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from '
 import { isMcpTool } from '../../constants';
 import { cn } from '../../lib/cn';
 import {
-	projectRuntimeMessages,
+	projectSessionMessages,
 	type RenderNode,
 	useChangedFilesState,
-	useChatActions,
 	useHasTodos,
 	useMcpServers,
 	useTodoState,
@@ -45,9 +44,9 @@ import {
 } from '../ui';
 
 interface TodoItem {
-	id: string;
 	content: string;
-	status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
+	status: string;
+	priority: string;
 }
 
 interface CopyMenuItem {
@@ -59,8 +58,10 @@ interface CopyMenuItem {
 
 function getActiveMessages(): RenderNode[] | undefined {
 	const state = useChatStore.getState();
-	const session = state.activeSessionId ? state.sessionsById[state.activeSessionId] : undefined;
-	return session ? projectRuntimeMessages(session) : undefined;
+	const sid = state.activeSessionId;
+	if (!sid) return undefined;
+	const items = projectSessionMessages(state, sid);
+	return items.length > 0 ? items : undefined;
 }
 
 function findLastUserIndex(msgs: RenderNode[]): number {
@@ -83,7 +84,13 @@ function formatMessage(
 	mode: 'last' | 'all',
 	mcpServerNames: string[],
 ): string | undefined {
-	if (m.kind === 'user') return `## User\n${m.content}`;
+	if (m.kind === 'user') {
+		const text = m.parts
+			.filter(p => p.type === 'text' && 'text' in p)
+			.map(p => ('text' in p ? (p as { text: string }).text : ''))
+			.join('');
+		return `## User\n${text}`;
+	}
 	if (m.kind === 'assistant' && m.content) {
 		return mode === 'all' ? `## Assistant\n${m.content}` : m.content;
 	}
@@ -179,7 +186,7 @@ const CopyDropdown = React.memo<{
 CopyDropdown.displayName = 'CopyDropdown';
 
 /** Status icon for todo items */
-const TodoStatusIcon: React.FC<{ status: TodoItem['status'] }> = ({ status }) => {
+const TodoStatusIcon: React.FC<{ status: string }> = ({ status }) => {
 	switch (status) {
 		case 'completed':
 			return <TodoCheckIcon size={14} className="text-success shrink-0" />;
@@ -254,7 +261,7 @@ const TodoHoverPopup = React.memo<{
 				<div className="px-(--tool-header-padding) py-1 bg-(--tool-bg-header)">
 					<div className="flex flex-col gap-(--gap-1)">
 						{todos.map(todo => (
-							<div key={todo.id || todo.content} className="flex items-start gap-1.5">
+							<div key={todo.content} className="flex items-start gap-1.5">
 								<TodoStatusIcon status={todo.status} />
 								<span
 									className={cn(
@@ -407,7 +414,6 @@ ChangedFilesPanel.displayName = 'ChangedFilesPanel';
 const ChangedFilesPanelContent: React.FC = React.memo(() => {
 	const { postMessage } = useVSCode();
 	const { changedFiles, cumulativeDiffs } = useChangedFilesState();
-	const { clearChangedFiles, removeChangedFile } = useChatActions();
 	const { showConfirmDialog } = useUIActions();
 	const mcpServers = useMcpServers();
 	const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
@@ -424,7 +430,7 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 			map.set(d.file, {
 				additions: d.additions,
 				deletions: d.deletions,
-				status: d.status,
+				status: d.status as 'added' | 'deleted' | 'modified' | undefined,
 			});
 		}
 		return map;
@@ -521,9 +527,8 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 	const handleAcceptFile = useCallback(
 		(filePath: string) => {
 			postMessage({ type: 'acceptFile', filePath });
-			removeChangedFile(filePath);
 		},
-		[postMessage, removeChangedFile],
+		[postMessage],
 	);
 
 	const handleRejectFile = useCallback(
@@ -540,8 +545,7 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 	const handleKeepAll = useCallback(() => {
 		const filePaths = groupedFiles.map(f => f.filePath);
 		postMessage({ type: 'acceptAllFiles', filePaths });
-		clearChangedFiles();
-	}, [groupedFiles, postMessage, clearChangedFiles]);
+	}, [groupedFiles, postMessage]);
 
 	// ─── Copy operations: read directly from chatStore + clipboard ───
 

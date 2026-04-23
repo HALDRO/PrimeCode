@@ -18,7 +18,7 @@ import { createPortal } from 'react-dom';
 import { useShallow } from 'zustand/react/shallow';
 import { cn } from '../../lib/cn';
 import { useChatActions, useChatStore, useHistoryDropdownState, useUIActions } from '../../store';
-import type { ChatState } from '../../store/chatStore';
+import type { SessionStore } from '../../store/chatStore';
 import { useSettingsStore } from '../../store/settingsStore';
 import { useUIStore } from '../../store/uiStore';
 import { proxyEventSource } from '../../utils/proxyEventSource';
@@ -257,7 +257,7 @@ export const Header: React.FC = React.memo(() => {
 	// sessionsById changes on every streaming event (Immer produce), but tabs only
 	// need the list of session IDs and which one is active.
 	const { sessionOrder, activeSessionId } = useChatStore(
-		useShallow((state: ChatState) => ({
+		useShallow((state: SessionStore) => ({
 			sessionOrder: state.sessionOrder,
 			activeSessionId: state.activeSessionId,
 		})),
@@ -467,10 +467,11 @@ export const Header: React.FC = React.memo(() => {
 
 	const handleCloseSession = useCallback(
 		(sessionId: string) => {
-			const sessionIsProcessing =
-				useChatStore.getState().sessionsById[sessionId]?.isProcessing ?? false;
+			const state = useChatStore.getState();
+			const status = state.sessionStatus[sessionId];
+			const isSessionProcessing = status?.type === 'busy' || status?.type === 'retry';
 
-			if (sessionIsProcessing) {
+			if (isSessionProcessing) {
 				showConfirmDialog({
 					title: 'Close active session?',
 					message: 'This session is still processing. Are you sure you want to close it?',
@@ -497,9 +498,10 @@ export const Header: React.FC = React.memo(() => {
 	}, []);
 
 	const SessionTab: React.FC<{ sessionId: string; index: number }> = ({ sessionId, index }) => {
-		const isProcessing = useChatStore(
-			(state: ChatState) => state.sessionsById[sessionId]?.isProcessing ?? false,
-		);
+		const isProcessing = useChatStore((state: SessionStore) => {
+			const status = state.sessionStatus[sessionId];
+			return status?.type === 'busy' || status?.type === 'retry';
+		});
 		const isActive = sessionId === activeSessionId;
 		const [hasFinishedWhileInactive, setHasFinishedWhileInactive] = useState(false);
 		const prevProcessingRef = useRef(isProcessing);

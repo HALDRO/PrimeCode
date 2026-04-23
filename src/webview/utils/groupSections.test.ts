@@ -17,15 +17,13 @@ type Message = RenderNode;
 
 // --- Helpers ---
 
-const userMsg = (id: string, content = 'hello'): RenderNode =>
+const userMsg = (id: string, _content = 'hello'): RenderNode =>
 	({
 		kind: 'user',
-		message: undefined as never,
-		type: 'user',
 		id,
-		timestamp: new Date().toISOString(),
-		content,
-	}) as RenderNode;
+		message: { time: { created: Date.now() }, summary: undefined },
+		parts: [],
+	}) as unknown as RenderNode;
 
 const assistantMsg = (id: string, content = 'reply'): RenderNode =>
 	({
@@ -35,7 +33,7 @@ const assistantMsg = (id: string, content = 'reply'): RenderNode =>
 		partId: id,
 		timestamp: new Date().toISOString(),
 		content,
-	}) as RenderNode;
+	}) as unknown as RenderNode;
 
 const hiddenMsg = (id: string): RenderNode =>
 	({
@@ -46,7 +44,7 @@ const hiddenMsg = (id: string): RenderNode =>
 		timestamp: new Date().toISOString(),
 		content: 'hidden',
 		hidden: true,
-	}) as RenderNode;
+	}) as unknown as RenderNode;
 
 const toolUseMsg = (id: string): RenderNode =>
 	({
@@ -58,7 +56,7 @@ const toolUseMsg = (id: string): RenderNode =>
 		toolUseId: `tu-${id}`,
 		toolInput: '{}',
 		rawInput: {},
-	}) as RenderNode;
+	}) as unknown as RenderNode;
 
 const taskCardMsg = (id: string, description = 'nested task'): RenderNode =>
 	({
@@ -76,7 +74,7 @@ const taskCardMsg = (id: string, description = 'nested task'): RenderNode =>
 			childCount: 0,
 			diffStats: { added: 0, removed: 0 },
 		},
-	}) as RenderNode;
+	}) as unknown as RenderNode;
 
 // --- Tests ---
 
@@ -348,43 +346,63 @@ describe('groupMessagesIntoSections', () => {
 		});
 
 		it('should compute nextUserMessageTs between sections', () => {
-			const t1 = '2024-01-01T00:00:00.000Z';
-			const t2 = '2024-01-01T00:01:00.000Z';
-			const t3 = '2024-01-01T00:02:00.000Z';
+			const t1 = Date.now();
+			const t2 = t1 + 60000;
+			const t3 = t1 + 120000;
 			const msgs = [
-				{ kind: 'user', type: 'user', id: 'u1', timestamp: t1, content: 'hi' } as Message,
+				{
+					kind: 'user',
+					id: 'u1',
+					message: { time: { created: t1 } },
+					parts: [],
+				} as unknown as Message,
 				{
 					kind: 'assistant',
 					type: 'assistant',
 					id: 'a1',
 					partId: 'a1',
-					timestamp: t1,
+					timestamp: new Date(t1).toISOString(),
 					content: 'reply',
-				} as Message,
-				{ kind: 'user', type: 'user', id: 'u2', timestamp: t2, content: 'hi2' } as Message,
+				} as unknown as Message,
+				{
+					kind: 'user',
+					id: 'u2',
+					message: { time: { created: t2 } },
+					parts: [],
+				} as unknown as Message,
 				{
 					kind: 'assistant',
 					type: 'assistant',
 					id: 'a2',
 					partId: 'a2',
-					timestamp: t2,
+					timestamp: new Date(t2).toISOString(),
 					content: 'reply2',
-				} as Message,
-				{ kind: 'user', type: 'user', id: 'u3', timestamp: t3, content: 'hi3' } as Message,
+				} as unknown as Message,
+				{
+					kind: 'user',
+					id: 'u3',
+					message: { time: { created: t3 } },
+					parts: [],
+				} as unknown as Message,
 			];
 			const result = groupMessagesIntoSections(msgs, [], null);
 
-			expect(result[0].stats.nextUserMessageTs).toBe(new Date(t2).getTime());
-			expect(result[1].stats.nextUserMessageTs).toBe(new Date(t3).getTime());
+			expect(result[0].stats.nextUserMessageTs).toBe(t2);
+			expect(result[1].stats.nextUserMessageTs).toBe(t3);
 			expect(result[2].stats.nextUserMessageTs).toBeNull();
 		});
 
 		it('should compute lastResponseTs from assistant messages', () => {
-			const tUser = '2024-01-01T00:00:00.000Z';
+			const tUser = new Date('2024-01-01T00:00:00.000Z').getTime();
 			const tAsst1 = '2024-01-01T00:00:05.000Z';
 			const tAsst2 = '2024-01-01T00:00:10.000Z';
 			const msgs = [
-				{ kind: 'user', type: 'user', id: 'u1', timestamp: tUser, content: 'hi' } as Message,
+				{
+					kind: 'user',
+					id: 'u1',
+					message: { time: { created: tUser } },
+					parts: [],
+				} as unknown as Message,
 				{
 					kind: 'assistant',
 					type: 'assistant',
@@ -392,7 +410,7 @@ describe('groupMessagesIntoSections', () => {
 					partId: 'a1',
 					timestamp: tAsst1,
 					content: 'r1',
-				} as Message,
+				} as unknown as Message,
 				{
 					kind: 'assistant',
 					type: 'assistant',
@@ -400,7 +418,7 @@ describe('groupMessagesIntoSections', () => {
 					partId: 'a2',
 					timestamp: tAsst2,
 					content: 'r2',
-				} as Message,
+				} as unknown as Message,
 			];
 			const result = groupMessagesIntoSections(msgs, [], null);
 
@@ -426,7 +444,7 @@ describe('groupMessagesIntoSections', () => {
 					toolUseId: 'tu-1',
 					toolInput: '{}',
 					rawInput: {},
-				} as Message,
+				} as unknown as Message,
 				{
 					kind: 'tool_use',
 					type: 'tool_use',
@@ -436,7 +454,7 @@ describe('groupMessagesIntoSections', () => {
 					toolUseId: 'tu-2',
 					toolInput: '{}',
 					rawInput: {},
-				} as Message,
+				} as unknown as Message,
 				assistantMsg('a1'),
 			];
 			const changedFiles: ChangedFile[] = [
@@ -487,6 +505,70 @@ describe('groupMessagesIntoSections', () => {
 			expect(result[0].stats.fileChanges).toBeNull();
 		});
 
+		it('should ignore summary diffs when raw tool diff is unavailable', () => {
+			const msg = {
+				kind: 'user',
+				id: 'u1',
+				message: {
+					time: { created: Date.now() },
+					summary: { diffs: [{ file: '/a.ts', additions: 1, deletions: 1 }] },
+				},
+				parts: [],
+			} as unknown as Message;
+			const result = groupMessagesIntoSections([msg, assistantMsg('a1')], [], null, [], {}, false, [
+				{ file: '/a.ts', additions: 10, deletions: 2, status: 'modified' },
+				{ file: '/b.ts', additions: 5, deletions: 0, status: 'added' },
+			]);
+
+			expect(result[0].stats.fileChanges).toBeNull();
+		});
+
+		it('should prefer raw tool metadata diff over summary diffs for footer stats', () => {
+			const msg = {
+				kind: 'user',
+				id: 'u1',
+				message: {
+					time: { created: Date.now() },
+					summary: {
+						diffs: [{ file: '/wrong.ts', additions: 395, deletions: 259 }],
+					},
+				},
+				parts: [],
+			} as unknown as Message;
+			const tool = {
+				kind: 'tool_use',
+				type: 'tool_use',
+				id: 't1',
+				timestamp: new Date().toISOString(),
+				toolName: 'apply_patch',
+				toolUseId: 'tu-1',
+				toolInput: '{}',
+				rawInput: {},
+				metadata: {
+					files: [
+						{
+							filePath: 'src/example.ts',
+							status: 'update',
+							additions: 3,
+							deletions: 0,
+							diff: [
+								'--- a/src/example.ts',
+								'+++ b/src/example.ts',
+								'@@ -1,2 +1,5 @@',
+								' old',
+								'+one',
+								'+two',
+								'+three',
+							].join('\n'),
+						},
+					],
+				},
+			} as unknown as Message;
+			const result = groupMessagesIntoSections([msg, tool, assistantMsg('a1')], [], null, []);
+
+			expect(result[0].stats.fileChanges).toEqual({ added: 3, removed: 0, files: 1 });
+		});
+
 		it('should use real turnTokens for tokenCount', () => {
 			const msgs = [
 				userMsg('u1'),
@@ -497,7 +579,7 @@ describe('groupMessagesIntoSections', () => {
 					partId: 'a1',
 					timestamp: new Date().toISOString(),
 					content: 'reply',
-				} as Message,
+				} as unknown as Message,
 			];
 			const turnTokens = {
 				u1: { input: 50, output: 50, total: 100, usage: 25, cacheRead: 0 },

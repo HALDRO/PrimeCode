@@ -8,39 +8,14 @@
 import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 
-import type {
-	EventMessagePartDelta,
-	EventMessagePartUpdated,
-	EventMessageUpdated,
-	EventSessionError,
-	EventSessionStatus,
-	Message,
-	Part,
-	Event as SdkEvent,
-	SessionStatus as SdkSessionStatus,
-	Session,
-	TextPart,
-	ToolPart,
-} from '@opencode-ai/sdk/v2/client';
+import type { Message, Part, TextPart } from '@opencode-ai/sdk/v2/client';
 import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk/v2/client';
 
-import { asRecord, getStringField, parseModelId } from '../../common';
+import { parseModelId } from '../../common';
 import { PERMISSION_CATEGORIES } from '../../common/permissions';
-import {
-	mapPermissionRuntimePayloadToRequest,
-	mapQuestionRuntimePayloadToRequest,
-	parseSessionTodoItem,
-} from '../../common/schemas';
-import {
-	computeTurnUsage,
-	getCompletedDurationMs,
-	getSnapshotTotal,
-} from '../../common/tokenStats';
 import { logger } from '../../utils/logger';
 import { getPathBaseName, toFileUri } from '../../utils/path';
-import { LogNormalizer } from './LogNormalizer';
-import { mapSdkMessageToRecord, mapSdkPartToPayload } from './OpenCodeEventMapper';
-import type { CLIConfig, CLIEvent, CLIExecutor } from './types';
+import type { CLIConfig, CLIExecutor } from './types';
 
 // =============================================================================
 // Types & Interfaces
@@ -48,110 +23,6 @@ import type { CLIConfig, CLIEvent, CLIExecutor } from './types';
 
 /** Single entry from `client.session.messages()` response. */
 type SessionMessageEntry = { info: Message; parts: Part[] };
-
-function normalizeTodoItems(raw: unknown): import('../../common').SessionTodoItem[] {
-	if (!Array.isArray(raw) || raw.length === 0) return [];
-	return raw.flatMap((item, index) => {
-		const parsed = parseSessionTodoItem(item);
-		if (parsed) return [parsed];
-		if (!item || typeof item !== 'object') return [];
-		const record = item as Record<string, unknown>;
-		const content = typeof record.content === 'string' ? record.content : undefined;
-		if (!content) return [];
-		return [
-			{
-				id: typeof record.id === 'string' ? record.id : `todo-${index}-${content}`,
-				content,
-				status:
-					record.status === 'completed' ||
-					record.status === 'in_progress' ||
-					record.status === 'cancelled'
-						? record.status
-						: 'pending',
-				priority: typeof record.priority === 'string' ? record.priority : 'medium',
-			} satisfies import('../../common').SessionTodoItem,
-		];
-	});
-}
-
-type AssistantInfo = Extract<Message, { role: 'assistant' }>;
-
-/**
- * Extended session status that includes an 'other' fallback for unknown status types.
- * Mirrors SDK `SessionStatus` but adds graceful degradation.
- */
-type OpenCodeSessionStatus = SdkSessionStatus | { type: 'other'; raw?: unknown };
-
-/**
- * Normalized part type used internally.
- * SDK `Part` is the source of truth, but we keep a simplified view for event handling.
- */
-type OpenCodePart =
-	| {
-			type: 'text' | 'reasoning';
-			id?: string;
-			messageID?: string;
-			text?: string;
-			sessionID?: string;
-			synthetic?: boolean;
-	  }
-	| {
-			type: 'tool';
-			id?: string;
-			messageID?: string;
-			callID?: string;
-			tool?: string;
-			sessionID?: string;
-			state?: {
-				status?: 'pending' | 'running' | 'completed' | 'error';
-				input?: unknown;
-				output?: string;
-				title?: string;
-				metadata?: unknown;
-			};
-	  }
-	| {
-			type: 'file';
-			messageID?: string;
-			sessionID?: string;
-			mime: string;
-			url: string;
-			filename?: string;
-			source?: {
-				type: 'file' | 'symbol';
-				path: string;
-				text: { value: string; start: number; end: number };
-				range?: {
-					start: { line: number; character: number };
-					end: { line: number; character: number };
-				};
-				name?: string;
-			};
-	  }
-	| {
-			type: 'compaction';
-			messageID?: string;
-			sessionID?: string;
-			auto?: boolean;
-	  }
-	| { type: 'other'; raw: unknown; sessionID?: string };
-
-function isAssistantMessage(info: Message): info is AssistantInfo {
-	return info.role === 'assistant';
-}
-
-function isTaskToolName(name: string): boolean {
-	return name === 'task' || name === 'Task';
-}
-
-function getTaskDescription(input: unknown): string {
-	const record = asRecord(input);
-	return getStringField(record, 'description') || getStringField(record, 'prompt');
-}
-
-function getMetadataSessionId(metadata: unknown): string | undefined {
-	return getStringField(metadata, 'sessionId') || undefined;
-}
 
 // =============================================================================
 // TTL Cache Helper
@@ -189,48 +60,29 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	private directory: string | null = null;
 	/** SDK client for typed API calls. Initialized after server is ready. */
 	private sdkClient: OpencodeClient | null = null;
-	private readonly logNormalizer = new LogNormalizer();
 
 	private eventAbort: AbortController | null = null;
 	private eventStreamRunning = false;
 	private eventRestartTimer: ReturnType<typeof setTimeout> | null = null;
 
-	/** Unified tool call lifecycle state — replaces separate seenToolCalls/taskToolsPendingInput/completedToolCalls Sets. */
-	private readonly toolCallStates = new Map<
-		string,
-		{ completed: boolean; hasInput: boolean; taskFingerprint?: string }
-	>();
-	private readonly messageRoles = new Map<string, 'user' | 'assistant'>();
-	/** Maps messageID → agent name (e.g. 'plan', 'build') from assistant messages. */
-	private readonly messageAgents = new Map<string, string>();
-	/** Message IDs that already emitted a 'finished' event — prevents duplicate emissions when SDK re-sends message.updated with the same completed timestamp. */
-	private readonly finishedMessageIds = new Set<string>();
-	private lastEmittedStatus = new Map<string, string>();
+	/**
+	 * Bridge reference for sending SDK events directly to the webview.
+	 * Set by ChatProvider after construction via `setBridge()`.
+	 */
+	private bridge: import('../../transport/OutboundBridge').OutboundBridge | null = null;
+
+	/** Set the bridge reference for direct SDK event forwarding. */
+	public setBridge(bridge: import('../../transport/OutboundBridge').OutboundBridge): void {
+		this.bridge = bridge;
+	}
 
 	/** All session IDs that are currently active (main + subagent children). */
 	private readonly activeSessions = new Set<string>();
-	/** Reverse index: sessionID → Set<messageID>. Enables per-session cleanup of message-keyed Maps. */
-	private readonly sessionMessages = new Map<string, Set<string>>();
 	/** Sessions explicitly deleted/closed — SSE events for these are skipped to save CPU. */
 	private readonly deletedSessions = new Set<string>();
 
 	/** Guards against concurrent ensureServer calls. */
 	private ensureServerPromise: Promise<void> | null = null;
-
-	// Token stats tracking: snapshot of last known tokens per assistant message (for session_updated delta detection)
-	private readonly lastMessageTokens = new Map<
-		string,
-		{ input: number; output: number; cacheRead: number }
-	>();
-	// Per-turn (keyed by userMessageId) accumulated duration, latest token snapshot,
-	// and authoritative per-turn token usage derived from positive snapshot deltas.
-	private readonly turnAccum = new Map<
-		string,
-		{ total: number; usage: number; durationMs: number }
-	>();
-	/** Last observed user message ID per session for final turn_tokens fallback on stream finish. */
-	private readonly lastUserMessageIdBySession = new Map<string, string>();
-	private readonly sessionSnapshotTotals = new Map<string, number>();
 
 	private readonly _commandsCache = new TtlCache<Array<{ name: string; description?: string }>>(
 		5 * 60 * 1000,
@@ -256,15 +108,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	private serverStartedAt: number | null = null;
 	private static readonly LOCAL_SERVER_HOST = '127.0.0.1';
 	private static readonly LOCAL_SERVER_PORT = OpenCodeExecutor.resolveLocalServerPort();
-
-	constructor() {
-		super();
-		this.logNormalizer.on('entry', entry => {
-			if (entry.entryType.type === 'ErrorMessage') {
-				this.emit('event', { type: 'error', data: { message: entry.content } });
-			}
-		});
-	}
 
 	getCapabilities(): ReadonlyArray<'SessionFork' | 'SetupHelper'> {
 		return ['SessionFork'];
@@ -621,7 +464,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			void this.preloadMetadata();
 		} catch (error) {
 			logger.error('[OpenCodeExecutor] Failed to start server:', error);
-			this.emit('event', { type: 'error', data: { message: String(error) } });
 			throw error;
 		} finally {
 			if (changedCwd) {
@@ -709,7 +551,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		this.sdkClient = null;
 		this.isServerOwner = false;
 		this.serverStartedAt = null;
-		this.lastEmittedStatus.clear();
 		this._commandsCache.clear();
 		this._providersCache.clear();
 		this._agentsCache.clear();
@@ -890,7 +731,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		try {
 			this.sessionId = await this.createSession(config.workspaceRoot);
 			logger.info(`[OpenCodeExecutor] New session created: ${this.sessionId}`);
-			this.emit('event', { type: 'session_updated', data: { sessionId: this.sessionId } });
 
 			this.startEventStream(this.serverUrl, config.workspaceRoot);
 			await this.sendPrompt(config.workspaceRoot, this.sessionId, prompt, config);
@@ -1002,10 +842,10 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 		try {
 			const client = this.requireSdk();
-			// Pass roots=true so the server filters out child sessions (subtasks)
-			// at the SQL level BEFORE applying the limit. Without this, child
-			// sessions consume most of the 100-row limit, leaving very few
-			// top-level conversations visible in the history dropdown.
+			// Return the full session graph here, including child sessions.
+			// Restore/runtime flows need access to subtasks so nested task cards can
+			// hydrate their own transcripts. Call sites that only care about top-level
+			// chats must filter `!parentID` explicitly.
 			//
 			// On Windows, VS Code returns uri.fsPath with a lowercase drive letter
 			// (e.g. "c:\..."), while the OpenCode server stores sessions with an
@@ -1016,7 +856,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			//
 			// To work around this, we issue a second request with the alternate
 			// drive letter case and merge the results, deduplicating by session ID.
-			const { data: raw } = await client.session.list({ roots: true });
+			const { data: raw } = await client.session.list({});
 			const sessions = Array.isArray(raw) ? raw : [];
 
 			// Fetch sessions stored under the alternate drive letter case (Windows)
@@ -1028,7 +868,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 				try {
 					const { data: altRaw } = await client.session.list({
-						roots: true,
 						directory: altDirectory,
 					});
 					const altSessions = Array.isArray(altRaw) ? altRaw : [];
@@ -1096,260 +935,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 	}
 
-	async getHistory(sessionId: string, config: CLIConfig): Promise<CLIEvent[]> {
-		if (!this.serverUrl) {
-			if (!config.workspaceRoot) return [];
-			try {
-				await this.ensureServer(config);
-			} catch {
-				return [];
-			}
-			if (!this.serverUrl) return [];
-		}
-
-		try {
-			const client = this.requireSdk();
-			const { data: messages } = await client.session.messages({
-				sessionID: sessionId,
-				directory: config.workspaceRoot,
-			});
-
-			if (!Array.isArray(messages)) return [];
-
-			// Track cumulative counters and latest model/provider info.
-			let _assistantCount = 0;
-			let _totalModelDuration = 0;
-			let lastModelID: string | undefined;
-			let lastProviderID: string | undefined;
-
-			// Track per-turn token snapshots keyed by parent user message ID.
-			// `total` behaves like a cumulative snapshot, so the latest value per turn
-			// is the source of truth and the UI derives per-message deltas.
-			const turnSnapshots = new Map<
-				string,
-				{ total: number; input: number; output: number; cacheRead: number; durationMs: number }
-			>();
-			// Track current user message ID for assistant messages without parentID
-			let currentUserMessageId: string | undefined;
-
-			const events = messages.flatMap((msg: SessionMessageEntry) => {
-				const { info, parts } = msg;
-				const role = info.role;
-				const timestamp = info.time?.created
-					? new Date(info.time.created).toISOString()
-					: new Date().toISOString();
-
-				// Aggregate tokens and duration from assistant messages
-				if (info.role === 'assistant') {
-					const { tokens } = info;
-					_assistantCount++;
-
-					// Track model info from assistant messages for replay
-					if (info.modelID) lastModelID = info.modelID;
-					if (info.providerID) lastProviderID = info.providerID;
-
-					// Sum individual model response times (matches live behavior)
-					const created = info.time?.created;
-					const completed = info.time?.completed;
-					if (typeof created === 'number' && typeof completed === 'number' && completed > created) {
-						_totalModelDuration += completed - created;
-					}
-
-					// Collect the latest per-turn token snapshot (last value wins; duration sums across steps).
-					const turnKey = info.parentID || currentUserMessageId;
-					if (turnKey && (tokens.input > 0 || tokens.output > 0)) {
-						const total = getSnapshotTotal(tokens);
-						// Compute per-assistant-message duration
-						const msgCreated = info.time?.created;
-						const msgCompleted = info.time?.completed;
-						const msgDuration = getCompletedDurationMs(msgCreated, msgCompleted);
-						// Update snapshot: total is last-wins, duration is summed.
-						const existing = turnSnapshots.get(turnKey);
-						turnSnapshots.set(turnKey, {
-							total,
-							input: tokens.input,
-							output: tokens.output,
-							cacheRead: tokens.cache.read,
-							durationMs: (existing?.durationMs ?? 0) + msgDuration,
-						});
-					}
-				}
-
-				// For user messages, collect file parts to reconstruct attachments
-				if (role === 'user') {
-					currentUserMessageId = info.id;
-					const { content, attachments, isCompaction } = this.extractUserMessageParts(parts);
-
-					// Compaction is represented by native message_record/message_part events.
-					// Do not synthesize a fake tool card here.
-					if (isCompaction) {
-						return [];
-					}
-
-					return [
-						{
-							type: 'normalized_log' as const,
-							data: {
-								role: 'user',
-								content,
-								timestamp,
-								messageId: info.id,
-								...(info.summary
-									? {
-											summary: {
-												title: info.summary.title,
-												diffs: Array.isArray(info.summary.diffs)
-													? info.summary.diffs.map(diff => ({
-															file: diff.file,
-															additions: diff.additions,
-															deletions: diff.deletions,
-															status: diff.status,
-														}))
-													: [],
-											},
-										}
-									: {}),
-								...(attachments ? { attachments } : {}),
-							},
-							normalizedEntry: {
-								entryType: 'UserMessage' as const,
-								content: content || '',
-								timestamp,
-							},
-							sessionId,
-						},
-					];
-				}
-
-				return parts.flatMap((sdkPart: Part) => {
-					const part = this.normalizePart(sdkPart);
-					const partEvents: CLIEvent[] = [];
-
-					if (part.type === 'tool' && part.callID) {
-						const { callID, tool: name = 'unknown', state } = part;
-						const status = state?.status;
-						const input = (state?.input ?? {}) as Record<string, unknown>;
-						const stateTime = Reflect.get((state ?? {}) as object, 'time');
-						const toolTime =
-							stateTime && typeof stateTime === 'object'
-								? (stateTime as { start?: number; end?: number })
-								: undefined;
-						const toolStartTs =
-							typeof toolTime?.start === 'number'
-								? new Date(toolTime.start).toISOString()
-								: timestamp;
-						const toolEndTs =
-							typeof toolTime?.end === 'number'
-								? new Date(toolTime.end).toISOString()
-								: typeof info.time?.completed === 'number'
-									? new Date(info.time.completed).toISOString()
-									: timestamp;
-
-						// Always emit tool_use for history
-						const normalized = this.logNormalizer.normalizeToolUse(name, input, callID);
-						partEvents.push({
-							type: 'tool_use' as const,
-							data: {
-								tool: name,
-								input,
-								toolUseId: callID,
-								timestamp: toolStartTs,
-							},
-							normalizedEntry: normalized,
-							sessionId,
-						});
-
-						// If completed or error, emit tool_result
-						if (status === 'completed' || status === 'error') {
-							const isTask = isTaskToolName(name);
-							const taskDescription = isTask ? getTaskDescription(input) : '';
-							const outputText = typeof state?.output === 'string' ? state.output : '';
-							const resultNormalized = isTask
-								? this.logNormalizer.normalizeTaskResult(
-										callID,
-										taskDescription,
-										outputText,
-										status === 'error',
-									)
-								: undefined;
-							partEvents.push({
-								type: 'tool_result' as const,
-								data: {
-									tool: name,
-									content: state?.output || '',
-									is_error: status === 'error',
-									tool_use_id: callID,
-									timestamp: toolEndTs,
-									title: state?.title,
-									metadata: state?.metadata,
-									input: state?.input,
-								},
-								...(resultNormalized ? { normalizedEntry: resultNormalized } : {}),
-								sessionId,
-							});
-						}
-					}
-
-					return partEvents;
-				});
-			});
-
-			// Emit turn_tokens with snapshot totals per user turn.
-			// `total` from CLI is the context window size — that's what we show per user message.
-			// Duration is summed across steps within a turn. Total is last-wins snapshot.
-			let lastTotal = 0;
-			for (const [turnKey, snap] of turnSnapshots) {
-				lastTotal = snap.total;
-				events.push({
-					type: 'turn_tokens' as const,
-					data: {
-						inputTokens: snap.input,
-						outputTokens: snap.output,
-						totalTokens: snap.total,
-						cacheReadTokens: snap.cacheRead,
-						...(snap.durationMs > 0 ? { durationMs: snap.durationMs } : {}),
-						userMessageId: turnKey,
-					},
-					sessionId,
-				});
-			}
-
-			if (sessionId && lastTotal > 0) {
-				this.sessionSnapshotTotals.set(sessionId, lastTotal);
-			}
-
-			if (lastModelID) {
-				events.push({
-					type: 'session_updated' as const,
-					data: {
-						modelID: lastModelID,
-						providerID: lastProviderID,
-					},
-					sessionId,
-				});
-			}
-
-			return events;
-		} catch (_error) {
-			return [];
-		}
-	}
-
-	syncSessionSnapshotTotal(
-		sessionId: string,
-		turnTokens: Record<string, { total?: number }>,
-	): void {
-		let lastTotal = 0;
-		for (const turn of Object.values(turnTokens)) {
-			if (typeof turn?.total === 'number' && turn.total > 0) {
-				lastTotal = turn.total;
-			}
-		}
-		if (lastTotal > 0) {
-			this.sessionSnapshotTotals.set(sessionId, lastTotal);
-		}
-	}
-
 	// =========================================================================
 	// Metadata & Commands
 	// =========================================================================
@@ -1395,14 +980,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				break;
 			case 'status': {
 				const mcp = await this.getMcpStatus(this.directory);
-				this.emit('event', {
-					type: 'tool_result',
-					data: {
-						tool_use_id: 'system',
-						name: 'status',
-						content: JSON.stringify({ mcp }, null, 2),
-					},
-				});
+				logger.info('[OpenCode] Status:', { mcp });
 				break;
 			}
 			default:
@@ -1417,11 +995,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 		const parsed = parseModelId(config.model ?? '');
 		if (!parsed) {
-			this.emit('event', {
-				type: 'error',
-				data: { message: 'Error: No model configured for compaction.' },
-				sessionId: sid,
-			});
+			logger.warn('[OpenCode] No model configured for compaction', { sessionId: sid });
 			return;
 		}
 
@@ -1437,32 +1011,18 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				modelID: parsed.modelId,
 			});
 		} catch (error) {
-			this.emit('event', {
-				type: 'error',
-				data: { message: `Error compacting session: ${String(error)}` },
-				sessionId: sid,
-			});
+			logger.error(`[OpenCode] Error compacting session: ${String(error)}`);
 		}
 	}
 
-	private async handleListCommand(name: string, fetcher: () => Promise<unknown>): Promise<void> {
-		const data = await fetcher();
-		this.emitToolResult(name, JSON.stringify(data, null, 2));
-	}
-
-	private emitToolResult(name: string, content: string, isError = false, sessionId?: string): void {
-		this.emit('event', {
-			type: 'tool_result',
-			data: { tool_use_id: 'system', name, content, is_error: isError },
-			sessionId: sessionId || this.sessionId || undefined,
-		});
+	private async handleListCommand(_name: string, fetcher: () => Promise<unknown>): Promise<void> {
+		await fetcher();
+		// Results are delivered to webview via SDK events, not CLI event emit.
 	}
 
 	private async handleDynamicCommand(cmd: string): Promise<void> {
 		if (!this.directory) return;
-		// Generic execution logic could go here
 		logger.warn(`Unknown OpenCode command: ${cmd}`);
-		this.emit('event', { type: 'error', data: { message: `Unknown command: ${cmd}` } });
 	}
 
 	// =========================================================================
@@ -1728,7 +1288,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			} catch (error) {
 				if (!signal.aborted) {
 					logger.error('[OpenCode] Event stream error:', error);
-					this.emit('event', { type: 'error', data: { message: String(error) } });
 				}
 			} finally {
 				this.eventStreamRunning = false;
@@ -1744,840 +1303,57 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		})();
 	}
 
+	/**
+	 * Permission auto-approve callback. Set by ChatProvider via `setPermissionInterceptor()`.
+	 * Returns true if the permission was auto-approved (don't forward to webview).
+	 */
+	private permissionInterceptor:
+		| ((sessionId: string, props: Record<string, unknown>) => boolean)
+		| null = null;
+
+	/** Set the permission interceptor for auto-approve logic. */
+	public setPermissionInterceptor(
+		interceptor: (sessionId: string, props: Record<string, unknown>) => boolean,
+	): void {
+		this.permissionInterceptor = interceptor;
+	}
+
 	private handleSdkEvent(raw: unknown): void {
 		const envelope = raw as { type: string; properties?: unknown };
 		if (!envelope || typeof envelope.type !== 'string') return;
 
-		// Handle events not in SDK Event union before narrowing
-		if (envelope.type === 'question.asked') {
-			const props = (envelope.properties ?? {}) as Record<string, unknown>;
-			const sessionId = typeof props.sessionID === 'string' ? props.sessionID : undefined;
-			this.handleQuestionAsked(props, sessionId);
-			return;
+		const props = (envelope.properties ?? {}) as Record<string, unknown>;
+		const sessionId = typeof props.sessionID === 'string' ? props.sessionID : undefined;
+
+		// Skip deleted sessions
+		if (sessionId && this.deletedSessions.has(sessionId)) return;
+
+		// Track active sessions for abort
+		if (envelope.type === 'session.status') {
+			const status = props.status as { type?: string } | undefined;
+			if (sessionId && status?.type === 'busy') {
+				this.activeSessions.add(sessionId);
+			} else if (sessionId && status?.type === 'idle') {
+				this.activeSessions.delete(sessionId);
+			}
 		}
-		if (envelope.type === 'question.replied' || envelope.type === 'question.rejected') {
-			const props = (envelope.properties ?? {}) as Record<string, unknown>;
-			const sessionId = typeof props.sessionID === 'string' ? props.sessionID : undefined;
-			this.emit('event', {
-				type: 'question_replied',
-				data: {
-					sessionID: sessionId || '',
-					requestID: typeof props.requestID === 'string' ? props.requestID : '',
-					answers: Array.isArray(props.answers) ? (props.answers as string[][]) : undefined,
-					rejected: envelope.type === 'question.rejected',
-				},
-				sessionId,
-			});
-			return;
-		}
-		if (envelope.type === 'permission.asked') {
-			const props = (envelope.properties ?? {}) as Record<string, unknown>;
-			const sessionId = typeof props.sessionID === 'string' ? props.sessionID : undefined;
-			this.handlePermissionAsked(props, sessionId);
-			return;
-		}
-		if (envelope.type === 'permission.replied') {
-			const props = (envelope.properties ?? {}) as Record<string, unknown>;
-			const sessionId = typeof props.sessionID === 'string' ? props.sessionID : undefined;
-			this.emit('event', {
-				type: 'permission_replied',
-				data: {
-					sessionID: sessionId || '',
-					requestID: typeof props.requestID === 'string' ? props.requestID : '',
-					reply:
-						typeof props.reply === 'string'
-							? (props.reply as 'once' | 'always' | 'reject')
-							: undefined,
-				},
-				sessionId,
-			});
-			return;
-		}
-		if (envelope.type === 'todo.updated') {
-			const props = (envelope.properties ?? {}) as Record<string, unknown>;
-			const sessionId = typeof props.sessionID === 'string' ? props.sessionID : undefined;
-			const todosRaw = Array.isArray(props.todos) ? props.todos : [];
-			this.emit('event', {
-				type: 'todo',
-				data: {
-					sessionID: sessionId || '',
-					todos: normalizeTodoItems(todosRaw),
-				},
-				sessionId,
-			});
-			return;
-		}
-		if (envelope.type === 'message.part.delta') {
-			const props = (envelope as EventMessagePartDelta).properties;
-			if (props.sessionID && this.deletedSessions.has(props.sessionID)) return;
-			this.handlePartDelta(props);
-			return;
+		if (envelope.type === 'session.idle' && sessionId) {
+			this.activeSessions.delete(sessionId);
 		}
 
-		const event = raw as SdkEvent;
-
-		// Skip all events for sessions that have been deleted/closed.
-		// The SSE stream is global, so stale events may arrive after cleanup.
-		const eventSessionId =
-			(
-				event as {
-					properties?: {
-						info?: { sessionID?: string };
-						part?: { sessionID?: string };
-						sessionID?: string;
-					};
+		// Permission interceptor: auto-approve before forwarding to webview
+		if (this.bridge) {
+			if (envelope.type === 'permission.asked' && this.permissionInterceptor && sessionId) {
+				if (!this.permissionInterceptor(sessionId, props)) {
+					this.bridge.sendSdkEvent(envelope);
 				}
-			).properties?.info?.sessionID ??
-			(event as { properties?: { part?: { sessionID?: string } } }).properties?.part?.sessionID ??
-			(event as { properties?: { sessionID?: string } }).properties?.sessionID;
-		if (eventSessionId && this.deletedSessions.has(eventSessionId)) return;
-
-		switch (event.type) {
-			case 'lsp.updated': {
-				this.emit('event', {
-					type: 'lsp_updated',
-					data: {},
-				});
-				break;
-			}
-			case 'session.created': {
-				const props = (envelope as { type: string; properties: { info: Session } }).properties;
-				const info = props.info;
-				this.emit('event', {
-					type: 'session_created',
-					data: {
-						sessionID: info.id,
-						parentID: info.parentID ?? undefined,
-						title: info.title ?? undefined,
-					},
-					sessionId: info.id,
-				});
-				break;
-			}
-			case 'message.updated': {
-				const props = (event as EventMessageUpdated).properties;
-				const sessionId = props.info.sessionID;
-				this.handleMessageUpdated(props.info, sessionId);
-				break;
-			}
-			case 'message.removed': {
-				const props = (
-					event as {
-						type: 'message.removed';
-						properties: { sessionID: string; messageID: string };
-					}
-				).properties;
-				this.emit('event', {
-					type: 'message_record_removed',
-					data: {
-						sessionID: props.sessionID,
-						messageID: props.messageID,
-					},
-					sessionId: props.sessionID,
-				});
-				break;
-			}
-			case 'message.part.updated': {
-				const props = (event as EventMessagePartUpdated).properties;
-				const sessionId = props.part.sessionID;
-				this.handlePartUpdated(props, sessionId);
-				break;
-			}
-			case 'message.part.removed': {
-				const props = (
-					event as {
-						type: 'message.part.removed';
-						properties: { sessionID: string; messageID: string; partID: string };
-					}
-				).properties;
-				this.emit('event', {
-					type: 'message_part_removed',
-					data: {
-						sessionID: props.sessionID,
-						messageID: props.messageID,
-						partID: props.partID,
-					},
-					sessionId: props.sessionID,
-				});
-				break;
-			}
-			case 'session.status': {
-				const props = (envelope as EventSessionStatus).properties;
-				const sessionId = props.sessionID;
-				this.handleSessionStatus(props.status, sessionId);
-				if (sessionId) {
-					if (props.status.type === 'busy') {
-						this.activeSessions.add(sessionId);
-					} else if (props.status.type === 'idle') {
-						this.activeSessions.delete(sessionId);
-					}
-				}
-				break;
-			}
-			case 'session.error': {
-				const props = (envelope as EventSessionError).properties;
-				const sessionId = props.sessionID;
-				this.handleSessionError(props.error, sessionId);
-				break;
-			}
-			case 'session.idle': {
-				const props = (envelope as { type: string; properties: { sessionID: string } }).properties;
-				if (props.sessionID) this.activeSessions.delete(props.sessionID);
-				this.emitFinalTurnTokensForSession(props.sessionID);
-				this.emit('event', {
-					type: 'finished',
-					data: { reason: 'idle' },
-					sessionId: props.sessionID,
-				});
-				break;
-			}
-			case 'session.diff': {
-				const props = (
-					envelope as {
-						type: string;
-						properties: {
-							sessionID: string;
-							diff: Array<{ file: string; additions: number; deletions: number; status?: string }>;
-						};
-					}
-				).properties;
-				this.emit('event', {
-					type: 'session_diff' as const,
-					data: {
-						sessionID: props.sessionID,
-						diff: (props.diff || []).map(d => ({
-							file: d.file,
-							additions: d.additions || 0,
-							deletions: d.deletions || 0,
-							status: d.status as 'added' | 'deleted' | 'modified' | undefined,
-						})),
-					},
-					sessionId: props.sessionID,
-				});
-				break;
-			}
-			case 'session.compacted': {
-				const props = (envelope as { type: string; properties: { sessionID: string } }).properties;
-				const sid = props.sessionID;
-				logger.info('[OpenCode] Session compacted', { sessionId: sid });
-				break;
-			}
-		}
-	}
-
-	private handleMessageUpdated(info: Message, sessionId?: string): void {
-		const mappedRecord = mapSdkMessageToRecord(info, {
-			agent: isAssistantMessage(info) ? this.messageAgents.get(info.id) : undefined,
-		});
-		this.emit('event', {
-			type: 'message_record',
-			data: {
-				id: info.id,
-				sessionID: info.sessionID,
-				role: info.role,
-				parentID: mappedRecord.parentId,
-				createdAt: info.time?.created,
-				completedAt: mappedRecord.completedAt,
-				modelID: mappedRecord.modelId,
-				providerID: mappedRecord.providerId,
-				agent: mappedRecord.agent,
-				tokens: mappedRecord.tokens,
-				cost: mappedRecord.cost,
-			},
-			sessionId,
-		});
-
-		this.messageRoles.set(info.id, info.role);
-
-		// Track message→session mapping for per-session cleanup
-		if (sessionId) {
-			let msgs = this.sessionMessages.get(sessionId);
-			if (!msgs) {
-				msgs = new Set();
-				this.sessionMessages.set(sessionId, msgs);
-			}
-			msgs.add(info.id);
-		}
-
-		// Store agent/mode from assistant messages for later use in part events
-		if (isAssistantMessage(info)) {
-			// SDK Message type doesn't expose `mode`, but the runtime object carries it.
-			const mode = (info as Message & { mode?: string }).mode;
-			if (mode) {
-				this.messageAgents.set(info.id, mode);
-			}
-			const { tokens } = info;
-			const userMessageId = info.parentID;
-			if (sessionId && typeof userMessageId === 'string' && userMessageId) {
-				this.lastUserMessageIdBySession.set(sessionId, userMessageId);
-			}
-			const input = tokens.input;
-			const output = tokens.output;
-			const total = getSnapshotTotal(tokens);
-			const cacheRead = tokens.cache.read;
-
-			// Detect token changes for session_updated emission (context bar, etc.)
-			const prev = this.lastMessageTokens.get(info.id) ?? { input: 0, output: 0, cacheRead: 0 };
-			const hasTokenDelta =
-				input !== prev.input || output !== prev.output || cacheRead !== prev.cacheRead;
-			this.lastMessageTokens.set(info.id, { input, output, cacheRead });
-
-			const modelID = info.modelID || undefined;
-			const providerID = info.providerID || undefined;
-
-			// Emit session_updated only for model/provider changes.
-			if (hasTokenDelta) {
-				if (modelID) {
-					this.emit('event', { type: 'session_updated', data: { modelID, providerID }, sessionId });
-				}
-			} else if (modelID) {
-				this.emit('event', { type: 'session_updated', data: { modelID, providerID }, sessionId });
-			}
-
-			// On step completion emit the latest per-turn snapshot plus authoritative
-			// per-turn token usage.
-			// accumulated inside this turn from positive snapshot deltas.
-			// Duration is summed across steps within a turn.
-			const completed = info.time.completed;
-			const hasCompleted = typeof completed === 'number';
-			const started = info.time.created;
-			const durationMs = getCompletedDurationMs(started, completed) || undefined;
-			const finish = (info as Record<string, unknown>).finish as string | undefined;
-			const isStepDone = hasCompleted || !!finish;
-
-			if (isStepDone) {
-				// Accumulate duration per user turn, keep the latest non-zero snapshot total,
-				// and derive actual per-turn usage from positive snapshot growth within the turn.
-				// Skip zero-total steps (empty/aborted messages) to avoid overwriting real data.
-				if (userMessageId) {
-					const prev = this.turnAccum.get(userMessageId) ?? { total: 0, usage: 0, durationMs: 0 };
-					const sessionSnapshotTotal = sessionId
-						? (this.sessionSnapshotTotals.get(sessionId) ?? 0)
-						: 0;
-					const usage = computeTurnUsage(tokens, {
-						previousTurnSnapshotTotal: prev.total,
-						previousSessionSnapshotTotal: sessionSnapshotTotal,
-					});
-					this.turnAccum.set(userMessageId, {
-						total: usage.totalTokens > 0 ? usage.totalTokens : prev.total,
-						usage: prev.usage + usage.usageTokens,
-						durationMs: prev.durationMs + (durationMs ?? 0),
-					});
-					if (usage.totalTokens > 0 && sessionId) {
-						this.sessionSnapshotTotals.set(sessionId, usage.nextSessionSnapshotTotal);
-					}
-				}
-
-				// Emit turn_tokens with snapshot total + accumulated usage + duration.
-				if (total > 0) {
-					const accum = userMessageId ? this.turnAccum.get(userMessageId) : undefined;
-					this.emit('event', {
-						type: 'turn_tokens',
-						data: {
-							inputTokens: input,
-							outputTokens: output,
-							totalTokens: accum?.total ?? total,
-							...(typeof accum?.usage === 'number' ? { usageTokens: accum.usage } : {}),
-							cacheReadTokens: cacheRead,
-							...(userMessageId ? { userMessageId } : {}),
-							...(accum ? { durationMs: accum.durationMs } : durationMs ? { durationMs } : {}),
-						},
-						sessionId,
-					});
-				}
-
-				if (hasCompleted && !this.finishedMessageIds.has(info.id)) {
-					if (sessionId) {
-						this.emitFinalTurnTokensForSession(sessionId);
-					}
-					this.finishedMessageIds.add(info.id);
-					this.emit('event', {
-						type: 'finished',
-						data: { reason: 'message_completed' },
-						sessionId,
-					});
-				}
-			}
-		}
-	}
-
-	private emitFinalTurnTokensForSession(sessionId?: string): void {
-		if (!sessionId) return;
-		const userMessageId = this.lastUserMessageIdBySession.get(sessionId);
-		if (!userMessageId) return;
-		const accum = this.turnAccum.get(userMessageId);
-		if (!accum || accum.total <= 0) return;
-
-		this.emit('event', {
-			type: 'turn_tokens',
-			data: {
-				inputTokens: 0,
-				outputTokens: 0,
-				totalTokens: accum.total,
-				usageTokens: accum.usage,
-				cacheReadTokens: 0,
-				userMessageId,
-				...(accum.durationMs > 0 ? { durationMs: accum.durationMs } : {}),
-			},
-			sessionId,
-		});
-	}
-
-	/**
-	 * Handle question.asked SSE events from OpenCode's Question tool.
-	 * Validates raw SSE props against QuestionRequestSchema (single parse),
-	 * then emits typed data that flows through all layers without re-mapping.
-	 */
-	private handleQuestionAsked(props: Record<string, unknown>, sessionId?: string): void {
-		const parsed = mapQuestionRuntimePayloadToRequest(props, sessionId ?? '');
-		if (!parsed) return;
-
-		this.emit('event', {
-			type: 'question',
-			data: {
-				id: parsed.id,
-				requestId: parsed.id,
-				sessionID: sessionId,
-				questions: parsed.questions,
-				tool: parsed.tool,
-			},
-			sessionId,
-		});
-	}
-
-	private handlePermissionAsked(props: Record<string, unknown>, sessionId?: string): void {
-		const parsed = mapPermissionRuntimePayloadToRequest(props, sessionId ?? '');
-		if (!parsed) return;
-
-		this.emit('event', {
-			type: 'permission',
-			data: {
-				id: parsed.id,
-				requestId: parsed.id,
-				permission: parsed.permission,
-				patterns: parsed.patterns,
-				toolCallId: parsed.tool?.callID,
-				toolUseId: parsed.tool?.callID,
-				tool: parsed.permission,
-				toolInput: parsed.metadata,
-				metadata: parsed.metadata,
-			},
-			sessionId,
-		});
-	}
-
-	private handleSessionStatus(status: SdkSessionStatus, sessionId?: string): void {
-		const normalized = this.normalizeSessionStatus(status);
-		const statusKey = sessionId || '__global__';
-		if (this.lastEmittedStatus.get(statusKey) === normalized.type) return;
-
-		this.lastEmittedStatus.set(statusKey, normalized.type);
-		this.emit('event', { type: 'session_updated', data: { status: normalized }, sessionId });
-	}
-
-	private handleSessionError(
-		error: EventSessionError['properties']['error'],
-		sessionId?: string,
-	): void {
-		let message = 'OpenCode session error';
-		if (error) {
-			const data = error.data as { message?: string };
-			message = data?.message ?? message;
-		}
-		this.emit('event', { type: 'error', data: { message }, sessionId });
-	}
-
-	private handlePartUpdated(
-		props: EventMessagePartUpdated['properties'],
-		sessionId?: string,
-	): void {
-		const part = this.normalizePart(props.part);
-		const sid = part.sessionID ?? sessionId;
-		const partMessageId = 'messageID' in part ? part.messageID : undefined;
-		const partId = typeof props.part.id === 'string' ? props.part.id : partMessageId;
-
-		if (partMessageId && partId) {
-			const payloadPart = mapSdkPartToPayload(props.part, partMessageId, sid || '');
-			this.emit('event', {
-				type: 'message_part',
-				data: {
-					id: payloadPart.id,
-					messageID: payloadPart.messageId,
-					sessionID: payloadPart.sessionId,
-					type: payloadPart.type,
-					text: payloadPart.text,
-					callID: payloadPart.callId,
-					tool: payloadPart.toolName,
-					state: payloadPart.state,
-					createdAt: payloadPart.createdAt,
-					completedAt: payloadPart.completedAt,
-					mime: payloadPart.mime,
-					url: payloadPart.url,
-					filename: payloadPart.filename,
-					synthetic: payloadPart.synthetic,
-					auto: payloadPart.auto,
-				},
-				sessionId: sid,
-			});
-		}
-
-		if (part.type === 'tool') this.handleToolPart(part, sid);
-	}
-
-	/**
-	 * Handle `message.part.delta` SSE events — lightweight incremental text/reasoning
-	 * chunks emitted by the server for every streaming token (no DB write on server side).
-	 * This is the primary path for real-time streaming; `message.part.updated` only fires
-	 * at part boundaries (start/end) with full snapshots.
-	 */
-	private handlePartDelta(props: EventMessagePartDelta['properties']): void {
-		const { sessionID, messageID, field, delta } = props;
-		if (!delta) return;
-		if (messageID && props.partID) {
-			this.emit('event', {
-				type: 'message_part_delta',
-				data: {
-					messageID,
-					partID: props.partID,
-					field,
-					delta,
-					sessionID,
-				},
-				sessionId: sessionID,
-			});
-		}
-
-		// Skip deltas for user messages
-		if (messageID && this.messageRoles.get(messageID) === 'user') return;
-	}
-
-	/** Emit a tool_use event — shared helper to avoid duplication. */
-	private emitToolUse(
-		callID: string,
-		name: string,
-		state: { input?: unknown; title?: string; metadata?: unknown } | undefined,
-		status: string | undefined,
-		messageID?: string,
-		partId?: string,
-		sessionId?: string,
-	): void {
-		const inputObj = asRecord(state?.input);
-		const normalized = this.logNormalizer.normalizeToolUse(name, inputObj, callID);
-		const evt = {
-			data: {
-				id: callID,
-				...(messageID ? { messageID } : {}),
-				name,
-				input: state?.input,
-				state: status,
-				title: state?.title,
-				metadata: state?.metadata,
-				...(partId ? { partId } : {}),
-			},
-			normalizedEntry: normalized,
-			sessionId,
-		};
-		this.emit('event', { type: 'tool_use', ...evt });
-		this.emit('event', { type: 'normalized_log', ...evt });
-	}
-
-	private getTaskToolFingerprint(
-		state:
-			| {
-					input?: unknown;
-					title?: string;
-					metadata?: unknown;
-			  }
-			| undefined,
-	): string {
-		return JSON.stringify({
-			input: state?.input ?? null,
-			title: state?.title ?? null,
-			metadata: state?.metadata ?? null,
-		});
-	}
-
-	private handleToolPart(part: OpenCodePart, sessionId?: string): void {
-		if (part.type !== 'tool' || !part.callID) return;
-		const { callID, tool: name = 'unknown', state, messageID, id: partId } = part;
-		const status = state?.status;
-
-		// Question tool parts are emitted so ToolCard can render QuestionCard inline.
-		// The interactive overlay is handled separately via question.asked SSE event.
-
-		const current = this.toolCallStates.get(callID);
-		const inputObj = (state?.input ?? {}) as Record<string, unknown>;
-		const hasInputNow = Object.keys(inputObj).length > 0;
-		const isTask = isTaskToolName(name);
-		const nextTaskFingerprint = isTask ? this.getTaskToolFingerprint(state) : undefined;
-
-		if (status === 'pending' || status === 'running') {
-			const isFirstSeen = !current;
-			const awaitingInput = current && !current.hasInput && hasInputNow;
-			const taskStateChanged =
-				isTask && current && current.taskFingerprint !== undefined
-					? current.taskFingerprint !== nextTaskFingerprint
-					: false;
-
-			if (isFirstSeen || awaitingInput || taskStateChanged) {
-				// First emission OR re-emit when input arrives (was missing on initial pending).
-				// Task tools can continue receiving partial input/title/metadata updates after the
-				// first emission, so re-emit them whenever their visible state changes.
-				this.emitToolUse(callID, name, state, status, messageID, partId, sessionId);
-				this.toolCallStates.set(callID, {
-					completed: false,
-					hasInput: hasInputNow,
-					...(isTask ? { taskFingerprint: nextTaskFingerprint } : {}),
-				});
-			} else if (status === 'running' && current && !current.completed) {
-				// Intermediate update for a running tool.
-				const meta = asRecord(state?.metadata);
-
-				// For task tools: when metadata.sessionId appears (OpenCode CLI calls
-				// ctx.metadata() after Session.create()), re-emit as tool_use so
-				// ChatProvider can extract the child session ID and link it.
-				if (isTask && getMetadataSessionId(meta)) {
-					this.emitToolUse(callID, name, state, status, messageID, partId, sessionId);
-					this.toolCallStates.set(callID, {
-						completed: false,
-						hasInput: hasInputNow,
-						...(isTask ? { taskFingerprint: nextTaskFingerprint } : {}),
-					});
-				} else if (meta && Object.keys(meta).length > 0) {
-					// Non-task tools: forward metadata as streaming update (e.g. bash output).
-					this.emit('event', {
-						type: 'tool_streaming',
-						data: {
-							id: callID,
-							...(messageID ? { messageID } : {}),
-							name,
-							streamingOutput: typeof meta.output === 'string' ? meta.output : undefined,
-							metadata: meta,
-							...(partId ? { partId } : {}),
-						},
-						sessionId,
-					});
-				}
+				// If auto-approved, don't forward to webview
+			} else {
+				this.bridge.sendSdkEvent(envelope);
 			}
 		}
 
-		if ((status === 'completed' || status === 'error') && !current?.completed) {
-			this.toolCallStates.set(callID, {
-				completed: true,
-				hasInput: hasInputNow,
-				...(isTask ? { taskFingerprint: nextTaskFingerprint } : {}),
-			});
-			const description = isTask ? getTaskDescription(state?.input) : '';
-			const outputText = typeof state?.output === 'string' ? state.output : '';
-
-			const resultNormalized = isTask
-				? this.logNormalizer.normalizeTaskResult(
-						callID,
-						description,
-						outputText,
-						status === 'error',
-					)
-				: this.logNormalizer.normalizeToolUse(name, asRecord(state?.input), callID);
-			this.emit('event', {
-				type: 'tool_result',
-				data: {
-					tool_use_id: callID,
-					...(messageID ? { messageID } : {}),
-					name,
-					content: state?.output ?? '',
-					is_error: status === 'error',
-					input: state?.input,
-					title: state?.title,
-					metadata: state?.metadata,
-					...(partId ? { partId } : {}),
-				},
-				normalizedEntry: resultNormalized,
-				sessionId,
-			});
-		}
-	}
-
-	private extractUserMessageParts(parts: Part[]): {
-		content: string;
-		isCompaction?: boolean;
-		attachments?: {
-			files?: string[];
-			codeSnippets?: Array<{
-				filePath: string;
-				startLine: number;
-				endLine: number;
-				content: string;
-			}>;
-			images?: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
-		};
-	} {
-		const textParts: string[] = [];
-		const files: string[] = [];
-		const codeSnippets: Array<{
-			filePath: string;
-			startLine: number;
-			endLine: number;
-			content: string;
-		}> = [];
-		const images: Array<{ id: string; name: string; dataUrl: string; path?: string }> = [];
-		let hasCompaction = false;
-
-		for (const sdkPart of parts) {
-			const part = this.normalizePart(sdkPart);
-			if (part.type === 'compaction') {
-				hasCompaction = true;
-			} else if (part.type === 'text' && part.text && !part.synthetic) {
-				textParts.push(part.text);
-			} else if (part.type === 'file') {
-				if (part.mime.startsWith('image/')) {
-					images.push({
-						id: `img-${Math.random().toString(36).slice(2, 9)}`,
-						name: part.filename || 'image',
-						dataUrl: part.url,
-						path: part.source?.path,
-					});
-				} else if (part.source) {
-					const src = part.source;
-					if (src.type === 'symbol' || (src.text.start > 0 && src.text.end > 0)) {
-						codeSnippets.push({
-							filePath: src.path,
-							startLine: src.text.start,
-							endLine: src.text.end,
-							content: src.text.value,
-						});
-					} else {
-						files.push(src.path);
-					}
-				} else {
-					// Fallback: no source, extract path from URL
-					try {
-						const parsed = new URL(part.url);
-						files.push(decodeURIComponent(parsed.pathname).replace(/^\//, ''));
-					} catch {
-						const fp = part.url.startsWith('file://') ? part.url.replace('file://', '') : part.url;
-						files.push(decodeURIComponent(fp));
-					}
-				}
-			}
-		}
-
-		const content = textParts.join('\n');
-		const hasAttachments = files.length > 0 || codeSnippets.length > 0 || images.length > 0;
-
-		// If this is a compaction message, return special marker
-		if (hasCompaction) {
-			return { content: '', isCompaction: true };
-		}
-
-		return {
-			content,
-			...(hasAttachments
-				? {
-						attachments: {
-							...(files.length > 0 ? { files } : {}),
-							...(codeSnippets.length > 0 ? { codeSnippets } : {}),
-							...(images.length > 0 ? { images } : {}),
-						},
-					}
-				: {}),
-		};
-	}
-
-	private normalizeSessionStatus(raw?: SdkSessionStatus): OpenCodeSessionStatus {
-		if (!raw) return { type: 'other' };
-		if (raw.type === 'retry' || raw.type === 'idle' || raw.type === 'busy') return raw;
-		return { type: 'other', raw };
-	}
-
-	private normalizePart(raw: Part | undefined): OpenCodePart {
-		if (!raw) return { type: 'other', raw: null };
-
-		if (raw.type === 'text') {
-			return {
-				type: 'text',
-				id: raw.id,
-				messageID: raw.messageID,
-				text: raw.text,
-				sessionID: raw.sessionID,
-				synthetic: (raw as { synthetic?: boolean }).synthetic,
-			};
-		}
-		if (raw.type === 'reasoning') {
-			return {
-				type: 'reasoning',
-				id: raw.id,
-				messageID: raw.messageID,
-				text: raw.text,
-				sessionID: raw.sessionID,
-			};
-		}
-		if (raw.type === 'tool') {
-			const toolPart = raw as ToolPart;
-			return {
-				type: 'tool',
-				id: toolPart.id,
-				messageID: toolPart.messageID,
-				callID: toolPart.callID,
-				tool: toolPart.tool,
-				sessionID: toolPart.sessionID,
-				state: {
-					status: toolPart.state.status,
-					input: 'input' in toolPart.state ? toolPart.state.input : undefined,
-					output: toolPart.state.status === 'completed' ? toolPart.state.output : undefined,
-					title:
-						'title' in toolPart.state ? (toolPart.state.title as string | undefined) : undefined,
-					metadata: 'metadata' in toolPart.state ? toolPart.state.metadata : undefined,
-				},
-			};
-		}
-		if (raw.type === 'file') {
-			const filePart = raw as {
-				messageID: string;
-				sessionID: string;
-				type: 'file';
-				mime: string;
-				url: string;
-				filename?: string;
-				source?: {
-					type: 'file' | 'symbol';
-					path: string;
-					text: { value: string; start: number; end: number };
-					range?: {
-						start: { line: number; character: number };
-						end: { line: number; character: number };
-					};
-					name?: string;
-				};
-			};
-			return {
-				type: 'file',
-				messageID: filePart.messageID,
-				sessionID: filePart.sessionID,
-				mime: filePart.mime,
-				url: filePart.url,
-				filename: filePart.filename,
-				source: filePart.source,
-			};
-		}
-		if (raw.type === 'compaction') {
-			const compactionPart = raw as {
-				messageID: string;
-				sessionID: string;
-				type: 'compaction';
-				auto: boolean;
-			};
-			return {
-				type: 'compaction',
-				messageID: compactionPart.messageID,
-				sessionID: compactionPart.sessionID,
-				auto: compactionPart.auto,
-			};
-		}
-		return { type: 'other', raw, sessionID: 'sessionID' in raw ? raw.sessionID : undefined };
-	}
-
-	parseStream(_chunk: Buffer): CLIEvent[] {
-		return [];
+		this.emit('sdk_event', envelope);
 	}
 
 	async abortSession(sessionId: string): Promise<void> {
@@ -2615,42 +1391,14 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		this.sessionId = null;
 		this.eventStreamRunning = false;
 		this.eventAbort = null;
-		this.toolCallStates.clear();
-		this.messageRoles.clear();
-		this.messageAgents.clear();
-		this.lastEmittedStatus.clear();
-		this.lastMessageTokens.clear();
-		this.turnAccum.clear();
-		this.lastUserMessageIdBySession.clear();
-		this.sessionSnapshotTotals.clear();
 		this.activeSessions.clear();
-		this.sessionMessages.clear();
 		this.deletedSessions.clear();
-		this.finishedMessageIds.clear();
 	}
 
-	/** Remove per-message metadata for a given session to prevent unbounded Map growth. */
+	/** Remove per-session metadata to prevent unbounded growth. */
 	private cleanupSessionMessages(sessionId: string): void {
 		this.activeSessions.delete(sessionId);
-		this.lastEmittedStatus.delete(sessionId);
-		// Mark as deleted so future SSE events for this session are skipped early.
 		this.deletedSessions.add(sessionId);
-
-		// Clean all message-keyed Maps using the session→messages index.
-		const messageIds = this.sessionMessages.get(sessionId);
-		if (messageIds) {
-			for (const msgId of messageIds) {
-				this.toolCallStates.delete(msgId);
-				this.messageRoles.delete(msgId);
-				this.messageAgents.delete(msgId);
-				this.lastMessageTokens.delete(msgId);
-				this.turnAccum.delete(msgId);
-				this.finishedMessageIds.delete(msgId);
-			}
-			this.sessionMessages.delete(sessionId);
-		}
-		this.lastUserMessageIdBySession.delete(sessionId);
-		this.sessionSnapshotTotals.delete(sessionId);
 	}
 
 	async dispose(): Promise<void> {
@@ -2791,13 +1539,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 		if (!this.isServerOwner) {
 			logger.warn('[OpenCode] Cannot restart shared server from a non-owner window');
-			this.emit('event', {
-				type: 'error',
-				data: {
-					message:
-						'Cannot restart OpenCode from this window because it is attached to a server started elsewhere. Restart from the owner window or reload the owning VS Code instance.',
-				},
-			});
 			return false;
 		}
 
@@ -2826,10 +1567,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			}
 		} catch (error) {
 			logger.error('[OpenCode] Server restart failed:', error);
-			this.emit('event', {
-				type: 'error',
-				data: { message: `Failed to restart OpenCode server: ${String(error)}` },
-			});
 		}
 
 		return false;

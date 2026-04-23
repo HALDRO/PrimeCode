@@ -6,7 +6,9 @@
  *              so the frontend components stay dumb renderers.
  */
 
+import { buildToolActionType } from '../../common/normalizedTypes';
 import { getTurnUsageDuration, getTurnUsageTokenCount } from '../../common/tokenStats';
+import { resolveFileChanges } from '../components/chat/SimpleDiff';
 import {
 	type GroupedResponseItem,
 	groupToolMessages,
@@ -122,7 +124,7 @@ export const groupMessagesIntoSections = (
 	changedFiles: ChangedFile[] = [],
 	turnTokens: Record<string, TokenUsage> = {},
 	isProcessing = false,
-	_cumulativeDiffs: Array<{
+	cumulativeDiffs: Array<{
 		file: string;
 		additions: number;
 		deletions: number;
@@ -173,6 +175,7 @@ export const groupMessagesIntoSections = (
 					changedFilesMap,
 					false,
 					turnTokens,
+					cumulativeDiffs,
 				);
 				sections.push(currentSection);
 				currentResponses = [];
@@ -211,6 +214,7 @@ export const groupMessagesIntoSections = (
 			changedFilesMap,
 			true,
 			turnTokens,
+			cumulativeDiffs,
 		);
 		sections.push(currentSection);
 	}
@@ -220,7 +224,9 @@ export const groupMessagesIntoSections = (
 		sections[i].stats.isFirst = i === 0;
 		sections[i].stats.isLast = i === sections.length - 1;
 		sections[i].stats.nextUserMessageTs =
-			i < sections.length - 1 ? new Date(sections[i + 1].userMessage.timestamp).getTime() : null;
+			i < sections.length - 1
+				? new Date(sections[i + 1].userMessage.message.time.created).getTime()
+				: null;
 	}
 
 	return sections;
@@ -233,54 +239,68 @@ function computeSectionStats(
 	changedFilesMap: Map<string, ChangedFile[]>,
 	isLast: boolean,
 	turnTokens: Record<string, TokenUsage> = {},
+	_cumulativeDiffs: Array<{
+		file: string;
+		additions: number;
+		deletions: number;
+		status?: string;
+	}> = [],
 ): SectionStats {
-	const userTs = new Date(section.userMessage.timestamp).getTime();
+	const userTs = new Date(section.userMessage.message.time.created).getTime();
 
 	// Last response timestamp
 	let lastResponseTs: number | null = null;
 	for (const msg of rawResponses) {
+		if (!('timestamp' in msg)) continue;
 		const t = new Date(msg.timestamp).getTime();
 		if (t > userTs && (lastResponseTs === null || t > lastResponseTs)) {
 			lastResponseTs = t;
 		}
 	}
 
-	// File changes: use userMessage.summary.diffs from OpenCode history.
-	// This matches the official OpenCode UI for turn-level change summaries.
 	let fileChanges: SectionStats['fileChanges'] = null;
-	const summaryDiffs = section.userMessage.summary?.diffs;
+	let rawDiffAdded = 0;
+	let rawDiffRemoved = 0;
+	const rawDiffFiles = new Set<string>();
 
-	if (Array.isArray(summaryDiffs) && summaryDiffs.length > 0) {
-		let added = 0;
-		let removed = 0;
-		const files = new Set<string>();
-		for (const diff of summaryDiffs) {
-			added += diff.additions || 0;
-			removed += diff.deletions || 0;
-			if ((diff.additions || 0) > 0 || (diff.deletions || 0) > 0) {
-				if (typeof diff.file === 'string' && diff.file) files.add(diff.file);
+	for (const response of rawResponses) {
+		if (response.kind !== 'tool_use') continue;
+		const actionType =
+			response.normalizedEntry?.entryType &&
+			typeof response.normalizedEntry.entryType === 'object' &&
+			'actionType' in response.normalizedEntry.entryType
+				? response.normalizedEntry.entryType.actionType
+				: buildToolActionType(response.toolName, response.rawInput ?? {});
+		const resolvedChanges = resolveFileChanges({
+			actionType,
+			toolResultMetadata: response.metadata,
+			fallbackFilePath: response.filePath,
+		});
+		if (resolvedChanges.length > 0) {
+			for (const change of resolvedChanges) {
+				rawDiffAdded += change.stats.added;
+				rawDiffRemoved += change.stats.removed;
+				if (change.filePath || change.name) {
+					rawDiffFiles.add(change.filePath || change.name);
+				}
 			}
+			continue;
 		}
-		if (added > 0 || removed > 0) {
-			fileChanges = { added, removed, files: files.size };
+
+		const changedFiles = changedFilesMap.get(response.toolUseId) ?? [];
+		for (const file of changedFiles) {
+			rawDiffAdded += file.linesAdded;
+			rawDiffRemoved += file.linesRemoved;
+			rawDiffFiles.add(file.filePath || file.fileName);
 		}
-	} else {
-		let added = 0;
-		let removed = 0;
-		let files = 0;
-		for (const response of rawResponses) {
-			if (response.kind !== 'tool_use') continue;
-			const changed = changedFilesMap.get(response.toolUseId);
-			if (!changed?.length) continue;
-			files += changed.length;
-			for (const file of changed) {
-				added += file.linesAdded;
-				removed += file.linesRemoved;
-			}
-		}
-		if (added > 0 || removed > 0 || files > 0) {
-			fileChanges = { added, removed, files };
-		}
+	}
+
+	if (rawDiffAdded > 0 || rawDiffRemoved > 0 || rawDiffFiles.size > 0) {
+		fileChanges = {
+			added: rawDiffAdded,
+			removed: rawDiffRemoved,
+			files: rawDiffFiles.size,
+		};
 	}
 
 	// Token count: use only the authoritative per-turn usage figure from the backend.

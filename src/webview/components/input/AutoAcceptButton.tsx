@@ -16,11 +16,13 @@ export const AutoAcceptButton: React.FC = React.memo(() => {
 	const mode = useChatStore(
 		s =>
 			(s.activeSessionId
-				? s.sessionsById[s.activeSessionId]?.permissionAutoAcceptMode
+				? s.sessionAutoAccept[s.activeSessionId]
+					? 'on'
+					: 'default'
 				: undefined) ?? 'default',
 	);
 	const autoAccept = useChatStore(
-		s => (s.activeSessionId ? s.sessionsById[s.activeSessionId]?.autoAccept : undefined) ?? false,
+		s => (s.activeSessionId ? s.sessionAutoAccept[s.activeSessionId] : undefined) ?? false,
 	);
 	const { postMessage } = useVSCode();
 

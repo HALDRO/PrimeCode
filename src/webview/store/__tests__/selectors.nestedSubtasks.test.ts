@@ -1,323 +1,117 @@
+import type { AssistantMessage, SessionStatus } from '@opencode-ai/sdk/v2/client';
 import { describe, expect, it } from 'vitest';
-import type { ChatState, RenderTaskCardNode } from '../chatStore';
-import { projectSessionMessages } from '../selectors';
+import type { SessionStore } from '../chatStore';
+import { collectDescendantSessionIds, computeDerivedSessionStats } from '../selectors';
 
-function createSession(
+function assistantMessage(
 	id: string,
-	title: string,
-	overrides?: Partial<ChatState['sessionsById'][string]>,
-) {
+	options: { total: number; created: number; completed: number },
+): AssistantMessage {
 	return {
 		id,
-		title,
-		agent: undefined,
-		model: undefined,
-		userMessagesById: {},
-		runtimeMessageRecords: [] as ChatState['sessionsById'][string]['runtimeMessageRecords'],
-		runtimeMessagePartsById: {} as ChatState['sessionsById'][string]['runtimeMessagePartsById'],
-		input: '',
-		status: 'Ready',
-		streamingToolId: null,
-		isProcessing: false,
-		isAutoRetrying: false,
-		retryInfo: null,
-		isLoading: false,
-		toolActivity: null,
-		lastActive: 0,
-		changedFiles: [],
-		cumulativeDiffs: [],
-		restoreCommits: [],
-		unrevertAvailable: false,
-		revertedFromMessageId: null,
-		turnTokens: {},
-		queuedMessages: [],
-		availableTools: [],
-		availableMcpServers: [],
-		autoAccept: false,
-		permissionAutoAcceptMode: 'default' as const,
-		todos: [],
-		pendingPermissions: [],
-		pendingQuestions: [],
-		compactionUserMessageIds: {},
-		compactionAssistantMessageIds: {},
-		...overrides,
-	};
+		sessionID: 'session',
+		parentID: 'parent',
+		role: 'assistant',
+		modelID: 'gpt-5',
+		providerID: 'oai',
+		mode: 'default',
+		path: '',
+		stopReason: 'end_turn',
+		parts: [],
+		time: { created: options.created, completed: options.completed },
+		tokens: {
+			input: 0,
+			output: 0,
+			reasoning: 0,
+			total: options.total,
+			cache: { read: 0, write: 0 },
+		},
+		cost: 0,
+	} as unknown as AssistantMessage;
 }
 
-function createBaseState(): ChatState {
+function createState(overrides: Partial<SessionStore>): SessionStore {
 	return {
-		sessionsById: {
-			root: createSession('root', 'Root', {
-				runtimeMessageRecords: [
-					{ id: 'a-root', sessionId: 'root', role: 'assistant', createdAt: 1 },
-				],
-				runtimeMessagePartsById: {
-					'a-root': [
-						{
-							id: 'root-task-part',
-							messageId: 'a-root',
-							sessionId: 'root',
-							type: 'tool',
-							callId: 't1',
-							toolName: 'task',
-							state: {
-								status: 'completed',
-								input: {
-									subagent_type: 'general',
-									prompt: 'do child work',
-									description: 'child task',
-								},
-								output: '<task_result>Final child result</task_result>',
-								metadata: { sessionId: 'child' },
-							},
-						},
-					],
-				},
-			}),
-			child: createSession('child', 'Child', {
-				runtimeMessageRecords: [
-					{ id: 'child-a', sessionId: 'child', role: 'assistant', createdAt: 2 },
-				],
-				runtimeMessagePartsById: {
-					'child-a': [
-						{
-							id: 'child-text',
-							messageId: 'child-a',
-							sessionId: 'child',
-							type: 'text',
-							text: 'Child execution history',
-							createdAt: 2,
-							completedAt: 2,
-						},
-						{
-							id: 'child-task-part',
-							messageId: 'child-a',
-							sessionId: 'child',
-							type: 'tool',
-							callId: 't2',
-							toolName: 'task',
-							state: {
-								status: 'completed',
-								input: {
-									subagent_type: 'general',
-									prompt: 'do grandchild work',
-									description: 'grandchild task',
-								},
-								output: '<task_result>Nested task result</task_result>',
-								metadata: { sessionId: 'grandchild' },
-							},
-						},
-					],
-				},
-			}),
-			grandchild: createSession('grandchild', 'Grandchild', {
-				runtimeMessageRecords: [
-					{ id: 'gc-a', sessionId: 'grandchild', role: 'assistant', createdAt: 3 },
-				],
-				runtimeMessagePartsById: {
-					'gc-a': [
-						{
-							id: 'gc-text',
-							messageId: 'gc-a',
-							sessionId: 'grandchild',
-							type: 'text',
-							text: 'Grandchild execution history',
-							createdAt: 3,
-							completedAt: 3,
-						},
-					],
-				},
-			}),
-		},
-		sessionOrder: ['root', 'child', 'grandchild'],
+		sessions: [],
+		sessionStatus: {} as Record<string, SessionStatus>,
+		sessionDiff: {},
+		messages: {},
+		parts: {},
+		todos: {},
+		permissions: {},
+		questions: {},
 		activeSessionId: 'root',
+		sessionOrder: [],
 		editingMessageId: null,
 		editDrafts: {},
-		isImprovingPrompt: false,
+		sessionInput: {},
+		draftAttachments: {},
+		draftAgent: {},
 		improvingPromptRequestId: null,
-		promptVersions: null,
-		childSessionIdsByParentId: {
-			root: ['child'],
-			child: ['grandchild'],
-		},
-		originatingToolCallBySessionId: {
-			child: 't1',
-			grandchild: 't2',
-		},
-		actions: {} as never,
-	};
+		isImprovingPrompt: false,
+		promptVersions: { original: '', improved: '', showingImproved: false },
+		restoreCommits: {},
+		revertedFromMessageId: {},
+		sessionCanUnrevert: {},
+		sessionAutoAccept: {},
+		sessionModel: {},
+		sessionAgent: {},
+		queuedMessages: {},
+		childSessionIdsByParentId: {},
+		originatingToolCallBySessionId: {},
+		actions: {} as SessionStore['actions'],
+		...overrides,
+	} as SessionStore;
 }
 
-describe('projectSessionMessages — flat projection with childSessionId', () => {
-	it('produces task_card with childSessionId instead of embedded childSession', () => {
-		const state = createBaseState();
-		const items = projectSessionMessages(state, 'root');
-
-		expect(items).toHaveLength(1);
-		const card = items[0] as RenderTaskCardNode;
-		expect(card.kind).toBe('task_card');
-		expect(card.childSessionId).toBe('child');
-		// No embedded childSession — child content is rendered by React components
-		expect('childSession' in card).toBe(false);
-	});
-
-	it('extracts task result from tool output', () => {
-		const state = createBaseState();
-		const items = projectSessionMessages(state, 'root');
-		const card = items[0] as RenderTaskCardNode;
-		expect(card.result).toBe('<task_result>Final child result</task_result>');
-	});
-
-	it('populates childSummary with title, tokens, diffStats', () => {
-		const state = createBaseState();
-		state.sessionsById.child.changedFiles = [
-			{
-				filePath: 'a.ts',
-				fileName: 'a.ts',
-				linesAdded: 10,
-				linesRemoved: 3,
-				toolUseId: 'x',
-				timestamp: 1,
+describe('selectors nested subtasks', () => {
+	it('collects descendant session ids recursively', () => {
+		const state = createState({
+			childSessionIdsByParentId: {
+				root: ['child-a', 'child-b'],
+				'child-a': ['grandchild-a1'],
+				'grandchild-a1': ['great-grandchild-a1'],
 			},
-		];
-		state.sessionsById.child.turnTokens = {
-			turn1: { input: 100, output: 50, total: 150 },
-		};
-		const items = projectSessionMessages(state, 'root');
-		const card = items[0] as RenderTaskCardNode;
-		expect(card.childSummary.title).toBe('Child');
-		expect(card.childSummary.diffStats).toEqual({ added: 10, removed: 3 });
-		expect(card.childSummary.tokens?.total).toBe(150);
-	});
-
-	it('derives task status from child session state', () => {
-		const state = createBaseState();
-		// Override tool status to running
-		const parts = state.sessionsById.root.runtimeMessagePartsById['a-root'];
-		if (parts[0]?.state) parts[0].state.status = 'running';
-		state.sessionsById.child.status = 'Stopped';
-		state.sessionsById.child.isProcessing = false;
-
-		const items = projectSessionMessages(state, 'root');
-		const card = items[0] as RenderTaskCardNode;
-		expect(card.status).toBe('cancelled');
-	});
-
-	it('counts nested children in childSummary.childCount', () => {
-		const state = createBaseState();
-		const items = projectSessionMessages(state, 'root');
-		const card = items[0] as RenderTaskCardNode;
-		// child has one grandchild
-		expect(card.childSummary.childCount).toBe(1);
-	});
-
-	it('projects child session independently (flat, no recursion)', () => {
-		const state = createBaseState();
-		const childItems = projectSessionMessages(state, 'child');
-
-		// Child session has: assistant text + task_card (for grandchild)
-		expect(childItems.length).toBe(2);
-		expect(childItems[0].kind).toBe('assistant');
-		expect(childItems[1].kind).toBe('task_card');
-
-		const grandchildCard = childItems[1] as RenderTaskCardNode;
-		expect(grandchildCard.childSessionId).toBe('grandchild');
-		expect('childSession' in grandchildCard).toBe(false);
-	});
-
-	it('projects grandchild session independently', () => {
-		const state = createBaseState();
-		const gcItems = projectSessionMessages(state, 'grandchild');
-
-		expect(gcItems.length).toBe(1);
-		expect(gcItems[0].kind).toBe('assistant');
-	});
-
-	it('returns empty for unknown session', () => {
-		const state = createBaseState();
-		const items = projectSessionMessages(state, 'nonexistent');
-		expect(items).toHaveLength(0);
-	});
-
-	it('returns empty for undefined session', () => {
-		const state = createBaseState();
-		const items = projectSessionMessages(state, undefined);
-		expect(items).toHaveLength(0);
-	});
-
-	it('handles session with no parts', () => {
-		const state = createBaseState();
-		state.sessionsById.empty = createSession('empty', 'Empty');
-		const items = projectSessionMessages(state, 'empty');
-		expect(items).toHaveLength(0);
-	});
-
-	it('preserves agent and description in task_card', () => {
-		const state = createBaseState();
-		const items = projectSessionMessages(state, 'root');
-		const card = items[0] as RenderTaskCardNode;
-		expect(card.agent).toBe('general');
-		expect(card.description).toBe('child task');
-		expect(card.prompt).toBe('do child work');
-	});
-
-	it('handles task tool without metadata.sessionId', () => {
-		const state = createBaseState();
-		// Remove sessionId from metadata
-		const parts = state.sessionsById.root.runtimeMessagePartsById['a-root'];
-		if (parts?.[0]?.state) parts[0].state.metadata = {};
-
-		const items = projectSessionMessages(state, 'root');
-		const card = items[0] as RenderTaskCardNode;
-		expect(card.kind).toBe('task_card');
-		expect(card.childSessionId).toBeUndefined();
-	});
-
-	it('updates task_card as soon as child metadata appears during streaming', () => {
-		const state = createBaseState();
-		const parts = state.sessionsById.root.runtimeMessagePartsById['a-root'];
-		if (parts?.[0]?.state) {
-			parts[0].state.status = 'running';
-			parts[0].state.output = undefined;
-			parts[0].state.metadata = {};
-		}
-
-		let items = projectSessionMessages(state, 'root');
-		let card = items[0] as RenderTaskCardNode;
-		expect(card.childSessionId).toBeUndefined();
-		expect(card.childSummary.title).toBe('child task');
-
-		if (parts?.[0]?.state) {
-			parts[0].state.metadata = {
-				sessionId: 'child',
-				model: { providerID: 'kiro', modelID: 'kيرو-claude-opus-4-6' },
-			};
-		}
-		state.sessionsById.child.title = 'Research compaction in PrimeCode';
-
-		items = projectSessionMessages(state, 'root');
-		card = items[0] as RenderTaskCardNode;
-		expect(card.childSessionId).toBe('child');
-		expect(card.childSummary.title).toBe('Research compaction in PrimeCode');
-		expect(card.childSummary.modelId).toBe('kiro/kиро-claude-opus-4-6');
-	});
-
-	it('includes non-task tool_use items as-is', () => {
-		const state = createBaseState();
-		// Add a read tool to root
-		state.sessionsById.root.runtimeMessagePartsById['a-root'].unshift({
-			id: 'read-part',
-			messageId: 'a-root',
-			sessionId: 'root',
-			type: 'tool',
-			callId: 'read-1',
-			toolName: 'read',
-			state: { status: 'completed', input: { filePath: 'a.ts' }, output: 'contents' },
 		});
 
-		const items = projectSessionMessages(state, 'root');
-		expect(items).toHaveLength(2);
-		expect(items[0].kind).toBe('tool_use');
-		expect(items[1].kind).toBe('task_card');
+		expect(collectDescendantSessionIds(state, 'root')).toEqual([
+			'child-a',
+			'child-b',
+			'grandchild-a1',
+			'great-grandchild-a1',
+		]);
+	});
+
+	it('aggregates request count and subagent count across nested descendants', () => {
+		const state = createState({
+			messages: {
+				root: [assistantMessage('a-root', { total: 100, created: 0, completed: 10 })],
+				child: [assistantMessage('a-child', { total: 50, created: 10, completed: 30 })],
+				grandchild: [assistantMessage('a-grandchild', { total: 25, created: 30, completed: 60 })],
+				leaf: [assistantMessage('a-leaf', { total: 0, created: 60, completed: 80 })],
+			},
+			childSessionIdsByParentId: {
+				root: ['child'],
+				child: ['grandchild'],
+				grandchild: ['leaf'],
+			},
+		});
+
+		expect(computeDerivedSessionStats(state, 'root')).toEqual({
+			requestCount: 3,
+			totalDuration: 80,
+			subagentCount: 3,
+		});
+	});
+
+	it('returns nested descendant count for child summary source data', () => {
+		const state = createState({
+			childSessionIdsByParentId: {
+				child: ['grandchild-a', 'grandchild-b'],
+				'grandchild-a': ['great-grandchild'],
+			},
+		});
+
+		expect(collectDescendantSessionIds(state, 'child')).toHaveLength(3);
 	});
 });

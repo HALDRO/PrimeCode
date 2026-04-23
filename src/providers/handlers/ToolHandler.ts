@@ -324,8 +324,9 @@ export class ToolHandler implements WebviewMessageHandler {
 		);
 		const autoAcceptState = this.getSessionAutoAcceptState(sessionId);
 
-		this.context.bridge.emit(sessionId, 'session_info', {
-			data: { sessionId, autoAccept: autoAcceptState.effective },
+		this.context.bridge.data('syncSessionState', {
+			sessionId,
+			autoAccept: autoAcceptState.effective,
 			permissionAutoAccept: autoAcceptState,
 		});
 		if (autoAcceptState.effective) {

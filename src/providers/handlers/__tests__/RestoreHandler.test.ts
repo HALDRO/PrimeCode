@@ -29,6 +29,7 @@ interface MockContext {
 	};
 	bridge: {
 		emit: ReturnType<typeof vi.fn>;
+		data: ReturnType<typeof vi.fn>;
 	};
 	sessionState: {
 		activeSessionId: string | undefined;
@@ -51,6 +52,7 @@ function createMockContext(overrides: Partial<MockContext> = {}): MockContext & 
 		},
 		bridge: {
 			emit: vi.fn(),
+			data: vi.fn(),
 			...overrides.bridge,
 		},
 		sessionState: {
@@ -149,7 +151,7 @@ describe('RestoreHandler', () => {
 			await handler.handleMessage({ type: 'restoreCommit' } as any);
 
 			expect(ctx.cli.truncateSession).not.toHaveBeenCalled();
-			expect(ctx.bridge.emit).not.toHaveBeenCalled();
+			expect(ctx.bridge.data).not.toHaveBeenCalled();
 		});
 
 		it('should do nothing when commitId is empty string', async () => {
@@ -203,7 +205,8 @@ describe('RestoreHandler', () => {
 				data: { commitId: 'cp-1' },
 			} as any);
 
-			expect(ctx.bridge.emit).toHaveBeenCalledWith('session-1', 'restore', {
+			expect(ctx.bridge.data).toHaveBeenCalledWith('restoreState', {
+				sessionId: 'session-1',
 				action: 'success',
 				canUnrevert: true,
 				revertedFromMessageId: 'ui-msg-1',
@@ -219,7 +222,8 @@ describe('RestoreHandler', () => {
 				data: { commitId: 'cp-1' },
 			} as any);
 
-			expect(ctx.bridge.emit).toHaveBeenCalledWith('session-1', 'restore', {
+			expect(ctx.bridge.data).toHaveBeenCalledWith('restoreState', {
+				sessionId: 'session-1',
 				action: 'error',
 				message: expect.stringContaining('Server down'),
 			});
@@ -248,8 +252,9 @@ describe('RestoreHandler', () => {
 			await handler.handleMessage({ type: 'unrevert' } as any);
 
 			// Single atomic notification — no more race between two events
-			expect(ctx.bridge.emit).toHaveBeenCalledTimes(1);
-			expect(ctx.bridge.emit).toHaveBeenCalledWith('session-1', 'restore', {
+			expect(ctx.bridge.data).toHaveBeenCalledTimes(1);
+			expect(ctx.bridge.data).toHaveBeenCalledWith('restoreState', {
+				sessionId: 'session-1',
 				action: 'unrevert_available',
 				available: false,
 			});
@@ -260,7 +265,8 @@ describe('RestoreHandler', () => {
 
 			await handler.handleMessage({ type: 'unrevert' } as any);
 
-			expect(ctx.bridge.emit).toHaveBeenCalledWith('session-1', 'restore', {
+			expect(ctx.bridge.data).toHaveBeenCalledWith('restoreState', {
+				sessionId: 'session-1',
 				action: 'error',
 				message: expect.stringContaining('Unrevert failed'),
 			});

@@ -113,7 +113,8 @@ export class RestoreHandler implements WebviewMessageHandler {
 			});
 
 			// Single notification: success + unrevert available
-			this.context.bridge.emit(record.sessionId, 'restore', {
+			this.context.bridge.data('restoreState', {
+				sessionId: record.sessionId,
 				action: 'success',
 				canUnrevert: true,
 				revertedFromMessageId: record.associatedMessageId,
@@ -153,7 +154,8 @@ export class RestoreHandler implements WebviewMessageHandler {
 			});
 
 			// Single notification: clear both unrevert flag and revert marker atomically.
-			this.context.bridge.emit(sessionId, 'restore', {
+			this.context.bridge.data('restoreState', {
+				sessionId,
 				action: 'unrevert_available',
 				available: false,
 			});
@@ -165,7 +167,8 @@ export class RestoreHandler implements WebviewMessageHandler {
 	}
 
 	private notifyError(sessionId: string, message: string): void {
-		this.context.bridge.emit(sessionId, 'restore', {
+		this.context.bridge.data('restoreState', {
+			sessionId,
 			action: 'error',
 			message,
 		});

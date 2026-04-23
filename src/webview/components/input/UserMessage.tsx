@@ -9,6 +9,7 @@ import {
 	type RenderUserMessage,
 	useActiveModelID,
 	useChatActions,
+	useChatStore,
 	useCompactionMessage,
 	useEditDraft,
 	useEditingMessageId,
@@ -164,6 +165,16 @@ const CompactionCard = React.memo<{ compaction: MessageCompaction }>(({ compacti
 CompactionCard.displayName = 'CompactionCard';
 
 /**
+ * Extract text content from RenderUserMessage parts.
+ */
+function getUserMessageText(message: RenderUserMessage): string {
+	return message.parts
+		.filter(p => p.type === 'text' && 'text' in p)
+		.map(p => ('text' in p ? (p as { text: string }).text : ''))
+		.join('');
+}
+
+/**
  * Extract attachments from message. Only structured attachments are rendered as pinned resources.
  */
 function getMessageAttachments(message: RenderUserMessage): {
@@ -173,6 +184,7 @@ function getMessageAttachments(message: RenderUserMessage): {
 	text: string;
 } {
 	const attachments = (message as { attachments?: MessageAttachments }).attachments;
+	const text = getUserMessageText(message);
 
 	// If we have structured attachments, use them directly
 	if (attachments) {
@@ -180,7 +192,7 @@ function getMessageAttachments(message: RenderUserMessage): {
 			files: attachments.files || [],
 			codeSnippets: attachments.codeSnippets || [],
 			images: attachments.images || [],
-			text: message.content,
+			text,
 		};
 	}
 
@@ -188,7 +200,7 @@ function getMessageAttachments(message: RenderUserMessage): {
 		files: [],
 		codeSnippets: [],
 		images: [],
-		text: message.content,
+		text,
 	};
 }
 
@@ -277,7 +289,7 @@ const MessageStats = React.memo<{
 		const liveTurnTokens = useMessageTurnTokens(messageId);
 		const liveElapsed = useElapsedTimer(isProcessing, timestamp);
 
-		// Simple token display: live usage if available, otherwise static (pre-computed from store).
+		// Simple token display: live total if available, otherwise static (pre-computed from store).
 		// No refs, no caching, no complex fallback chains.
 		const liveUsage =
 			typeof liveTurnTokens?.usage === 'number' && liveTurnTokens.usage > 0
@@ -286,7 +298,7 @@ const MessageStats = React.memo<{
 		const tokenCount = isProcessing ? liveUsage : (liveUsage ?? staticTokenCount);
 
 		const durationMs = getDisplayDurationMs({
-			liveDurationMs: liveTurnTokens?.durationMs,
+			liveDurationMs: undefined,
 			statsDurationMs: processingTimeFallbackMs ?? undefined,
 			isProcessing,
 			liveElapsedMs: liveElapsed,
@@ -569,12 +581,10 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 				if (message.id) {
 					// Editing from an older message replaces that branch in the active transcript
 					// immediately, regardless of whether the backend path is revert-based or
-					// history-only. The difference between the two modes is server-side file
-					// handling, not whether the old transcript branch should remain visible.
-					chatActions.deleteMessagesAfterId(message.id);
-					chatActions.removeMessageByPartId(message.id);
-					if (shouldRestore) {
-						chatActions.setUnrevertAvailable(false);
+					// history-only. Mark the revert point so the UI hides subsequent messages.
+					const activeId = useChatStore.getState().activeSessionId;
+					if (activeId) {
+						chatActions.markRevertedFromMessageId(message.id, activeId);
 					}
 				}
 
@@ -775,11 +785,15 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 							<MessageStats
 								fileChanges={fileChangesStats}
 								messageId={message.id}
-								timestamp={message.timestamp}
+								timestamp={new Date(message.message.time.created).toISOString()}
 								processingTimeFallbackMs={stats.durationMs}
 								isProcessing={isProcessingLastMessage}
 								staticTokenCount={tokenStats}
-								modelName={getModelDisplayName(message.model || activeModelID || '')}
+								modelName={getModelDisplayName(
+									(message.message.role === 'user' ? message.message.model?.modelID : undefined) ||
+										activeModelID ||
+										'',
+								)}
 							/>
 						</div>
 					</div>

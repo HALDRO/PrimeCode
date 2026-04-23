@@ -43,7 +43,7 @@ export const ThinkingBudgetButton: React.FC = React.memo(() => {
 	} = useModelSelection();
 	const sessionModel = useChatStore(s => {
 		const sid = s.activeSessionId;
-		return sid ? s.sessionsById[sid]?.model : undefined;
+		return sid ? s.sessionModel[sid] : undefined;
 	});
 	const effectiveModel = sessionModel ?? globalModel;
 

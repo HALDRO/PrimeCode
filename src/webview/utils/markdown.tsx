@@ -99,7 +99,8 @@ const renderPathReferenceChip = (reference: ParsedPathReference, key: string) =>
 		startLine={reference.startLine}
 		endLine={reference.endLine}
 		title={reference.rawText}
-		className="align-text-bottom"
+		className="relative z-[1] translate-y-[1px] align-text-bottom"
+		backgroundColor="var(--surface-base)"
 		onClick={() => openPathReference(reference)}
 	/>
 );
@@ -231,7 +232,7 @@ const StreamableNode: React.FC<{
 					// Build a stable key from child content rather than array index
 					const childKey =
 						typeof child === 'string'
-							? `sn-${index}-str-${child.length}-${child.slice(0, 8)}`
+							? `sn-${index}-str-${childIdx}-${child.length}-${child.slice(0, 8)}`
 							: `sn-${index}-node-${childIdx}`;
 					return (
 						<StreamableNode

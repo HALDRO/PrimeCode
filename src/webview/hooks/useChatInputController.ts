@@ -91,9 +91,8 @@ export function useChatInputController(
 
 	const storeInput = useStoreInput();
 	const {
-		addMessage,
-		updateSession,
-		clearRevertedMessages,
+		updateSessionInput,
+		markRevertedFromMessageId,
 		setImprovingPrompt,
 		clearPromptVersions,
 		togglePromptVersion,
@@ -162,10 +161,10 @@ export function useChatInputController(
 			if (isControlled && controlledOnChange) {
 				controlledOnChange(v);
 			} else {
-				updateSession({ input: v });
+				updateSessionInput(v);
 			}
 		},
-		[isControlled, controlledOnChange, updateSession],
+		[isControlled, controlledOnChange, updateSessionInput],
 	);
 
 	const setSelectedAgent = useCallback(
@@ -291,31 +290,10 @@ export function useChatInputController(
 			}
 		}
 
-		// Generate a stable message ID on the client so we can show the user
-		// message bubble immediately (optimistic UI) and let the extension
-		// reuse the same ID — upsertUserMessage in chatStore will merge.
+		// Generate a stable message ID on the client so the extension
+		// can reuse the same ID — messages come from SDK events now.
 		const clientMessageID = generateId('msg');
 		const targetSessionId = await ensureSessionForSend();
-		const canRenderOptimistically = Boolean(targetSessionId);
-
-		// Optimistic: show user message bubble instantly, before the extension
-		// round-trip completes (model validation, session creation, etc.).
-		if (canRenderOptimistically) {
-			addMessage(
-				{
-					id: clientMessageID,
-					type: 'user',
-					content: inputValue.trim(),
-					model: effectiveModel,
-					timestamp: new Date().toISOString(),
-					...(agent ? { agent } : {}),
-					...(hasAttachments ? { attachments: builtAttachments } : {}),
-				},
-				targetSessionId,
-			);
-			// Mark session as processing so the UI shows the loading state right away.
-			updateSession({ isProcessing: true }, targetSessionId);
-		}
 
 		postSessionMessage({
 			type: 'sendMessage',
@@ -328,8 +306,10 @@ export function useChatInputController(
 			attachments: hasAttachments ? builtAttachments : undefined,
 		});
 
-		clearRevertedMessages();
-		updateSession({ input: '' });
+		if (targetSessionId) {
+			markRevertedFromMessageId(null, targetSessionId);
+		}
+		updateSessionInput('');
 		attachments.clearAll();
 		clearPromptVersions();
 	}, [
@@ -340,14 +320,13 @@ export function useChatInputController(
 		selectedAgent,
 		validSessionVariant,
 		postSessionMessage,
-		clearRevertedMessages,
-		updateSession,
+		markRevertedFromMessageId,
+		updateSessionInput,
 		clearPromptVersions,
 		setSessionModel,
 		selectedModel,
 		sessionModel,
 		validAgentNames.has,
-		addMessage,
 		ensureSessionForSend,
 	]);
 

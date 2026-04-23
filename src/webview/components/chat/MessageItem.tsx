@@ -16,6 +16,7 @@ import {
 	type RenderThinkingMessage,
 	type RenderToolUseMessage,
 	useChildSessionMessages,
+	useChildSessionSummary,
 	useChildSessionTitle,
 	useMcpServers,
 	useSubtaskAccessRequest,
@@ -209,15 +210,15 @@ const TaskCardItem = React.memo<{
 
 	// All data from the projector's pre-computed summary — no store access needed
 	const { status, agent, description, prompt, result } = message;
-	const {
-		title,
-		durationMs,
-		tokens: childTokens,
-		modelId: childModelId,
-		childCount,
-		diffStats,
-	} = message.childSummary;
+	const { title, modelId: childModelId } = message.childSummary;
 	const childSessionId = message.childSessionId;
+	const liveChildSummary = useChildSessionSummary(childSessionId);
+	const effectiveStatus: RenderTaskCardNode['status'] =
+		status === 'running' && liveChildSummary.isIdle ? 'completed' : status;
+	const durationMs = liveChildSummary.durationMs ?? message.childSummary.durationMs;
+	const childTokens = liveChildSummary.tokens ?? message.childSummary.tokens;
+	const childCount = childSessionId ? liveChildSummary.childCount : message.childSummary.childCount;
+	const diffStats = childSessionId ? liveChildSummary.diffStats : message.childSummary.diffStats;
 
 	// Subscribe to child session messages independently via store hook.
 	// Each TaskCardItem re-renders only when its own child session changes.
@@ -268,7 +269,7 @@ const TaskCardItem = React.memo<{
 	}, [rawChildItems, taskResultContent, status]);
 
 	const shouldRenderTaskResult = Boolean(taskResultContent);
-	const isRunning = status === 'running';
+	const isRunning = effectiveStatus === 'running';
 	const isPreviewMode = expandState === 'preview';
 	const shouldRenderTranscript = expandState === 'expanded' || isRunning;
 
@@ -282,6 +283,12 @@ const TaskCardItem = React.memo<{
 	const agentLabel = formatAgentLabel(agent);
 	const modelLabel = getReadableModelLabel(childModelId);
 	const headerTitle = childTitle?.trim() || title?.trim() || description?.trim() || agentLabel;
+	const shouldShowAgentMeta = useMemo(() => {
+		const normalizedHeader = headerTitle.trim().toLowerCase();
+		const normalizedAgent = agentLabel.trim().toLowerCase();
+		if (!normalizedHeader || !normalizedAgent) return true;
+		return !normalizedHeader.includes(normalizedAgent);
+	}, [agentLabel, headerTitle]);
 
 	// Unified auto-scroll with detach support (mirrors main session behavior)
 	const {
@@ -373,10 +380,14 @@ const TaskCardItem = React.memo<{
 				<span className="shrink-0 flex items-center justify-center text-vscode-descriptionForeground [&>svg]:w-[14px] [&>svg]:h-[14px]">
 					<BotIcon size={14} />
 				</span>
-				<span className="text-sm font-medium whitespace-nowrap text-vscode-foreground opacity-80">
-					{agentLabel}
-				</span>
-				<span className="text-sm text-vscode-descriptionForeground">·</span>
+				{shouldShowAgentMeta && (
+					<span className="text-sm font-medium whitespace-nowrap text-vscode-foreground opacity-80">
+						{agentLabel}
+					</span>
+				)}
+				{shouldShowAgentMeta && (
+					<span className="text-sm text-vscode-descriptionForeground">·</span>
+				)}
 				<span className="min-w-0 overflow-hidden flex items-center shrink">
 					<span className="text-sm truncate text-vscode-descriptionForeground">
 						{modelLabel ?? childModelId}
@@ -391,7 +402,7 @@ const TaskCardItem = React.memo<{
 			headerLeft={
 				<>
 					<span className="toolcard-leading-icon flex items-center justify-center w-5 h-5 shrink-0">
-						{taskCardStatusIcon(status)}
+						{taskCardStatusIcon(effectiveStatus)}
 					</span>
 					{headerTitle && (
 						<span className="text-sm text-vscode-foreground truncate min-w-0">{headerTitle}</span>
@@ -538,7 +549,7 @@ const TaskCardItem = React.memo<{
 						{isRunning && (
 							<SubtaskGenerationStatus
 								isRunning={isRunning}
-								status={status}
+								status={effectiveStatus}
 								retryMessage={retryInfo?.message}
 							/>
 						)}
