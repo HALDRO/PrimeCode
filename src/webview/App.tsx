@@ -33,9 +33,9 @@ import {
 	useTurnTokens,
 } from './store';
 import type { WebviewSdkEvent } from './store/eventReducer';
+import { groupMessagesIntoSections, type MessageSection } from './store/projector';
 import { useSettingsStore } from './store/settingsStore';
 import { useUIStore } from './store/uiStore';
-import { groupMessagesIntoSections, type MessageSection } from './utils/groupSections';
 import { vscode } from './utils/vscode';
 
 let queue: WebviewSdkEvent[] = [];

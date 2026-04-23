@@ -20,10 +20,10 @@ import {
 	useSessionModel,
 	useUnrevertAvailable,
 } from '../../store';
+import type { SectionStats } from '../../store/projector';
 import { useSettingsStore } from '../../store/settingsStore';
 import { useUIActions } from '../../store/uiStore';
 import { formatDuration, formatTime, formatTokens } from '../../utils/format';
-import type { SectionStats } from '../../utils/groupSections';
 import { Markdown } from '../../utils/markdown';
 import { parseMessageSegments } from '../../utils/messageParser';
 import { useSessionMessage, useVSCode } from '../../utils/vscode';

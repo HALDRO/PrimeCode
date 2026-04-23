@@ -11,7 +11,7 @@ vi.mock('../components/chat/SimpleTool', () => ({
 }));
 
 import type { ChangedFile, RenderNode } from '../store';
-import { groupMessagesIntoSections } from './groupSections';
+import { groupMessagesIntoSections } from '../store/projector';
 
 type Message = RenderNode;
 

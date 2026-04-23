@@ -24,15 +24,12 @@ import {
 	type RenderAssistantMessage,
 	type RenderCompactionMessage,
 	type RenderNode,
-	type RenderTaskCardNode,
-	type RenderThinkingMessage,
-	type RenderToolUseMessage,
-	type RenderUserMessage,
 	type SessionStore,
 	type TokenUsage,
 	type ToolResultView,
 	useChatStore,
 } from './chatStore';
+import { collectDescendantSessionIds, computeDerivedSessionStats } from './projector';
 import { type SettingsState, useSettingsStore } from './settingsStore';
 import type { TransientNotification } from './uiStore';
 import { type UIState, useUIStore } from './uiStore';
@@ -97,263 +94,53 @@ function buildTurnTokenMap(messages: Message[] | undefined): Record<string, Toke
 	return Object.keys(turnTokens).length > 0 ? turnTokens : EMPTY_TURN_TOKENS;
 }
 
-export function projectSessionMessages(
-	state: SessionStore,
-	sessionId: string | undefined,
-): RenderNode[] {
-	if (!sessionId) return EMPTY_MESSAGES;
-	const messages = state.messages[sessionId];
-	if (!messages || messages.length === 0) return EMPTY_MESSAGES;
-
-	const nodes: RenderNode[] = [];
-	const assistantByParent = new Map<string, AssistantMessage>();
-	for (const message of messages) {
-		if (isAssistantMessage(message) && message.parentID) {
-			assistantByParent.set(message.parentID, message);
-		}
-	}
-
-	for (const msg of messages) {
-		const msgParts = state.parts[msg.id] ?? [];
-
-		if (msg.role === 'user') {
-			const compactionPart = msgParts.find(p => p.type === 'compaction');
-			let compaction: RenderCompactionMessage | undefined;
-			if (compactionPart && compactionPart.type === 'compaction') {
-				const assistantMsg = assistantByParent.get(msg.id);
-				const assistantParts = assistantMsg ? (state.parts[assistantMsg.id] ?? []) : [];
-				const summary = assistantParts
-					.filter(
-						p =>
-							p.type === 'text' && 'text' in p && !(('synthetic' in p && p.synthetic) as boolean),
-					)
-					.map(p => ('text' in p ? (p.text as string)?.trim() : '') || '')
-					.filter(Boolean)
-					.join('\n\n');
-				const isStreaming = assistantMsg ? typeof assistantMsg.time.completed !== 'number' : true;
-				compaction = {
-					type: 'compaction',
-					messageId: msg.id,
-					auto: compactionPart.auto,
-					summary: summary || undefined,
-					partId: compactionPart.id,
-					assistantMessageId: assistantMsg?.id,
-					isStreaming,
-					completedAt: assistantMsg?.time.completed,
-				};
-			}
-
-			nodes.push({
-				...(msg as Message),
-				kind: 'user',
-				message: msg,
-				parts: msgParts,
-				...(compaction ? { compaction } : {}),
-			} satisfies RenderUserMessage);
-			continue;
-		}
-
-		if (isAssistantMessage(msg) && msg.mode === 'compaction') continue;
-		if (isAssistantMessage(msg) && msg.parentID) {
-			const parentParts = state.parts[msg.parentID] ?? [];
-			if (parentParts.some(p => p.type === 'compaction')) continue;
-		}
-
-		const assistantMsg = msg as AssistantMessage;
-		const isCompleted = typeof assistantMsg.time.completed === 'number';
-		const timestamp = new Date(assistantMsg.time.created).toISOString();
-
-		for (const part of msgParts) {
-			if (
-				part.type === 'text' &&
-				'text' in part &&
-				part.text &&
-				!(('synthetic' in part && part.synthetic) as boolean)
-			) {
-				nodes.push({
-					kind: 'assistant',
-					id: `msg-${part.id}`,
-					type: 'assistant',
-					content: part.text,
-					partId: part.id,
-					isStreaming: !isCompleted,
-					timestamp,
-					agent: assistantMsg.agent,
-				} satisfies RenderAssistantMessage);
-				continue;
-			}
-
-			if (part.type === 'reasoning' && 'text' in part && part.text) {
-				const rp = part as import('@opencode-ai/sdk/v2/client').ReasoningPart;
-				nodes.push({
-					kind: 'thinking',
-					id: `thinking-${part.id}`,
-					type: 'thinking',
-					content: rp.text,
-					partId: part.id,
-					isStreaming: typeof rp.time.end !== 'number',
-					startTime: rp.time.start,
-					durationMs: typeof rp.time.end === 'number' ? rp.time.end - rp.time.start : undefined,
-					timestamp,
-				} satisfies RenderThinkingMessage);
-				continue;
-			}
-
-			if (part.type === 'tool') {
-				const tp = part as ToolPart;
-				const status = tp.state.status;
-				const isRunning = status === 'pending' || status === 'running';
-				const input = 'input' in tp.state ? tp.state.input : {};
-				const output = 'output' in tp.state ? (tp.state as { output?: string }).output : undefined;
-				const title = 'title' in tp.state ? (tp.state as { title?: string }).title : undefined;
-				const metadata =
-					tp.metadata ??
-					('metadata' in tp.state
-						? (tp.state as { metadata?: Record<string, unknown> }).metadata
-						: undefined);
-
-				nodes.push({
-					kind: 'tool_use',
-					id: tp.callID,
-					type: 'tool_use',
-					toolName: tp.tool,
-					toolUseId: tp.callID,
-					toolInput: JSON.stringify(input),
-					rawInput: input as Record<string, unknown>,
-					streamingOutput: output,
-					isRunning,
-					status,
-					title,
-					resultContent: output,
-					metadata: metadata as Record<string, unknown> | undefined,
-					timestamp,
-				} satisfies RenderToolUseMessage);
-			}
-		}
-	}
-
-	return materializeTaskCards(state, sessionId, nodes);
-}
-
-function materializeTaskCards(
-	_state: SessionStore,
-	sessionId: string,
-	baseItems: RenderNode[],
-): RenderNode[] {
-	const items: RenderNode[] = [];
-	let afterCompletedTask = false;
-
-	for (const item of baseItems) {
-		if (item.kind === 'tool_use' && item.toolName.toLowerCase() === 'task') {
-			const toolCallId = item.toolUseId;
-			const taskInput = item.rawInput ?? {};
-			const childSessionId =
-				typeof item.metadata?.sessionId === 'string' ? item.metadata.sessionId : undefined;
-			const metadataModel =
-				item.metadata && typeof item.metadata.model === 'object'
-					? (item.metadata.model as { providerID?: string; modelID?: string })
-					: undefined;
-			const childModelId =
-				metadataModel?.providerID && metadataModel?.modelID
-					? `${metadataModel.providerID}/${metadataModel.modelID}`
-					: undefined;
-			const result =
-				item.status === 'completed' && typeof item.resultContent === 'string'
-					? item.resultContent.trim()
-					: undefined;
-
-			const node: RenderTaskCardNode = {
-				kind: 'task_card',
-				id: toolCallId,
-				toolCallId,
-				parentSessionId: sessionId,
-				parentMessageId: undefined,
-				timestamp: item.timestamp,
-				status: item.status ?? 'running',
-				agent: typeof taskInput.subagent_type === 'string' ? taskInput.subagent_type : undefined,
-				description: typeof taskInput.description === 'string' ? taskInput.description : undefined,
-				prompt: typeof taskInput.prompt === 'string' ? taskInput.prompt : undefined,
-				result,
-				startTime: item.timestamp,
-				childSessionId,
-				childSummary: {
-					title: typeof taskInput.description === 'string' ? taskInput.description : undefined,
-					modelId: childModelId,
-					durationMs: undefined,
-					tokens: undefined,
-					diffStats: { added: 0, removed: 0 },
-					childCount: 0,
-				},
-			};
-			items.push(node);
-			if (node.status === 'completed') afterCompletedTask = true;
-			continue;
-		}
-
-		if (afterCompletedTask) {
-			if (item.kind === 'thinking') {
-				items.push(item);
-				continue;
-			}
-			if (item.kind === 'assistant') {
-				afterCompletedTask = false;
-				continue;
-			}
-			afterCompletedTask = false;
-		}
-
-		items.push(item);
-	}
-
-	return items.length > 0 ? items : EMPTY_MESSAGES;
-}
-
 export const projectRuntimeMessages = (_session: unknown): RenderNode[] => EMPTY_MESSAGES;
+
+// Re-export pure functions from projector for backward compatibility
+export { collectDescendantSessionIds, computeDerivedSessionStats } from './projector';
+
+// ---------------------------------------------------------------------------
+// Component-level subscription hooks (Phase 1.4)
+// These allow components to subscribe to individual nodes/sections
+// instead of the entire message list, reducing re-renders during streaming.
+// ---------------------------------------------------------------------------
+
+const EMPTY_NODE_IDS: string[] = [];
+
+/** Subscribe to the ordered list of RenderNode IDs for the active session. */
+export const useNodeIds = () =>
+	useChatStore((state: SessionStore) => {
+		const sid = state.activeSessionId;
+		if (!sid) return EMPTY_NODE_IDS;
+		return state.materializedViews[sid]?.nodeIds ?? EMPTY_NODE_IDS;
+	});
+
+/** Subscribe to a single RenderNode by ID from the active session's materialized view. */
+export const useRenderNode = (nodeId: string) =>
+	useChatStore((state: SessionStore) => {
+		const sid = state.activeSessionId;
+		if (!sid) return undefined;
+		return state.materializedViews[sid]?.nodesById[nodeId];
+	});
+
+/** Subscribe to a single RenderNode by ID from a specific session's materialized view. */
+export const useSessionRenderNode = (sessionId: string | undefined, nodeId: string) =>
+	useChatStore((state: SessionStore) => {
+		if (!sessionId) return undefined;
+		return state.materializedViews[sessionId]?.nodesById[nodeId];
+	});
+
+/** Subscribe to the materialized view version — useful for knowing when any update happened. */
+export const useMaterializedVersion = (sessionId: string | undefined) =>
+	useChatStore((state: SessionStore) => {
+		if (!sessionId) return 0;
+		return state.materializedViews[sessionId]?.version ?? 0;
+	});
+
+// ---------------------------------------------------------------------------
 
 function countSessionDescendants(state: SessionStore, sessionId: string): number {
 	return collectDescendantSessionIds(state, sessionId).length;
-}
-
-export function collectDescendantSessionIds(state: SessionStore, sessionId: string): string[] {
-	const queue = [...(state.childSessionIdsByParentId[sessionId] ?? [])];
-	const visited = new Set<string>();
-	const descendants: string[] = [];
-	let head = 0;
-	while (head < queue.length) {
-		const current = queue[head++];
-		if (!current || visited.has(current)) continue;
-		visited.add(current);
-		descendants.push(current);
-		queue.push(...(state.childSessionIdsByParentId[current] ?? []));
-	}
-	return descendants;
-}
-
-export function computeDerivedSessionStats(
-	state: SessionStore,
-	sessionId: string | undefined,
-): { requestCount: number; totalDuration: number; subagentCount: number } {
-	if (!sessionId) return EMPTY_DERIVED_STATS;
-	const sessionIds = [sessionId, ...collectDescendantSessionIds(state, sessionId)];
-	let requestCount = 0;
-	let totalDuration = 0;
-	for (const currentSessionId of sessionIds) {
-		const messages = state.messages[currentSessionId] ?? EMPTY_SDK_MESSAGES;
-		for (const msg of messages) {
-			if (!isAssistantMessage(msg)) continue;
-			const t = msg.tokens;
-			const total = t.total ?? t.input + t.output + t.reasoning + t.cache.read + t.cache.write;
-			if (total > 0) requestCount += 1;
-			if (typeof msg.time.completed === 'number') {
-				totalDuration += msg.time.completed - msg.time.created;
-			}
-		}
-	}
-	return {
-		requestCount,
-		totalDuration,
-		subagentCount: sessionIds.length - 1,
-	};
 }
 
 function messagesStructurallyEqual(prev: RenderNode[], next: RenderNode[]): boolean {
@@ -390,26 +177,27 @@ function messagesStructurallyEqual(prev: RenderNode[], next: RenderNode[]): bool
 
 export const useMessages = () => {
 	const activeSessionId = useChatStore((state: SessionStore) => state.activeSessionId);
-	const trigger = useChatStore(
-		useShallow((state: SessionStore) => {
-			if (!activeSessionId) return [];
-			const msgs = state.messages[activeSessionId] || [];
-			return [
-				msgs,
-				...msgs.map(message => state.parts[message.id]),
-				state.sessionStatus[activeSessionId],
-			];
-		}),
-	);
+	const view = useChatStore((state: SessionStore) => {
+		if (!activeSessionId) return undefined;
+		return state.materializedViews[activeSessionId];
+	});
 	const prevRef = useRef<RenderNode[]>(EMPTY_MESSAGES);
 	return useMemo(() => {
-		void trigger;
-		const state = useChatStore.getState();
-		const next = projectSessionMessages(state, activeSessionId);
-		if (messagesStructurallyEqual(prevRef.current, next)) return prevRef.current;
+		if (!view || view.nodeIds.length === 0) return EMPTY_MESSAGES;
+		// Reconstruct ordered array from nodesById using nodeIds
+		const next: RenderNode[] = [];
+		for (const id of view.nodeIds) {
+			const node = view.nodesById[id];
+			if (node) next.push(node);
+		}
+		if (next.length === 0) return EMPTY_MESSAGES;
+		// For delta-only updates, check if the array is structurally the same
+		if (!view.lastUpdateWasStructural && messagesStructurallyEqual(prevRef.current, next)) {
+			return prevRef.current;
+		}
 		prevRef.current = next;
 		return next;
-	}, [activeSessionId, trigger]);
+	}, [view]);
 };
 
 export const useHasMessages = () => {
@@ -418,29 +206,25 @@ export const useHasMessages = () => {
 };
 
 export const useChildSessionMessages = (childSessionId: string | undefined) => {
-	const trigger = useChatStore(
-		useShallow((state: SessionStore) => {
-			if (!childSessionId) return [];
-			const msgs = state.messages[childSessionId] ?? EMPTY_SDK_MESSAGES;
-			return [
-				msgs,
-				...msgs.map(message => state.parts[message.id]),
-				state.sessions,
-				state.sessionStatus[childSessionId],
-				state.sessionDiff[childSessionId],
-				state.childSessionIdsByParentId,
-			];
-		}),
-	);
+	const view = useChatStore((state: SessionStore) => {
+		if (!childSessionId) return undefined;
+		return state.materializedViews[childSessionId];
+	});
 	const prevRef = useRef<RenderNode[]>(EMPTY_MESSAGES);
 	return useMemo(() => {
-		void trigger;
-		if (!childSessionId) return EMPTY_MESSAGES;
-		const next = projectSessionMessages(useChatStore.getState(), childSessionId);
-		if (messagesStructurallyEqual(prevRef.current, next)) return prevRef.current;
+		if (!childSessionId || !view || view.nodeIds.length === 0) return EMPTY_MESSAGES;
+		const next: RenderNode[] = [];
+		for (const id of view.nodeIds) {
+			const node = view.nodesById[id];
+			if (node) next.push(node);
+		}
+		if (next.length === 0) return EMPTY_MESSAGES;
+		if (!view.lastUpdateWasStructural && messagesStructurallyEqual(prevRef.current, next)) {
+			return prevRef.current;
+		}
 		prevRef.current = next;
 		return next;
-	}, [childSessionId, trigger]);
+	}, [childSessionId, view]);
 };
 
 export const useChildSessionTitle = (childSessionId: string | undefined) =>

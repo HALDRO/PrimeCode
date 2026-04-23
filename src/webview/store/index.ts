@@ -8,6 +8,7 @@
 export {
 	type ChangedFile,
 	type CommitInfo,
+	type MaterializedView,
 	type Message,
 	type Part,
 	type RenderAssistantMessage,
@@ -22,6 +23,8 @@ export {
 	type ToolResultView,
 	useChatStore,
 } from './chatStore';
+// Projection layer types
+export type { MessageSection, SectionStats } from './projector';
 // Optimized selectors (preferred)
 export * from './selectors';
 export { useSettingsStore } from './settingsStore';

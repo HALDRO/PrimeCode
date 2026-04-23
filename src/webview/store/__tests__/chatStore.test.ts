@@ -161,3 +161,136 @@ describe('chatStore revert', () => {
 		expect(state.parts['msg-live'][0]).toMatchObject({ text: 'Hello world' });
 	});
 });
+
+describe('chatStore materialized view streaming', () => {
+	beforeEach(() => {
+		resetStore();
+		useChatStore.getState().actions.handleSessionCreated(SESSION_ID);
+	});
+
+	function setupAssistantStreaming() {
+		const userMsg: Message = {
+			id: 'u1',
+			sessionID: SESSION_ID,
+			role: 'user',
+			time: { created: Date.now() },
+		} as Message;
+		const asstMsg: Message = {
+			id: 'a1',
+			sessionID: SESSION_ID,
+			role: 'assistant',
+			parentID: 'u1',
+			agent: 'build',
+			tokens: { input: 0, output: 0, reasoning: 0, total: 0, cache: { read: 0, write: 0 } },
+			cost: 0,
+			time: { created: Date.now() },
+		} as unknown as Message;
+		const textPart: Part = {
+			id: 'p1',
+			messageID: 'a1',
+			sessionID: SESSION_ID,
+			type: 'text',
+			text: 'Hello',
+		} as unknown as Part;
+
+		useChatStore.getState().actions.restoreSession(SESSION_ID, {
+			messages: [userMsg, asstMsg],
+			parts: { a1: [textPart] },
+		});
+		return useChatStore.getState();
+	}
+
+	it('creates materialized view on restoreSession', () => {
+		const state = setupAssistantStreaming();
+		const view = state.materializedViews[SESSION_ID];
+		expect(view).toBeDefined();
+		expect(view.nodeIds.length).toBe(2); // user + assistant
+		const asstNode = view.nodesById['msg-p1'];
+		expect(asstNode).toBeDefined();
+		expect(asstNode.kind).toBe('assistant');
+		if (asstNode.kind === 'assistant') {
+			expect(asstNode.content).toBe('Hello');
+		}
+	});
+
+	it('updates materialized view content on applyEvent delta', () => {
+		setupAssistantStreaming();
+
+		useChatStore.getState().actions.applyEvent({
+			type: 'message.part.delta',
+			properties: {
+				sessionID: SESSION_ID,
+				messageID: 'a1',
+				partID: 'p1',
+				field: 'text',
+				delta: ' world',
+			},
+		} as never);
+
+		const state = useChatStore.getState();
+		const view = state.materializedViews[SESSION_ID];
+		expect(view).toBeDefined();
+		const asstNode = view.nodesById['msg-p1'];
+		expect(asstNode.kind).toBe('assistant');
+		if (asstNode.kind === 'assistant') {
+			expect(asstNode.content).toBe('Hello world');
+		}
+	});
+
+	it('updates materialized view content on applyBatch delta', () => {
+		setupAssistantStreaming();
+
+		useChatStore.getState().actions.applyBatch([
+			{
+				type: 'message.part.delta',
+				properties: {
+					sessionID: SESSION_ID,
+					messageID: 'a1',
+					partID: 'p1',
+					field: 'text',
+					delta: ' world',
+				},
+			} as never,
+			{
+				type: 'message.part.delta',
+				properties: {
+					sessionID: SESSION_ID,
+					messageID: 'a1',
+					partID: 'p1',
+					field: 'text',
+					delta: '!',
+				},
+			} as never,
+		]);
+
+		const state = useChatStore.getState();
+		const view = state.materializedViews[SESSION_ID];
+		expect(view).toBeDefined();
+		const asstNode = view.nodesById['msg-p1'];
+		expect(asstNode.kind).toBe('assistant');
+		if (asstNode.kind === 'assistant') {
+			expect(asstNode.content).toBe('Hello world!');
+		}
+		// Should be incremental (not structural)
+		expect(view.lastUpdateWasStructural).toBe(false);
+	});
+
+	it('materialized view version increments on each delta', () => {
+		setupAssistantStreaming();
+		const v1 = useChatStore.getState().materializedViews[SESSION_ID].version;
+
+		useChatStore.getState().actions.applyEvent({
+			type: 'message.part.delta',
+			properties: {
+				sessionID: SESSION_ID,
+				messageID: 'a1',
+				partID: 'p1',
+				field: 'text',
+				delta: '!',
+			},
+		} as never);
+
+		const v2 = useChatStore.getState().materializedViews[SESSION_ID].version;
+		expect(v2).toBeGreaterThan(v1);
+	});
+});

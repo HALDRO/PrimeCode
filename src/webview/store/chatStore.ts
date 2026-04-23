@@ -21,11 +21,18 @@ import type { NormalizedEntry } from '../../common/normalizedTypes';
 import type { QueuedMessageData } from '../../common/protocol';
 import type { CommitInfo } from '../../common/schemas';
 import { eventReducer, type WebviewSdkEvent } from './eventReducer';
+import { applyDelta, applyToolDelta, type MaterializedView, projectSession } from './projector';
+import {
+	createDraftDomainState,
+	createMessageDomainState,
+	createSessionMetaDomainState,
+} from './storeState';
 import { useUIStore } from './uiStore';
 
 export type {
 	AssistantMessage,
 	CommitInfo,
+	MaterializedView,
 	Message,
 	Part,
 	PermissionRequest,
@@ -197,6 +204,8 @@ export interface SessionStore {
 	>;
 	draftAgent: Record<string, string | undefined>;
 	lastError: { sessionID: string; error: unknown } | null;
+	/** Cached projection output per session — maintained by applyEvent/applyBatch */
+	materializedViews: Record<string, MaterializedView>;
 	actions: SessionActions;
 }
 
@@ -237,35 +246,26 @@ function resolveSessionId(state: SessionStore, sessionId?: string): string | und
 	return sessionId || state.activeSessionId;
 }
 
+/** Extract the session ID from an SDK event, if applicable. */
+function getEventSessionId(event: WebviewSdkEvent): string | undefined {
+	const props = event.properties as Record<string, unknown>;
+	if ('sessionID' in props && typeof props.sessionID === 'string') return props.sessionID;
+	if ('part' in props && typeof props.part === 'object' && props.part !== null) {
+		const part = props.part as { sessionID?: string };
+		if (typeof part.sessionID === 'string') return part.sessionID;
+	}
+	if ('info' in props && typeof props.info === 'object' && props.info !== null) {
+		const info = props.info as { id?: string };
+		if (typeof info.id === 'string' && event.type.startsWith('session.')) return info.id;
+	}
+	return undefined;
+}
+
 export const useChatStore = create<SessionStore>()((set, get) => ({
-	sessions: [],
-	sessionStatus: {},
-	sessionDiff: {},
-	messages: {},
-	parts: {},
-	todos: {},
-	permissions: {},
-	questions: {},
-	activeSessionId: undefined,
-	sessionOrder: [],
-	editingMessageId: null,
-	editDrafts: {},
-	isImprovingPrompt: false,
-	improvingPromptRequestId: null,
-	promptVersions: null,
-	childSessionIdsByParentId: {},
-	originatingToolCallBySessionId: {},
-	queuedMessages: {},
-	restoreCommits: {},
-	revertedFromMessageId: {},
-	sessionCanUnrevert: {},
-	sessionInput: {},
-	sessionAgent: {},
-	sessionModel: {},
-	sessionAutoAccept: {},
-	draftAttachments: {},
-	draftAgent: {},
-	lastError: null,
+	// Domain state factories
+	...createMessageDomainState(),
+	...createDraftDomainState(),
+	...createSessionMetaDomainState(),
 	actions: {
 		applyEvent: event => {
 			if (event.type === 'session.error') {
@@ -286,6 +286,24 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 			set(
 				produce((state: SessionStore) => {
 					eventReducer(state, event);
+					// Update materialized view for affected session
+					const sid = getEventSessionId(event);
+					if (sid) {
+						// For delta events, try incremental path first
+						if (event.type === 'message.part.delta') {
+							const prev = state.materializedViews[sid];
+							if (prev && prev.version > 0) {
+								const { partID, field, delta } = event.properties;
+								const textResult = applyDelta(prev, partID, field, delta);
+								const result = textResult ?? applyToolDelta(prev, partID, field, delta);
+								if (result) {
+									state.materializedViews[sid] = result;
+									return;
+								}
+							}
+						}
+						state.materializedViews[sid] = projectSession(state, sid);
+					}
 				}),
 			);
 		},
@@ -308,6 +326,35 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 					}
 				}
 			}
+
+			// Classify events: which sessions need full rebuild vs incremental delta
+			const deltaOnlySessions = new Map<
+				string,
+				Array<{ partId: string; field: string; delta: string; messageId: string }>
+			>();
+			const structuralSessions = new Set<string>();
+
+			for (const event of events) {
+				const sid = getEventSessionId(event);
+				if (!sid) continue;
+
+				if (event.type === 'message.part.delta') {
+					if (!structuralSessions.has(sid)) {
+						const deltas = deltaOnlySessions.get(sid) ?? [];
+						deltas.push({
+							partId: event.properties.partID,
+							field: event.properties.field,
+							delta: event.properties.delta,
+							messageId: event.properties.messageID,
+						});
+						deltaOnlySessions.set(sid, deltas);
+					}
+				} else {
+					structuralSessions.add(sid);
+					deltaOnlySessions.delete(sid);
+				}
+			}
+
 			set(
 				produce((state: SessionStore) => {
 					const lastPartUpdateIndex = new Map<string, number>();
@@ -328,6 +375,39 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 							}
 						}
 						eventReducer(state, event);
+					}
+
+					// Update materialized views:
+					// 1. Full rebuild for sessions with structural changes
+					for (const sid of structuralSessions) {
+						state.materializedViews[sid] = projectSession(state, sid);
+					}
+
+					// 2. Incremental delta for sessions with only delta events
+					for (const [sid, deltas] of deltaOnlySessions) {
+						const prev = state.materializedViews[sid];
+						if (!prev || prev.version === 0) {
+							// No existing view — full rebuild
+							state.materializedViews[sid] = projectSession(state, sid);
+							continue;
+						}
+
+						let current: MaterializedView | null = prev;
+						for (const d of deltas) {
+							if (!current) break;
+							// Try text/reasoning delta first, then tool delta
+							const textResult = applyDelta(current, d.partId, d.field, d.delta);
+							const result: MaterializedView | null =
+								textResult ?? applyToolDelta(current, d.partId, d.field, d.delta);
+							current = result;
+						}
+
+						if (current) {
+							state.materializedViews[sid] = current;
+						} else {
+							// Incremental path failed — fall back to full rebuild
+							state.materializedViews[sid] = projectSession(state, sid);
+						}
 					}
 				}),
 			);
@@ -431,6 +511,8 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 										for (const m of msgs) delete state.parts[m.id];
 									}
 									state.messages[sid] = [];
+									// Rebuild materialized view after clear
+									state.materializedViews[sid] = projectSession(state, sid);
 								}),
 							);
 						}
@@ -566,6 +648,7 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 					delete state.draftAgent[sessionId];
 					delete state.childSessionIdsByParentId[sessionId];
 					delete state.originatingToolCallBySessionId[sessionId];
+					delete state.materializedViews[sessionId];
 					if (state.activeSessionId === sessionId) {
 						state.activeSessionId = state.sessionOrder[state.sessionOrder.length - 1];
 						state.editingMessageId = null;
@@ -735,6 +818,8 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 							}
 						}
 					}
+					// Rebuild materialized view after restore
+					s.materializedViews[sessionId] = projectSession(s, sessionId);
 				}),
 			);
 		},
