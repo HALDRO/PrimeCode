@@ -92,13 +92,18 @@ export const ThinkingBudgetButton: React.FC = React.memo(() => {
 				onClick={() => setIsOpen(!isOpen)}
 				title={`Thinking effort: ${currentLabel}`}
 				className={cn(
-					'relative inline-flex items-center justify-center font-medium rounded cursor-pointer transition-all duration-200 select-none border-none bg-transparent focus:outline-none',
+					'group/thinking relative inline-flex items-center justify-center font-medium rounded cursor-pointer transition-all duration-200 select-none border-none bg-(--surface-raised) text-vscode-foreground focus:outline-none',
 					'h-(--input-toolbar-height) w-(--input-toolbar-height)',
-					'opacity-70 hover:opacity-100 hover:bg-(--alpha-5)',
-					isOpen && 'bg-(--alpha-5) opacity-100',
+					'opacity-70 hover:opacity-100 hover:bg-white/10',
+					isOpen && 'bg-white/10 opacity-100',
 				)}
 			>
-				<ThinkingLevelIcon size={13} level={effectiveLevel} total={variantNames.length} />
+				<ThinkingLevelIcon
+					size={13}
+					level={effectiveLevel}
+					total={variantNames.length}
+					className="transition-transform duration-200 group-hover/thinking:scale-110"
+				/>
 				{effectiveLevel !== undefined &&
 					(() => {
 						const dotColors = getLevelDotColors(effectiveLevel, variantNames.length);

@@ -129,8 +129,8 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({
 							onModelToggle(e.currentTarget as HTMLElement);
 						}}
 						className={cn(
-							'h-(--input-toolbar-height) rounded-md opacity-70 hover:opacity-100 hover:bg-(--alpha-5) text-sm font-(family-name:--vscode-font-family) min-w-0 max-w-full flex items-center gap-2 px-(--gap-1-5) transition-all duration-200 border border-transparent',
-							showModelDropdown && 'bg-(--alpha-5) opacity-100',
+							'h-(--input-toolbar-height) rounded-md opacity-70 hover:opacity-100 hover:bg-white/10 text-vscode-foreground text-sm font-(family-name:--vscode-font-family) min-w-0 max-w-full flex items-center gap-2 px-(--gap-1-5) transition-all duration-200 border-none bg-(--surface-raised)',
+							showModelDropdown && 'opacity-100 bg-white/10',
 						)}
 					>
 						<span className="truncate">{modelDisplayName}</span>
@@ -174,7 +174,6 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({
 						)}
 					/>
 				</div>
-				{/* Plus button — opens native file dialog for files, folders, and images */}
 				<IconButton
 					icon={
 						<PlusIcon
@@ -184,7 +183,7 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({
 						/>
 					}
 					onClick={() => postMessage({ type: 'browseFiles' })}
-					title="Attach file, folder, or image"
+					title="Attach file or image"
 					size={22}
 					className="group/plus text-vscode-foreground opacity-70 hover:opacity-100"
 				/>

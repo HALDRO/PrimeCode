@@ -9,6 +9,7 @@
  */
 
 import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { isMcpTool } from '../../constants';
 import { cn } from '../../lib/cn';
 import {
@@ -204,7 +205,9 @@ const TodoHoverPopup = React.memo<{
 	triggerRef: React.RefObject<HTMLDivElement | null>;
 }>(({ todos, triggerRef }) => {
 	const popupRef = useRef<HTMLDivElement>(null);
-	const [position, setPosition] = useState<{ left: number; maxWidth: number } | null>(null);
+	const [position, setPosition] = useState<{ left: number; top: number; maxWidth: number } | null>(
+		null,
+	);
 	const completedCount = todos.filter(t => t.status === 'completed').length;
 	const totalCount = todos.length;
 
@@ -233,19 +236,20 @@ const TodoHoverPopup = React.memo<{
 			left = viewportWidth - padding - finalWidth;
 		}
 
-		// Convert to position relative to trigger's left edge (since parent is relative)
-		const relativeLeft = left - triggerRect.left;
+		const top = Math.max(padding, triggerRect.top - popup.offsetHeight - padding);
 
-		setPosition({ left: relativeLeft, maxWidth: finalWidth });
+		setPosition({ left, top, maxWidth: finalWidth });
 	}, [triggerRef]);
 
-	return (
+	return createPortal(
 		<div
 			ref={popupRef}
-			className="absolute bottom-[calc(100%+8px)] z-100 pointer-events-none"
+			className="fixed z-10000 pointer-events-none"
 			style={{
 				left: position ? `${position.left}px` : 0,
+				top: position ? `${position.top}px` : 0,
 				width: position ? `${position.maxWidth}px` : '75vw',
+				visibility: position ? 'visible' : 'hidden',
 			}}
 		>
 			<div className="bg-(--tool-bg-header) border border-(--tool-border-color) rounded-lg overflow-hidden w-full pointer-events-auto">
@@ -279,7 +283,8 @@ const TodoHoverPopup = React.memo<{
 					</div>
 				</div>
 			</div>
-		</div>
+		</div>,
+		document.body,
 	);
 });
 TodoHoverPopup.displayName = 'TodoHoverPopup';

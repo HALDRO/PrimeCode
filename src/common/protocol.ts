@@ -1236,6 +1236,9 @@ export interface GetImageDataCommand {
 export interface BrowseFilesCommand {
 	type: 'browseFiles';
 }
+export interface BrowseFoldersCommand {
+	type: 'browseFolders';
+}
 export interface GetWorkspaceFilesCommand {
 	type: 'getWorkspaceFiles';
 	searchTerm: string;
@@ -1498,6 +1501,7 @@ export type WebviewCommand =
 	| OpenExternalCommand
 	| GetImageDataCommand
 	| BrowseFilesCommand
+	| BrowseFoldersCommand
 	| GetWorkspaceFilesCommand
 	| SseSubscribeCommand
 	| SseCloseCommand

@@ -12,6 +12,8 @@ import { useFileAttachments } from '../../hooks/useFileAttachments';
 import { cn } from '../../lib/cn';
 import { useFilePickerControls, useSettingsStore, useSlashCommandsState } from '../../store';
 import { useVSCode } from '../../utils/vscode';
+import { FolderOpenIcon } from '../icons';
+import { IconButton } from '../ui';
 import {
 	chatHighlighter,
 	chatKeymap,
@@ -84,6 +86,7 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 	}) => {
 		const { postMessage } = useVSCode();
 		const editorRef = useRef<EditorCoreRef>(null);
+		const [showFolderOverlay, setShowFolderOverlay] = useState(false);
 
 		const {
 			attachedFiles,
@@ -279,6 +282,11 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 		const hasAttachments =
 			attachedFiles.length > 0 || codeSnippets.length > 0 || attachedImages.length > 0;
 
+		const handleRightOverlayMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+			const rect = e.currentTarget.getBoundingClientRect();
+			setShowFolderOverlay(e.clientX >= rect.right - 96);
+		}, []);
+
 		return (
 			<div
 				className={cn(
@@ -292,10 +300,23 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 						'flex flex-row transition-colors duration-150 relative group',
 						isDragOver && 'bg-vscode-button-background/10 border-(--input-border-focus)',
 					)}
+					onMouseMove={handleRightOverlayMouseMove}
+					onMouseLeave={() => setShowFolderOverlay(false)}
 					onDragOver={handleDragOver}
 					onDragLeave={handleDragLeave}
 					onDrop={handleDrop}
 				>
+					<IconButton
+						icon={<FolderOpenIcon size={13} strokeWidth={2.2} />}
+						onClick={() => postMessage({ type: 'browseFolders' })}
+						aria-label="Attach folder"
+						size={22}
+						className={cn(
+							'absolute right-[calc(var(--send-btn-size)+var(--send-btn-margin)*2)] bottom-[calc(var(--input-toolbar-height)+var(--gap-1))] z-20 text-vscode-foreground opacity-0 pointer-events-none translate-y-1 scale-95 shadow-lg transition-all duration-200',
+							showFolderOverlay &&
+								'opacity-70 pointer-events-auto translate-y-0 scale-100 hover:opacity-100',
+						)}
+					/>
 					<div className="flex-1 min-w-0 flex flex-col relative pb-(--gap-0-5)">
 						{isDragOver && (
 							<div className="absolute inset-0 bg-vscode-button-background/10 rounded-lg flex items-center justify-center z-10 pointer-events-none">

@@ -70,6 +70,9 @@ const scrollToBottom = (instance: OverlayScrollbars) => {
 	if (viewport) viewport.scrollTop = viewport.scrollHeight;
 };
 
+const getFileChangeCardKey = (change: ResolvedFileChange, index: number) =>
+	change.filePath || `${change.name}-${index}`;
+
 type ToolUse = RenderToolUseMessage;
 type ToolResult = ToolResultView;
 
@@ -634,7 +637,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		);
 		const liveElapsed = useElapsedTimer(isRunning, toolUse.timestamp);
 		const [expanded, setExpanded] = useState(defaultExpanded ?? false);
-		const [diffExpanded, setDiffExpanded] = useState(defaultExpanded ?? false);
+		const [expandedDiffKeys, setExpandedDiffKeys] = useState<Set<string>>(() => new Set());
 
 		// Extract LSP diagnostics from the same merged metadata source used by diff rendering.
 		// Diagnostics may arrive on the live tool state before/without a separate final toolResult.
@@ -701,26 +704,40 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		if (canRenderPendingDiffCard) {
 			return (
 				<div className="flex flex-col gap-1">
-					{displayFileChanges.map((change, i) => (
-						<FileEditCard
-							key={change.filePath || i}
-							change={change}
-							accessRequest={i === 0 ? accessRequest : undefined}
-							toolName={toolName}
-							rawInput={rawInput}
-							diffExpanded={diffExpanded}
-							onToggleDiff={() => setDiffExpanded(prev => !prev)}
-							diagnostics={getApplyPatchDiagnosticsForCard({
-								change,
-								changeIndex: i,
-								totalChanges: displayFileChanges.length,
-								isApplyPatch,
-								diagnostics,
-							})}
-							postMessage={postMessage}
-							isRunning={isRunning && !canRenderDiffCard}
-						/>
-					))}
+					{displayFileChanges.map((change, i) => {
+						const cardKey = getFileChangeCardKey(change, i);
+						const diffExpanded = defaultExpanded ?? expandedDiffKeys.has(cardKey);
+						return (
+							<FileEditCard
+								key={cardKey}
+								change={change}
+								accessRequest={i === 0 ? accessRequest : undefined}
+								toolName={toolName}
+								rawInput={rawInput}
+								diffExpanded={diffExpanded}
+								onToggleDiff={() =>
+									setExpandedDiffKeys(prev => {
+										const next = new Set(prev);
+										if (next.has(cardKey)) {
+											next.delete(cardKey);
+										} else {
+											next.add(cardKey);
+										}
+										return next;
+									})
+								}
+								diagnostics={getApplyPatchDiagnosticsForCard({
+									change,
+									changeIndex: i,
+									totalChanges: displayFileChanges.length,
+									isApplyPatch,
+									diagnostics,
+								})}
+								postMessage={postMessage}
+								isRunning={isRunning && !canRenderDiffCard}
+							/>
+						);
+					})}
 				</div>
 			);
 		}

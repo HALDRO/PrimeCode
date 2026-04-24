@@ -433,7 +433,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		// File
 		r.register(
 			this.fileHandler,
-			['openFile', 'openFileDiff', 'openExternal', 'getImageData', 'browseFiles'],
+			['openFile', 'openFileDiff', 'openExternal', 'getImageData', 'browseFiles', 'browseFolders'],
 			'file',
 		);
 

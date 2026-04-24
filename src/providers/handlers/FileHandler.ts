@@ -40,6 +40,9 @@ export class FileHandler implements WebviewMessageHandler {
 			case 'browseFiles':
 				await this.onBrowseFiles();
 				break;
+			case 'browseFolders':
+				await this.onBrowseFolders();
+				break;
 		}
 	}
 
@@ -224,9 +227,10 @@ export class FileHandler implements WebviewMessageHandler {
 	private async onBrowseFiles(): Promise<void> {
 		const picks = await vscode.window.showOpenDialog({
 			canSelectFiles: true,
-			canSelectFolders: true,
+			canSelectFolders: false,
 			canSelectMany: true,
 			openLabel: 'Attach',
+			title: 'Attach files or images',
 		});
 
 		if (!picks || picks.length === 0) return;
@@ -278,5 +282,22 @@ export class FileHandler implements WebviewMessageHandler {
 				paths: filePaths,
 			});
 		}
+	}
+
+	private async onBrowseFolders(): Promise<void> {
+		const picks = await vscode.window.showOpenDialog({
+			canSelectFiles: false,
+			canSelectFolders: true,
+			canSelectMany: true,
+			openLabel: 'Attach',
+			title: 'Attach folders',
+		});
+
+		if (!picks || picks.length === 0) return;
+
+		this.context.bridge.send({
+			type: 'browsedFiles',
+			paths: picks.map(folderUri => folderUri.fsPath),
+		});
 	}
 }
