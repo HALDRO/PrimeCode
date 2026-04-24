@@ -29,18 +29,6 @@ export interface HandlerContext {
 	};
 	/** Clears runtime auto-accept state for a session. */
 	clearSessionAutoAccept?: (sessionId: string) => void;
-	/** Register a checkpoint on the backend so the frontend can restore by commitId alone. */
-	registerCheckpoint?: (
-		commitId: string,
-		record: {
-			sessionId: string;
-			messageId: string;
-			associatedMessageId: string;
-			isOpenCode: boolean;
-		},
-	) => void;
-	/** Clean up restore/revert state when a session is deleted. */
-	cleanupSessionRestore?: (sessionId: string) => void;
 	/** Refresh webview bootstrap after a successful manual server restart. */
 	refreshAfterServerRestart?: () => Promise<void>;
 }

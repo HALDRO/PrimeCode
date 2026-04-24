@@ -1,94 +1,93 @@
-/**
- * @file RestoreHandler tests
- * @description Tests for checkpoint restore, unrevert, commitId parsing,
- *              multi-chat isolation, and error handling.
- */
-
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RestoreHandler } from '../RestoreHandler';
 import type { HandlerContext } from '../types';
 
-// ---------------------------------------------------------------------------
-// Mock vscode
-// ---------------------------------------------------------------------------
 vi.mock('vscode', () => ({
 	workspace: {
 		workspaceFolders: [{ uri: { fsPath: '/test/workspace' } }],
 	},
 }));
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 interface MockContext {
 	cli: {
 		truncateSession: ReturnType<typeof vi.fn>;
 		unrevertSession: ReturnType<typeof vi.fn>;
-		getOpenCodeServerInfo: ReturnType<typeof vi.fn>;
+		getSdkClient: ReturnType<typeof vi.fn>;
 	};
 	bridge: {
-		emit: ReturnType<typeof vi.fn>;
+		sendSdkEvent: ReturnType<typeof vi.fn>;
 		data: ReturnType<typeof vi.fn>;
 	};
-	sessionState: {
-		activeSessionId: string | undefined;
+	sessionManager: {
+		setSession: ReturnType<typeof vi.fn>;
 	};
 	extensionContext: {
 		workspaceState: {
-			get: ReturnType<typeof vi.fn>;
 			update: ReturnType<typeof vi.fn>;
 		};
 	};
 }
 
 function createMockContext(overrides: Partial<MockContext> = {}): MockContext & HandlerContext {
+	const sdkClient = {
+		session: {
+			get: vi.fn().mockResolvedValue({
+				data: { id: 'session-1', title: 'Session', revert: { messageID: 'msg-1' } },
+				error: null,
+			}),
+			messages: vi.fn().mockResolvedValue({
+				data: [
+					{
+						info: {
+							id: 'msg-1',
+							sessionID: 'session-1',
+							role: 'user',
+							time: { created: 1 },
+						},
+						parts: [
+							{
+								id: 'msg-1-text',
+								messageID: 'msg-1',
+								sessionID: 'session-1',
+								type: 'text',
+								text: 'hello',
+							},
+						],
+					},
+				],
+				error: null,
+			}),
+			diff: vi.fn().mockResolvedValue({ data: [] }),
+			todo: vi.fn().mockResolvedValue({ data: [] }),
+			status: vi.fn().mockResolvedValue({ data: { 'session-1': { type: 'idle' } } }),
+		},
+	};
+
 	const ctx: MockContext = {
 		cli: {
 			truncateSession: vi.fn().mockResolvedValue(undefined),
 			unrevertSession: vi.fn().mockResolvedValue(undefined),
-			getOpenCodeServerInfo: vi.fn().mockReturnValue({ baseUrl: 'http://localhost:3000' }),
+			getSdkClient: vi.fn().mockReturnValue(sdkClient),
 			...overrides.cli,
 		},
 		bridge: {
-			emit: vi.fn(),
+			sendSdkEvent: vi.fn(),
 			data: vi.fn(),
 			...overrides.bridge,
 		},
-		sessionState: {
-			activeSessionId: 'session-1',
-			...overrides.sessionState,
+		sessionManager: {
+			setSession: vi.fn(),
+			...overrides.sessionManager,
 		},
 		extensionContext: {
 			workspaceState: {
-				get: vi.fn().mockReturnValue([]),
 				update: vi.fn().mockResolvedValue(undefined),
 			},
 		},
 	};
+
 	return ctx as unknown as MockContext & HandlerContext;
 }
-
-function registerTestCheckpoint(
-	handler: RestoreHandler,
-	commitId: string,
-	opts: {
-		sessionId?: string;
-		messageId?: string;
-		associatedMessageId?: string;
-	} = {},
-) {
-	handler.registerCheckpoint(commitId, {
-		sessionId: opts.sessionId ?? 'session-1',
-		messageId: opts.messageId ?? 'msg-1',
-		associatedMessageId: opts.associatedMessageId ?? 'msg-1',
-		isOpenCode: true,
-	});
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 describe('RestoreHandler', () => {
 	let handler: RestoreHandler;
@@ -99,271 +98,49 @@ describe('RestoreHandler', () => {
 		handler = new RestoreHandler(ctx);
 	});
 
-	// =========================================================================
-	// commitId parsing
-	// =========================================================================
-
-	describe('commitId parsing', () => {
-		it('should read commitId from msg.data.commitId (webview format)', async () => {
-			registerTestCheckpoint(handler, 'cp-1');
-
-			await handler.handleMessage({
-				type: 'restoreCommit',
-				data: { commitId: 'cp-1' },
-			} as any);
-
-			expect(ctx.cli.truncateSession).toHaveBeenCalledOnce();
-			expect(ctx.cli.truncateSession).toHaveBeenCalledWith(
-				'session-1',
-				'msg-1',
-				expect.objectContaining({ workspaceRoot: '/test/workspace' }),
-			);
+	it('restores a session to a concrete message', async () => {
+		await handler.handleMessage({
+			type: 'restoreMessage',
+			sessionId: 'session-1',
+			messageId: 'msg-1',
 		});
 
-		it('should read commitId from msg.commitId (top-level fallback)', async () => {
-			registerTestCheckpoint(handler, 'cp-2');
-
-			await handler.handleMessage({
-				type: 'restoreCommit',
-				commitId: 'cp-2',
-			} as any);
-
-			expect(ctx.cli.truncateSession).toHaveBeenCalledOnce();
+		expect(ctx.cli.truncateSession).toHaveBeenCalledWith('session-1', 'msg-1', {
+			provider: 'opencode',
+			workspaceRoot: '/test/workspace',
 		});
-
-		it('should prefer msg.data.commitId over msg.commitId', async () => {
-			registerTestCheckpoint(handler, 'cp-data');
-			registerTestCheckpoint(handler, 'cp-top', {
-				sessionId: 'session-other',
-				messageId: 'msg-other',
-			});
-
-			await handler.handleMessage({
-				type: 'restoreCommit',
-				commitId: 'cp-top',
-				data: { commitId: 'cp-data' },
-			} as any);
-
-			expect(ctx.cli.truncateSession).toHaveBeenCalledWith('session-1', 'msg-1', expect.anything());
-		});
-
-		it('should do nothing when no commitId provided at all', async () => {
-			await handler.handleMessage({ type: 'restoreCommit' } as any);
-
-			expect(ctx.cli.truncateSession).not.toHaveBeenCalled();
-			expect(ctx.bridge.data).not.toHaveBeenCalled();
-		});
-
-		it('should do nothing when commitId is empty string', async () => {
-			await handler.handleMessage({
-				type: 'restoreCommit',
-				data: { commitId: '' },
-			} as any);
-
-			expect(ctx.cli.truncateSession).not.toHaveBeenCalled();
-		});
-
-		it('should do nothing for unknown commitId', async () => {
-			await handler.handleMessage({
-				type: 'restoreCommit',
-				data: { commitId: 'nonexistent' },
-			} as any);
-
-			expect(ctx.cli.truncateSession).not.toHaveBeenCalled();
-		});
+		expect(ctx.bridge.data).toHaveBeenCalledWith('restore_session', expect.any(Object));
 	});
 
-	// =========================================================================
-	// Revert flow
-	// =========================================================================
-
-	describe('revert flow', () => {
-		it('should call truncateSession with correct sessionId and messageId', async () => {
-			registerTestCheckpoint(handler, 'cp-1', {
-				sessionId: 'sess-abc',
-				messageId: 'msg-xyz',
-			});
-
-			await handler.handleMessage({
-				type: 'restoreCommit',
-				data: { commitId: 'cp-1' },
-			} as any);
-
-			expect(ctx.cli.truncateSession).toHaveBeenCalledWith('sess-abc', 'msg-xyz', {
-				provider: 'opencode',
-				workspaceRoot: '/test/workspace',
-			});
+	it('unreverts a concrete session', async () => {
+		await handler.handleMessage({
+			type: 'unrevert',
+			sessionId: 'session-1',
 		});
 
-		it('should notify UI with success + canUnrevert=true after revert', async () => {
-			registerTestCheckpoint(handler, 'cp-1', {
-				associatedMessageId: 'ui-msg-1',
-			});
-
-			await handler.handleMessage({
-				type: 'restoreCommit',
-				data: { commitId: 'cp-1' },
-			} as any);
-
-			expect(ctx.bridge.data).toHaveBeenCalledWith('restoreState', {
-				sessionId: 'session-1',
-				action: 'success',
-				canUnrevert: true,
-				revertedFromMessageId: 'ui-msg-1',
-			});
+		expect(ctx.cli.unrevertSession).toHaveBeenCalledWith('session-1', {
+			provider: 'opencode',
+			workspaceRoot: '/test/workspace',
 		});
-
-		it('should notify error when truncateSession fails', async () => {
-			ctx.cli.truncateSession.mockRejectedValueOnce(new Error('Server down'));
-			registerTestCheckpoint(handler, 'cp-1');
-
-			await handler.handleMessage({
-				type: 'restoreCommit',
-				data: { commitId: 'cp-1' },
-			} as any);
-
-			expect(ctx.bridge.data).toHaveBeenCalledWith('restoreState', {
-				sessionId: 'session-1',
-				action: 'error',
-				message: expect.stringContaining('Server down'),
-			});
-		});
+		expect(ctx.bridge.data).toHaveBeenCalledWith('restore_session', expect.any(Object));
 	});
 
-	// =========================================================================
-	// Unrevert flow
-	// =========================================================================
+	it('shows notification on restore failure', async () => {
+		ctx.cli.truncateSession.mockRejectedValueOnce(new Error('restore failed'));
 
-	describe('unrevert flow', () => {
-		it('should use activeSessionId for unrevert', async () => {
-			ctx.sessionState.activeSessionId = 'sess-A';
-
-			await handler.handleMessage({ type: 'unrevert' } as any);
-
-			expect(ctx.cli.unrevertSession).toHaveBeenCalledWith(
-				'sess-A',
-				expect.objectContaining({ workspaceRoot: '/test/workspace' }),
-			);
+		await handler.handleMessage({
+			type: 'restoreMessage',
+			sessionId: 'session-1',
+			messageId: 'msg-1',
 		});
 
-		it('should notify UI with single unrevert_available=false after unrevert', async () => {
-			ctx.sessionState.activeSessionId = 'session-1';
-
-			await handler.handleMessage({ type: 'unrevert' } as any);
-
-			// Single atomic notification — no more race between two events
-			expect(ctx.bridge.data).toHaveBeenCalledTimes(1);
-			expect(ctx.bridge.data).toHaveBeenCalledWith('restoreState', {
-				sessionId: 'session-1',
-				action: 'unrevert_available',
-				available: false,
-			});
-		});
-
-		it('should notify error when unrevertSession fails', async () => {
-			ctx.cli.unrevertSession.mockRejectedValueOnce(new Error('Unrevert failed'));
-
-			await handler.handleMessage({ type: 'unrevert' } as any);
-
-			expect(ctx.bridge.data).toHaveBeenCalledWith('restoreState', {
-				sessionId: 'session-1',
-				action: 'error',
-				message: expect.stringContaining('Unrevert failed'),
-			});
-		});
-
-		it('should do nothing when no active session', async () => {
-			ctx.sessionState.activeSessionId = undefined;
-
-			await handler.handleMessage({ type: 'unrevert' } as any);
-
-			expect(ctx.cli.unrevertSession).not.toHaveBeenCalled();
-		});
-	});
-
-	// =========================================================================
-	// Multi-chat isolation
-	// =========================================================================
-
-	describe('multi-chat isolation', () => {
-		it('checkpoints from different sessions are isolated', async () => {
-			registerTestCheckpoint(handler, 'cp-A', {
-				sessionId: 'sess-A',
-				messageId: 'msg-A1',
-				associatedMessageId: 'ui-A1',
-			});
-			registerTestCheckpoint(handler, 'cp-B', {
-				sessionId: 'sess-B',
-				messageId: 'msg-B1',
-				associatedMessageId: 'ui-B1',
-			});
-
-			await handler.handleMessage({
-				type: 'restoreCommit',
-				data: { commitId: 'cp-A' },
-			} as any);
-
-			expect(ctx.cli.truncateSession).toHaveBeenCalledWith('sess-A', 'msg-A1', expect.anything());
-
-			await handler.handleMessage({
-				type: 'restoreCommit',
-				data: { commitId: 'cp-B' },
-			} as any);
-
-			expect(ctx.cli.truncateSession).toHaveBeenCalledWith('sess-B', 'msg-B1', expect.anything());
-		});
-
-		it('revert in A then unrevert targets active session (B if switched)', async () => {
-			registerTestCheckpoint(handler, 'cp-A', { sessionId: 'sess-A' });
-
-			await handler.handleMessage({
-				type: 'restoreCommit',
-				data: { commitId: 'cp-A' },
-			} as any);
-
-			// Switch to session B
-			ctx.sessionState.activeSessionId = 'sess-B';
-
-			// Unrevert targets active session (B), not A
-			await handler.handleMessage({ type: 'unrevert' } as any);
-
-			expect(ctx.cli.unrevertSession).toHaveBeenCalledWith('sess-B', expect.anything());
-		});
-	});
-
-	// =========================================================================
-	// Checkpoint registration
-	// =========================================================================
-
-	describe('checkpoint registration', () => {
-		it('should register and retrieve checkpoints', async () => {
-			registerTestCheckpoint(handler, 'cp-1', {
-				sessionId: 'sess-1',
-				messageId: 'msg-1',
-			});
-
-			await handler.handleMessage({
-				type: 'restoreCommit',
-				data: { commitId: 'cp-1' },
-			} as any);
-
-			expect(ctx.cli.truncateSession).toHaveBeenCalledWith('sess-1', 'msg-1', expect.anything());
-		});
-
-		it('should overwrite checkpoint with same commitId', async () => {
-			registerTestCheckpoint(handler, 'cp-1', { messageId: 'msg-old' });
-			registerTestCheckpoint(handler, 'cp-1', { messageId: 'msg-new' });
-
-			await handler.handleMessage({
-				type: 'restoreCommit',
-				data: { commitId: 'cp-1' },
-			} as any);
-
-			expect(ctx.cli.truncateSession).toHaveBeenCalledWith(
-				'session-1',
-				'msg-new',
-				expect.anything(),
-			);
-		});
+		expect(ctx.bridge.data).toHaveBeenCalledWith(
+			'showNotification',
+			expect.objectContaining({
+				notification: expect.objectContaining({
+					content: expect.stringContaining('restore failed'),
+				}),
+			}),
+		);
 	});
 });

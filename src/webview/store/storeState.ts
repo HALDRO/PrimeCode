@@ -17,7 +17,6 @@ import type {
 	Todo,
 } from '@opencode-ai/sdk/v2/client';
 import type { QueuedMessageData } from '../../common/protocol';
-import type { CommitInfo } from '../../common/schemas';
 import type { MaterializedView } from './projector';
 
 export interface MessageDomainState {
@@ -53,9 +52,6 @@ export interface SessionMetaDomainState {
 	childSessionIdsByParentId: Record<string, string[]>;
 	originatingToolCallBySessionId: Record<string, string>;
 	queuedMessages: Record<string, QueuedMessageData[]>;
-	restoreCommits: Record<string, CommitInfo[]>;
-	revertedFromMessageId: Record<string, string | null>;
-	sessionCanUnrevert: Record<string, boolean>;
 	sessionAgent: Record<string, string | undefined>;
 	sessionModel: Record<string, string | undefined>;
 	sessionAutoAccept: Record<string, boolean>;
@@ -96,9 +92,6 @@ export function createSessionMetaDomainState(): SessionMetaDomainState {
 		childSessionIdsByParentId: {},
 		originatingToolCallBySessionId: {},
 		queuedMessages: {},
-		restoreCommits: {},
-		revertedFromMessageId: {},
-		sessionCanUnrevert: {},
 		sessionAgent: {},
 		sessionModel: {},
 		sessionAutoAccept: {},

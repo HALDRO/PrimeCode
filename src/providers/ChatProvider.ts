@@ -67,7 +67,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.cli.setBridge(this.bridge);
 
 		// Initialize Handlers — single shared context
-		// RestoreHandler is created first so registerCheckpoint can be wired into the context
 		const baseContext = {
 			extensionContext: this.context,
 			settings: this.settings,
@@ -89,9 +88,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				this.toolHandler.getSessionAutoAcceptState(sessionId),
 			clearSessionAutoAccept: (sessionId: string) =>
 				this.toolHandler.clearSessionAutoAccept(sessionId),
-			registerCheckpoint: (commitId, record) =>
-				this.restoreHandler.registerCheckpoint(commitId, record),
-			cleanupSessionRestore: sessionId => this.restoreHandler.cleanupSession(sessionId),
 			refreshAfterServerRestart: async () => {
 				this.sendServerInfo(true);
 				this.hasSynced = false;
@@ -445,7 +441,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		r.register(this.sseHandler, ['sseSubscribe', 'sseClose'], 'sse');
 
 		// Restore
-		r.register(this.restoreHandler, ['restoreCommit', 'unrevert'], 'restore');
+		r.register(this.restoreHandler, ['restoreMessage', 'unrevert'], 'restore');
 
 		// Orchestration
 		r.register(

@@ -92,7 +92,6 @@ export function useChatInputController(
 	const storeInput = useStoreInput();
 	const {
 		updateSessionInput,
-		markRevertedFromMessageId,
 		setImprovingPrompt,
 		clearPromptVersions,
 		togglePromptVersion,
@@ -300,9 +299,6 @@ export function useChatInputController(
 			attachments: hasAttachments ? builtAttachments : undefined,
 		});
 
-		if (targetSessionId) {
-			markRevertedFromMessageId(null, targetSessionId);
-		}
 		updateSessionInput('');
 		attachments.clearAll();
 		clearPromptVersions();
@@ -314,7 +310,6 @@ export function useChatInputController(
 		selectedAgent,
 		validSessionVariant,
 		postSessionMessage,
-		markRevertedFromMessageId,
 		updateSessionInput,
 		clearPromptVersions,
 		sessionModel,

@@ -440,21 +440,13 @@ const mockVSCodeApi: VSCodeApi = {
 				if (settings.provider === 'opencode')
 					setTimeout(() => mockVSCodeApi.postMessage({ type: 'reloadAllProviders' }), 100);
 			}
-		} else if (msg.type === 'restoreCommit') {
-			const data = msg.data as
-				| { messageId: string; sessionId: string; associatedMessageId?: string }
-				| string
-				| undefined;
+		} else if (msg.type === 'restoreMessage') {
+			const data = msg as unknown as { messageId: string; sessionId: string };
 			setTimeout(() => {
-				const sid = typeof data === 'object' && data ? data.sessionId : mockActiveSessionId;
-				if (typeof data === 'object' && data && 'associatedMessageId' in data) {
-					dispatchSessionEvent(sid, 'delete_messages_after', {
-						messageId: data.associatedMessageId,
-					});
-					dispatchRestore(sid, 'success', { message: 'Files restored.', canUnrevert: true });
-					dispatchRestore(sid, 'unrevert_available', { available: true });
-					dispatchRestore(sid, 'set_commits', { commits: [] });
-				}
+				const sid = data.sessionId || mockActiveSessionId;
+				dispatchSessionEvent(sid, 'delete_messages_after', {
+					messageId: data.messageId,
+				});
 			}, 300);
 		} else if (msg.type === 'unrevert') {
 			const data = msg.data as { sessionId: string } | undefined;

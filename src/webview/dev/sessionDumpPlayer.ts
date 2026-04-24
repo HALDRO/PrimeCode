@@ -574,24 +574,6 @@ function convertSession(
 				),
 			);
 
-			// Emit checkpoint/restore after user message
-			result.push(
-				createSessionEvent(
-					sessionId,
-					'restore',
-					{
-						action: 'add_commit',
-						commit: {
-							id: `checkpoint-${msg.info.id}`,
-							sha: msg.info.id.replace('msg_', ''),
-							message: 'Checkpoint before message',
-							timestamp,
-							associatedMessageId: msg.info.id,
-						},
-					},
-					Math.round(100 / config.speed),
-				),
-			);
 			continue;
 		}
 

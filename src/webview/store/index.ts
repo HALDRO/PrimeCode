@@ -7,7 +7,6 @@
 // Base stores (use sparingly - prefer selectors)
 export {
 	type ChangedFile,
-	type CommitInfo,
 	type MaterializedView,
 	type Message,
 	type Part,

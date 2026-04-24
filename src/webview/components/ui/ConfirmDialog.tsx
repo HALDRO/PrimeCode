@@ -27,6 +27,11 @@ export const ConfirmDialog: React.FC = () => {
 		hideConfirmDialog();
 	}, [confirmDialog, hideConfirmDialog]);
 
+	const handleSecondary = useCallback(() => {
+		confirmDialog?.onSecondary?.();
+		hideConfirmDialog();
+	}, [confirmDialog, hideConfirmDialog]);
+
 	// Handle Escape key
 	useEffect(() => {
 		if (!confirmDialog) {
@@ -51,7 +56,7 @@ export const ConfirmDialog: React.FC = () => {
 
 	return (
 		<div
-			className="fixed inset-0 z-1000 flex items-center justify-center bg-black/50"
+			className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/50"
 			onClick={handleCancel}
 			onKeyDown={e => e.key === 'Escape' && handleCancel()}
 			role="dialog"
@@ -80,7 +85,12 @@ export const ConfirmDialog: React.FC = () => {
 					{confirmDialog.message}
 				</p>
 
-				<div className="grid grid-cols-2 gap-(--gap-3) pt-(--gap-2)">
+				<div
+					className={cn(
+						'grid gap-(--gap-3) pt-(--gap-2)',
+						confirmDialog.onSecondary ? 'grid-cols-3' : 'grid-cols-2',
+					)}
+				>
 					<Button
 						variant="primary"
 						size="md"
@@ -91,6 +101,17 @@ export const ConfirmDialog: React.FC = () => {
 					>
 						{confirmDialog.confirmLabel || 'Confirm'}
 					</Button>
+					{confirmDialog.onSecondary && (
+						<Button
+							variant="secondary"
+							size="md"
+							onClick={handleSecondary}
+							fullWidth
+							className="min-h-10 text-center whitespace-normal leading-snug"
+						>
+							{confirmDialog.cancelLabel || 'Continue'}
+						</Button>
+					)}
 					<Button
 						variant="secondary"
 						size="md"
@@ -98,7 +119,7 @@ export const ConfirmDialog: React.FC = () => {
 						fullWidth
 						className="min-h-10 text-center whitespace-normal leading-snug"
 					>
-						{confirmDialog.cancelLabel || 'Cancel'}
+						{confirmDialog.onSecondary ? 'Cancel' : confirmDialog.cancelLabel || 'Cancel'}
 					</Button>
 				</div>
 			</div>

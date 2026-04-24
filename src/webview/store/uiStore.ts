@@ -15,7 +15,7 @@ import type {
 import { generateId } from '../../common';
 
 // Re-export types from chatStore for backward compatibility
-export type { ChangedFile, CommitInfo } from './chatStore';
+export type { ChangedFile } from './chatStore';
 export type { ConversationIndexEntry, WorkspaceFile };
 
 export type ModalType = 'settings' | 'history' | 'access' | 'mcp' | null;
@@ -26,6 +26,8 @@ export interface ConfirmDialogData {
 	confirmLabel?: string;
 	cancelLabel?: string;
 	onConfirm: () => void;
+	/** Optional explicit secondary action. Closing the dialog does not trigger it. */
+	onSecondary?: () => void;
 	onCancel?: () => void;
 }
 

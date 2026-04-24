@@ -35,7 +35,6 @@ export type {
 	SessionPermissionRequest,
 	SessionQuestionPayload,
 	SessionQuestionRequest,
-	SessionRestorePayload,
 	SessionStatus,
 	SessionStatusPayload,
 	SessionTodoItem,

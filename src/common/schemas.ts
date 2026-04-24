@@ -3,7 +3,6 @@
  * @description Defines runtime-validated schemas (TypeBox) shared between extension and webview.
  * Acts as the single source of truth for cross-boundary message payloads and stored data shapes.
  * Types are derived from schemas to keep compile-time and runtime contracts aligned.
- * Includes commit/checkpoint metadata used by both git-based restore and OpenCode-native checkpoints.
  */
 
 import type { Static } from '@sinclair/typebox';
@@ -368,21 +367,6 @@ export const WorkspaceFileSchema = Type.Object({
 	fsPath: Type.String(),
 });
 export type WorkspaceFile = Static<typeof WorkspaceFileSchema>;
-
-// =============================================================================
-// Git & Commits
-// =============================================================================
-
-export const CommitInfoSchema = Type.Object({
-	id: Type.String(),
-	sha: Type.String(),
-	message: Type.String(),
-	timestamp: Type.String(),
-	associatedMessageId: Type.Optional(Type.String()),
-	// When using OpenCode-native revert, we may also keep a git checkpoint SHA to restore workspace files.
-	workspaceCommitSha: Type.Optional(Type.String()),
-});
-export type CommitInfo = Static<typeof CommitInfoSchema>;
 
 // =============================================================================
 // Message Attachments

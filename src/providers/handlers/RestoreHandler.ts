@@ -1,18 +1,9 @@
 /**
- * @file RestoreHandler - Handles checkpoint restore and unrevert operations
- * @description The single source of truth for checkpoint data. The backend registers
- *              checkpoints (commitId → metadata) and the frontend only sends a commitId.
- *              RestoreHandler resolves the commitId to the real API parameters (sessionId,
- *              messageId) and calls the appropriate endpoint. The frontend has ZERO
- *              knowledge of OpenCode message IDs, session IDs, or provider differences.
- *
- * Multi-chat safety: the CLI server tracks revert state per-session via session.revert,
- * so reverting in chat A then chat B doesn't lose the ability to unrevert A.
- *
- * Restart safety: checkpoints are re-registered during history replay
- * (SessionHandler.replayHistoryIntoSession), so they survive extension restarts.
- * Revert state is read from the server's session.revert field during replay,
- * so it also survives restarts without local persistence.
+ * @file RestoreHandler
+ * @description Canonical history mutation handler for restore/unrevert operations.
+ *              The frontend addresses real session/message IDs directly.
+ *              After each mutation we resync the session from the server snapshot
+ *              instead of maintaining a parallel local restore control plane.
  */
 
 import * as vscode from 'vscode';
@@ -20,49 +11,13 @@ import type { CommandOf, WebviewCommand } from '../../common/protocol';
 import { logger } from '../../utils/logger';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
-/** Internal checkpoint record — never sent to the frontend */
-interface CheckpointRecord {
-	/** The OpenCode session ID (or CLI session) this checkpoint belongs to */
-	sessionId: string;
-	/** The real OpenCode message ID (msg_...) to pass to the revert API */
-	messageId: string;
-	/** The UI message ID (user message) this checkpoint is associated with */
-	associatedMessageId: string;
-	/** Whether this is an OpenCode checkpoint (vs git-based) */
-	isOpenCode: boolean;
-}
-
 export class RestoreHandler implements WebviewMessageHandler {
-	/**
-	 * Backend-only registry: commitId → checkpoint metadata.
-	 * The frontend never sees the internals — it only knows commitId.
-	 */
-	private readonly checkpoints = new Map<string, CheckpointRecord>();
-
-	constructor(private readonly context: HandlerContext) {
-		// Clean up legacy workspaceState key if present (was used before server-side revert tracking)
-		void context.extensionContext.workspaceState.update('primecode.revertedSessions', undefined);
-	}
-
-	/** Register a checkpoint so the frontend can later restore it by commitId alone. */
-	registerCheckpoint(commitId: string, record: CheckpointRecord): void {
-		this.checkpoints.set(commitId, record);
-		logger.trace('[RestoreHandler] Registered checkpoint', { commitId, ...record });
-	}
-
-	/** Clean up checkpoint data when a session is deleted. */
-	cleanupSession(sessionId: string): void {
-		for (const [commitId, record] of this.checkpoints) {
-			if (record.sessionId === sessionId) {
-				this.checkpoints.delete(commitId);
-			}
-		}
-	}
+	constructor(private readonly context: HandlerContext) {}
 
 	async handleMessage(msg: WebviewCommand): Promise<void> {
 		switch (msg.type) {
-			case 'restoreCommit':
-				await this.handleRestoreCommit(msg);
+			case 'restoreMessage':
+				await this.handleRestoreMessage(msg);
 				break;
 			case 'unrevert':
 				await this.handleUnrevert(msg);
@@ -70,75 +25,33 @@ export class RestoreHandler implements WebviewMessageHandler {
 		}
 	}
 
-	/**
-	 * Handle restoreCommit from webview.
-	 *
-	 * The frontend sends `{ type: 'restoreCommit', data: { commitId } }`.
-	 * The protocol also allows `{ commitId }` at the top level for backwards compat.
-	 */
-	private async handleRestoreCommit(msg: CommandOf<'restoreCommit'>): Promise<void> {
-		const commitId = msg.data?.commitId || msg.commitId;
-
-		if (!commitId) {
-			logger.warn('[RestoreHandler] restoreCommit: no commitId provided', {
-				hasData: !!msg.data,
-				topLevelCommitId: msg.commitId,
-			});
-			return;
-		}
-
-		const record = this.checkpoints.get(commitId);
-		if (!record) {
-			logger.warn('[RestoreHandler] restoreCommit: unknown commitId', { commitId });
-			return;
-		}
-
+	private async handleRestoreMessage(msg: CommandOf<'restoreMessage'>): Promise<void> {
+		const { sessionId, messageId } = msg;
 		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 		if (!workspaceRoot) {
-			logger.warn('[RestoreHandler] restoreCommit: no workspace root');
+			logger.warn('[RestoreHandler] restoreMessage: no workspace root');
 			return;
 		}
 
-		logger.info('[RestoreHandler] Restoring checkpoint', {
-			commitId,
-			sessionId: record.sessionId,
-			messageId: record.messageId,
-			associatedMessageId: record.associatedMessageId,
+		logger.info('[RestoreHandler] Restoring session to message', {
+			sessionId,
+			messageId,
 		});
 
 		try {
-			await this.context.cli.truncateSession(record.sessionId, record.messageId, {
+			await this.context.cli.truncateSession(sessionId, messageId, {
 				provider: 'opencode',
 				workspaceRoot,
 			});
-
-			// Single notification: success + unrevert available
-			this.context.bridge.data('restoreState', {
-				sessionId: record.sessionId,
-				action: 'success',
-				canUnrevert: true,
-				revertedFromMessageId: record.associatedMessageId,
-			});
-			logger.info('[RestoreHandler] Checkpoint restored successfully');
+			await this.resyncSession(sessionId, workspaceRoot);
 		} catch (error) {
-			logger.error('[RestoreHandler] Failed to restore checkpoint', error);
-			this.notifyError(record.sessionId, `Failed to restore checkpoint: ${error}`);
+			logger.error('[RestoreHandler] Failed to restore message', error);
+			this.notifyError(sessionId, `Failed to restore message: ${error}`);
 		}
 	}
 
-	/**
-	 * Handle unrevert from webview.
-	 *
-	 * Uses activeSessionId — the UI only shows the unrevert button on sessions
-	 * that were actually reverted, so activeSessionId is correct here.
-	 */
 	private async handleUnrevert(msg: CommandOf<'unrevert'>): Promise<void> {
-		const sessionId = msg.sessionId || this.context.sessionState.activeSessionId;
-		if (!sessionId) {
-			logger.warn('[RestoreHandler] unrevert: no active session');
-			return;
-		}
-
+		const { sessionId } = msg;
 		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 		if (!workspaceRoot) {
 			logger.warn('[RestoreHandler] unrevert: no workspace root');
@@ -152,25 +65,110 @@ export class RestoreHandler implements WebviewMessageHandler {
 				provider: 'opencode',
 				workspaceRoot,
 			});
-
-			// Single notification: clear both unrevert flag and revert marker atomically.
-			this.context.bridge.data('restoreState', {
-				sessionId,
-				action: 'unrevert_available',
-				available: false,
-			});
-			logger.info('[RestoreHandler] Unrevert successful');
+			await this.resyncSession(sessionId, workspaceRoot);
 		} catch (error) {
 			logger.error('[RestoreHandler] Unrevert failed', error);
 			this.notifyError(sessionId, `Failed to unrevert: ${error}`);
 		}
 	}
 
-	private notifyError(sessionId: string, message: string): void {
-		this.context.bridge.data('restoreState', {
+	private async resyncSession(sessionId: string, workspaceRoot: string): Promise<void> {
+		const sdkClient = this.context.cli.getSdkClient?.();
+		if (!sdkClient) {
+			throw new Error('OpenCode SDK client unavailable for restore resync');
+		}
+
+		const [messagesResult, sessionResult, diffResult, todoResult, statusResult] = await Promise.all(
+			[
+				sdkClient.session.messages({ sessionID: sessionId, directory: workspaceRoot }),
+				sdkClient.session.get({ sessionID: sessionId, directory: workspaceRoot }),
+				sdkClient.session.diff({ sessionID: sessionId, directory: workspaceRoot }),
+				sdkClient.session
+					.todo({ sessionID: sessionId, directory: workspaceRoot })
+					.catch(() => null),
+				sdkClient.session.status({ directory: workspaceRoot }).catch(() => null),
+			],
+		);
+
+		if (messagesResult.error) {
+			throw new Error(`Failed to fetch session messages: ${JSON.stringify(messagesResult.error)}`);
+		}
+
+		const entries = (messagesResult.data ?? []).sort(
+			(a, b) => a.info.time.created - b.info.time.created,
+		);
+		const skipParts = new Set(['patch', 'step-start', 'step-finish', 'snapshot']);
+		const partsByMessageId: Record<string, import('@opencode-ai/sdk/v2/client').Part[]> = {};
+		for (const entry of entries) {
+			partsByMessageId[entry.info.id] = entry.parts.filter(part => !skipParts.has(part.type));
+		}
+
+		this.context.bridge.data('restore_session', {
 			sessionId,
-			action: 'error',
-			message,
+			messages: entries.map(entry => entry.info),
+			parts: partsByMessageId,
+		});
+
+		if (sessionResult.error) {
+			throw new Error(`Failed to fetch session info: ${JSON.stringify(sessionResult.error)}`);
+		}
+
+		const sessionInfo = sessionResult.data;
+		if (sessionInfo) {
+			this.context.sessionManager.setSession(sessionInfo);
+			this.context.bridge.sendSdkEvent({
+				type: 'session.updated',
+				properties: {
+					info: sessionInfo,
+				},
+			});
+		}
+
+		const status = statusResult?.data?.[sessionId];
+		if (status) {
+			this.context.bridge.sendSdkEvent({
+				type: 'session.status',
+				properties: {
+					sessionID: sessionId,
+					status,
+				},
+			});
+		}
+
+		this.context.bridge.sendSdkEvent({
+			type: 'session.diff',
+			properties: {
+				sessionID: sessionId,
+				diff: diffResult.data ?? [],
+			},
+		});
+
+		if (todoResult?.data) {
+			this.context.bridge.sendSdkEvent({
+				type: 'todo.updated',
+				properties: {
+					sessionID: sessionId,
+					todos: todoResult.data,
+				},
+			});
+		}
+	}
+
+	private notifyError(sessionId: string, message: string): void {
+		this.context.bridge.data('showNotification', {
+			notification: {
+				id: `restore-error-${Date.now()}`,
+				type: 'error',
+				content: message,
+				timestamp: new Date().toISOString(),
+			},
+		});
+		this.context.bridge.sendSdkEvent({
+			type: 'session.status',
+			properties: {
+				sessionID: sessionId,
+				status: { type: 'error' },
+			},
 		});
 	}
 }

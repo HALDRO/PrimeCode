@@ -20,7 +20,6 @@ import {
 } from '../lib/modelVariants';
 import {
 	type ChangedFile,
-	type CommitInfo,
 	type RenderAssistantMessage,
 	type RenderCompactionMessage,
 	type RenderNode,
@@ -35,7 +34,6 @@ import type { TransientNotification } from './uiStore';
 import { type UIState, useUIStore } from './uiStore';
 
 const EMPTY_MESSAGES: RenderNode[] = [];
-const EMPTY_COMMITS: CommitInfo[] = [];
 const EMPTY_CHANGED_FILES: ChangedFile[] = [];
 const EMPTY_CUMULATIVE_DIFFS: Array<{
 	file: string;
@@ -545,23 +543,12 @@ export const useContextPercentage = () => {
 	return Math.floor(metrics.context?.usage ?? 0);
 };
 
-export const useRestoreCommits = () =>
-	useChatStore((state: SessionStore) => {
-		const sid = state.activeSessionId;
-		return sid ? (state.restoreCommits[sid] ?? EMPTY_COMMITS) : EMPTY_COMMITS;
-	});
-
-export const useUnrevertAvailable = () =>
-	useChatStore((state: SessionStore) => {
-		const sid = state.activeSessionId;
-		if (!sid) return false;
-		return state.sessionCanUnrevert[sid] ?? false;
-	});
-
 export const useRevertedFromMessageId = () =>
 	useChatStore((state: SessionStore) => {
 		const sid = state.activeSessionId;
-		return sid ? (state.revertedFromMessageId[sid] ?? null) : null;
+		if (!sid) return null;
+		const session = state.sessions.find(item => item.id === sid);
+		return session?.revert?.messageID ?? null;
 	});
 
 export const useIsImprovingPrompt = () =>

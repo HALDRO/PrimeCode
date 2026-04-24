@@ -52,42 +52,13 @@ function createUserMessageWithModel(
 	};
 }
 
-describe('chatStore revert', () => {
+describe('chatStore restore', () => {
 	beforeEach(() => {
 		resetStore();
 		useChatStore.getState().actions.handleSessionCreated(SESSION_ID);
 	});
 
-	it('restores revert state from extension messages', () => {
-		useChatStore.getState().actions.handleExtensionMessage({
-			type: 'restoreState',
-			data: {
-				sessionId: SESSION_ID,
-				action: 'success',
-				revertedFromMessageId: 'msg-2',
-				canUnrevert: true,
-			},
-		});
-
-		let state = useChatStore.getState();
-		expect(state.revertedFromMessageId[SESSION_ID]).toBe('msg-2');
-		expect(state.sessionCanUnrevert[SESSION_ID]).toBe(true);
-
-		useChatStore.getState().actions.handleExtensionMessage({
-			type: 'restoreState',
-			data: {
-				sessionId: SESSION_ID,
-				action: 'unrevert_available',
-				available: false,
-			},
-		});
-
-		state = useChatStore.getState();
-		expect(state.revertedFromMessageId[SESSION_ID]).toBeNull();
-		expect(state.sessionCanUnrevert[SESSION_ID]).toBe(false);
-	});
-
-	it('restores canonical session messages and parts for reverted sessions', () => {
+	it('restores canonical session messages and parts from snapshot', () => {
 		const first = createUserMessage('msg-1', 'first');
 		const second = createUserMessage('msg-2', 'second');
 
@@ -103,13 +74,10 @@ describe('chatStore revert', () => {
 			},
 		});
 
-		useChatStore.getState().actions.markRevertedFromMessageId('msg-2', SESSION_ID);
-
 		const state = useChatStore.getState();
 		expect(state.messages[SESSION_ID].map(message => message.id)).toEqual(['msg-1', 'msg-2']);
 		expect(state.parts['msg-1'][0]).toMatchObject({ text: 'first' });
 		expect(state.parts['msg-2'][0]).toMatchObject({ text: 'second' });
-		expect(state.revertedFromMessageId[SESSION_ID]).toBe('msg-2');
 	});
 
 	it('restores session model from the last user message in session history', () => {
@@ -159,7 +127,7 @@ describe('chatStore revert', () => {
 		expect(useChatStore.getState().sessionModel[SESSION_ID]).toBe('openai/gpt-5');
 	});
 
-	it('drops removed messages and clears revert marker when caller resets it', () => {
+	it('drops removed messages after restore', () => {
 		const first = createUserMessage('msg-1', 'first');
 		const second = createUserMessage('msg-2', 'second');
 
@@ -170,8 +138,6 @@ describe('chatStore revert', () => {
 				[second.message.id]: [second.part],
 			},
 		});
-		useChatStore.getState().actions.markRevertedFromMessageId('msg-2', SESSION_ID);
-
 		useChatStore.getState().actions.applyEvent({
 			type: 'message.removed',
 			properties: {
@@ -179,12 +145,9 @@ describe('chatStore revert', () => {
 				messageID: 'msg-2',
 			},
 		} as never);
-		useChatStore.getState().actions.markRevertedFromMessageId(null, SESSION_ID);
-
 		const state = useChatStore.getState();
 		expect(state.messages[SESSION_ID].map(message => message.id)).toEqual(['msg-1']);
 		expect(state.parts['msg-2']).toBeUndefined();
-		expect(state.revertedFromMessageId[SESSION_ID]).toBeNull();
 	});
 
 	it('keeps deltas that arrive after a part update in the same batch', () => {

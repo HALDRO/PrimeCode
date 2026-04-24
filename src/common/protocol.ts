@@ -10,7 +10,6 @@
 import type { ProxyEndpointProtocol } from './proxyEndpoints';
 import type {
 	Access,
-	CommitInfo,
 	InstalledMcpServerMetadata,
 	MCPServerConfig,
 	MCPServersMap,
@@ -51,7 +50,6 @@ export type SessionEventType =
 	| 'status'
 	| 'stats'
 	| 'complete'
-	| 'restore'
 	| 'file'
 	| 'access'
 	| 'messages_reload'
@@ -227,26 +225,6 @@ export interface SessionCompletePayload {
 	completedAt?: number;
 }
 
-export interface SessionRestorePayload {
-	eventType: 'restore';
-	action:
-		| 'add_commit'
-		| 'clear_commits'
-		| 'set_commits'
-		| 'success'
-		| 'error'
-		| 'progress'
-		| 'unrevert_available'
-		| 'restore_input';
-	commit?: CommitInfo;
-	commits?: CommitInfo[];
-	message?: string;
-	canUnrevert?: boolean;
-	available?: boolean;
-	text?: string;
-	revertedFromMessageId?: string;
-}
-
 export interface SessionFilePayload {
 	eventType: 'file';
 	action: 'changed' | 'undone' | 'all_undone';
@@ -305,7 +283,6 @@ export interface SessionMessagesReloadPayload {
 			durationMs?: number;
 		}
 	>;
-	restoreCommits?: CommitInfo[];
 }
 
 export interface SessionDeleteMessagesAfterPayload {
@@ -437,7 +414,6 @@ export type SessionEventPayload =
 	| SessionMessagePartRemovedPayload
 	| SessionStatusPayload
 	| SessionCompletePayload
-	| SessionRestorePayload
 	| SessionFilePayload
 	| SessionAccessPayload
 	| SessionMessagesReloadPayload
@@ -1283,15 +1259,14 @@ export interface SseCloseCommand {
 // Restore Commands
 // =============================================================================
 
-export interface RestoreCommitCommand {
-	type: 'restoreCommit';
-	commitId?: string;
-	data?: { commitId: string };
-	sessionId?: string;
+export interface RestoreMessageCommand {
+	type: 'restoreMessage';
+	sessionId: string;
+	messageId: string;
 }
 export interface UnrevertCommand {
 	type: 'unrevert';
-	sessionId?: string;
+	sessionId: string;
 }
 
 // =============================================================================
@@ -1526,7 +1501,7 @@ export type WebviewCommand =
 	| GetWorkspaceFilesCommand
 	| SseSubscribeCommand
 	| SseCloseCommand
-	| RestoreCommitCommand
+	| RestoreMessageCommand
 	| UnrevertCommand
 	| ProxyFetchCommand
 	| ProxyFetchAbortCommand

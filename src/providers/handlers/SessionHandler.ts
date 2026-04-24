@@ -501,15 +501,12 @@ export class SessionHandler implements WebviewMessageHandler {
 			this.context.bridge.sendSdkEventBatch(childBatch);
 		}
 
-		// Restore revert state
-		if (
-			currentSession?.revert?.messageID &&
-			entries.some(e => e.info.role === 'user' && e.info.id === currentSession.revert?.messageID)
-		) {
-			this.context.bridge.emit(sessionId, 'restore', {
-				action: 'success',
-				canUnrevert: true,
-				revertedFromMessageId: currentSession.revert.messageID,
+		if (currentSession) {
+			this.context.bridge.sendSdkEvent({
+				type: 'session.updated',
+				properties: {
+					info: currentSession,
+				},
 			});
 		}
 
@@ -1063,7 +1060,7 @@ export class SessionHandler implements WebviewMessageHandler {
 			// have the original message. On restore, both would appear.
 			// By truncating first, the server history is clean before we send.
 			if (isOpenCode && messageIdToTruncate) {
-				if (editMode === 'history_only') {
+				if (editMode !== 'revert') {
 					logger.info('[SessionHandler] Editing message: prune history without workspace revert', {
 						messageId: messageIdToTruncate,
 					});
@@ -1106,16 +1103,15 @@ export class SessionHandler implements WebviewMessageHandler {
 				}
 			}
 
-			// Post user message and send to CLI.
-			// For edits: generate a NEW id — the old message was truncated on the server,
-			// and the UI already removed messages after it via deleteMessagesAfterId.
-			// Reusing the old ID would cause the server to have a different ID than the UI.
+			// Use the same client-generated ID for the optimistic UI row and the backend
+			// prompt. Server events reconcile into this row instead of creating a duplicate.
 			const prefix = isOpenCode ? 'msg' : 'user';
 			const userMessageId = clientMessageID || generateId(prefix);
 			const hasAttachments =
 				attachments?.files?.length ||
 				attachments?.codeSnippets?.length ||
 				attachments?.images?.length;
+
 			this.context.bridge.sendSdkEventBatch([
 				{
 					type: 'message.updated',
@@ -1153,13 +1149,6 @@ export class SessionHandler implements WebviewMessageHandler {
 					},
 				},
 			]);
-
-			this.emitCheckpointForUserMessage(
-				activeId,
-				userMessageId,
-				new Date().toISOString(),
-				isOpenCode,
-			);
 
 			// Pass our client-generated ID to the server so it uses it as the
 			// real user message ID (OpenCode prompt.ts: id = input.messageID ?? ...).
@@ -1361,9 +1350,6 @@ export class SessionHandler implements WebviewMessageHandler {
 				this.restoringSessions.delete(sessionId);
 				this.context.sessionGraph.clearParent(sessionId);
 
-				// Clean up restore/revert state for deleted session
-				this.context.cleanupSessionRestore?.(sessionId);
-
 				const nextActiveSessionId = wasActive ? this.getLastStartedSessionId() : undefined;
 				this.context.sessionState.activeSessionId = nextActiveSessionId;
 
@@ -1400,7 +1386,6 @@ export class SessionHandler implements WebviewMessageHandler {
 					this.restoredSessions.delete(session.id);
 					this.restoringSessions.delete(session.id);
 					this.context.sessionGraph.clearParent(session.id);
-					this.context.cleanupSessionRestore?.(session.id);
 					if (this.context.sessionState.activeSessionId === session.id) {
 						this.context.sessionState.activeSessionId = undefined;
 					}
@@ -1894,31 +1879,5 @@ export class SessionHandler implements WebviewMessageHandler {
 		void this.restoreSessionRuntimeStateFromServer(sessionId).catch(error =>
 			logger.warn('[SessionHandler] Failed to sync session runtime state', { sessionId, error }),
 		);
-	}
-
-	private emitCheckpointForUserMessage(
-		sessionId: string,
-		messageId: string,
-		timestamp: string,
-		isOpenCode: boolean,
-	): void {
-		const commitId = generateId('checkpoint');
-		this.context.registerCheckpoint?.(commitId, {
-			sessionId,
-			messageId,
-			associatedMessageId: messageId,
-			isOpenCode,
-		});
-
-		this.context.bridge.data('addRestoreCommit', {
-			sessionId,
-			commit: {
-				id: commitId,
-				sha: commitId,
-				message: 'Checkpoint before message',
-				timestamp,
-				associatedMessageId: messageId,
-			},
-		});
 	}
 }

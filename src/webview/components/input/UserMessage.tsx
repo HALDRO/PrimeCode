@@ -5,7 +5,6 @@ import { useElapsedTimer } from '../../hooks/useElapsedTimer';
 
 import { cn } from '../../lib/cn';
 import {
-	type CommitInfo,
 	type RenderUserMessage,
 	useActiveModelID,
 	useChatActions,
@@ -14,9 +13,7 @@ import {
 	useEditingMessageId,
 	useIsProcessing,
 	useMessageTurnTokens,
-	useRestoreCommits,
 	useSessionModel,
-	useUnrevertAvailable,
 } from '../../store';
 import type { SectionStats } from '../../store/projector';
 import { useSettingsStore } from '../../store/settingsStore';
@@ -24,6 +21,7 @@ import { useUIActions } from '../../store/uiStore';
 import { formatDuration, formatTime, formatTokens } from '../../utils/format';
 import { Markdown } from '../../utils/markdown';
 import { parseMessageSegments } from '../../utils/messageParser';
+import { extractPromptFromParts } from '../../utils/promptParts';
 import { useSessionMessage, useVSCode } from '../../utils/vscode';
 import { ToolCard } from '../chat/ToolCard';
 import { ClockIcon, CopyIcon, TimerIcon, TokensIcon, Undo2Icon, WandIcon } from '../icons';
@@ -211,10 +209,7 @@ function getMessageAttachments(message: RenderUserMessage): {
 	};
 }
 
-const RestoreButton = React.memo<{
-	restoreCommit: CommitInfo;
-	onRestore: () => void;
-}>(({ restoreCommit, onRestore }) => {
+const RestoreButton = React.memo<{ onRestore: () => void }>(({ onRestore }) => {
 	const { showConfirmDialog } = useUIActions();
 
 	const handleClick = useCallback(
@@ -233,11 +228,7 @@ const RestoreButton = React.memo<{
 	);
 
 	return (
-		<Tooltip
-			content={`Restore to checkpoint (${new Date(restoreCommit.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`}
-			position="top"
-			delay={200}
-		>
+		<Tooltip content="Restore to this message" position="top" delay={200}>
 			<button
 				type="button"
 				onClick={handleClick}
@@ -442,8 +433,6 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 
 		// Use optimized selectors to prevent unnecessary re-renders
 		const editingMessageId = useEditingMessageId();
-		const restoreCommits = useRestoreCommits();
-		const unrevertAvailable = useUnrevertAvailable();
 
 		const isProcessing = useIsProcessing();
 		const sessionModel = useSessionModel();
@@ -474,13 +463,29 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 		const tokenStats = stats.tokenCount;
 		const isProcessingLastMessage = isProcessing && isLastUserMessage;
 
-		// Parse attachments (prop-based, stable)
+		const reconstructedPrompt = useMemo(
+			() => extractPromptFromParts(message.parts),
+			[message.parts],
+		);
+
+		// Parse attachments (canonical prompt reconstruction first, legacy structured attachments second)
 		const {
 			files: attachedFiles,
 			codeSnippets: attachedSnippets,
 			images: attachedImages,
 			text: messageText,
-		} = useMemo(() => getMessageAttachments(message), [message]);
+		} = useMemo(() => {
+			const legacy = getMessageAttachments(message);
+			return {
+				files: reconstructedPrompt.files.length > 0 ? reconstructedPrompt.files : legacy.files,
+				codeSnippets:
+					reconstructedPrompt.codeSnippets.length > 0
+						? reconstructedPrompt.codeSnippets
+						: legacy.codeSnippets,
+				images: reconstructedPrompt.images.length > 0 ? reconstructedPrompt.images : legacy.images,
+				text: reconstructedPrompt.text || legacy.text,
+			};
+		}, [message, reconstructedPrompt]);
 		const liveCompaction = useCompactionMessage(message.id) as MessageCompaction | undefined;
 		const compaction = liveCompaction ?? (message.compaction as MessageCompaction | undefined);
 
@@ -495,10 +500,6 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 			},
 			[opencodeProviders, allProxyModels],
 		);
-
-		const restoreCommit = useMemo(() => {
-			return restoreCommits.find(c => c.associatedMessageId === message.id);
-		}, [restoreCommits, message.id]);
 
 		const isEditing = editingMessageId === message.id;
 		const editDraft = useEditDraft(message.id);
@@ -624,45 +625,40 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 				if (!text.trim()) {
 					return;
 				}
-				if (restoreCommit) {
+				if (message.id) {
 					showConfirmDialog({
-						title: 'Continue From This Message?',
+						title: 'Edit Message History?',
 						message:
-							'Submitting from a previous message will clear the messages after it. Choose whether to also revert file changes to the state before this message.',
-						confirmLabel: 'Continue and revert',
-						cancelLabel: 'Continue without reverting',
+							'This will remove this message and everything after it, then send the edited message here. If later assistant turns changed files, choose whether to restore files to the state before this message first.',
+						confirmLabel: 'Restore files and send',
+						cancelLabel: 'Only replace history',
 						onConfirm: () => doSendUpdate(text, true, currentAttachments),
-						onCancel: () => doSendUpdate(text, false, currentAttachments),
+						onSecondary: () => doSendUpdate(text, false, currentAttachments),
 					});
 				} else {
 					doSendUpdate(text, false, currentAttachments);
 				}
 			},
-			[restoreCommit, doSendUpdate, showConfirmDialog],
+			[message.id, doSendUpdate, showConfirmDialog],
 		);
 
 		const handleRestore = useCallback(() => {
-			if (restoreCommit) {
-				// Frontend only sends commitId — backend resolves everything else.
-				// Pass sessionId explicitly for multi-chat safety: if the user
-				// switches tabs between clicking and backend processing, the
-				// correct session is still targeted.
+			if (message.id && message.message.sessionID) {
 				postSessionMessage({
-					type: 'restoreCommit',
-					data: { commitId: restoreCommit.id },
+					type: 'restoreMessage',
+					sessionId: message.message.sessionID,
+					messageId: message.id,
 				});
 			}
-		}, [restoreCommit, postSessionMessage]);
+		}, [message.id, message.message.sessionID, postSessionMessage]);
 
 		const handleUnrevert = useCallback(() => {
-			// Pass sessionId explicitly for multi-chat safety.
-			postSessionMessage({ type: 'unrevert' });
-		}, [postSessionMessage]);
+			if (!message.message.sessionID) return;
+			postSessionMessage({ type: 'unrevert', sessionId: message.message.sessionID });
+		}, [message.message.sessionID, postSessionMessage]);
 
-		// Show unrevert on the REVERT POINT section (the message the user clicked Restore on).
-		// Show restore on any message that has a checkpoint and is NOT in a reverted state.
-		const showUnrevert = isRevertPoint && unrevertAvailable;
-		const showRestore = restoreCommit && !isRevertPoint;
+		const showUnrevert = isRevertPoint;
+		const showRestore = Boolean(message.id) && !isRevertPoint;
 
 		if (isEditing) {
 			return (
@@ -710,9 +706,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 						{(showRestore || showUnrevert) && (
 							<div className="absolute top-1 right-1.5 flex items-center gap-1 z-10">
 								{showUnrevert && <UnrevertButton onUnrevert={handleUnrevert} />}
-								{showRestore && (
-									<RestoreButton restoreCommit={restoreCommit} onRestore={handleRestore} />
-								)}
+								{showRestore && <RestoreButton onRestore={handleRestore} />}
 							</div>
 						)}
 						<button

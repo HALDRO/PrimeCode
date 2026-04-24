@@ -19,7 +19,6 @@ import { produce } from 'immer';
 import { create } from 'zustand';
 import type { NormalizedEntry } from '../../common/normalizedTypes';
 import type { QueuedMessageData } from '../../common/protocol';
-import type { CommitInfo } from '../../common/schemas';
 import { eventReducer, type WebviewSdkEvent } from './eventReducer';
 import { applyDelta, applyToolDelta, type MaterializedView, projectSession } from './projector';
 import { useSettingsStore } from './settingsStore';
@@ -68,7 +67,6 @@ function getNewSessionSeedModel(): string | undefined {
 
 export type {
 	AssistantMessage,
-	CommitInfo,
 	MaterializedView,
 	Message,
 	Part,
@@ -228,9 +226,6 @@ export interface SessionStore {
 	childSessionIdsByParentId: Record<string, string[]>;
 	originatingToolCallBySessionId: Record<string, string>;
 	queuedMessages: Record<string, QueuedMessageData[]>;
-	restoreCommits: Record<string, CommitInfo[]>;
-	revertedFromMessageId: Record<string, string | null>;
-	sessionCanUnrevert: Record<string, boolean>;
 	sessionInput: Record<string, string>;
 	sessionAgent: Record<string, string | undefined>;
 	sessionModel: Record<string, string | undefined>;
@@ -261,10 +256,6 @@ export interface SessionActions {
 	setEditDraft: (messageId: string, text: string) => void;
 	clearEditDraft: (messageId: string) => void;
 	clearAllEditDrafts: () => void;
-	addRestoreCommit: (commit: CommitInfo, sessionId: string) => void;
-	clearRestoreCommits: (sessionId: string) => void;
-	setRestoreCommits: (commits: CommitInfo[], sessionId: string) => void;
-	markRevertedFromMessageId: (id: string | null, sessionId: string) => void;
 	setImprovingPrompt: (isImproving: boolean, requestId?: string | null) => void;
 	clearPromptVersions: () => void;
 	togglePromptVersion: () => void;
@@ -463,38 +454,6 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 				return;
 			}
 
-			if (msgType === 'addRestoreCommit' && msgData) {
-				const sessionId = msgData.sessionId as string;
-				const commit = msgData.commit as CommitInfo;
-				get().actions.addRestoreCommit(commit, sessionId);
-				return;
-			}
-
-			if (msgType === 'restoreState' && msgData) {
-				const sessionId = msgData.sessionId as string;
-				const action = msgData.action as string;
-				set(
-					produce((state: SessionStore) => {
-						if (action === 'success') {
-							state.revertedFromMessageId[sessionId] =
-								(msgData.revertedFromMessageId as string | undefined) ?? null;
-							state.sessionCanUnrevert[sessionId] = Boolean(msgData.canUnrevert);
-						} else if (action === 'unrevert_available' && msgData.available === false) {
-							state.revertedFromMessageId[sessionId] = null;
-							state.sessionCanUnrevert[sessionId] = false;
-						} else if (action === 'error') {
-							useUIStore.getState().actions.pushNotification({
-								type: 'error',
-								content: String(msgData.message || 'Restore failed'),
-								timestamp: new Date().toISOString(),
-								autoDismissMs: 8000,
-							});
-						}
-					}),
-				);
-				return;
-			}
-
 			if (msgType === 'syncSessionState' && msgData) {
 				const sessionId = msgData.sessionId as string;
 				set(
@@ -672,9 +631,6 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 					if (state.sessionOrder.length <= 1) return;
 					state.sessionOrder = state.sessionOrder.filter(id => id !== sessionId);
 					delete state.queuedMessages[sessionId];
-					delete state.restoreCommits[sessionId];
-					delete state.revertedFromMessageId[sessionId];
-					delete state.sessionCanUnrevert[sessionId];
 					delete state.sessionInput[sessionId];
 					delete state.sessionAgent[sessionId];
 					delete state.sessionModel[sessionId];
@@ -751,35 +707,6 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 				}),
 			),
 		clearAllEditDrafts: () => set({ editDrafts: {} }),
-
-		addRestoreCommit: (commit, sessionId) => {
-			set(
-				produce((s: SessionStore) => {
-					const commits = s.restoreCommits[sessionId] || [];
-					if (!commits.some(c => c.sha === commit.sha)) {
-						s.restoreCommits[sessionId] = [...commits, commit];
-					}
-				}),
-			);
-		},
-		clearRestoreCommits: sessionId =>
-			set(
-				produce((s: SessionStore) => {
-					s.restoreCommits[sessionId] = [];
-				}),
-			),
-		setRestoreCommits: (commits, sessionId) =>
-			set(
-				produce((s: SessionStore) => {
-					s.restoreCommits[sessionId] = commits;
-				}),
-			),
-		markRevertedFromMessageId: (id, sessionId) =>
-			set(
-				produce((s: SessionStore) => {
-					s.revertedFromMessageId[sessionId] = id;
-				}),
-			),
 
 		setImprovingPrompt: (isImproving, requestId = null) =>
 			set({ isImprovingPrompt: isImproving, improvingPromptRequestId: requestId }),
