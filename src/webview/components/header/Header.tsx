@@ -533,6 +533,7 @@ export const Header: React.FC = React.memo(() => {
 
 		return (
 			<div
+				data-session-id={sessionId}
 				onClick={() => handleSwitchSession(sessionId)}
 				onMouseDown={e => {
 					if (e.button === 1) {

@@ -233,6 +233,18 @@ export const useChildSessionTitle = (childSessionId: string | undefined) =>
 		return state.sessions.find(s => s.id === childSessionId)?.title;
 	});
 
+export const useChildSessionAgent = (childSessionId: string | undefined) =>
+	useChatStore((state: SessionStore) => {
+		if (!childSessionId) return undefined;
+		return state.sessionAgent[childSessionId];
+	});
+
+export const useChildSessionSlug = (childSessionId: string | undefined) =>
+	useChatStore((state: SessionStore) => {
+		if (!childSessionId) return undefined;
+		return state.sessions.find(s => s.id === childSessionId)?.slug;
+	});
+
 export const useChildSessionSummary = (childSessionId: string | undefined) => {
 	const session = useChatStore((state: SessionStore) => {
 		if (!childSessionId) return undefined;
@@ -559,10 +571,10 @@ export const useImprovingPromptRequestId = () =>
 export const usePromptVersions = () => useChatStore((state: SessionStore) => state.promptVersions);
 
 export const useChangedFilesState = () => {
-	const activeSessionId = useChatStore((state: SessionStore) => state.activeSessionId);
-	const rawDiffs = useChatStore((state: SessionStore) =>
-		activeSessionId ? state.sessionDiff[activeSessionId] : undefined,
-	);
+	const rawDiffs = useChatStore((state: SessionStore) => {
+		const sid = state.activeSessionId;
+		return sid ? state.sessionDiff[sid] : undefined;
+	});
 
 	const cumulativeDiffs = useMemo(() => {
 		if (!rawDiffs || rawDiffs.length === 0) return EMPTY_CUMULATIVE_DIFFS;
@@ -576,6 +588,14 @@ export const useChangedFilesState = () => {
 
 	return useMemo(() => ({ changedFiles: EMPTY_CHANGED_FILES, cumulativeDiffs }), [cumulativeDiffs]);
 };
+
+export const useIsActiveChildSession = () =>
+	useChatStore((state: SessionStore) => {
+		const sid = state.activeSessionId;
+		if (!sid) return false;
+		const session = state.sessions.find(s => s.id === sid);
+		return !!session?.parentID;
+	});
 
 export const useHasTodos = () =>
 	useChatStore((state: SessionStore) => {
@@ -769,14 +789,14 @@ export const useModelSelection = () => {
 	return useSettingsStore(
 		useShallow((state: SettingsState) => ({
 			provider: state.provider,
-			selectedModel: state.selectedModel,
+			lastSelectedModel: state.lastSelectedModel,
 			proxyEndpoints: state.proxyEndpoints,
 			opencodeProviders: state.opencodeProviders,
 			enabledOpenCodeModels: state.enabledOpenCodeModels,
 			disabledProviders: state.disabledProviders,
 			getModelVariant: state.actions.getModelVariant,
 			setModelVariant: state.actions.setModelVariant,
-			setSelectedModel: state.actions.setSelectedModel,
+			setLastSelectedModel: state.actions.setLastSelectedModel,
 			getSessionAgent: chatActions.getSessionAgent,
 			setSessionAgent,
 			getSessionModel: chatActions.getSessionModel,
@@ -791,7 +811,7 @@ export const useMainSettings = () =>
 			provider: state.provider,
 			workspaceName: state.workspaceName,
 			platformInfo: state.platformInfo,
-			selectedModel: state.selectedModel,
+			lastSelectedModel: state.lastSelectedModel,
 			setSettings: state.actions.setSettings,
 		})),
 	);
@@ -799,9 +819,12 @@ export const useMainSettings = () =>
 export const useSettingsActions = () => useSettingsStore(state => state.actions);
 
 export const useModelContextWindow = () =>
-	useSettingsStore((state: SettingsState) => {
-		const { selectedModel, opencodeProviders, proxyEndpoints } = state;
-		const parsed = parseModelId(selectedModel);
+	useChatStore((chatState: SessionStore) => {
+		const sid = chatState.activeSessionId;
+		const sessionModel = sid ? chatState.sessionModel[sid] : undefined;
+		if (!sessionModel) return DEFAULT_CONTEXT_WINDOW;
+		const { opencodeProviders, proxyEndpoints } = useSettingsStore.getState();
+		const parsed = parseModelId(sessionModel);
 		if (parsed) {
 			if (
 				parsed.providerId === 'proxy' ||
@@ -826,7 +849,7 @@ export const useModelContextWindow = () =>
 		}
 		for (const endpoint of proxyEndpoints) {
 			const epModel = endpoint.models.find(
-				(m: { id: string; contextLength?: number }) => m.id === selectedModel,
+				(m: { id: string; contextLength?: number }) => m.id === sessionModel,
 			);
 			if (epModel?.contextLength) return epModel.contextLength;
 		}
@@ -882,20 +905,20 @@ export const useSessionVariant = () => {
 		return sid ? state.sessionAgent[sid] : undefined;
 	});
 	return useSettingsStore((state: SettingsState) => {
-		const effectiveModel = activeSessionModel ?? state.selectedModel;
-		if (!effectiveModel || effectiveModel === 'default') return undefined;
+		const sessionModelId = activeSessionModel;
+		if (!sessionModelId || sessionModelId === 'default') return undefined;
 		const variants = getAvailableModelVariants(
 			state.opencodeProviders,
-			effectiveModel,
+			sessionModelId,
 			state.proxyEndpoints,
 		);
-		const selected = state.modelVariants[effectiveModel];
+		const selected = state.modelVariants[sessionModelId];
 		const agentId = activeSessionAgent ?? 'build';
 		const configured = getConfiguredAgentVariant({
 			agent:
 				state.agents.items.find(agent => agent.id === agentId) ??
 				state.subagents.items.find(agent => agent.name === agentId),
-			effectiveModel,
+			effectiveModel: sessionModelId,
 			variants,
 		});
 		return resolveEffectiveVariant({ variants, selected, configured });

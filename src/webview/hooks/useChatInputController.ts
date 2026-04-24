@@ -99,15 +99,8 @@ export function useChatInputController(
 		clearDraftState,
 	} = useChatActions();
 	const isProcessing = useIsProcessing();
-	const {
-		selectedModel,
-		proxyEndpoints,
-		opencodeProviders,
-		getSessionModel,
-		setSessionModel,
-		getSessionAgent,
-		setSessionAgent,
-	} = useModelSelection();
+	const { proxyEndpoints, opencodeProviders, getSessionModel, getSessionAgent, setSessionAgent } =
+		useModelSelection();
 	const isImproving = useIsImprovingPrompt();
 	const currentImproveRequestId = useImprovingPromptRequestId();
 	const promptVersions = usePromptVersions();
@@ -119,14 +112,15 @@ export function useChatInputController(
 	const sessionModel = useSessionModel();
 	const reactiveSessionVariant = useSessionVariant();
 	const validSessionVariant = useMemo(() => {
-		const effectiveModel = sessionModel ?? selectedModel;
-		const variants = getAvailableModelVariants(opencodeProviders, effectiveModel, proxyEndpoints);
+		const sessionModelId = sessionModel;
+		if (!sessionModelId) return undefined;
+		const variants = getAvailableModelVariants(opencodeProviders, sessionModelId, proxyEndpoints);
 		const agentId = selectedAgent ?? 'build';
 		const configured = getConfiguredAgentVariant({
 			agent:
 				agentItems.find(agent => agent.id === agentId) ??
 				subagentItems.find(agent => agent.name === agentId),
-			effectiveModel,
+			effectiveModel: sessionModelId,
 			variants,
 		});
 		return resolveEffectiveVariant({
@@ -140,7 +134,6 @@ export function useChatInputController(
 		proxyEndpoints,
 		reactiveSessionVariant,
 		selectedAgent,
-		selectedModel,
 		sessionModel,
 		subagentItems,
 	]);
@@ -177,8 +170,10 @@ export function useChatInputController(
 	// Restore draft state from cancelled queued messages
 	const draftAttachments = useDraftAttachments();
 	const draftAgent = useDraftAgent();
+	const shouldRestoreQueuedDraft = !isControlled;
 
 	useEffect(() => {
+		if (!shouldRestoreQueuedDraft) return;
 		if (!draftAttachments && draftAgent === undefined) return;
 		if (draftAttachments?.files) {
 			for (const f of draftAttachments.files) attachments.addFile(f);
@@ -187,7 +182,14 @@ export function useChatInputController(
 			setSelectedAgent(draftAgent);
 		}
 		clearDraftState();
-	}, [draftAttachments, draftAgent, attachments, clearDraftState, setSelectedAgent]);
+	}, [
+		draftAttachments,
+		draftAgent,
+		attachments,
+		clearDraftState,
+		setSelectedAgent,
+		shouldRestoreQueuedDraft,
+	]);
 
 	const ensureSessionForSend = useCallback(async (): Promise<string | undefined> => {
 		const existing = useChatStore.getState().activeSessionId;
@@ -263,16 +265,8 @@ export function useChatInputController(
 
 		const hasAttachments =
 			builtAttachments.files || builtAttachments.codeSnippets || builtAttachments.images;
-		// Send the effective model (what the user sees in the dropdown), not just
-		// the per-session override. When there is no session override, the UI
-		// displays selectedModel, so we must send that exact value.
-		const effectiveModel = sessionModel ?? selectedModel;
-
-		// Lock in the effective model per-session on first send so that model
-		// changes in other tabs don't retroactively affect this session's display.
-		if (!sessionModel && effectiveModel && effectiveModel !== 'default') {
-			setSessionModel(effectiveModel);
-		}
+		const sessionModelId = sessionModel;
+		if (!sessionModelId) return;
 
 		// Parse @agent from text as fallback when selectedAgent is not set via InputToolbar.
 		// Only match known subagent/CLI agent names to avoid false positives with @filenames.
@@ -301,7 +295,7 @@ export function useChatInputController(
 			...(targetSessionId ? { sessionId: targetSessionId } : {}),
 			clientMessageID,
 			agent,
-			model: effectiveModel,
+			model: sessionModelId,
 			...(validSessionVariant ? { variant: validSessionVariant } : {}),
 			attachments: hasAttachments ? builtAttachments : undefined,
 		});
@@ -323,8 +317,6 @@ export function useChatInputController(
 		markRevertedFromMessageId,
 		updateSessionInput,
 		clearPromptVersions,
-		setSessionModel,
-		selectedModel,
 		sessionModel,
 		validAgentNames.has,
 		ensureSessionForSend,
@@ -369,11 +361,12 @@ export function useChatInputController(
 
 	// Model display name
 	const modelDisplayName = useMemo(() => {
-		const effectiveModel = sessionModel ?? selectedModel;
-		if (effectiveModel === 'default') return 'Default';
+		const sessionModelId = sessionModel;
+		if (!sessionModelId) return 'No model';
+		if (sessionModelId === 'default') return 'Default';
 		const allProxyModels = proxyEndpoints.flatMap(ep => ep.models);
-		return resolveModelDisplayName(effectiveModel, opencodeProviders, allProxyModels);
-	}, [sessionModel, selectedModel, proxyEndpoints, opencodeProviders]);
+		return resolveModelDisplayName(sessionModelId, opencodeProviders, allProxyModels);
+	}, [sessionModel, proxyEndpoints, opencodeProviders]);
 
 	return {
 		inputValue,

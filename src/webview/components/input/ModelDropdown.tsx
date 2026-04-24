@@ -45,18 +45,17 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 	extraItems,
 }) => {
 	const {
-		selectedModel,
 		proxyEndpoints,
 		opencodeProviders,
 		enabledOpenCodeModels,
 		disabledProviders,
+		setLastSelectedModel,
 		setSessionModel,
 	} = useModelSelection();
 	const { setShowModelDropdown } = useModelDropdownState();
 	const sessionModel = useSessionModel();
 
-	// Use per-session model if set, otherwise fall back to workspace default
-	const effectiveModel = sessionModel ?? selectedModel;
+	const sessionScopedModel = sessionModel;
 
 	// Filter OpenCode models to only show enabled ones from non-disabled providers
 	const filteredOpencodeProviders = useMemo(() => {
@@ -92,11 +91,12 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 				onClose();
 				return;
 			}
+			setLastSelectedModel(model.id);
 			// Persist per-session override (so different chats can use different models)
 			setSessionModel(model.id === 'default' ? undefined : model.id);
 			onClose();
 		},
-		[onClose, setSessionModel, onSelectOverride],
+		[onClose, onSelectOverride, setLastSelectedModel, setSessionModel],
 	);
 
 	// Custom render for model items with purple dot for active model
@@ -131,7 +131,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 	);
 
 	// Resolve which model id to use for "active" highlighting
-	const effectiveActiveModel = activeModelId ?? effectiveModel;
+	const activeModelForHighlight = activeModelId ?? sessionScopedModel;
 
 	// Build flat list of models with provider as badge
 	const items = useMemo((): DropdownMenuItem<ModelData>[] => {
@@ -140,7 +140,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 		for (const opProvider of filteredOpencodeProviders) {
 			for (const model of opProvider.models) {
 				const modelId = `${opProvider.id}/${model.id}`;
-				const isActive = effectiveActiveModel === modelId;
+				const isActive = activeModelForHighlight === modelId;
 				result.push({
 					id: modelId,
 					label: model.name,
@@ -180,7 +180,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 			for (const model of endpoint.models) {
 				if (!endpoint.enabledModels.includes(model.id)) continue;
 				const modelId = `${providerId}/${model.id}`;
-				const isActive = effectiveActiveModel === modelId;
+				const isActive = activeModelForHighlight === modelId;
 				const hasReasoning = model.capabilities?.reasoning === true;
 				result.push({
 					id: modelId,
@@ -215,7 +215,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 
 		return result;
 	}, [
-		effectiveActiveModel,
+		activeModelForHighlight,
 		filteredOpencodeProviders,
 		proxyEndpoints,
 		disabledProviders,

@@ -55,7 +55,7 @@ export interface CLIExecutor extends EventEmitter {
 		sessionId: string,
 		messageId: string,
 		config: CLIConfig,
-	): Promise<void>;
+	): Promise<string[]>;
 	/** Execute a slash command (e.g. /compact, /summarize) via the appropriate API. */
 	executeCommand(
 		command: string,

@@ -35,29 +35,24 @@ export const ThinkingBudgetButton: React.FC = React.memo(() => {
 	const [isOpen, setIsOpen] = useState(false);
 	const triggerRef = useRef<HTMLButtonElement>(null);
 
-	const {
-		opencodeProviders,
-		proxyEndpoints,
-		selectedModel: globalModel,
-		setModelVariant,
-	} = useModelSelection();
+	const { opencodeProviders, proxyEndpoints, setModelVariant } = useModelSelection();
 	const sessionModel = useChatStore(s => {
 		const sid = s.activeSessionId;
 		return sid ? s.sessionModel[sid] : undefined;
 	});
-	const effectiveModel = sessionModel ?? globalModel;
+	const sessionModelId = sessionModel;
 
 	const variantNames = useMemo(() => {
-		return getAvailableModelVariants(opencodeProviders, effectiveModel, proxyEndpoints);
-	}, [effectiveModel, opencodeProviders, proxyEndpoints]);
+		return getAvailableModelVariants(opencodeProviders, sessionModelId, proxyEndpoints);
+	}, [sessionModelId, opencodeProviders, proxyEndpoints]);
 
 	useEffect(() => {
 		if (variant && !resolveValidVariant(variantNames, variant)) {
-			if (effectiveModel && effectiveModel !== 'default') {
-				setModelVariant(effectiveModel, undefined);
+			if (sessionModelId && sessionModelId !== 'default') {
+				setModelVariant(sessionModelId, undefined);
 			}
 		}
-	}, [effectiveModel, setModelVariant, variant, variantNames]);
+	}, [sessionModelId, setModelVariant, variant, variantNames]);
 
 	const items = useMemo(
 		() => [
@@ -73,11 +68,11 @@ export const ThinkingBudgetButton: React.FC = React.memo(() => {
 
 	const handleSelect = useCallback(
 		(value: string | undefined) => {
-			if (!effectiveModel || effectiveModel === 'default') return;
-			setModelVariant(effectiveModel, value);
+			if (!sessionModelId || sessionModelId === 'default') return;
+			setModelVariant(sessionModelId, value);
 			setIsOpen(false);
 		},
-		[effectiveModel, setModelVariant],
+		[sessionModelId, setModelVariant],
 	);
 
 	// Don't render if model has no variants

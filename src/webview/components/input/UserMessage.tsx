@@ -9,13 +9,11 @@ import {
 	type RenderUserMessage,
 	useActiveModelID,
 	useChatActions,
-	useChatStore,
 	useCompactionMessage,
 	useEditDraft,
 	useEditingMessageId,
 	useIsProcessing,
 	useMessageTurnTokens,
-	useModelSelection,
 	useRestoreCommits,
 	useSessionModel,
 	useUnrevertAvailable,
@@ -168,10 +166,19 @@ CompactionCard.displayName = 'CompactionCard';
  * Extract text content from RenderUserMessage parts.
  */
 function getUserMessageText(message: RenderUserMessage): string {
-	return message.parts
-		.filter(p => p.type === 'text' && 'text' in p)
-		.map(p => ('text' in p ? (p as { text: string }).text : ''))
-		.join('');
+	const textParts = message.parts.filter(
+		(part): part is typeof part & { text: string } => part.type === 'text' && 'text' in part,
+	);
+	if (textParts.length === 0) return '';
+
+	// User messages can briefly accumulate both an optimistic text part and the
+	// canonical server text part after edit-resend/restore flows. Rendering all
+	// text parts concatenated produces visual duplicates like "окейокей" even
+	// though the actual prompt was sent only once. Prefer the richest single part.
+	return textParts.reduce((best, part) => {
+		if (part.text.length > best.length) return part.text;
+		return best;
+	}, '');
 }
 
 /**
@@ -440,7 +447,6 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 
 		const isProcessing = useIsProcessing();
 		const sessionModel = useSessionModel();
-		const { selectedModel } = useModelSelection();
 		const chatActions = useChatActions();
 		const { setEditingMessageId } = chatActions;
 		const activeModelID = useActiveModelID();
@@ -557,13 +563,6 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 					images: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
 				},
 			) => {
-				if (shouldRestore && restoreCommit) {
-					postMessage({
-						type: 'restoreCommit',
-						data: { commitId: restoreCommit.id },
-					});
-				}
-
 				// Use attachments from ChatInput (reflects user's edits: removed files, etc.)
 				// Falls back to original message attachments if not provided
 				const files = currentAttachments?.files ?? attachedFiles;
@@ -578,20 +577,10 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 				const hasAttachments =
 					editAttachments.files || editAttachments.codeSnippets || editAttachments.images;
 
-				if (message.id) {
-					// Editing from an older message replaces that branch in the active transcript
-					// immediately, regardless of whether the backend path is revert-based or
-					// history-only. Mark the revert point so the UI hides subsequent messages.
-					const activeId = useChatStore.getState().activeSessionId;
-					if (activeId) {
-						chatActions.markRevertedFromMessageId(message.id, activeId);
-					}
-				}
-
 				postSessionMessage({
 					type: 'sendMessage',
 					text,
-					model: sessionModel ?? selectedModel,
+					model: sessionModel,
 					attachments: hasAttachments ? editAttachments : undefined,
 					...(message.id
 						? {
@@ -608,16 +597,13 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 			},
 			[
 				message.id,
-				restoreCommit,
 				chatActions,
-				postMessage,
 				postSessionMessage,
 				setEditingMessageId,
 				attachedFiles,
 				attachedImages,
 				attachedSnippets,
 				sessionModel,
-				selectedModel,
 			],
 		);
 
@@ -638,7 +624,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 				if (!text.trim()) {
 					return;
 				}
-				if (restoreCommit && !unrevertAvailable) {
+				if (restoreCommit) {
 					showConfirmDialog({
 						title: 'Continue From This Message?',
 						message:
@@ -652,7 +638,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 					doSendUpdate(text, false, currentAttachments);
 				}
 			},
-			[restoreCommit, unrevertAvailable, doSendUpdate, showConfirmDialog],
+			[restoreCommit, doSendUpdate, showConfirmDialog],
 		);
 
 		const handleRestore = useCallback(() => {

@@ -1,11 +1,13 @@
 import type { Message, Part } from '@opencode-ai/sdk/v2/client';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useChatStore } from '../chatStore';
+import { useSettingsStore } from '../settingsStore';
 
 const SESSION_ID = 'session-1';
 
 function resetStore() {
 	useChatStore.setState(useChatStore.getInitialState(), true);
+	useSettingsStore.setState(useSettingsStore.getInitialState(), true);
 }
 
 function createUserMessage(id: string, text: string): { message: Message; part: Part } {
@@ -20,6 +22,30 @@ function createUserMessage(id: string, text: string): { message: Message; part: 
 			id: `${id}-text`,
 			messageID: id,
 			sessionID: SESSION_ID,
+			type: 'text',
+			text,
+		} as Part,
+	};
+}
+
+function createUserMessageWithModel(
+	id: string,
+	text: string,
+	model: { providerID: string; modelID: string },
+	sessionId = SESSION_ID,
+): { message: Message; part: Part } {
+	return {
+		message: {
+			id,
+			sessionID: sessionId,
+			role: 'user',
+			time: { created: Date.now() },
+			model,
+		} as Message,
+		part: {
+			id: `${id}-text`,
+			messageID: id,
+			sessionID: sessionId,
 			type: 'text',
 			text,
 		} as Part,
@@ -84,6 +110,53 @@ describe('chatStore revert', () => {
 		expect(state.parts['msg-1'][0]).toMatchObject({ text: 'first' });
 		expect(state.parts['msg-2'][0]).toMatchObject({ text: 'second' });
 		expect(state.revertedFromMessageId[SESSION_ID]).toBe('msg-2');
+	});
+
+	it('restores session model from the last user message in session history', () => {
+		const first = createUserMessageWithModel('msg-1', 'first', {
+			providerID: 'anthropic',
+			modelID: 'claude-sonnet-4',
+		});
+		const second = createUserMessageWithModel('msg-2', 'second', {
+			providerID: 'openai',
+			modelID: 'gpt-5',
+		});
+
+		useChatStore.getState().actions.restoreSession(SESSION_ID, {
+			messages: [first.message, second.message],
+			parts: {
+				[first.message.id]: [first.part],
+				[second.message.id]: [second.part],
+			},
+		});
+
+		expect(useChatStore.getState().sessionModel[SESSION_ID]).toBe('openai/gpt-5');
+	});
+
+	it('does not copy the previous session model into a newly created session', () => {
+		useSettingsStore.getState().actions.setLastSelectedModel('anthropic/claude-sonnet-4');
+		useChatStore.getState().actions.updateSessionModel('openai/gpt-5', SESSION_ID);
+
+		useChatStore.getState().actions.handleSessionCreated('session-2');
+
+		const state = useChatStore.getState();
+		expect(state.activeSessionId).toBe('session-2');
+		expect(state.sessionModel['session-2']).toBe('anthropic/claude-sonnet-4');
+		expect(state.sessionModel[SESSION_ID]).toBe('openai/gpt-5');
+	});
+
+	it('seeds restored sessions from the global model when history has no model yet', () => {
+		useSettingsStore.getState().actions.setLastSelectedModel('openai/gpt-5');
+		const first = createUserMessage('msg-1', 'first');
+
+		useChatStore.getState().actions.restoreSession(SESSION_ID, {
+			messages: [first.message],
+			parts: {
+				[first.message.id]: [first.part],
+			},
+		});
+
+		expect(useChatStore.getState().sessionModel[SESSION_ID]).toBe('openai/gpt-5');
 	});
 
 	it('drops removed messages and clears revert marker when caller resets it', () => {

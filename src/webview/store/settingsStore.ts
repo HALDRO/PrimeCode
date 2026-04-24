@@ -277,7 +277,7 @@ const handleSettingsRuntimeMessage = (
 			return true;
 		case 'modelSelected':
 			if (message.model) {
-				actions.setSelectedModel(message.model);
+				actions.setLastSelectedModel(message.model);
 			}
 			return true;
 		case 'cliDiagnostics':
@@ -378,7 +378,7 @@ export interface ProxyEndpointState {
 
 export interface SettingsActions {
 	setSettings: (settings: Partial<SettingsState>) => void;
-	setSelectedModel: (model: string) => void;
+	setLastSelectedModel: (model: string) => void;
 	setProxyEndpoints: (endpoints: ProxyEndpointState[]) => void;
 	addProxyEndpoint: (endpoint: ProxyEndpointState) => void;
 	updateProxyEndpoint: (
@@ -530,7 +530,7 @@ export interface SettingsState {
 	platformInfo: PlatformInfo;
 
 	// Model
-	selectedModel: string;
+	lastSelectedModel: string;
 	modelVariants: Record<string, string | undefined>;
 	proxyEndpoints: ProxyEndpointState[];
 
@@ -690,7 +690,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 		isWindows: false,
 	},
 
-	selectedModel: 'default',
+	lastSelectedModel: 'default',
 	modelVariants: persistedSelection.modelVariants ?? {},
 	proxyEndpoints: [],
 
@@ -764,11 +764,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
 	actions: {
 		setSettings: settings => set(state => ({ ...state, ...settings })),
-		setSelectedModel: selectedModel => {
+		setLastSelectedModel: lastSelectedModel => {
 			writePersistedSelectionState({
 				modelVariants: get().modelVariants,
 			});
-			set({ selectedModel });
+			set({ lastSelectedModel });
 		},
 		setModelVariant: (modelId, variant) =>
 			set(state => {
@@ -1003,7 +1003,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 						actions.setOpenCodeConfig({ isLoading: false, error: config?.error });
 
 						const state = get();
-						const currentModel = state.selectedModel;
+						const currentModel = state.lastSelectedModel;
 						if (currentModel && currentModel !== 'default' && providers.length > 0) {
 							const allAvailable = new Set<string>();
 							for (const p of providers) {
@@ -1020,7 +1020,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 							}
 							if (!allAvailable.has(currentModel) && allAvailable.size > 0) {
 								const firstAvailable = allAvailable.values().next().value;
-								if (firstAvailable) actions.setSelectedModel(firstAvailable);
+								if (firstAvailable) actions.setLastSelectedModel(firstAvailable);
 							}
 						}
 					}
@@ -1028,7 +1028,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
 				case 'openCodeModelSet':
 					if (message.data) {
-						actions.setSelectedModel(message.data.model ?? 'default');
+						actions.setLastSelectedModel(message.data.model ?? 'default');
 					}
 					break;
 

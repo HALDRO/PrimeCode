@@ -22,12 +22,49 @@ import type { QueuedMessageData } from '../../common/protocol';
 import type { CommitInfo } from '../../common/schemas';
 import { eventReducer, type WebviewSdkEvent } from './eventReducer';
 import { applyDelta, applyToolDelta, type MaterializedView, projectSession } from './projector';
+import { useSettingsStore } from './settingsStore';
 import {
 	createDraftDomainState,
 	createMessageDomainState,
 	createSessionMetaDomainState,
 } from './storeState';
 import { useUIStore } from './uiStore';
+
+function extractCompositeModelId(message: Message): string | undefined {
+	const record = message as Record<string, unknown>;
+	const directModelId = typeof record.modelID === 'string' ? record.modelID.trim() : '';
+	const directProviderId = typeof record.providerID === 'string' ? record.providerID.trim() : '';
+	if (directModelId) {
+		return directProviderId ? `${directProviderId}/${directModelId}` : directModelId;
+	}
+
+	const model =
+		typeof record.model === 'object' && record.model !== null
+			? (record.model as Record<string, unknown>)
+			: undefined;
+	const nestedModelId = typeof model?.modelID === 'string' ? model.modelID.trim() : '';
+	const nestedProviderId = typeof model?.providerID === 'string' ? model.providerID.trim() : '';
+	if (!nestedModelId) return undefined;
+	return nestedProviderId ? `${nestedProviderId}/${nestedModelId}` : nestedModelId;
+}
+
+function syncSessionModelFromMessages(state: SessionStore, sessionId: string): void {
+	const messages = state.messages[sessionId] ?? [];
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i];
+		if (message.role !== 'user') continue;
+		const model = extractCompositeModelId(message);
+		if (model) {
+			state.sessionModel[sessionId] = model;
+			return;
+		}
+	}
+}
+
+function getNewSessionSeedModel(): string | undefined {
+	const model = useSettingsStore.getState().lastSelectedModel;
+	return model && model !== 'default' ? model : undefined;
+}
 
 export type {
 	AssistantMessage,
@@ -608,10 +645,7 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 						state.sessionOrder.push(sessionId);
 					}
 					if (!state.messages[sessionId]) state.messages[sessionId] = [];
-					const prevId = state.activeSessionId;
-					if (prevId && state.sessionModel[prevId]) {
-						state.sessionModel[sessionId] = state.sessionModel[prevId];
-					}
+					state.sessionModel[sessionId] ??= getNewSessionSeedModel();
 					state.activeSessionId = sessionId;
 				}),
 			);
@@ -624,6 +658,7 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 						state.sessionOrder.push(sessionId);
 					}
 					if (!state.messages[sessionId]) state.messages[sessionId] = [];
+					state.sessionModel[sessionId] ??= getNewSessionSeedModel();
 					state.activeSessionId = sessionId;
 					state.editingMessageId = null;
 					state.editDrafts = {};
@@ -804,6 +839,7 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 		restoreSession: (sessionId, data) => {
 			set(
 				produce((s: SessionStore) => {
+					s.sessionModel[sessionId] ??= getNewSessionSeedModel();
 					s.messages[sessionId] = data.messages;
 					for (const [messageId, messageParts] of Object.entries(data.parts)) {
 						s.parts[messageId] = messageParts;
@@ -818,6 +854,7 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 							}
 						}
 					}
+					syncSessionModelFromMessages(s, sessionId);
 					// Rebuild materialized view after restore
 					s.materializedViews[sessionId] = projectSession(s, sessionId);
 				}),

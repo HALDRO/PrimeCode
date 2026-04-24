@@ -419,16 +419,23 @@ export class SessionHandler implements WebviewMessageHandler {
 			parts: partsByMessageId,
 		});
 
-		// Fetch and send diffs
-		const diffResult = await sdkClient.session.diff({
-			sessionID: sessionId,
-			directory: config.workspaceRoot,
-		});
-		if (diffResult.data) {
-			this.context.bridge.sendSdkEvent({
-				type: 'session.diff',
-				properties: { sessionID: sessionId, diff: diffResult.data },
+		// Child sessions don't own file changes — diffs belong to the parent.
+		// Fetching diff for a child would return the parent's workspace-level changes,
+		// causing duplicate/misleading file counts in the UI.
+		const isChildSession = !!currentSession?.parentID;
+
+		if (!isChildSession) {
+			// Fetch and send diffs
+			const diffResult = await sdkClient.session.diff({
+				sessionID: sessionId,
+				directory: config.workspaceRoot,
 			});
+			if (diffResult.data) {
+				this.context.bridge.sendSdkEvent({
+					type: 'session.diff',
+					properties: { sessionID: sessionId, diff: diffResult.data },
+				});
+			}
 		}
 
 		// Fetch and send todos
@@ -1060,12 +1067,42 @@ export class SessionHandler implements WebviewMessageHandler {
 					logger.info('[SessionHandler] Editing message: prune history without workspace revert', {
 						messageId: messageIdToTruncate,
 					});
-					await this.context.cli.deleteSessionMessagesFrom?.(activeId, messageIdToTruncate, config);
+					const deletedMessageIds =
+						(await this.context.cli.deleteSessionMessagesFrom?.(
+							activeId,
+							messageIdToTruncate,
+							config,
+						)) ?? [];
+					if (deletedMessageIds.length > 0) {
+						this.context.bridge.sendSdkEventBatch(
+							deletedMessageIds.map(messageID => ({
+								type: 'message.removed',
+								properties: { sessionID: activeId, messageID },
+							})),
+						);
+					}
 				} else {
-					logger.info('[SessionHandler] Editing message: revert then resend', {
+					logger.info('[SessionHandler] Editing message: revert workspace then replace message', {
 						messageId: messageIdToTruncate,
 					});
 					await this.context.cli.truncateSession(activeId, messageIdToTruncate, config);
+					// `session.revert()` restores workspace state before the target message,
+					// but the message itself can still remain in transcript history.
+					// For edit-resend we must replace that user prompt, not append after it.
+					const deletedMessageIds =
+						(await this.context.cli.deleteSessionMessagesFrom?.(
+							activeId,
+							messageIdToTruncate,
+							config,
+						)) ?? [];
+					if (deletedMessageIds.length > 0) {
+						this.context.bridge.sendSdkEventBatch(
+							deletedMessageIds.map(messageID => ({
+								type: 'message.removed',
+								properties: { sessionID: activeId, messageID },
+							})),
+						);
+					}
 				}
 			}
 

@@ -12,10 +12,10 @@ import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from '
 import { isMcpTool } from '../../constants';
 import { cn } from '../../lib/cn';
 import {
-	projectSessionMessages,
 	type RenderNode,
 	useChangedFilesState,
 	useHasTodos,
+	useIsActiveChildSession,
 	useMcpServers,
 	useTodoState,
 } from '../../store';
@@ -34,14 +34,7 @@ import {
 	TodoPendingIcon,
 	TodoProgressIcon,
 } from '../icons';
-import {
-	DropdownMenu,
-	IconButton,
-	PathChip,
-	ScrollContainer,
-	SessionStatsDisplay,
-	Tooltip,
-} from '../ui';
+import { DropdownMenu, IconButton, PathChip, ScrollContainer, Tooltip } from '../ui';
 
 interface TodoItem {
 	content: string;
@@ -60,7 +53,13 @@ function getActiveMessages(): RenderNode[] | undefined {
 	const state = useChatStore.getState();
 	const sid = state.activeSessionId;
 	if (!sid) return undefined;
-	const items = projectSessionMessages(state, sid);
+	const view = state.materializedViews[sid];
+	if (!view || view.nodeIds.length === 0) return undefined;
+	const items: RenderNode[] = [];
+	for (const id of view.nodeIds) {
+		const node = view.nodesById[id];
+		if (node) items.push(node);
+	}
 	return items.length > 0 ? items : undefined;
 }
 
@@ -317,21 +316,19 @@ const TodoSection: React.FC = React.memo(() => {
 });
 TodoSection.displayName = 'TodoSection';
 
-const StandaloneStatsPanel: React.FC = React.memo(() => (
+/** Centered todo block shown when there are todos but no changed files yet */
+const StandaloneTodoPanel: React.FC = React.memo(() => (
 	<div className="w-full box-border relative bg-transparent">
-		<div className="bg-(--panel-header-bg) rounded-t-lg border border-(--panel-header-border) border-b-0 @container/panel">
-			<div className="relative flex items-center h-(--tool-header-height) px-(--tool-header-padding) text-(--changed-files-font-size) font-(family-name:--vscode-font-family)">
-				<div className="shrink-0">
+		<div className="flex justify-center">
+			<div className="@container/panel max-w-full bg-transparent border-none rounded-none">
+				<div className="flex items-center justify-center h-(--tool-header-height) px-(--tool-header-padding) text-(--changed-files-font-size) font-(family-name:--vscode-font-family)">
 					<TodoSection />
-				</div>
-				<div className="flex-1 min-w-0">
-					<SessionStatsDisplay mode="footer" className="border-0 h-auto px-0" />
 				</div>
 			</div>
 		</div>
 	</div>
 ));
-StandaloneStatsPanel.displayName = 'StandaloneStatsPanel';
+StandaloneTodoPanel.displayName = 'StandaloneTodoPanel';
 
 function formatDiffCount(value: number, kind: 'added' | 'removed'): string {
 	if (value <= 0) {
@@ -395,6 +392,11 @@ FileRow.displayName = 'FileRow';
 export const ChangedFilesPanel: React.FC = React.memo(() => {
 	const { changedFiles, cumulativeDiffs } = useChangedFilesState();
 	const hasTodos = useHasTodos();
+	const isChild = useIsActiveChildSession();
+
+	// Child sessions don't own file changes — diffs belong to the parent session.
+	if (isChild) return null;
+
 	// Official OpenCode treats session.diff as the authoritative review/files source.
 	// Keep changedFiles for live metadata, but do not require it for restored visibility.
 	const hasFiles = cumulativeDiffs.length > 0 || changedFiles.length > 0;
@@ -404,7 +406,7 @@ export const ChangedFilesPanel: React.FC = React.memo(() => {
 	}
 
 	if (!hasFiles) {
-		return <StandaloneStatsPanel />;
+		return <StandaloneTodoPanel />;
 	}
 
 	return <ChangedFilesPanelContent />;

@@ -649,7 +649,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		sessionId: string,
 		messageId: string,
 		config: CLIConfig,
-	): Promise<void> {
+	): Promise<string[]> {
 		if (!this.serverUrl) throw new Error('OpenCode server not running');
 
 		logger.info('[OpenCode] Deleting session messages from point without revert', {
@@ -710,6 +710,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 					: new Error(String(firstError.reason));
 			}
 		}
+
+		return [...toDelete].reverse();
 	}
 
 	async unrevertSession(sessionId: string, config: CLIConfig): Promise<void> {

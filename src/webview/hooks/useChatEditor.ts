@@ -8,6 +8,10 @@ import { Compartment, EditorState, type Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { type RefObject, useEffect, useRef } from 'react';
 
+type PrimeCodeEditorView = EditorView & {
+	__primecodeSuppressNextSyncChange?: boolean;
+};
+
 export interface UseChatEditorOptions {
 	containerRef: RefObject<HTMLDivElement | null>;
 	initialValue: string;
@@ -43,6 +47,11 @@ export function useChatEditor(options: UseChatEditorOptions): RefObject<EditorVi
 
 		const updateListener = EditorView.updateListener.of(update => {
 			if (update.docChanged) {
+				const currentView = update.view as PrimeCodeEditorView;
+				if (currentView.__primecodeSuppressNextSyncChange) {
+					currentView.__primecodeSuppressNextSyncChange = false;
+					return;
+				}
 				onChangeRef.current(update.state.doc.toString());
 			}
 		});
@@ -96,6 +105,11 @@ export function useSyncEditorValue(viewRef: RefObject<EditorView | null>, value:
 		if (!view) return;
 		const current = view.state.doc.toString();
 		if (current !== value) {
+			// Prevent controlled sync dispatches from feeding back into React onChange.
+			// Without this guard, a single external value update can be observed as a
+			// second user edit and duplicate the composed text.
+			const syncView = view as PrimeCodeEditorView;
+			syncView.__primecodeSuppressNextSyncChange = true;
 			view.dispatch({
 				changes: { from: 0, to: current.length, insert: value },
 				selection: { anchor: value.length },

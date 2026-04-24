@@ -15,7 +15,9 @@ import {
 	type RenderTaskCardNode,
 	type RenderThinkingMessage,
 	type RenderToolUseMessage,
+	useChildSessionAgent,
 	useChildSessionMessages,
+	useChildSessionSlug,
 	useChildSessionSummary,
 	useChildSessionTitle,
 	useMcpServers,
@@ -82,6 +84,17 @@ function getReadableModelLabel(childModelId: string | undefined): string | undef
 	return slashIndex >= 0 ? trimmed.slice(slashIndex + 1) : trimmed;
 }
 
+function formatAgentLabel(agent: string | undefined): string {
+	const trimmed = agent?.trim().replace(/^@+/, '');
+	if (!trimmed) return '';
+	return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+}
+
+function stripSubagentSuffix(title: string | undefined): string {
+	if (!title) return '';
+	return title.replace(/\s*\(@[^)]*subagent\)\s*$/i, '').trim();
+}
+
 function buildTaskCardPatches(items: Array<RenderNode | RenderNode[]>): string {
 	const patches: string[] = [];
 	const visit = (msg: RenderNode) => {
@@ -105,12 +118,6 @@ function buildTaskCardPatches(items: Array<RenderNode | RenderNode[]>): string {
 
 function formatDiffCount(value: number): string {
 	return `${value > 0 ? '+' : ''}${formatNumber(value)}`;
-}
-
-function formatAgentLabel(agent: string | undefined): string {
-	const trimmed = agent?.trim();
-	if (!trimmed) return 'SubAgent';
-	return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
 }
 
 function summarizePreviewTools(items: Array<RenderNode | RenderNode[]>): Array<{
@@ -223,6 +230,8 @@ const TaskCardItem = React.memo<{
 	// Subscribe to child session messages independently via store hook.
 	// Each TaskCardItem re-renders only when its own child session changes.
 	const rawChildItems = useChildSessionMessages(childSessionId);
+	const childSessionAgent = useChildSessionAgent(childSessionId);
+	const childSessionSlug = useChildSessionSlug(childSessionId);
 	const childTitle = useChildSessionTitle(childSessionId);
 	// Clean task result: strip <task_result> tags and extract task_id to show separately
 	const { displayResult: taskResultContent, taskIdLine } = useMemo(() => {
@@ -280,15 +289,18 @@ const TaskCardItem = React.memo<{
 
 	const retryInfo = message.retryInfo;
 
-	const agentLabel = formatAgentLabel(agent);
-	const modelLabel = getReadableModelLabel(childModelId);
-	const headerTitle = childTitle?.trim() || title?.trim() || description?.trim() || agentLabel;
-	const shouldShowAgentMeta = useMemo(() => {
-		const normalizedHeader = headerTitle.trim().toLowerCase();
-		const normalizedAgent = agentLabel.trim().toLowerCase();
-		if (!normalizedHeader || !normalizedAgent) return true;
-		return !normalizedHeader.includes(normalizedAgent);
-	}, [agentLabel, headerTitle]);
+	const headerTitle = useMemo(
+		() =>
+			stripSubagentSuffix(childTitle) || stripSubagentSuffix(title) || description?.trim() || '',
+		[childTitle, title, description],
+	);
+	const agentLabel = useMemo(
+		() => formatAgentLabel(agent || childSessionAgent || childSessionSlug),
+		[agent, childSessionAgent, childSessionSlug],
+	);
+	const effectiveModelId = childModelId;
+	const modelLabel = useMemo(() => getReadableModelLabel(effectiveModelId), [effectiveModelId]);
+	const shouldShowAgentMeta = agentLabel.trim().length > 0;
 
 	// Unified auto-scroll with detach support (mirrors main session behavior)
 	const {
@@ -374,23 +386,23 @@ const TaskCardItem = React.memo<{
 	}, [taskResultContent, patchText]);
 
 	// Meta info block (model) — reused in result & expanded
-	const metaBlock = childModelId ? (
+	const metaBlock = effectiveModelId ? (
 		<div className="mb-2 ml-2 animate-fade-slide-in">
 			<div className="flex items-center gap-2 w-full min-w-0 overflow-hidden text-left bg-transparent border-none p-0 py-0.5 select-none">
 				<span className="shrink-0 flex items-center justify-center text-vscode-descriptionForeground [&>svg]:w-[14px] [&>svg]:h-[14px]">
 					<BotIcon size={14} />
 				</span>
-				{shouldShowAgentMeta && (
-					<span className="text-sm font-medium whitespace-nowrap text-vscode-foreground opacity-80">
-						{agentLabel}
-					</span>
-				)}
-				{shouldShowAgentMeta && (
-					<span className="text-sm text-vscode-descriptionForeground">·</span>
+				{shouldShowAgentMeta && agentLabel && (
+					<>
+						<span className="text-sm font-medium whitespace-nowrap text-vscode-foreground opacity-80">
+							{agentLabel}
+						</span>
+						<span className="text-sm text-vscode-descriptionForeground">·</span>
+					</>
 				)}
 				<span className="min-w-0 overflow-hidden flex items-center shrink">
 					<span className="text-sm truncate text-vscode-descriptionForeground">
-						{modelLabel ?? childModelId}
+						{modelLabel ?? effectiveModelId}
 					</span>
 				</span>
 			</div>
