@@ -280,15 +280,15 @@ export const useUIStore = create<UIState>((set, get) => ({
 		clearNotifications: () => set({ notifications: [] }),
 
 		handleExtensionMessage: (message: ExtensionMessage) => {
-			const actions = get().actions;
+			const { actions, activeModal, showHistoryDropdown } = get();
 
 			switch (message.type) {
 				case 'openHistory':
-					set({ showHistoryDropdown: true });
+					set({ showHistoryDropdown: !showHistoryDropdown });
 					break;
 
 				case 'openSettings':
-					actions.setActiveModal('settings');
+					actions.setActiveModal(activeModal === 'settings' ? null : 'settings');
 					break;
 
 				case 'workspaceFiles':

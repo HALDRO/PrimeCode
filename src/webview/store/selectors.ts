@@ -55,6 +55,17 @@ function isAssistantMessage(msg: Message): msg is AssistantMessage {
 	return msg.role === 'assistant';
 }
 
+function getAssistantTokenTotal(msg: AssistantMessage): number {
+	const t = msg.tokens;
+	return (
+		(t.input ?? 0) +
+		(t.output ?? 0) +
+		(t.reasoning ?? 0) +
+		(t.cache?.read ?? 0) +
+		(t.cache?.write ?? 0)
+	);
+}
+
 function buildTurnTokenMap(messages: Message[] | undefined): Record<string, TokenUsage> {
 	if (!messages || messages.length === 0) return EMPTY_TURN_TOKENS;
 
@@ -251,11 +262,6 @@ export const useChildSessionSummary = (childSessionId: string | undefined) => {
 	const status = useChatStore((state: SessionStore) =>
 		childSessionId ? state.sessionStatus[childSessionId] : undefined,
 	);
-	const diffs = useChatStore((state: SessionStore) =>
-		childSessionId
-			? (state.sessionDiff[childSessionId] ?? EMPTY_SESSION_DIFFS)
-			: EMPTY_SESSION_DIFFS,
-	);
 	const messages = useChatStore((state: SessionStore) =>
 		childSessionId ? (state.messages[childSessionId] ?? EMPTY_SDK_MESSAGES) : EMPTY_SDK_MESSAGES,
 	);
@@ -264,30 +270,39 @@ export const useChildSessionSummary = (childSessionId: string | undefined) => {
 	);
 
 	return useMemo(() => {
-		const diffStats = diffs.reduce(
-			(acc, d) => ({ added: acc.added + d.additions, removed: acc.removed + d.deletions }),
-			{ added: 0, removed: 0 },
-		);
+		const summary = session?.summary;
+		const diffStats = {
+			added:
+				summary?.additions ??
+				(summary?.diffs ?? EMPTY_SESSION_DIFFS).reduce((sum, d) => sum + d.additions, 0),
+			removed:
+				summary?.deletions ??
+				(summary?.diffs ?? EMPTY_SESSION_DIFFS).reduce((sum, d) => sum + d.deletions, 0),
+		};
 		let tokens: TokenUsage | undefined;
 		if (messages.length > 0) {
-			let input = 0;
-			let output = 0;
-			let cacheRead = 0;
-			let total = 0;
 			let durationMs = 0;
+			let lastAssistantWithTokens: AssistantMessage | undefined;
+
 			for (const msg of messages) {
 				if (!isAssistantMessage(msg)) continue;
-				const t = msg.tokens;
-				input += t.input ?? 0;
-				output += t.output ?? 0;
-				cacheRead += t.cache?.read ?? 0;
-				total += t.total ?? t.input + t.output + t.reasoning + t.cache.read + t.cache.write;
+				if (getAssistantTokenTotal(msg) > 0) {
+					lastAssistantWithTokens = msg;
+				}
 				if (typeof msg.time.completed === 'number') {
 					durationMs += msg.time.completed - msg.time.created;
 				}
 			}
-			if (input !== 0 || output !== 0 || total !== 0) {
-				tokens = { input, output, total, cacheRead, durationMs };
+
+			if (lastAssistantWithTokens) {
+				const t = lastAssistantWithTokens.tokens;
+				tokens = {
+					input: t.input ?? 0,
+					output: t.output ?? 0,
+					total: getAssistantTokenTotal(lastAssistantWithTokens),
+					cacheRead: t.cache?.read ?? 0,
+					durationMs,
+				};
 			}
 		}
 		return {
@@ -298,7 +313,7 @@ export const useChildSessionSummary = (childSessionId: string | undefined) => {
 			tokens,
 			durationMs: tokens?.durationMs,
 		};
-	}, [childCount, diffs, messages, session?.title, status?.type]);
+	}, [childCount, messages, session?.summary, session?.title, status?.type]);
 };
 
 export const useIsProcessing = () =>
