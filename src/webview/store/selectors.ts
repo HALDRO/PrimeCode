@@ -66,6 +66,50 @@ function getAssistantTokenTotal(msg: AssistantMessage): number {
 	);
 }
 
+function getAssistantSnapshotTotal(msg: AssistantMessage): number {
+	return getAssistantTokenTotal(msg);
+}
+
+function computeAssistantUsage(messages: Message[] | undefined): TokenUsage | undefined {
+	if (!messages || messages.length === 0) return undefined;
+
+	let previousSessionSnapshotTotal = 0;
+	let usageTotal = 0;
+	let latestInput = 0;
+	let latestOutput = 0;
+	let latestCacheRead = 0;
+	let durationMs = 0;
+
+	for (const msg of messages) {
+		if (!isAssistantMessage(msg)) continue;
+
+		const snapshotTotal = getAssistantSnapshotTotal(msg);
+		if (snapshotTotal > 0) {
+			const usage = computeTurnUsage(msg.tokens, { previousSessionSnapshotTotal });
+			usageTotal += usage.usageTokens;
+			previousSessionSnapshotTotal = usage.nextSessionSnapshotTotal;
+			latestInput = msg.tokens.input ?? 0;
+			latestOutput = msg.tokens.output ?? 0;
+			latestCacheRead = msg.tokens.cache?.read ?? 0;
+		}
+
+		if (typeof msg.time.completed === 'number') {
+			durationMs += msg.time.completed - msg.time.created;
+		}
+	}
+
+	if (usageTotal <= 0) return undefined;
+
+	return {
+		input: latestInput,
+		output: latestOutput,
+		total: usageTotal,
+		usage: usageTotal,
+		cacheRead: latestCacheRead,
+		durationMs,
+	};
+}
+
 function buildTurnTokenMap(messages: Message[] | undefined): Record<string, TokenUsage> {
 	if (!messages || messages.length === 0) return EMPTY_TURN_TOKENS;
 
@@ -139,7 +183,7 @@ export const useSessionRenderNode = (sessionId: string | undefined, nodeId: stri
 		return state.materializedViews[sessionId]?.nodesById[nodeId];
 	});
 
-/** Subscribe to the materialized view version — useful for knowing when any update happened. */
+/** Subscribe to the materialized view version тАФ useful for knowing when any update happened. */
 export const useMaterializedVersion = (sessionId: string | undefined) =>
 	useChatStore((state: SessionStore) => {
 		if (!sessionId) return 0;
@@ -279,32 +323,9 @@ export const useChildSessionSummary = (childSessionId: string | undefined) => {
 				summary?.deletions ??
 				(summary?.diffs ?? EMPTY_SESSION_DIFFS).reduce((sum, d) => sum + d.deletions, 0),
 		};
-		let tokens: TokenUsage | undefined;
-		if (messages.length > 0) {
-			let durationMs = 0;
-			let lastAssistantWithTokens: AssistantMessage | undefined;
 
-			for (const msg of messages) {
-				if (!isAssistantMessage(msg)) continue;
-				if (getAssistantTokenTotal(msg) > 0) {
-					lastAssistantWithTokens = msg;
-				}
-				if (typeof msg.time.completed === 'number') {
-					durationMs += msg.time.completed - msg.time.created;
-				}
-			}
+		const tokens = computeAssistantUsage(messages);
 
-			if (lastAssistantWithTokens) {
-				const t = lastAssistantWithTokens.tokens;
-				tokens = {
-					input: t.input ?? 0,
-					output: t.output ?? 0,
-					total: getAssistantTokenTotal(lastAssistantWithTokens),
-					cacheRead: t.cache?.read ?? 0,
-					durationMs,
-				};
-			}
-		}
 		return {
 			title: session?.title,
 			isIdle: status?.type === 'idle',
@@ -352,7 +373,7 @@ export const useChatStatus = () =>
 		const status = state.sessionStatus[sid];
 		if (!status) return 'Ready';
 		if (status.type === 'busy') return 'Working...';
-		if (status.type === 'retry') return 'Retrying…';
+		if (status.type === 'retry') return 'RetryingтАж';
 		return 'Ready';
 	});
 
@@ -440,17 +461,12 @@ export const useSubagentTokenTotals = () => {
 	}, [activeSessionId, childSessionIdsByParentId]);
 	return useMemo(() => {
 		const usageValues: Array<number | undefined> = [];
+
 		for (const childSessionId of descendantSessionIds) {
 			const msgs = allMessages[childSessionId];
-			if (!msgs) continue;
-			let lastTotal: number | undefined;
-			for (const msg of msgs) {
-				if (!isAssistantMessage(msg)) continue;
-				const t = msg.tokens;
-				lastTotal = t.total ?? t.input + t.output + t.reasoning + t.cache.read + t.cache.write;
-			}
-			if (lastTotal) usageValues.push(lastTotal);
+			usageValues.push(computeAssistantUsage(msgs)?.usage);
 		}
+
 		const next = sumUsageValues(usageValues);
 		if (next === prevRef.current) return prevRef.current;
 		prevRef.current = next;
@@ -1098,3 +1114,4 @@ export const useDerivedSessionStats = () => {
 		return next;
 	}, [statsInput]);
 };
+
