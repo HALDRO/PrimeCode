@@ -24,16 +24,12 @@ import { useElementHeight } from './hooks/useElementHeight';
 import {
 	useActiveModal,
 	useActiveSessionId,
-	useChangedFilesState,
 	useChatStore,
 	useIsProcessing,
-	useMcpServers,
-	useMessages,
-	useRevertedFromMessageId,
-	useTurnTokens,
+	useMessageSections,
 } from './store';
 import type { WebviewSdkEvent } from './store/eventReducer';
-import { groupMessagesIntoSections, type MessageSection } from './store/projector';
+import type { MessageSection } from './store/projector';
 import { useSettingsStore } from './store/settingsStore';
 import { useUIStore } from './store/uiStore';
 import { vscode } from './utils/vscode';
@@ -119,92 +115,6 @@ const handleExtensionMessage = (message: unknown): void => {
 		.getState()
 		.actions.handleExtensionMessage(message as import('../common').ExtensionMessage);
 };
-
-/**
- * Structurally compare two sections — reuse the old ref if nothing meaningful changed.
- * This preserves referential equality for Virtuoso's memo check (prev.section === next.section).
- */
-function sectionChanged(prev: MessageSection, next: MessageSection): boolean {
-	if (prev.userMessage !== next.userMessage) return true;
-	if (prev.isReverted !== next.isReverted) return true;
-	if (prev.isRevertPoint !== next.isRevertPoint) return true;
-	if (prev.responses.length !== next.responses.length) return true;
-	// Check referential equality of all responses to catch mid-list updates
-	// (e.g. a tool completing in the middle while streaming continues at the end)
-	for (let i = 0; i < prev.responses.length; i++) {
-		const p = prev.responses[i];
-		const n = next.responses[i];
-		if (p !== n) {
-			// Arrays are recreated by groupToolMessages — compare by last id + length + isLive
-			if (Array.isArray(p) && Array.isArray(n)) {
-				if (p.length !== n.length) return true;
-				for (let j = 0; j < p.length; j++) {
-					if (p[j] !== n[j]) return true;
-				}
-				const pId = p[p.length - 1]?.id;
-				const nId = n[n.length - 1]?.id;
-				if (pId !== nId) return true;
-				if ((p as { isLive?: boolean }).isLive !== (n as { isLive?: boolean }).isLive) return true;
-				if (
-					(p as { shouldCollapse?: boolean }).shouldCollapse !==
-					(n as { shouldCollapse?: boolean }).shouldCollapse
-				)
-					return true;
-			} else {
-				return true;
-			}
-		}
-	}
-	// Stats: compare by value (computeSectionStats creates new objects every time)
-	const ps = prev.stats;
-	const ns = next.stats;
-	if (ps.tokenCount !== ns.tokenCount) return true;
-	if (ps.durationMs !== ns.durationMs) return true;
-	if (ps.isLast !== ns.isLast) return true;
-	if (ps.lastResponseTs !== ns.lastResponseTs) return true;
-	// fileChanges: both null, or same values
-	if (ps.fileChanges !== ns.fileChanges) {
-		if (!ps.fileChanges || !ns.fileChanges) return true;
-		if (
-			ps.fileChanges.added !== ns.fileChanges.added ||
-			ps.fileChanges.removed !== ns.fileChanges.removed ||
-			ps.fileChanges.files !== ns.fileChanges.files
-		)
-			return true;
-	}
-	return false;
-}
-
-/** Stabilize section refs — reuse previous objects when data hasn't changed */
-function stabilizeSections(
-	next: MessageSection[],
-	prevRef: React.MutableRefObject<MessageSection[]>,
-): MessageSection[] {
-	const prev = prevRef.current;
-	if (prev.length === 0 || next.length === 0) {
-		prevRef.current = next;
-		return next;
-	}
-
-	let allSame = prev.length === next.length;
-	const result: MessageSection[] = new Array(next.length);
-
-	for (let i = 0; i < next.length; i++) {
-		const p = prev[i];
-		const n = next[i];
-		// Match by userMessage.id and sectionIndex
-		if (p && p.userMessage.id === n.userMessage.id && !sectionChanged(p, n)) {
-			result[i] = p; // reuse old ref
-		} else {
-			result[i] = n;
-			allSame = false;
-		}
-	}
-
-	if (allSame) return prev; // entire array unchanged
-	prevRef.current = result;
-	return result;
-}
 
 /**
  * Static context object for MessageItem — totalSections is no longer needed
@@ -370,37 +280,8 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 	const [showScrollToBottom, setShowScrollToBottom] = useState(false);
 	const sessionSwitchRef = useRef(false);
 
-	const messages = useMessages();
-	const mcpServers = useMcpServers();
+	const sections = useMessageSections();
 	const isProcessing = useIsProcessing();
-	const revertedFromMessageId = useRevertedFromMessageId();
-	const { changedFiles, cumulativeDiffs } = useChangedFilesState();
-	const turnTokens = useTurnTokens();
-
-	const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
-
-	const prevSectionsRef = useRef<MessageSection[]>([]);
-
-	const sections = useMemo(() => {
-		const raw = groupMessagesIntoSections(
-			messages,
-			mcpServerNames,
-			revertedFromMessageId,
-			changedFiles,
-			turnTokens,
-			isProcessing,
-			cumulativeDiffs,
-		);
-		return stabilizeSections(raw, prevSectionsRef);
-	}, [
-		messages,
-		mcpServerNames,
-		revertedFromMessageId,
-		changedFiles,
-		turnTokens,
-		isProcessing,
-		cumulativeDiffs,
-	]);
 
 	const virtuosoComponents = useMemo(
 		() => ({

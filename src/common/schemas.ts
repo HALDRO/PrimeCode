@@ -369,30 +369,6 @@ export const WorkspaceFileSchema = Type.Object({
 export type WorkspaceFile = Static<typeof WorkspaceFileSchema>;
 
 // =============================================================================
-// Message Attachments
-// =============================================================================
-
-const CodeSnippetAttachmentSchema = Type.Object({
-	filePath: Type.String(),
-	startLine: Type.Number(),
-	endLine: Type.Number(),
-	content: Type.String(),
-});
-
-const ImageAttachmentSchema = Type.Object({
-	id: Type.String(),
-	name: Type.String(),
-	dataUrl: Type.String(),
-	path: Type.Optional(Type.String()),
-});
-
-const MessageAttachmentsSchema = Type.Object({
-	files: Type.Optional(Type.Array(Type.String())),
-	codeSnippets: Type.Optional(Type.Array(CodeSnippetAttachmentSchema)),
-	images: Type.Optional(Type.Array(ImageAttachmentSchema)),
-});
-
-// =============================================================================
 // Conversation History
 // =============================================================================
 
@@ -425,7 +401,6 @@ export const ConversationMessageSchema = Type.Union([
 				),
 			}),
 		),
-		attachments: Type.Optional(MessageAttachmentsSchema),
 	}),
 	Type.Object({
 		id: Type.Optional(Type.String()),

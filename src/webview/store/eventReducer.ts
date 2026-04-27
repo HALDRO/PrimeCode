@@ -71,6 +71,25 @@ function syncCompactionParentFromAssistant(
 	ensureCompactionParentMessage(state, sessionId, info.parentID, info.time.created);
 }
 
+function shouldKeepAccumulatedTextPart(existingPart: unknown, nextPart: unknown): boolean {
+	if (
+		!existingPart ||
+		!nextPart ||
+		typeof existingPart !== 'object' ||
+		typeof nextPart !== 'object'
+	) {
+		return false;
+	}
+
+	const existing = existingPart as { type?: string; text?: unknown };
+	const next = nextPart as { type?: string; text?: unknown };
+	if (existing.type !== next.type) return false;
+	if (existing.type !== 'text' && existing.type !== 'reasoning') return false;
+	if (typeof existing.text !== 'string' || typeof next.text !== 'string') return false;
+
+	return existing.text.length > next.text.length && existing.text.startsWith(next.text);
+}
+
 // ─── Subset of SDK Event types that the webview cares about ─────────────────
 export type WebviewSdkEvent =
 	| EventSessionCreated
@@ -200,8 +219,11 @@ export function eventReducer(state: SessionStore, event: WebviewSdkEvent): void 
 			if (!state.parts[messageID]) state.parts[messageID] = [];
 			const parts = state.parts[messageID];
 			const idx = parts.findIndex(existingPart => existingPart.id === part.id);
-			if (idx >= 0) parts[idx] = part;
-			else parts.push(part);
+			if (idx >= 0) {
+				if (!shouldKeepAccumulatedTextPart(parts[idx], part)) {
+					parts[idx] = part;
+				}
+			} else parts.push(part);
 
 			// Track task tool → child session mapping
 			if (part.type === 'tool' && part.tool.toLowerCase() === 'task') {

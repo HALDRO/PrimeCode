@@ -150,13 +150,30 @@ describe('chatStore restore', () => {
 		expect(state.parts['msg-2']).toBeUndefined();
 	});
 
-	it('keeps deltas that arrive after a part update in the same batch', () => {
-		const message = createUserMessage('msg-live', 'prompt');
+	it('keeps accumulated streaming text when stale part updates arrive in the same batch', () => {
+		const userMessage = createUserMessage('msg-live-user', 'prompt');
+		const assistantMessage = {
+			id: 'msg-live',
+			sessionID: SESSION_ID,
+			role: 'assistant',
+			parentID: 'msg-live-user',
+			tokens: { input: 0, output: 0, reasoning: 0, total: 0, cache: { read: 0, write: 0 } },
+			cost: 0,
+			time: { created: Date.now() },
+		} as unknown as Message;
+		const assistantPart = {
+			id: 'msg-live-text',
+			messageID: 'msg-live',
+			sessionID: SESSION_ID,
+			type: 'text',
+			text: 'Hello',
+		} as Part;
 
 		useChatStore.getState().actions.restoreSession(SESSION_ID, {
-			messages: [message.message],
+			messages: [userMessage.message, assistantMessage],
 			parts: {
-				[message.message.id]: [message.part],
+				[userMessage.message.id]: [userMessage.part],
+				[assistantMessage.id]: [assistantPart],
 			},
 		});
 
@@ -167,7 +184,7 @@ describe('chatStore restore', () => {
 					messageID: 'msg-live',
 					partID: 'msg-live-text',
 					field: 'text',
-					delta: ' stale',
+					delta: ' world',
 				},
 			} as never,
 			{
@@ -188,13 +205,15 @@ describe('chatStore restore', () => {
 					messageID: 'msg-live',
 					partID: 'msg-live-text',
 					field: 'text',
-					delta: ' world',
+					delta: '!',
 				},
 			} as never,
 		]);
 
 		const state = useChatStore.getState();
-		expect(state.parts['msg-live'][0]).toMatchObject({ text: 'Hello world' });
+		expect(state.parts[assistantMessage.id][0]).toMatchObject({ text: 'Hello world!' });
+		const node = state.materializedViews[SESSION_ID].nodesById['msg-msg-live-text'];
+		expect(node).toMatchObject({ kind: 'assistant', content: 'Hello world!' });
 	});
 });
 
@@ -328,5 +347,45 @@ describe('chatStore materialized view streaming', () => {
 
 		const v2 = useChatStore.getState().materializedViews[SESSION_ID].version;
 		expect(v2).toBeGreaterThan(v1);
+	});
+
+	it('rebuilds cached materialized sections when MCP server names change', () => {
+		const userMsg: Message = {
+			id: 'u1',
+			sessionID: SESSION_ID,
+			role: 'user',
+			time: { created: Date.now() },
+		} as Message;
+		const asstMsg: Message = {
+			id: 'a1',
+			sessionID: SESSION_ID,
+			role: 'assistant',
+			parentID: 'u1',
+			tokens: { input: 0, output: 0, reasoning: 0, total: 0, cache: { read: 0, write: 0 } },
+			cost: 0,
+			time: { created: Date.now() },
+		} as unknown as Message;
+		const toolPart: Part = {
+			id: 'tool-1',
+			messageID: 'a1',
+			sessionID: SESSION_ID,
+			type: 'tool',
+			tool: 'mcp_fetch',
+			callID: 'call-1',
+			state: { status: 'completed', input: {}, output: 'done' },
+		} as unknown as Part;
+
+		useChatStore.getState().actions.restoreSession(SESSION_ID, {
+			messages: [userMsg, asstMsg],
+			parts: { a1: [toolPart] },
+		});
+		const before = useChatStore.getState().materializedViews[SESSION_ID];
+
+		useSettingsStore.getState().actions.setMcpServers({ mcp: { type: 'local', command: 'node' } });
+
+		const after = useChatStore.getState().materializedViews[SESSION_ID];
+		expect(after).toBeDefined();
+		expect(after.version).toBeGreaterThan(before.version);
+		expect(after.lastUpdateWasStructural).toBe(true);
 	});
 });

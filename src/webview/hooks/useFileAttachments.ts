@@ -14,14 +14,6 @@ import { useCallback, useEffect, useState } from 'react';
 import { decodeFilePath } from '../../utils/path';
 import { useVSCode } from '../utils/vscode';
 
-interface CodeSnippet {
-	id: string;
-	filePath: string;
-	startLine: number;
-	endLine: number;
-	content: string;
-}
-
 interface AttachedImage {
 	id: string;
 	name: string;
@@ -31,19 +23,13 @@ interface AttachedImage {
 }
 
 interface UseFileAttachmentsOptions {
-	initialFiles?: string[];
-	initialCodeSnippets?: Array<{
-		filePath: string;
-		startLine: number;
-		endLine: number;
-		content: string;
-	}>;
 	initialImages?: Array<{
 		id: string;
 		name: string;
 		dataUrl: string;
 		path?: string;
 	}>;
+	onAttachPath?: (path: string) => void;
 }
 
 /** Image extensions for path-based detection */
@@ -64,43 +50,37 @@ function isSameAttachedImage(
 	return left.name === right.name && left.dataUrl === right.dataUrl;
 }
 
+function dedupeAttachedImages(images: AttachedImage[]): AttachedImage[] {
+	return images.reduce<AttachedImage[]>((deduped, image) => {
+		if (deduped.some(existing => isSameAttachedImage(existing, image))) return deduped;
+		deduped.push(image);
+		return deduped;
+	}, []);
+}
+
 export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
-	const { initialFiles = [], initialCodeSnippets = [], initialImages = [] } = options;
+	const { initialImages = [], onAttachPath } = options;
 	const { postMessage } = useVSCode();
-	const [attachedFiles, setAttachedFiles] = useState<string[]>(initialFiles);
-	const [attachedImages, setAttachedImages] = useState<AttachedImage[]>(
-		initialImages.map(img => ({ ...img, file: undefined })),
-	);
-	const [codeSnippets, setCodeSnippets] = useState<CodeSnippet[]>(
-		initialCodeSnippets.map(s => ({
-			...s,
-			id: `${s.filePath}:${s.startLine}-${s.endLine}`,
-		})),
+	const [attachedImages, setAttachedImages] = useState<AttachedImage[]>(() =>
+		dedupeAttachedImages(initialImages.map(img => ({ ...img, file: undefined }))),
 	);
 	const [isDragOver, setIsDragOver] = useState(false);
 
 	// Handlers for managing attachments
-	const addFile = useCallback((filePath: string) => {
-		const normalized = filePath.trim();
-		if (!normalized) return;
-		setAttachedFiles(prev => {
-			if (prev.includes(normalized)) {
-				return prev;
+	const addFile = useCallback(
+		(filePath: string) => {
+			const normalized = filePath.trim();
+			if (!normalized) return;
+			if (onAttachPath) {
+				onAttachPath(normalized);
+				return;
 			}
-			return [...prev, normalized];
-		});
-	}, []);
-
-	const removeFile = useCallback((filePath: string) => {
-		setAttachedFiles(prev => prev.filter(f => f !== filePath));
-	}, []);
+		},
+		[onAttachPath],
+	);
 
 	const removeImage = useCallback((id: string) => {
 		setAttachedImages(prev => prev.filter(img => img.id !== id));
-	}, []);
-
-	const removeCodeSnippet = useCallback((id: string) => {
-		setCodeSnippets(prev => prev.filter(s => s.id !== id));
 	}, []);
 
 	const addAttachedImage = useCallback(
@@ -116,9 +96,7 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 	);
 
 	const clearAll = useCallback(() => {
-		setAttachedFiles([]);
 		setAttachedImages([]);
-		setCodeSnippets([]);
 	}, []);
 
 	// ── Drag & Drop ──────────────────────────────────────────────────────
@@ -264,30 +242,22 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 			if (message?.type === 'browsedFiles' && Array.isArray(message.paths)) {
 				for (const filePath of message.paths as string[]) {
 					const trimmed = filePath.trim();
-					if (trimmed) {
-						setAttachedFiles(prev => {
-							if (prev.includes(trimmed)) return prev;
-							return [...prev, trimmed];
-						});
-					}
+					if (trimmed) addFile(trimmed);
 				}
 			}
 		};
 
 		window.addEventListener('message', handleMessage);
 		return () => window.removeEventListener('message', handleMessage);
-	}, [addAttachedImage]);
+	}, [addAttachedImage, addFile]);
 
 	return {
-		attachedFiles,
 		attachedImages,
-		codeSnippets,
 		pendingPasteText,
 		isDragOver,
 		addFile,
-		removeFile,
+		addImage: addAttachedImage,
 		removeImage,
-		removeCodeSnippet,
 		clearAll,
 		clearPendingPaste: () => {},
 		handleDragOver,

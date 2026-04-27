@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useMemo } from 'react';
 import { generateId, resolveModelDisplayName } from '../../common';
+import { extractInlineAttachmentPayload } from '../../common/inlineAttachments';
 import {
 	getAvailableModelVariants,
 	getConfiguredAgentVariant,
@@ -31,17 +32,10 @@ import { useUIStore } from '../store/uiStore';
 import { useSessionMessage, useVSCode } from '../utils/vscode';
 
 interface AttachmentState {
-	files: string[];
 	images: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
-	codeSnippets: Array<{
-		id: string;
-		filePath: string;
-		startLine: number;
-		endLine: number;
-		content: string;
-	}>;
 	clearAll: () => void;
 	addFile: (path: string) => void;
+	addImage: (image: { id: string; name: string; dataUrl: string; path?: string }) => void;
 }
 
 interface UseChatInputControllerOptions {
@@ -174,8 +168,8 @@ export function useChatInputController(
 	useEffect(() => {
 		if (!shouldRestoreQueuedDraft) return;
 		if (!draftAttachments && draftAgent === undefined) return;
-		if (draftAttachments?.files) {
-			for (const f of draftAttachments.files) attachments.addFile(f);
+		if (draftAttachments?.images) {
+			for (const image of draftAttachments.images) attachments.addImage(image);
 		}
 		if (draftAgent !== undefined) {
 			setSelectedAgent(draftAgent);
@@ -213,18 +207,20 @@ export function useChatInputController(
 
 	// Send message
 	const handleSend = useCallback(async () => {
+		const inlinePayload = extractInlineAttachmentPayload(inputValue);
+
 		const hasContent =
 			inputValue.trim() ||
-			attachments.codeSnippets.length > 0 ||
-			attachments.files.length > 0 ||
+			inlinePayload.codeSnippets.length > 0 ||
+			inlinePayload.files.length > 0 ||
 			attachments.images.length > 0;
 
 		if (!hasContent) return;
 
 		if (isControlled && controlledOnSend) {
-			controlledOnSend(inputValue, {
-				files: attachments.files,
-				codeSnippets: attachments.codeSnippets.map(s => ({
+			controlledOnSend(inputValue.trim(), {
+				files: inlinePayload.files,
+				codeSnippets: inlinePayload.codeSnippets.map(s => ({
 					filePath: s.filePath,
 					startLine: s.startLine,
 					endLine: s.endLine,
@@ -241,10 +237,10 @@ export function useChatInputController(
 		}
 
 		const builtAttachments = {
-			files: attachments.files.length > 0 ? attachments.files : undefined,
+			files: inlinePayload.files.length > 0 ? inlinePayload.files : undefined,
 			codeSnippets:
-				attachments.codeSnippets.length > 0
-					? attachments.codeSnippets.map(s => ({
+				inlinePayload.codeSnippets.length > 0
+					? inlinePayload.codeSnippets.map(s => ({
 							filePath: s.filePath,
 							startLine: s.startLine,
 							endLine: s.endLine,

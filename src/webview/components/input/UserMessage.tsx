@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { resolveModelDisplayName } from '../../../common';
+import { extractInlineAttachmentMatches } from '../../../common/inlineAttachments';
 import { getDisplayDurationMs } from '../../../common/tokenStats';
 import { useElapsedTimer } from '../../hooks/useElapsedTimer';
-
 import { cn } from '../../lib/cn';
 import {
 	type RenderUserMessage,
@@ -25,7 +26,7 @@ import { extractPromptFromParts } from '../../utils/promptParts';
 import { useSessionMessage, useVSCode } from '../../utils/vscode';
 import { ToolCard } from '../chat/ToolCard';
 import { ClockIcon, CopyIcon, TimerIcon, TokensIcon, Undo2Icon, WandIcon } from '../icons';
-import { IconButton, type StatItem, StatsDisplay, Tooltip } from '../ui';
+import { IconButton, InlineAttachmentChip, type StatItem, StatsDisplay, Tooltip } from '../ui';
 import { AttachmentsBar } from './AttachmentsBar';
 import { ChatInput } from './ChatInput';
 
@@ -35,35 +36,6 @@ interface UserMessageProps {
 	isRevertPoint?: boolean;
 	/** Pre-computed section stats from groupMessagesIntoSections */
 	stats: SectionStats;
-}
-
-/**
- * Represents a code snippet attachment with file location and content
- */
-interface CodeSnippetAttachment {
-	filePath: string;
-	startLine: number;
-	endLine: number;
-	content: string;
-}
-
-/**
- * Represents an image attachment
- */
-interface ImageAttachment {
-	id: string;
-	name: string;
-	dataUrl: string;
-	path?: string;
-}
-
-/**
- * Structured attachments from message
- */
-interface MessageAttachments {
-	files?: string[];
-	codeSnippets?: CodeSnippetAttachment[];
-	images?: ImageAttachment[];
 }
 
 interface MessageCompaction {
@@ -159,55 +131,6 @@ const CompactionCard = React.memo<{ compaction: MessageCompaction }>(({ compacti
 	);
 });
 CompactionCard.displayName = 'CompactionCard';
-
-/**
- * Extract text content from RenderUserMessage parts.
- */
-function getUserMessageText(message: RenderUserMessage): string {
-	const textParts = message.parts.filter(
-		(part): part is typeof part & { text: string } => part.type === 'text' && 'text' in part,
-	);
-	if (textParts.length === 0) return '';
-
-	// User messages can briefly accumulate both an optimistic text part and the
-	// canonical server text part after edit-resend/restore flows. Rendering all
-	// text parts concatenated produces visual duplicates like "окейокей" even
-	// though the actual prompt was sent only once. Prefer the richest single part.
-	return textParts.reduce((best, part) => {
-		if (part.text.length > best.length) return part.text;
-		return best;
-	}, '');
-}
-
-/**
- * Extract attachments from message. Only structured attachments are rendered as pinned resources.
- */
-function getMessageAttachments(message: RenderUserMessage): {
-	files: string[];
-	codeSnippets: CodeSnippetAttachment[];
-	images: ImageAttachment[];
-	text: string;
-} {
-	const attachments = (message as { attachments?: MessageAttachments }).attachments;
-	const text = getUserMessageText(message);
-
-	// If we have structured attachments, use them directly
-	if (attachments) {
-		return {
-			files: attachments.files || [],
-			codeSnippets: attachments.codeSnippets || [],
-			images: attachments.images || [],
-			text,
-		};
-	}
-
-	return {
-		files: [],
-		codeSnippets: [],
-		images: [],
-		text,
-	};
-}
 
 const RestoreButton = React.memo<{ onRestore: () => void }>(({ onRestore }) => {
 	const { showConfirmDialog } = useUIActions();
@@ -385,7 +308,51 @@ const MessageTextWithCommands: React.FC<{
 	validCommands: Set<string>;
 	validSubagents: Set<string>;
 }> = React.memo(({ text, validCommands, validSubagents }) => {
+	const { postMessage } = useVSCode();
 	const segments = parseMessageSegments(text, validCommands, validSubagents);
+	const inlineMatches = useMemo(() => extractInlineAttachmentMatches(text), [text]);
+
+	const renderInlineChip = useCallback(
+		(inlineMatch: (typeof inlineMatches)[number]) => (
+			<InlineAttachmentChip
+				key={`inline-${inlineMatch.start}-${inlineMatch.end}`}
+				match={inlineMatch}
+				onOpen={(filePath, startLine, endLine) => {
+					postMessage({
+						type: 'openFile',
+						filePath,
+						startLine,
+						endLine,
+					});
+				}}
+			/>
+		),
+		[postMessage],
+	);
+
+	const renderSegmentContent = useCallback(
+		(segment: (typeof segments)[number]) => {
+			const overlappingMatches = inlineMatches.filter(
+				match => match.start >= segment.start && match.end <= segment.end,
+			);
+			if (overlappingMatches.length === 0) return segment.content;
+
+			const parts: React.ReactNode[] = [];
+			let cursor = segment.start;
+			for (const inlineMatch of overlappingMatches) {
+				if (inlineMatch.start > cursor) {
+					parts.push(text.slice(cursor, inlineMatch.start));
+				}
+				parts.push(renderInlineChip(inlineMatch));
+				cursor = inlineMatch.end;
+			}
+			if (cursor < segment.end) {
+				parts.push(text.slice(cursor, segment.end));
+			}
+			return parts;
+		},
+		[inlineMatches, renderInlineChip, text],
+	);
 
 	return (
 		<>
@@ -402,7 +369,7 @@ const MessageTextWithCommands: React.FC<{
 									'color-mix(in srgb, var(--vscode-editorGutter-modifiedBackground) 15%, transparent)',
 							}}
 						>
-							{segment.content}
+							{renderSegmentContent(segment)}
 						</span>
 					);
 				}
@@ -415,16 +382,27 @@ const MessageTextWithCommands: React.FC<{
 								backgroundColor: 'color-mix(in srgb, #60a5fa 15%, transparent)',
 							}}
 						>
-							{segment.content}
+							{renderSegmentContent(segment)}
 						</span>
 					);
 				}
-				return <span key={segmentKey}>{segment.content}</span>;
+				return <span key={segmentKey}>{renderSegmentContent(segment)}</span>;
 			})}
 		</>
 	);
 });
 MessageTextWithCommands.displayName = 'MessageTextWithCommands';
+
+const useStickyMessageSettings = () =>
+	useSettingsStore(
+		useShallow(state => ({
+			opencodeProviders: state.opencodeProviders,
+			proxyEndpoints: state.proxyEndpoints,
+			customCommands: state.commands.custom,
+			cliCommands: state.commands.cli,
+			subagentItems: state.subagents.items,
+		})),
+	);
 
 export const UserMessage: React.FC<UserMessageProps> = React.memo(
 	({ message, isRevertPoint = false, stats }) => {
@@ -439,10 +417,8 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 		const chatActions = useChatActions();
 		const { setEditingMessageId } = chatActions;
 		const activeModelID = useActiveModelID();
-		const { opencodeProviders, proxyEndpoints } = useSettingsStore();
-		const customCommands = useSettingsStore(s => s.commands.custom);
-		const cliCommands = useSettingsStore(s => s.commands.cli);
-		const subagents = useSettingsStore(s => s.subagents);
+		const { opencodeProviders, proxyEndpoints, customCommands, cliCommands, subagentItems } =
+			useStickyMessageSettings();
 
 		const validCommands = useMemo(
 			() =>
@@ -453,8 +429,8 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 			[cliCommands, customCommands],
 		);
 		const validSubagents = useMemo(
-			() => new Set(subagents.items.map(a => a.name.toLowerCase())),
-			[subagents.items],
+			() => new Set(subagentItems.map(a => a.name.toLowerCase())),
+			[subagentItems],
 		);
 
 		// Stats come from props (pre-computed in groupMessagesIntoSections)
@@ -468,24 +444,14 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 			[message.parts],
 		);
 
-		// Parse attachments (canonical prompt reconstruction first, legacy structured attachments second)
-		const {
-			files: attachedFiles,
-			codeSnippets: attachedSnippets,
-			images: attachedImages,
-			text: messageText,
-		} = useMemo(() => {
-			const legacy = getMessageAttachments(message);
+		// User prompt resources are reconstructed from canonical OpenCode parts:
+		// text/file mentions use source metadata; images are data-url file parts.
+		const { images: attachedImages, text: messageText } = useMemo(() => {
 			return {
-				files: reconstructedPrompt.files.length > 0 ? reconstructedPrompt.files : legacy.files,
-				codeSnippets:
-					reconstructedPrompt.codeSnippets.length > 0
-						? reconstructedPrompt.codeSnippets
-						: legacy.codeSnippets,
-				images: reconstructedPrompt.images.length > 0 ? reconstructedPrompt.images : legacy.images,
-				text: reconstructedPrompt.text || legacy.text,
+				images: reconstructedPrompt.images,
+				text: reconstructedPrompt.text,
 			};
-		}, [message, reconstructedPrompt]);
+		}, [reconstructedPrompt]);
 		const liveCompaction = useCompactionMessage(message.id) as MessageCompaction | undefined;
 		const compaction = liveCompaction ?? (message.compaction as MessageCompaction | undefined);
 
@@ -564,10 +530,8 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 					images: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
 				},
 			) => {
-				// Use attachments from ChatInput (reflects user's edits: removed files, etc.)
-				// Falls back to original message attachments if not provided
-				const files = currentAttachments?.files ?? attachedFiles;
-				const snippets = currentAttachments?.codeSnippets ?? attachedSnippets;
+				const files = currentAttachments?.files ?? [];
+				const snippets = currentAttachments?.codeSnippets ?? [];
 				const images = currentAttachments?.images ?? attachedImages;
 
 				const editAttachments = {
@@ -601,9 +565,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 				chatActions,
 				postSessionMessage,
 				setEditingMessageId,
-				attachedFiles,
 				attachedImages,
-				attachedSnippets,
 				sessionModel,
 			],
 		);
@@ -622,7 +584,13 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 					images: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
 				},
 			) => {
-				if (!text.trim()) {
+				const hasAttachments = Boolean(
+					currentAttachments &&
+						(currentAttachments.files.length > 0 ||
+							currentAttachments.codeSnippets.length > 0 ||
+							currentAttachments.images.length > 0),
+				);
+				if (!text.trim() && !hasAttachments) {
 					return;
 				}
 				if (message.id) {
@@ -673,8 +641,6 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 						hideContextBar
 						sendDisabled={isProcessing}
 						placeholder="Edit your message..."
-						initialFiles={attachedFiles}
-						initialCodeSnippets={attachedSnippets}
 						initialImages={attachedImages}
 					/>
 				</div>
@@ -720,9 +686,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 							)}
 						>
 							<div className="px-(--gap-3) py-(--gap-1-5)">
-								{(attachedFiles.length > 0 ||
-									attachedSnippets.length > 0 ||
-									attachedImages.length > 0) && (
+								{attachedImages.length > 0 && (
 									<div className="mb-(--gap-2)">
 										<AttachmentsBar
 											images={attachedImages.map(img => ({
@@ -731,14 +695,8 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 												dataUrl: img.dataUrl,
 												path: img.path,
 											}))}
-											files={attachedFiles}
-											codeSnippets={attachedSnippets.map(s => ({
-												id: `${s.filePath}:${s.startLine}-${s.endLine}`,
-												filePath: s.filePath,
-												startLine: s.startLine,
-												endLine: s.endLine,
-												content: s.content,
-											}))}
+											files={[]}
+											codeSnippets={[]}
 											onOpenFile={(path, startLine, endLine) => {
 												postMessage({ type: 'openFile', filePath: path, startLine, endLine });
 											}}

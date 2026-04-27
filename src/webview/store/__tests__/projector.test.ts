@@ -263,6 +263,8 @@ describe('applyDelta', () => {
 		expect(updated.nodeIds).toBe(view.nodeIds);
 		expect(updated.lastUpdateWasStructural).toBe(false);
 		expect(updated.version).toBe(view.version + 1);
+		expect(updated.sections).not.toBe(view.sections);
+		expect(updated.sections[0]?.responses[0]).toMatchObject({ content: 'Hello world' });
 	});
 
 	it('appends text delta to thinking node', () => {

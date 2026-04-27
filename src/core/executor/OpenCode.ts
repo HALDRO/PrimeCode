@@ -14,7 +14,7 @@ import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk/v2/c
 import { parseModelId } from '../../common';
 import { PERMISSION_CATEGORIES } from '../../common/permissions';
 import { logger } from '../../utils/logger';
-import { getPathBaseName, toFileUri } from '../../utils/path';
+import { buildPromptParts } from '../promptParts';
 import type { CLIConfig, CLIExecutor } from './types';
 
 // =============================================================================
@@ -1204,41 +1204,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			? { model: { providerID: modelProviderId, modelID: parsed?.modelId || '' } }
 			: {};
 
-		// Build prompt parts: text + file attachments
-		const parts: Array<
-			| { type: 'text'; text: string }
-			| { type: 'file'; mime: string; url: string; filename?: string }
-		> = [{ type: 'text' as const, text: prompt }];
-
-		if (attachments) {
-			// Attach workspace files as file parts
-			for (const filePath of attachments.files ?? []) {
-				const fileUrl = toFileUri(filePath);
-				const fileName = getPathBaseName(filePath) || filePath;
-				parts.push({ type: 'file' as const, mime: 'text/plain', url: fileUrl, filename: fileName });
-			}
-
-			// Attach code snippets as file parts with line ranges
-			for (const snippet of attachments.codeSnippets ?? []) {
-				const snippetUrl = new URL(toFileUri(snippet.filePath));
-				if (snippet.startLine) snippetUrl.searchParams.set('start', String(snippet.startLine));
-				if (snippet.endLine) snippetUrl.searchParams.set('end', String(snippet.endLine));
-				const fileName = getPathBaseName(snippet.filePath) || snippet.filePath;
-				parts.push({
-					type: 'file' as const,
-					mime: 'text/plain',
-					url: snippetUrl.toString(),
-					filename: fileName,
-				});
-			}
-
-			// Attach images as file parts with data URLs
-			// Always use dataUrl (base64) — LLM providers cannot read file:// URLs
-			for (const img of attachments.images ?? []) {
-				const mime = img.dataUrl.match(/^data:([^;]+)/)?.[1] || 'image/png';
-				parts.push({ type: 'file' as const, mime, url: img.dataUrl, filename: img.name });
-			}
-		}
+		const parts = buildPromptParts({ text: prompt, attachments });
 
 		const client = this.requireSdk();
 		await client.session.promptAsync({

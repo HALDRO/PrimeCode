@@ -1,10 +1,12 @@
 import * as vscode from 'vscode';
 import type { ConversationIndexEntry, OpenCodeProviderData } from '../../common';
 import { generateId, parseModelId } from '../../common';
+import { prependInlineAttachmentReferences } from '../../common/inlineAttachments';
 import { IMPROVE_PROMPT_DEFAULT_TEMPLATE } from '../../common/promptImprover';
 import type { CommandOf, QueuedMessageData, WebviewCommand } from '../../common/protocol';
 import { parseSessionUpdatedRuntimePayload } from '../../common/schemas';
 import type { CLIConfig } from '../../core/executor/types';
+import { buildOptimisticPromptParts } from '../../core/promptParts';
 import { logger } from '../../utils/logger';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
@@ -704,12 +706,13 @@ export class SessionHandler implements WebviewMessageHandler {
 		});
 		if (!removed) return;
 		logger.info('[SessionHandler] Cancelled queued message', { sessionId, queueId });
+		const restored = this.restoreInlineAttachmentsForDraft(removed.text, removed.attachments);
 		this.context.bridge.queue.update(
 			'cancelled',
 			sessionId,
 			newQueue.length > 0 ? [...newQueue] : [],
-			removed.text,
-			removed.attachments,
+			restored.text,
+			restored.attachments,
 			removed.agent,
 		);
 	}
@@ -808,12 +811,13 @@ export class SessionHandler implements WebviewMessageHandler {
 			);
 		} catch (error) {
 			logger.error('[SessionHandler] Failed to send dequeued message, returning to input', error);
+			const restored = this.restoreInlineAttachmentsForDraft(entry.text, entry.attachments);
 			this.context.bridge.queue.update(
 				'cancelled',
 				sessionId,
 				[...remaining],
-				entry.text,
-				entry.attachments,
+				restored.text,
+				restored.attachments,
 				entry.agent,
 			);
 		} finally {
@@ -837,12 +841,13 @@ export class SessionHandler implements WebviewMessageHandler {
 		if (queue.length >= SessionHandler.MAX_QUEUE_SIZE) {
 			logger.warn('[SessionHandler] Queue full, rejecting message', { sessionId });
 			// Return text and attachments to input so user doesn't lose them
+			const restored = this.restoreInlineAttachmentsForDraft(text, attachments);
 			this.context.bridge.queue.update(
 				'cancelled',
 				sessionId,
 				[...queue],
-				text,
-				attachments,
+				restored.text,
+				restored.attachments,
 				agent,
 			);
 			return;
@@ -1107,10 +1112,12 @@ export class SessionHandler implements WebviewMessageHandler {
 			// prompt. Server events reconcile into this row instead of creating a duplicate.
 			const prefix = isOpenCode ? 'msg' : 'user';
 			const userMessageId = clientMessageID || generateId(prefix);
-			const hasAttachments =
-				attachments?.files?.length ||
-				attachments?.codeSnippets?.length ||
-				attachments?.images?.length;
+			const optimisticParts = buildOptimisticPromptParts({
+				text,
+				attachments,
+				sessionId: activeId,
+				messageId: userMessageId,
+			});
 
 			this.context.bridge.sendSdkEventBatch([
 				{
@@ -1124,23 +1131,16 @@ export class SessionHandler implements WebviewMessageHandler {
 							time: { created: Date.now() },
 							modelID: config.model,
 							...(config.agent ? { agent: config.agent } : {}),
-							...(hasAttachments ? { attachments } : {}),
 						},
 					},
 				},
-				{
-					type: 'message.part.updated',
+				...optimisticParts.map(part => ({
+					type: 'message.part.updated' as const,
 					properties: {
 						sessionID: activeId,
-						part: {
-							id: `${userMessageId}-text`,
-							messageID: userMessageId,
-							sessionID: activeId,
-							type: 'text',
-							text,
-						},
+						part,
 					},
-				},
+				})),
 				{
 					type: 'session.status',
 					properties: {
@@ -1796,7 +1796,15 @@ export class SessionHandler implements WebviewMessageHandler {
 					properties: { sessionID: sessionId, messageID: clientMessageID },
 				});
 			}
-			this.context.bridge.queue.update('cancelled', sessionId, [], text, attachments, agent);
+			const restored = this.restoreInlineAttachmentsForDraft(text, attachments);
+			this.context.bridge.queue.update(
+				'cancelled',
+				sessionId,
+				[],
+				restored.text,
+				restored.attachments,
+				agent,
+			);
 			this.context.bridge.data('showNotification', {
 				notification: {
 					id: `error-${Date.now()}`,
@@ -1836,6 +1844,27 @@ export class SessionHandler implements WebviewMessageHandler {
 				this.context.bridge.lifecycle.cleared(sessionId);
 				break;
 		}
+	}
+
+	private restoreInlineAttachmentsForDraft(
+		text: string,
+		attachments: CommandOf<'sendMessage'>['attachments'] | undefined,
+	): {
+		text: string;
+		attachments?: Pick<NonNullable<CommandOf<'sendMessage'>['attachments']>, 'images'>;
+	} {
+		return {
+			text: prependInlineAttachmentReferences(
+				text,
+				attachments?.files ?? [],
+				(attachments?.codeSnippets ?? []).map(snippet => ({
+					filePath: snippet.filePath,
+					startLine: snippet.startLine ?? 1,
+					endLine: snippet.endLine ?? snippet.startLine ?? 1,
+				})),
+			),
+			attachments: attachments?.images?.length ? { images: attachments.images } : undefined,
+		};
 	}
 
 	private collectDescendantSessionIds(rootSessionId: string): string[] {

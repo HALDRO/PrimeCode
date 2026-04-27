@@ -52,6 +52,7 @@ export type {
 };
 
 import { vscode } from '../utils/vscode';
+import { useChatStore } from './chatStore';
 import { handleSettingsData } from './settingsUtils';
 
 type PersistedSelectionState = {
@@ -879,7 +880,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 			set(state => ({
 				agents: { ...state.agents, ...agents },
 			})),
-		setMcpServers: mcpServers => set({ mcpServers }),
+		setMcpServers: mcpServers => {
+			set({ mcpServers });
+			useChatStore.getState().actions.rebuildMaterializedViews();
+		},
 		setMcpStatus: mcpStatus => set(state => ({ mcpStatus: { ...state.mcpStatus, ...mcpStatus } })),
 		setMcpInstalledMetadata: mcpInstalledMetadata => set({ mcpInstalledMetadata }),
 		setLspStatus: lspStatus => set({ lspStatus }),

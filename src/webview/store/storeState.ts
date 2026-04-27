@@ -37,7 +37,7 @@ export interface DraftDomainState {
 	sessionInput: Record<string, string>;
 	draftAttachments: Record<
 		string,
-		{ files?: string[]; images?: unknown[]; codeSnippets?: unknown[] }
+		{ images?: Array<{ id: string; name: string; dataUrl: string; path?: string }> }
 	>;
 	draftAgent: Record<string, string | undefined>;
 	isImprovingPrompt: boolean;

@@ -230,7 +230,10 @@ export class OutboundBridge {
 			sessionId: string,
 			queue: import('../common/protocol').QueuedMessageData[],
 			cancelledText?: string,
-			cancelledAttachments?: import('../common/protocol').SendMessageCommand['attachments'],
+			cancelledAttachments?: Pick<
+				NonNullable<import('../common/protocol').SendMessageCommand['attachments']>,
+				'images'
+			>,
 			cancelledAgent?: string,
 		): void => {
 			this.send({

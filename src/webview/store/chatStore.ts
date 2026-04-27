@@ -65,6 +65,10 @@ function getNewSessionSeedModel(): string | undefined {
 	return model && model !== 'default' ? model : undefined;
 }
 
+function getMcpServerNames(): string[] {
+	return Object.keys(useSettingsStore.getState().mcpServers || {});
+}
+
 export type {
 	AssistantMessage,
 	MaterializedView,
@@ -112,11 +116,6 @@ export type RenderUserMessage = Message & {
 	kind: 'user';
 	message: Message;
 	parts: Part[];
-	attachments?: {
-		files?: string[];
-		images?: unknown[];
-		codeSnippets?: unknown[];
-	};
 	compaction?: RenderCompactionMessage;
 };
 
@@ -232,7 +231,7 @@ export interface SessionStore {
 	sessionAutoAccept: Record<string, boolean>;
 	draftAttachments: Record<
 		string,
-		{ files?: string[]; images?: unknown[]; codeSnippets?: unknown[] }
+		{ images?: Array<{ id: string; name: string; dataUrl: string; path?: string }> }
 	>;
 	draftAgent: Record<string, string | undefined>;
 	lastError: { sessionID: string; error: unknown } | null;
@@ -264,6 +263,7 @@ export interface SessionActions {
 	getSessionModel: (sessionId?: string) => string | undefined;
 	getSessionAutoAccept: (sessionId?: string) => boolean;
 	removePendingQuestion: (requestId: string, sessionId: string) => void;
+	rebuildMaterializedViews: () => void;
 	restoreSession: (
 		sessionId: string,
 		data: { messages: Message[]; parts: Record<string, Part[]> },
@@ -330,7 +330,7 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 								}
 							}
 						}
-						state.materializedViews[sid] = projectSession(state, sid);
+						state.materializedViews[sid] = projectSession(state, sid, getMcpServerNames());
 					}
 				}),
 			);
@@ -385,30 +385,15 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 
 			set(
 				produce((state: SessionStore) => {
-					const lastPartUpdateIndex = new Map<string, number>();
 					for (let index = 0; index < events.length; index++) {
 						const event = events[index];
-						if (event.type !== 'message.part.updated') continue;
-						const { part } = event.properties;
-						lastPartUpdateIndex.set(`${part.messageID}:${part.id}`, index);
-					}
-
-					for (let index = 0; index < events.length; index++) {
-						const event = events[index];
-						if (event.type === 'message.part.delta') {
-							const { messageID, partID } = event.properties;
-							const lastUpdateIndex = lastPartUpdateIndex.get(`${messageID}:${partID}`);
-							if (lastUpdateIndex !== undefined && index < lastUpdateIndex) {
-								continue;
-							}
-						}
 						eventReducer(state, event);
 					}
 
 					// Update materialized views:
 					// 1. Full rebuild for sessions with structural changes
 					for (const sid of structuralSessions) {
-						state.materializedViews[sid] = projectSession(state, sid);
+						state.materializedViews[sid] = projectSession(state, sid, getMcpServerNames());
 					}
 
 					// 2. Incremental delta for sessions with only delta events
@@ -416,7 +401,7 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 						const prev = state.materializedViews[sid];
 						if (!prev || prev.version === 0) {
 							// No existing view — full rebuild
-							state.materializedViews[sid] = projectSession(state, sid);
+							state.materializedViews[sid] = projectSession(state, sid, getMcpServerNames());
 							continue;
 						}
 
@@ -434,7 +419,7 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 							state.materializedViews[sid] = current;
 						} else {
 							// Incremental path failed — fall back to full rebuild
-							state.materializedViews[sid] = projectSession(state, sid);
+							state.materializedViews[sid] = projectSession(state, sid, getMcpServerNames());
 						}
 					}
 				}),
@@ -508,7 +493,7 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 									}
 									state.messages[sid] = [];
 									// Rebuild materialized view after clear
-									state.materializedViews[sid] = projectSession(state, sid);
+									state.materializedViews[sid] = projectSession(state, sid, getMcpServerNames());
 								}),
 							);
 						}
@@ -574,7 +559,7 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 				const queueData = msgData.queue as QueuedMessageData[];
 				const cancelledText = msgData.cancelledText as string | undefined;
 				const cancelledAttachments = msgData.cancelledAttachments as
-					| { files?: string[]; images?: unknown[]; codeSnippets?: unknown[] }
+					| { images?: Array<{ id: string; name: string; dataUrl: string; path?: string }> }
 					| undefined;
 				const cancelledAgent = msgData.cancelledAgent as string | undefined;
 				set(
@@ -763,6 +748,21 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 			);
 		},
 
+		rebuildMaterializedViews: () => {
+			set(
+				produce((s: SessionStore) => {
+					const mcpServerNames = getMcpServerNames();
+					for (const sessionId of Object.keys(s.materializedViews)) {
+						const previousVersion = s.materializedViews[sessionId]?.version ?? 0;
+						s.materializedViews[sessionId] = {
+							...projectSession(s, sessionId, mcpServerNames),
+							version: previousVersion + 1,
+						};
+					}
+				}),
+			);
+		},
+
 		restoreSession: (sessionId, data) => {
 			set(
 				produce((s: SessionStore) => {
@@ -783,7 +783,7 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 					}
 					syncSessionModelFromMessages(s, sessionId);
 					// Rebuild materialized view after restore
-					s.materializedViews[sessionId] = projectSession(s, sessionId);
+					s.materializedViews[sessionId] = projectSession(s, sessionId, getMcpServerNames());
 				}),
 			);
 		},

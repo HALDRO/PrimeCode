@@ -20,7 +20,6 @@ import {
 } from '../lib/modelVariants';
 import {
 	type ChangedFile,
-	type RenderAssistantMessage,
 	type RenderCompactionMessage,
 	type RenderNode,
 	type SessionStore,
@@ -28,7 +27,11 @@ import {
 	type ToolResultView,
 	useChatStore,
 } from './chatStore';
-import { collectDescendantSessionIds, computeDerivedSessionStats } from './projector';
+import {
+	collectDescendantSessionIds,
+	computeDerivedSessionStats,
+	type MessageSection,
+} from './projector';
 import { type SettingsState, useSettingsStore } from './settingsStore';
 import type { TransientNotification } from './uiStore';
 import { type UIState, useUIStore } from './uiStore';
@@ -110,43 +113,6 @@ function computeAssistantUsage(messages: Message[] | undefined): TokenUsage | un
 	};
 }
 
-function buildTurnTokenMap(messages: Message[] | undefined): Record<string, TokenUsage> {
-	if (!messages || messages.length === 0) return EMPTY_TURN_TOKENS;
-
-	const turnTokens: Record<string, TokenUsage> = {};
-	let previousSessionSnapshotTotal = 0;
-
-	for (const msg of messages) {
-		if (!isAssistantMessage(msg) || !msg.parentID) continue;
-
-		const existing = turnTokens[msg.parentID];
-		const previousTurnSnapshotTotal =
-			typeof existing?.total === 'number' && existing.total > 0 ? existing.total : undefined;
-
-		const usage = computeTurnUsage(msg.tokens, {
-			previousTurnSnapshotTotal,
-			previousSessionSnapshotTotal,
-		});
-		if (usage.totalTokens > 0) {
-			previousSessionSnapshotTotal = usage.nextSessionSnapshotTotal;
-		}
-
-		const durationMs =
-			typeof msg.time.completed === 'number' ? msg.time.completed - msg.time.created : undefined;
-
-		turnTokens[msg.parentID] = {
-			input: msg.tokens.input,
-			output: msg.tokens.output,
-			total: usage.totalTokens > 0 ? usage.totalTokens : (existing?.total ?? 0),
-			usage: (existing?.usage ?? 0) + usage.usageTokens,
-			cacheRead: msg.tokens.cache.read,
-			durationMs: (existing?.durationMs ?? 0) + (durationMs ?? 0),
-		};
-	}
-
-	return Object.keys(turnTokens).length > 0 ? turnTokens : EMPTY_TURN_TOKENS;
-}
-
 export const projectRuntimeMessages = (_session: unknown): RenderNode[] => EMPTY_MESSAGES;
 
 // Re-export pure functions from projector for backward compatibility
@@ -159,6 +125,7 @@ export { collectDescendantSessionIds, computeDerivedSessionStats } from './proje
 // ---------------------------------------------------------------------------
 
 const EMPTY_NODE_IDS: string[] = [];
+const EMPTY_SECTIONS: MessageSection[] = [];
 
 /** Subscribe to the ordered list of RenderNode IDs for the active session. */
 export const useNodeIds = () =>
@@ -183,7 +150,7 @@ export const useSessionRenderNode = (sessionId: string | undefined, nodeId: stri
 		return state.materializedViews[sessionId]?.nodesById[nodeId];
 	});
 
-/** Subscribe to the materialized view version тАФ useful for knowing when any update happened. */
+/** Subscribe to the materialized view version — useful for knowing when any update happened. */
 export const useMaterializedVersion = (sessionId: string | undefined) =>
 	useChatStore((state: SessionStore) => {
 		if (!sessionId) return 0;
@@ -251,6 +218,16 @@ export const useMessages = () => {
 		prevRef.current = next;
 		return next;
 	}, [view]);
+};
+
+export const useMessageSections = (): MessageSection[] => {
+	const activeSessionId = useChatStore((state: SessionStore) => state.activeSessionId);
+	return (
+		useChatStore((state: SessionStore) => {
+			if (!activeSessionId) return undefined;
+			return state.materializedViews[activeSessionId]?.sections ?? EMPTY_SECTIONS;
+		}) ?? EMPTY_SECTIONS
+	);
 };
 
 export const useHasMessages = () => {
@@ -323,9 +300,7 @@ export const useChildSessionSummary = (childSessionId: string | undefined) => {
 				summary?.deletions ??
 				(summary?.diffs ?? EMPTY_SESSION_DIFFS).reduce((sum, d) => sum + d.deletions, 0),
 		};
-
 		const tokens = computeAssistantUsage(messages);
-
 		return {
 			title: session?.title,
 			isIdle: status?.type === 'idle',
@@ -373,7 +348,7 @@ export const useChatStatus = () =>
 		const status = state.sessionStatus[sid];
 		if (!status) return 'Ready';
 		if (status.type === 'busy') return 'Working...';
-		if (status.type === 'retry') return 'RetryingтАж';
+		if (status.type === 'retry') return 'Retrying…';
 		return 'Ready';
 	});
 
@@ -381,19 +356,7 @@ export const useStreamingToolId = () =>
 	useChatStore((state: SessionStore) => {
 		const sid = state.activeSessionId;
 		if (!sid) return null;
-		const msgs = state.messages[sid];
-		if (!msgs) return null;
-		for (let i = msgs.length - 1; i >= 0; i--) {
-			const parts = state.parts[msgs[i].id];
-			if (!parts) continue;
-			for (let j = parts.length - 1; j >= 0; j--) {
-				const p = parts[j];
-				if (p.type === 'tool' && (p as ToolPart).state.status === 'running') {
-					return (p as ToolPart).callID;
-				}
-			}
-		}
-		return null;
+		return state.materializedViews[sid]?.streamingToolId ?? null;
 	});
 
 export const useToolActivity = () =>
@@ -401,20 +364,7 @@ export const useToolActivity = () =>
 		useShallow((state: SessionStore) => {
 			const sid = state.activeSessionId;
 			if (!sid) return null;
-			const msgs = state.messages[sid];
-			if (!msgs) return null;
-			for (let i = msgs.length - 1; i >= 0; i--) {
-				const parts = state.parts[msgs[i].id];
-				if (!parts) continue;
-				for (let j = parts.length - 1; j >= 0; j--) {
-					const p = parts[j];
-					if (p.type === 'tool' && (p as ToolPart).state.status === 'running') {
-						const tp = p as ToolPart;
-						return { toolName: tp.tool, label: `Running ${tp.tool}...`, toolUseId: tp.callID };
-					}
-				}
-			}
-			return null;
+			return state.materializedViews[sid]?.toolActivity ?? null;
 		}),
 	);
 
@@ -461,12 +411,10 @@ export const useSubagentTokenTotals = () => {
 	}, [activeSessionId, childSessionIdsByParentId]);
 	return useMemo(() => {
 		const usageValues: Array<number | undefined> = [];
-
 		for (const childSessionId of descendantSessionIds) {
 			const msgs = allMessages[childSessionId];
 			usageValues.push(computeAssistantUsage(msgs)?.usage);
 		}
-
 		const next = sumUsageValues(usageValues);
 		if (next === prevRef.current) return prevRef.current;
 		prevRef.current = next;
@@ -478,21 +426,15 @@ export const useActiveModelID = () =>
 	useChatStore((state: SessionStore) => {
 		const sid = state.activeSessionId;
 		if (!sid) return undefined;
-		const msgs = state.messages[sid];
-		if (!msgs) return undefined;
-		for (let i = msgs.length - 1; i >= 0; i--) {
-			const msg = msgs[i];
-			if (isAssistantMessage(msg) && msg.modelID) return msg.modelID;
-		}
-		return undefined;
+		return state.materializedViews[sid]?.activeModelId;
 	});
 
 export const useTurnTokens = () => {
 	const activeSessionId = useChatStore((state: SessionStore) => state.activeSessionId);
-	const messages = useChatStore((state: SessionStore) =>
-		activeSessionId ? state.messages[activeSessionId] : undefined,
-	);
-	return useMemo(() => buildTurnTokenMap(messages), [messages]);
+	return useChatStore((state: SessionStore) => {
+		if (!activeSessionId) return EMPTY_TURN_TOKENS;
+		return state.materializedViews[activeSessionId]?.turnTokensByParentId ?? EMPTY_TURN_TOKENS;
+	});
 };
 
 export const useMessageTurnTokens = (messageId: string | undefined) =>
@@ -501,8 +443,7 @@ export const useMessageTurnTokens = (messageId: string | undefined) =>
 			if (!messageId) return undefined;
 			const sid = state.activeSessionId;
 			if (!sid) return undefined;
-			const msgs = state.messages[sid];
-			return buildTurnTokenMap(msgs)[messageId];
+			return state.materializedViews[sid]?.turnTokensByParentId[messageId];
 		}),
 	);
 
@@ -552,21 +493,13 @@ export const useCompactionMessage = (messageId: string | undefined) => {
 };
 
 export const useIsLastMessageStreaming = () => {
-	const activeSessionId = useChatStore((state: SessionStore) => state.activeSessionId);
-	const messages = useMessages();
-	const status = useChatStore((state: SessionStore) =>
-		activeSessionId ? state.sessionStatus[activeSessionId] : undefined,
-	);
-	return useMemo(() => {
-		if (!activeSessionId) return false;
+	return useChatStore((state: SessionStore) => {
+		const sid = state.activeSessionId;
+		if (!sid) return false;
+		const status = state.sessionStatus[sid];
 		if (!status || status.type !== 'busy') return false;
-		for (let i = messages.length - 1; i >= 0; i--) {
-			if (messages[i].kind === 'assistant')
-				return !!(messages[i] as RenderAssistantMessage).isStreaming;
-			if (messages[i].kind === 'user') return false;
-		}
-		return false;
-	}, [activeSessionId, messages, status]);
+		return state.materializedViews[sid]?.isLastAssistantStreaming ?? false;
+	});
 };
 
 export const useContextPercentage = () => {
@@ -1114,4 +1047,3 @@ export const useDerivedSessionStats = () => {
 		return next;
 	}, [statsInput]);
 };
-

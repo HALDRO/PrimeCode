@@ -6,6 +6,10 @@
 
 import { keymap } from '@codemirror/view';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+	extractInlineAttachmentPayload,
+	formatInlineFileReference,
+} from '../../../common/inlineAttachments';
 import { useChatInputController } from '../../hooks/useChatInputController';
 import { useDropdownTriggers } from '../../hooks/useDropdownTriggers';
 import { useFileAttachments } from '../../hooks/useFileAttachments';
@@ -18,6 +22,7 @@ import {
 	chatHighlighter,
 	chatKeymap,
 	dropHandler,
+	inlineAttachmentBehavior,
 	pasteHandler,
 	triggerDetector,
 	validCommandsFacet,
@@ -55,13 +60,6 @@ interface ChatInputProps {
 	hideContextBar?: boolean;
 	/** When true, the send button is disabled but no stop button is shown. */
 	sendDisabled?: boolean;
-	initialFiles?: string[];
-	initialCodeSnippets?: Array<{
-		filePath: string;
-		startLine: number;
-		endLine: number;
-		content: string;
-	}>;
 	initialImages?: Array<{
 		id: string;
 		name: string;
@@ -80,39 +78,71 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 		className,
 		placeholder = 'Plan, @ for context, / for commands',
 		sendDisabled = false,
-		initialFiles = [],
-		initialCodeSnippets = [],
 		initialImages = [],
 	}) => {
 		const { postMessage } = useVSCode();
 		const editorRef = useRef<EditorCoreRef>(null);
 		const [showFolderOverlay, setShowFolderOverlay] = useState(false);
+		const inputBridgeRef = useRef<{
+			inputValue: string;
+			setInputValue: (value: string) => void;
+		} | null>(null);
+		const insertInlineReference = useCallback((filePath: string) => {
+			const inlineReference = formatInlineFileReference(filePath, /[\\/]$/.test(filePath));
+			if (!inlineReference) return;
+
+			const view = editorRef.current?.view;
+			if (view) {
+				const selection = view.state.selection.main;
+				const prefix =
+					selection.from > 0 &&
+					!/\s/.test(view.state.doc.sliceString(selection.from - 1, selection.from))
+						? ' '
+						: '';
+				const suffix =
+					selection.to < view.state.doc.length &&
+					!/\s/.test(view.state.doc.sliceString(selection.to, selection.to + 1))
+						? ' '
+						: '';
+				const insert = `${prefix}${inlineReference}${suffix}`;
+				view.dispatch({
+					changes: { from: selection.from, to: selection.to, insert },
+					selection: { anchor: selection.from + insert.length },
+				});
+				view.focus();
+				return;
+			}
+
+			const bridge = inputBridgeRef.current;
+			if (!bridge) return;
+			const trimmed = bridge.inputValue.trimEnd();
+			bridge.setInputValue(`${trimmed}${trimmed ? ' ' : ''}${inlineReference}`);
+		}, []);
 
 		const {
-			attachedFiles,
 			attachedImages,
-			codeSnippets,
 			isDragOver,
 			addFile,
-			removeFile,
+			addImage,
 			removeImage,
-			removeCodeSnippet,
 			clearAll,
 			handleDragOver,
 			handleDragLeave,
 			handleDrop,
 			handlePaste,
-		} = useFileAttachments({ initialFiles, initialCodeSnippets, initialImages });
+		} = useFileAttachments({
+			initialImages,
+			onAttachPath: insertInlineReference,
+		});
 
 		const attachments = useMemo(
 			() => ({
-				files: attachedFiles,
 				images: attachedImages,
-				codeSnippets,
 				clearAll,
 				addFile,
+				addImage,
 			}),
-			[attachedFiles, attachedImages, codeSnippets, clearAll, addFile],
+			[attachedImages, clearAll, addFile, addImage],
 		);
 
 		const controller = useChatInputController({
@@ -121,6 +151,10 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 			controlledOnSend,
 			attachments,
 		});
+		inputBridgeRef.current = {
+			inputValue: controller.inputValue,
+			setInputValue: controller.setInputValue,
+		};
 
 		const dropdowns = useDropdownTriggers();
 		const { showSlashCommands, setShowSlashCommands, setSlashFilter } = useSlashCommandsState();
@@ -168,7 +202,7 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 
 		const handleFileSelect = useCallback(
 			(filePath: string) => {
-				addFile(filePath);
+				const inlineReference = formatInlineFileReference(filePath, /[\\/]$/.test(filePath));
 
 				// Precise @filter removal via CM6 dispatch
 				const view = editorRef.current?.view;
@@ -177,21 +211,25 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 				if (view && triggerPos !== null) {
 					const currentPos = view.state.selection.main.head;
 					view.dispatch({
-						changes: { from: triggerPos, to: currentPos, insert: '' },
+						changes: { from: triggerPos, to: currentPos, insert: inlineReference },
+						selection: { anchor: triggerPos + inlineReference.length },
 					});
 					view.focus();
 				} else {
 					// Fallback: string-based removal
 					const lastAt = controller.inputValue.lastIndexOf('@');
 					if (lastAt >= 0) {
-						controller.setInputValue(controller.inputValue.substring(0, lastAt).trim());
+						const nextValue = `${controller.inputValue.substring(0, lastAt).trimEnd()}${
+							controller.inputValue.substring(0, lastAt).trimEnd() ? ' ' : ''
+						}${inlineReference}`;
+						controller.setInputValue(nextValue);
 					}
 				}
 
 				setShowFilePicker(false);
 				setFileFilter('');
 			},
-			[addFile, dropdowns.filePickerTriggerIndex, controller, setShowFilePicker, setFileFilter],
+			[dropdowns.filePickerTriggerIndex, controller, setShowFilePicker, setFileFilter],
 		);
 
 		const handleOpenFile = useCallback(
@@ -258,6 +296,7 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 		const cmExtensions = useMemo(
 			() => [
 				chatHighlighter,
+				inlineAttachmentBehavior,
 				dropHandler,
 				keymap.of([
 					{ key: 'ArrowUp', run: () => stableDropdownsOpen() },
@@ -279,8 +318,13 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 			],
 		);
 
-		const hasAttachments =
-			attachedFiles.length > 0 || codeSnippets.length > 0 || attachedImages.length > 0;
+		const inlineAttachmentState = useMemo(
+			() => extractInlineAttachmentPayload(controller.inputValue),
+			[controller.inputValue],
+		);
+		const hasInlineAttachments =
+			inlineAttachmentState.files.length > 0 || inlineAttachmentState.codeSnippets.length > 0;
+		const hasToolbarAttachments = attachedImages.length > 0;
 
 		const handleRightOverlayMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
 			const rect = e.currentTarget.getBoundingClientRect();
@@ -329,14 +373,12 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 							</div>
 						)}
 
-						{hasAttachments && (
+						{hasToolbarAttachments && (
 							<AttachmentsBar
 								images={attachedImages}
-								files={attachedFiles}
-								codeSnippets={codeSnippets}
+								files={[]}
+								codeSnippets={[]}
 								onRemoveImage={removeImage}
-								onRemoveFile={removeFile}
-								onRemoveSnippet={removeCodeSnippet}
 								onPreviewImage={setPreviewImage}
 								onOpenFile={handleOpenFile}
 							/>
@@ -423,7 +465,9 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 
 					<SendButton
 						isProcessing={sendDisabled ? false : controller.isProcessing}
-						hasContent={!!(controller.inputValue.trim() || attachedFiles.length > 0)}
+						hasContent={
+							!!(controller.inputValue.trim() || hasInlineAttachments || attachedImages.length > 0)
+						}
 						onSend={controller.handleSend}
 						onStop={controller.handleStop}
 						disabled={sendDisabled}

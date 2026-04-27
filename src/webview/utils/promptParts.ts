@@ -1,4 +1,10 @@
 import type { Part } from '@opencode-ai/sdk/v2/client';
+import {
+	extractInlineAttachmentPayload,
+	formatInlineFileReference,
+	formatInlineSnippetReference,
+	prependInlineAttachmentReferences,
+} from '../../common/inlineAttachments';
 
 export interface ReconstructedCodeSnippet {
 	filePath: string;
@@ -21,6 +27,21 @@ export interface ReconstructedPrompt {
 	images: ReconstructedImage[];
 }
 
+export function getPrimaryUserText(parts: Part[] | undefined): string {
+	if (!parts || parts.length === 0) return '';
+
+	const textParts = parts.filter(
+		(part): part is Part & { text: string; synthetic?: boolean; ignored?: boolean } =>
+			part.type === 'text' &&
+			'text' in part &&
+			!(part as { synthetic?: boolean }).synthetic &&
+			!(part as { ignored?: boolean }).ignored,
+	);
+	if (textParts.length === 0) return '';
+
+	return textParts.reduce((best, part) => (part.text.length > best.text.length ? part : best)).text;
+}
+
 interface TextSource {
 	value: string;
 	start: number;
@@ -30,6 +51,40 @@ interface TextSource {
 interface FileSource {
 	text?: TextSource;
 	path?: string;
+}
+
+function appendUnique<T>(items: T[], next: T, isSame: (left: T, right: T) => boolean): void {
+	if (items.some(item => isSame(item, next))) return;
+	items.push(next);
+}
+
+function ensureInlineReferences(
+	text: string,
+	files: string[],
+	codeSnippets: ReconstructedCodeSnippet[],
+): string {
+	if (extractInlineAttachmentPayload(text).matches.length === 0) {
+		return prependInlineAttachmentReferences(text, files, codeSnippets);
+	}
+
+	const payload = extractInlineAttachmentPayload(text);
+	const missingFiles = files.filter(filePath => !payload.files.includes(filePath));
+	const missingSnippets = codeSnippets.filter(
+		snippet =>
+			!payload.codeSnippets.some(
+				inline =>
+					inline.filePath === snippet.filePath &&
+					inline.startLine === snippet.startLine &&
+					inline.endLine === snippet.endLine,
+			),
+	);
+	const refs = [
+		...missingFiles.map(filePath => formatInlineFileReference(filePath)).filter(Boolean),
+		...missingSnippets.map(snippet => formatInlineSnippetReference(snippet)).filter(Boolean),
+	];
+	if (refs.length === 0) return text;
+	const trimmed = text.trim();
+	return trimmed ? `${refs.join(' ')}\n\n${trimmed}` : refs.join(' ');
 }
 
 function parseFileUrl(url: string): { path: string; startLine?: number; endLine?: number } | null {
@@ -60,17 +115,7 @@ export function extractPromptFromParts(parts: Part[] | undefined): Reconstructed
 		return { text: '', files: [], codeSnippets: [], images: [] };
 	}
 
-	const textParts = parts.filter(
-		(part): part is Part & { text: string; synthetic?: boolean; ignored?: boolean } =>
-			part.type === 'text' &&
-			'text' in part &&
-			!(part as { synthetic?: boolean }).synthetic &&
-			!(part as { ignored?: boolean }).ignored,
-	);
-	const text = textParts.reduce((best, part) => {
-		if (part.text.length > best.length) return part.text;
-		return best;
-	}, '');
+	const text = getPrimaryUserText(parts);
 
 	const files: string[] = [];
 	const codeSnippets: ReconstructedCodeSnippet[] = [];
@@ -103,32 +148,51 @@ export function extractPromptFromParts(parts: Part[] | undefined): Reconstructed
 		const hasSelection = typeof parsed.startLine === 'number' || typeof parsed.endLine === 'number';
 
 		if (sourceText && hasSelection) {
-			codeSnippets.push({
-				filePath: displayPath,
-				startLine: parsed.startLine ?? 1,
-				endLine: parsed.endLine ?? parsed.startLine ?? 1,
-				content: sourceText.value,
-			});
+			appendUnique(
+				codeSnippets,
+				{
+					filePath: displayPath,
+					startLine: parsed.startLine ?? 1,
+					endLine: parsed.endLine ?? parsed.startLine ?? 1,
+					content: sourceText.value,
+				},
+				(left, right) =>
+					left.filePath === right.filePath &&
+					left.startLine === right.startLine &&
+					left.endLine === right.endLine,
+			);
 			continue;
 		}
 
 		if (sourceText) {
-			files.push(displayPath);
+			appendUnique(files, displayPath, (left, right) => left === right);
 			continue;
 		}
 
 		if (hasSelection) {
-			codeSnippets.push({
-				filePath: displayPath,
-				startLine: parsed.startLine ?? 1,
-				endLine: parsed.endLine ?? parsed.startLine ?? 1,
-				content: '',
-			});
+			appendUnique(
+				codeSnippets,
+				{
+					filePath: displayPath,
+					startLine: parsed.startLine ?? 1,
+					endLine: parsed.endLine ?? parsed.startLine ?? 1,
+					content: '',
+				},
+				(left, right) =>
+					left.filePath === right.filePath &&
+					left.startLine === right.startLine &&
+					left.endLine === right.endLine,
+			);
 			continue;
 		}
 
-		files.push(displayPath);
+		appendUnique(files, displayPath, (left, right) => left === right);
 	}
 
-	return { text, files, codeSnippets, images };
+	return {
+		text: ensureInlineReferences(text, files, codeSnippets),
+		files,
+		codeSnippets,
+		images,
+	};
 }

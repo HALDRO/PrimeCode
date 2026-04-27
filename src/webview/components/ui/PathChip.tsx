@@ -6,6 +6,7 @@
  */
 
 import type React from 'react';
+import type { InlineAttachmentMatch } from '../../../common/inlineAttachments';
 import { cn } from '../../lib/cn';
 import { FileTypeIcon, SmallCloseIcon } from '../icons';
 import { Tooltip } from './Tooltip';
@@ -148,3 +149,26 @@ export const PathChip: React.FC<PathChipProps> = ({
 
 	return chip;
 };
+
+interface InlineAttachmentChipProps {
+	match: InlineAttachmentMatch;
+	onOpen: (filePath: string, startLine?: number, endLine?: number) => void;
+	className?: string;
+}
+
+export const InlineAttachmentChip: React.FC<InlineAttachmentChipProps> = ({
+	match,
+	onOpen,
+	className,
+}) => (
+	<span className={cn('inline-flex align-middle mx-(--gap-0-5) max-w-full', className)}>
+		<PathChip
+			path={match.path}
+			isFolder={match.isDirectory}
+			startLine={match.startLine}
+			endLine={match.endLine}
+			title={match.displayPath}
+			onClick={() => onOpen(match.path, match.startLine, match.endLine)}
+		/>
+	</span>
+);

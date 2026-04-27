@@ -11,6 +11,7 @@
  */
 
 import type { AssistantMessage, Message, Part, ToolPart } from '@opencode-ai/sdk/v2/client';
+import { computeTurnUsage } from '../../common/tokenStats';
 import type {
 	RenderAssistantMessage,
 	RenderCompactionMessage,
@@ -31,8 +32,20 @@ export interface MaterializedView {
 	nodeIds: string[];
 	/** Individual RenderNode by stable ID */
 	nodesById: Record<string, RenderNode>;
+	/** Pre-grouped sections for the main chat viewport */
+	sections: MessageSection[];
 	/** Maps tool part IDs to their node IDs (callID) for delta lookups */
 	toolPartIdToCallId: Record<string, string>;
+	/** Precomputed per-turn token usage keyed by user message id */
+	turnTokensByParentId: Record<string, import('./chatStore').TokenUsage>;
+	/** Latest assistant model used in this session */
+	activeModelId?: string;
+	/** Latest running tool metadata for lightweight status selectors */
+	toolActivity: { toolName: string; label: string; toolUseId: string } | null;
+	/** Latest running tool call id */
+	streamingToolId: string | null;
+	/** Whether the last assistant render node is still streaming */
+	isLastAssistantStreaming: boolean;
 	/** Version counter — bumped on every update (structural or delta) */
 	version: number;
 	/** True if last update was structural (new message/part added/removed) */
@@ -42,7 +55,13 @@ export interface MaterializedView {
 const EMPTY_VIEW: MaterializedView = {
 	nodeIds: [],
 	nodesById: {},
+	sections: [],
 	toolPartIdToCallId: {},
+	turnTokensByParentId: {},
+	activeModelId: undefined,
+	toolActivity: null,
+	streamingToolId: null,
+	isLastAssistantStreaming: false,
 	version: 0,
 	lastUpdateWasStructural: true,
 };
@@ -53,6 +72,84 @@ const EMPTY_VIEW: MaterializedView = {
 
 function isAssistantMessage(msg: Message): msg is AssistantMessage {
 	return msg.role === 'assistant';
+}
+
+function buildTurnTokenMap(
+	messages: Message[] | undefined,
+): Record<string, import('./chatStore').TokenUsage> {
+	if (!messages || messages.length === 0) return {};
+
+	const turnTokens: Record<string, import('./chatStore').TokenUsage> = {};
+	let previousSessionSnapshotTotal = 0;
+
+	for (const msg of messages) {
+		if (!isAssistantMessage(msg) || !msg.parentID) continue;
+
+		const existing = turnTokens[msg.parentID];
+		const previousTurnSnapshotTotal =
+			typeof existing?.total === 'number' && existing.total > 0 ? existing.total : undefined;
+
+		const usage = computeTurnUsage(msg.tokens, {
+			previousTurnSnapshotTotal,
+			previousSessionSnapshotTotal,
+		});
+		if (usage.totalTokens > 0) {
+			previousSessionSnapshotTotal = usage.nextSessionSnapshotTotal;
+		}
+
+		const durationMs =
+			typeof msg.time.completed === 'number' ? msg.time.completed - msg.time.created : undefined;
+
+		turnTokens[msg.parentID] = {
+			input: msg.tokens.input,
+			output: msg.tokens.output,
+			total: usage.totalTokens > 0 ? usage.totalTokens : (existing?.total ?? 0),
+			usage: (existing?.usage ?? 0) + usage.usageTokens,
+			cacheRead: msg.tokens.cache.read,
+			durationMs: (existing?.durationMs ?? 0) + (durationMs ?? 0),
+		};
+	}
+
+	return turnTokens;
+}
+
+function getLatestAssistantModelId(messages: Message[]): string | undefined {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i];
+		if (isAssistantMessage(msg) && msg.modelID) return msg.modelID;
+	}
+	return undefined;
+}
+
+function getRunningToolMeta(
+	messages: Message[],
+	parts: Record<string, Part[]>,
+): { toolName: string; label: string; toolUseId: string } | null {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const messageParts = parts[messages[i].id];
+		if (!messageParts) continue;
+		for (let j = messageParts.length - 1; j >= 0; j--) {
+			const part = messageParts[j];
+			if (part.type !== 'tool') continue;
+			const toolPart = part as ToolPart;
+			if (toolPart.state.status !== 'running') continue;
+			return {
+				toolName: toolPart.tool,
+				label: `Running ${toolPart.tool}...`,
+				toolUseId: toolPart.callID,
+			};
+		}
+	}
+	return null;
+}
+
+function getLastAssistantStreaming(nodes: RenderNode[]): boolean {
+	for (let i = nodes.length - 1; i >= 0; i--) {
+		const node = nodes[i];
+		if (node.kind === 'assistant') return Boolean(node.isStreaming);
+		if (node.kind === 'user') return false;
+	}
+	return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -295,6 +392,7 @@ function buildNodesById(nodes: RenderNode[]): Record<string, RenderNode> {
 export function projectSession(
 	state: SessionStore,
 	sessionId: string | undefined,
+	mcpServerNames: string[] = [],
 ): MaterializedView {
 	if (!sessionId) return EMPTY_VIEW;
 	const messages = state.messages[sessionId];
@@ -304,6 +402,26 @@ export function projectSession(
 	const nodes = materializeTaskCards(sessionId, rawNodes);
 	const nodeIds = nodes.map(n => n.id);
 	const nodesById = buildNodesById(nodes);
+	const turnTokensByParentId = buildTurnTokenMap(messages);
+	const revertedFromMessageId =
+		state.sessions.find(session => session.id === sessionId)?.revert?.messageID ?? null;
+	const cumulativeDiffs = (state.sessionDiff[sessionId] ?? []).map(diff => ({
+		file: diff.file,
+		additions: diff.additions,
+		deletions: diff.deletions,
+		status: diff.status,
+	}));
+	const isProcessing = state.sessionStatus[sessionId]?.type === 'busy';
+	const sections = groupMessagesIntoSections(
+		nodes,
+		mcpServerNames,
+		revertedFromMessageId,
+		[],
+		turnTokensByParentId,
+		isProcessing,
+		cumulativeDiffs,
+	);
+	const toolActivity = getRunningToolMeta(messages, state.parts);
 
 	// Build partId → callID mapping for tool parts (needed for delta lookups)
 	const toolPartIdToCallId: Record<string, string> = {};
@@ -320,10 +438,65 @@ export function projectSession(
 	return {
 		nodeIds,
 		nodesById,
+		sections,
 		toolPartIdToCallId,
+		turnTokensByParentId,
+		activeModelId: getLatestAssistantModelId(messages),
+		toolActivity,
+		streamingToolId: toolActivity?.toolUseId ?? null,
+		isLastAssistantStreaming: getLastAssistantStreaming(nodes),
 		version: 1,
 		lastUpdateWasStructural: true,
 	};
+}
+
+function replaceGroupedResponseNode(
+	item: GroupedResponseItem,
+	updatedNode: RenderNode,
+): GroupedResponseItem | null {
+	if (Array.isArray(item)) {
+		let changed = false;
+		const next = item.map(entry => {
+			if (entry.id !== updatedNode.id) return entry;
+			changed = true;
+			return updatedNode;
+		});
+		if (!changed) return null;
+		return Object.assign(next, {
+			...(item as ToolGroup),
+		}) as ToolGroup;
+	}
+
+	return item.id === updatedNode.id ? updatedNode : null;
+}
+
+function patchSectionsForNodeUpdate(
+	sections: MessageSection[],
+	updatedNode: RenderNode,
+): MessageSection[] {
+	let changedIndex = -1;
+	const nextSections = sections.slice();
+
+	for (let i = 0; i < sections.length; i++) {
+		const section = sections[i];
+		let sectionChanged = false;
+		const nextResponses = section.responses.map(response => {
+			const patched = replaceGroupedResponseNode(response, updatedNode);
+			if (!patched) return response;
+			sectionChanged = true;
+			return patched;
+		});
+
+		if (!sectionChanged) continue;
+		changedIndex = i;
+		nextSections[i] = {
+			...section,
+			responses: nextResponses,
+		};
+		break;
+	}
+
+	return changedIndex === -1 ? sections : nextSections;
 }
 
 // ---------------------------------------------------------------------------
@@ -390,7 +563,20 @@ export function applyDelta(
 	return {
 		nodeIds: prev.nodeIds, // same array reference — no structural change
 		nodesById,
+		sections: patchSectionsForNodeUpdate(prev.sections, updatedNode),
 		toolPartIdToCallId: prev.toolPartIdToCallId,
+		turnTokensByParentId: prev.turnTokensByParentId,
+		activeModelId: prev.activeModelId,
+		toolActivity: prev.toolActivity,
+		streamingToolId: prev.streamingToolId,
+		isLastAssistantStreaming:
+			updatedNode.kind === 'assistant'
+				? getLastAssistantStreaming(
+						prev.nodeIds
+							.map(id => (id === targetId ? updatedNode : prev.nodesById[id]))
+							.filter(Boolean),
+					)
+				: prev.isLastAssistantStreaming,
 		version: prev.version + 1,
 		lastUpdateWasStructural: false,
 	};
@@ -426,7 +612,13 @@ export function applyToolDelta(
 	return {
 		nodeIds: prev.nodeIds,
 		nodesById,
+		sections: patchSectionsForNodeUpdate(prev.sections, updatedNode),
 		toolPartIdToCallId: prev.toolPartIdToCallId,
+		turnTokensByParentId: prev.turnTokensByParentId,
+		activeModelId: prev.activeModelId,
+		toolActivity: prev.toolActivity,
+		streamingToolId: prev.streamingToolId,
+		isLastAssistantStreaming: prev.isLastAssistantStreaming,
 		version: prev.version + 1,
 		lastUpdateWasStructural: false,
 	};
@@ -681,7 +873,7 @@ function computeSectionStats(
 	changedFilesMap: Map<string, ChangedFile[]>,
 	isLast: boolean,
 	turnTokens: Record<string, TokenUsage> = {},
-	_cumulativeDiffs: Array<{
+	cumulativeDiffs: Array<{
 		file: string;
 		additions: number;
 		deletions: number;
@@ -741,6 +933,12 @@ function computeSectionStats(
 			added: rawDiffAdded,
 			removed: rawDiffRemoved,
 			files: rawDiffFiles.size,
+		};
+	} else if (isLast && cumulativeDiffs.length > 0) {
+		fileChanges = {
+			added: cumulativeDiffs.reduce((sum, diff) => sum + diff.additions, 0),
+			removed: cumulativeDiffs.reduce((sum, diff) => sum + diff.deletions, 0),
+			files: new Set(cumulativeDiffs.map(diff => diff.file)).size,
 		};
 	}
 

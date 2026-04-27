@@ -91,16 +91,6 @@ export interface SessionUserMessagePayload {
 				status?: 'added' | 'deleted' | 'modified';
 			}>;
 		};
-		attachments?: {
-			files?: string[];
-			codeSnippets?: Array<{
-				filePath: string;
-				content: string;
-				startLine?: number;
-				endLine?: number;
-			}>;
-			images?: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
-		};
 		normalizedEntry?: import('./normalizedTypes').NormalizedEntry;
 	};
 }
@@ -1429,8 +1419,8 @@ export type QueueEventMessage = BaseExtensionMessage<
 		queue: QueuedMessageData[];
 		/** The cancelled message text, returned to input on cancel */
 		cancelledText?: string;
-		/** The cancelled message attachments, restored on cancel */
-		cancelledAttachments?: SendMessageCommand['attachments'];
+		/** Cancelled image attachments. Files/snippets are restored as inline refs in cancelledText. */
+		cancelledAttachments?: Pick<NonNullable<SendMessageCommand['attachments']>, 'images'>;
 		/** The cancelled message agent, restored on cancel */
 		cancelledAgent?: string;
 	}

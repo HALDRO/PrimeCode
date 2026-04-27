@@ -666,7 +666,7 @@ const SimpleToolGroup = React.memo<{
 		scrollerRef: bodyRef,
 		showScrollToBottom: showToolGroupScrollBtn,
 		scrollToBottom: toolGroupScrollToBottom,
-	} = useContainerAutoScroll({ active: isLive, observeCharacterData: true });
+	} = useContainerAutoScroll({ active: isLive });
 
 	if (toolUseMessages.length === 0) return null;
 

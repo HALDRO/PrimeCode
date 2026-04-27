@@ -53,6 +53,22 @@ const StreamingContext = createContext<{
 
 const URL_IN_TEXT = /https?:\/\/[^\s)<\]}"']+/gi;
 const EXACT_EXTERNAL_URL = /^https?:\/\/[^\s)<\]}"']+$/i;
+const MAX_INLINE_REFERENCE_SCAN_LENGTH = 4000;
+const MAX_HIGHLIGHT_CODE_LENGTH = 20000;
+
+const inlineReferenceCache = new Map<string, React.ReactNode[]>();
+
+const mayContainInlineReferences = (text: string): boolean => {
+	if (!text || text.length > MAX_INLINE_REFERENCE_SCAN_LENGTH) return false;
+	return (
+		text.includes('http://') ||
+		text.includes('https://') ||
+		text.includes('file://') ||
+		text.includes('/') ||
+		text.includes('\\') ||
+		/\.[a-zA-Z]{1,10}(?::\d+(?:-\d+)?)?/.test(text)
+	);
+};
 
 const openExternalLink = (url: string) => {
 	vscode.postMessage({ type: 'openExternal', url });
@@ -108,9 +124,7 @@ type InlineReferenceMatch =
 	| { type: 'externalUrl'; index: number; rawText: string; url: string }
 	| ({ type: 'pathReference' } & ReturnType<typeof findPathReferences>[number]);
 
-const renderInlineReferences = (text: string): React.ReactNode[] => {
-	const parts: React.ReactNode[] = [];
-	let lastIndex = 0;
+const collectInlineReferenceMatches = (text: string): InlineReferenceMatch[] => {
 	const matches: InlineReferenceMatch[] = [];
 
 	for (const match of text.matchAll(URL_IN_TEXT)) {
@@ -122,19 +136,32 @@ const renderInlineReferences = (text: string): React.ReactNode[] => {
 		});
 	}
 
+	const urlRanges = matches.map(match => ({
+		start: match.index,
+		end: match.index + match.rawText.length,
+	}));
+
 	for (const match of findPathReferences(text)) {
-		const isInsideUrl = matches.some(
-			candidate =>
-				candidate.type === 'externalUrl' &&
-				match.index >= candidate.index &&
-				match.index < candidate.index + candidate.rawText.length,
+		const isInsideUrl = urlRanges.some(
+			range => match.index >= range.start && match.index < range.end,
 		);
 		if (!isInsideUrl) {
 			matches.push({ type: 'pathReference', ...match });
 		}
 	}
 
-	matches.sort((left, right) => left.index - right.index);
+	return matches.sort((left, right) => left.index - right.index);
+};
+
+const renderInlineReferences = (text: string): React.ReactNode[] => {
+	if (!mayContainInlineReferences(text)) return [text];
+
+	const cached = inlineReferenceCache.get(text);
+	if (cached) return cached;
+
+	const parts: React.ReactNode[] = [];
+	let lastIndex = 0;
+	const matches = collectInlineReferenceMatches(text);
 
 	for (const match of matches) {
 		const matchStart = match.index;
@@ -153,64 +180,102 @@ const renderInlineReferences = (text: string): React.ReactNode[] => {
 		lastIndex = matchStart + fullMatch.length;
 	}
 
-	if (lastIndex === 0) return [text];
+	if (lastIndex === 0) {
+		inlineReferenceCache.set(text, [text]);
+		return [text];
+	}
 	if (lastIndex < text.length) {
 		parts.push(text.slice(lastIndex));
+	}
+	inlineReferenceCache.set(text, parts);
+	if (inlineReferenceCache.size > 200) {
+		const firstKey = inlineReferenceCache.keys().next().value;
+		if (firstKey) inlineReferenceCache.delete(firstKey);
 	}
 	return parts;
 };
 
-// ----------------------------------------------------------------------
-// Universal Streamable Node — word animations preserved
-// ----------------------------------------------------------------------
+const getInlinePartLength = (part: React.ReactNode): number => {
+	if (typeof part === 'string') return part.length;
+	if (
+		React.isValidElement(part) &&
+		part.props &&
+		typeof part.props === 'object' &&
+		'title' in part.props
+	) {
+		return String(part.props.title ?? '').length;
+	}
+	return 10;
+};
 
-const renderTextContent = (
-	content: string,
-	isStreaming: boolean,
+const renderStreamingTextPart = (
+	text: string,
+	startOffset: number,
 	animateFromOffset: number,
-	renderInlineReferencesEnabled = true,
-) => {
-	const linked = renderInlineReferencesEnabled ? renderInlineReferences(content) : [content];
+): React.ReactNode[] => {
+	const words = text.split(/(\s+)/);
+	let charOffset = startOffset;
+	return words.map(word => {
+		const wordStartOffset = charOffset;
+		charOffset += word.length;
+		const wordEndOffset = charOffset;
+		if (word.trim().length === 0) return word;
 
+		const wordKey = `w-${wordStartOffset}-${word.length}`;
+		const isNew = wordEndOffset > animateFromOffset;
+
+		return (
+			<span key={wordKey} className={isNew ? 'stream-word stream-word-new' : 'stream-word'}>
+				{word}
+			</span>
+		);
+	});
+};
+
+const renderStaticTextContent = (
+	content: string,
+	renderInlineReferencesEnabled: boolean,
+): React.ReactNode[] =>
+	renderInlineReferencesEnabled ? renderInlineReferences(content) : [content];
+
+const renderStreamingTextContent = (
+	content: string,
+	animateFromOffset: number,
+	renderInlineReferencesEnabled: boolean,
+): React.ReactNode[] => {
+	const linked = renderInlineReferencesEnabled ? renderInlineReferences(content) : [content];
 	let partOffset = 0;
+
 	return linked.map(part => {
 		const currentPartOffset = partOffset;
 		if (typeof part === 'string') {
 			partOffset += part.length;
-			const words = part.split(/(\s+)/);
-			let charOffset = currentPartOffset;
-			return words.map(word => {
-				const startOffset = charOffset;
-				charOffset += word.length;
-				const endOffset = charOffset;
-				if (word.trim().length === 0) return word;
-
-				const wordKey = `w-${startOffset}-${word.length}`;
-
-				if (!isStreaming) {
-					return <span key={wordKey}>{word}</span>;
-				}
-
-				const isNew = endOffset > animateFromOffset;
-
-				return (
-					<span key={wordKey} className={isNew ? 'stream-word stream-word-new' : 'stream-word'}>
-						{word}
-					</span>
-				);
-			});
+			return renderStreamingTextPart(part, currentPartOffset, animateFromOffset);
 		}
-		const chipLength =
-			React.isValidElement(part) &&
-			part.props &&
-			typeof part.props === 'object' &&
-			'title' in part.props
-				? String(part.props.title ?? '').length
-				: 10;
-		partOffset += chipLength || 10;
+
+		partOffset += getInlinePartLength(part);
 		return part;
 	});
 };
+
+// ----------------------------------------------------------------------
+// Universal text node renderer with explicit static/streaming paths
+// ----------------------------------------------------------------------
+
+const StaticTextNode: React.FC<{
+	content: string;
+	renderInlineReferencesEnabled: boolean;
+}> = ({ content, renderInlineReferencesEnabled }) => (
+	<>{renderStaticTextContent(content, renderInlineReferencesEnabled)}</>
+);
+
+const StreamingTextNode: React.FC<{
+	content: string;
+	animateFromOffset: number;
+	renderInlineReferencesEnabled: boolean;
+}> = ({ content, animateFromOffset, renderInlineReferencesEnabled }) => (
+	<>{renderStreamingTextContent(content, animateFromOffset, renderInlineReferencesEnabled)}</>
+);
 
 const StreamableNode: React.FC<{
 	node: React.ReactNode;
@@ -220,8 +285,17 @@ const StreamableNode: React.FC<{
 	const { isStreaming, animateFromOffset } = useContext(StreamingContext);
 
 	if (typeof node === 'string') {
-		return (
-			<>{renderTextContent(node, isStreaming, animateFromOffset, renderInlineReferencesEnabled)}</>
+		return isStreaming ? (
+			<StreamingTextNode
+				content={node}
+				animateFromOffset={animateFromOffset}
+				renderInlineReferencesEnabled={renderInlineReferencesEnabled}
+			/>
+		) : (
+			<StaticTextNode
+				content={node}
+				renderInlineReferencesEnabled={renderInlineReferencesEnabled}
+			/>
 		);
 	}
 	if (Array.isArray(node)) {
@@ -318,6 +392,12 @@ const LANG_DISPLAY: Record<string, string> = {
 
 const getLangDisplay = (lang: string) => LANG_DISPLAY[lang] || lang.toUpperCase();
 
+const normalizeLanguage = (language: string): string | null => {
+	const normalized = language.trim().toLowerCase();
+	if (!normalized || normalized === 'plaintext' || normalized === 'text') return null;
+	return hljs.getLanguage(normalized) ? normalized : null;
+};
+
 // ----------------------------------------------------------------------
 // Highlighted Code Block — isolated component so hooks are at top level
 // and innerHTML is set via ref instead of dangerouslySetInnerHTML
@@ -325,17 +405,18 @@ const getLangDisplay = (lang: string) => LANG_DISPLAY[lang] || lang.toUpperCase(
 
 const HighlightedCodeBlock: React.FC<{ code: string; language: string }> = ({ code, language }) => {
 	const codeRef = useRef<HTMLElement>(null);
+	const normalizedLanguage = useMemo(() => normalizeLanguage(language), [language]);
 
 	const highlightedHtml = useMemo(() => {
 		try {
-			if (language !== 'plaintext' && hljs.getLanguage(language)) {
-				return hljs.highlight(code, { language }).value;
+			if (!normalizedLanguage || code.length > MAX_HIGHLIGHT_CODE_LENGTH) {
+				return null;
 			}
-			return hljs.highlightAuto(code).value;
+			return hljs.highlight(code, { language: normalizedLanguage }).value;
 		} catch {
 			return null;
 		}
-	}, [code, language]);
+	}, [code, normalizedLanguage]);
 
 	useEffect(() => {
 		if (!codeRef.current) return;
@@ -352,7 +433,7 @@ const HighlightedCodeBlock: React.FC<{ code: string; language: string }> = ({ co
 		<div className="group/codeblock isolate relative my-2 rounded-lg border border-(--tool-border-color) overflow-hidden bg-(--tool-bg-header)">
 			<div className="absolute right-0 top-0 z-1 flex items-center gap-1 p-1 opacity-0 group-hover/codeblock:opacity-100 transition-opacity bg-(--tool-bg-header) rounded-bl">
 				<span className="text-xs font-mono text-vscode-descriptionForeground/50 pointer-events-none select-none">
-					{getLangDisplay(language)}
+					{getLangDisplay(normalizedLanguage ?? (language || 'text'))}
 				</span>
 				<CopyButton code={code} />
 			</div>
