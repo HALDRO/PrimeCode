@@ -108,8 +108,14 @@ export const validSubagentsFacet = Facet.define<Set<string>, Set<string>>({
 	combine: values => values[0] ?? new Set(),
 });
 
+/** Facet to pass valid skill names from React into CM6 */
+export const validSkillsFacet = Facet.define<Set<string>, Set<string>>({
+	combine: values => values[0] ?? new Set(),
+});
+
 const commandMark = Decoration.mark({ class: 'cm-slash-command' });
 const subagentMark = Decoration.mark({ class: 'cm-subagent' });
+const skillMark = Decoration.mark({ class: 'cm-slash-command' });
 
 interface InlineAttachmentRange {
 	from: number;
@@ -157,12 +163,17 @@ class InlineAttachmentWidget extends WidgetType {
 function buildHighlightDecorations(view: EditorView): DecorationSet {
 	const validCommands = view.state.facet(validCommandsFacet);
 	const validSubagents = view.state.facet(validSubagentsFacet);
+	const validSkills = view.state.facet(validSkillsFacet);
 	const doc = view.state.doc.toString();
-	const highlights = getMessageHighlights(doc, validCommands, validSubagents);
+	const highlights = getMessageHighlights(doc, validCommands, validSubagents, validSkills);
 
 	const builder = new RangeSetBuilder<Decoration>();
 	for (const h of highlights) {
-		builder.add(h.start, h.end, h.type === 'command' ? commandMark : subagentMark);
+		builder.add(
+			h.start,
+			h.end,
+			h.type === 'command' ? commandMark : h.type === 'subagent' ? subagentMark : skillMark,
+		);
 	}
 	return builder.finish();
 }

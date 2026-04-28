@@ -8,14 +8,14 @@ interface MessageHighlight {
 	start: number;
 	end: number;
 	content: string;
-	type: 'command' | 'subagent';
+	type: 'command' | 'subagent' | 'skill';
 }
 
 interface TextSegment {
 	start: number;
 	end: number;
 	content: string;
-	type: 'text' | 'command' | 'subagent';
+	type: 'text' | 'command' | 'subagent' | 'skill';
 }
 
 const isBoundaryChar = (char: string | undefined): boolean => !char || /\s/.test(char);
@@ -61,10 +61,13 @@ export function getMessageHighlights(
 	text: string,
 	validCommands: Set<string>,
 	validSubagents: Set<string>,
+	validSkills: Set<string> = new Set(),
 ): MessageHighlight[] {
+	const skillHighlights = collectSkillHighlights(text, validSkills);
 	const highlights = [
 		...collectTokenHighlights(text, '/', validCommands, 'command'),
 		...collectTokenHighlights(text, '@', validSubagents, 'subagent'),
+		...skillHighlights,
 	];
 
 	// Sort by start position
@@ -78,8 +81,9 @@ export function parseMessageSegments(
 	text: string,
 	validCommands: Set<string>,
 	validSubagents: Set<string>,
+	validSkills: Set<string> = new Set(),
 ): TextSegment[] {
-	const highlights = getMessageHighlights(text, validCommands, validSubagents);
+	const highlights = getMessageHighlights(text, validCommands, validSubagents, validSkills);
 	const segments: TextSegment[] = [];
 	let lastIndex = 0;
 
@@ -116,4 +120,33 @@ export function parseMessageSegments(
 	}
 
 	return segments;
+}
+
+function collectSkillHighlights(text: string, validSkills: Set<string>): MessageHighlight[] {
+	if (validSkills.size === 0) return [];
+	const highlights: MessageHighlight[] = [];
+	const regex = /\/skill\s+([a-zA-Z0-9][a-zA-Z0-9_-]*)/g;
+	let match: RegExpExecArray | null;
+
+	// biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec pattern
+	while ((match = regex.exec(text)) !== null) {
+		const start = match.index;
+		const end = start + match[0].length;
+		const skillName = match[1].toLowerCase();
+		const prevChar = text[start - 1];
+		const nextChar = text[end];
+
+		if (!isBoundaryChar(prevChar) || !isBoundaryChar(nextChar) || !validSkills.has(skillName)) {
+			continue;
+		}
+
+		highlights.push({
+			start,
+			end,
+			content: match[0],
+			type: 'skill',
+		});
+	}
+
+	return highlights;
 }

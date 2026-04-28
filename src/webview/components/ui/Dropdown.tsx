@@ -422,11 +422,11 @@ export function DropdownMenu<T>({
 			switch (e.key) {
 				case 'ArrowDown':
 					e.preventDefault();
-					setSelectedIndex(prev => Math.min(prev + 1, filteredItems.length - 1));
+					setSelectedIndex(prev => (prev + 1) % filteredItems.length);
 					break;
 				case 'ArrowUp':
 					e.preventDefault();
-					setSelectedIndex(prev => Math.max(prev - 1, 0));
+					setSelectedIndex(prev => (prev - 1 + filteredItems.length) % filteredItems.length);
 					break;
 				case 'Enter': {
 					e.preventDefault();

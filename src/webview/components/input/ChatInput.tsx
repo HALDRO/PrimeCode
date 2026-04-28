@@ -26,6 +26,7 @@ import {
 	pasteHandler,
 	triggerDetector,
 	validCommandsFacet,
+	validSkillsFacet,
 	validSubagentsFacet,
 } from '.';
 import { AttachmentsBar } from './AttachmentsBar';
@@ -166,8 +167,13 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 		);
 
 		const agentResources = useSettingsStore(s => s.resources.agent.items);
+		const skillResources = useSettingsStore(s => s.resources.skill.items);
 
 		const validCommands = useMemo(() => new Set<string>(['compact']), []);
+		const validSkillNames = useMemo(
+			() => new Set(skillResources.map(skill => skill.name.toLowerCase())),
+			[skillResources],
+		);
 		const validSubagentNames = useMemo(
 			() =>
 				new Set(
@@ -293,7 +299,7 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 		const stablePaste = useCallback((e: React.ClipboardEvent) => handlePasteRef.current(e), []);
 
 		// CM6 extensions — created once, never recreated.
-		// Only validCommands/validSubagentNames change when settings update (rare).
+		// Only command/subagent/skill sets change when settings update (rare).
 		const cmExtensions = useMemo(
 			() => [
 				chatHighlighter,
@@ -307,10 +313,12 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 				triggerDetector(stableTriggerCallbacks.current),
 				pasteHandler(stablePaste),
 				validCommandsFacet.of(validCommands),
+				validSkillsFacet.of(validSkillNames),
 				validSubagentsFacet.of(validSubagentNames),
 			],
 			[
 				validCommands,
+				validSkillNames,
 				validSubagentNames,
 				stableOnSubmit,
 				stableOnCancel,

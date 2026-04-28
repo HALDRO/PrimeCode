@@ -3,6 +3,7 @@ import { getMessageHighlights, parseMessageSegments } from './messageParser';
 
 const validCommands = new Set(['compact', 'summarize']);
 const validSubagents = new Set(['reviewer']);
+const validSkills = new Set(['careful', 'python-testing']);
 
 describe('messageParser', () => {
 	it('highlights standalone slash commands', () => {
@@ -33,6 +34,29 @@ describe('messageParser', () => {
 	it('highlights standalone subagents with the same boundary rules', () => {
 		const highlights = getMessageHighlights('Ask @reviewer please', validCommands, validSubagents);
 		expect(highlights).toEqual([{ start: 4, end: 13, content: '@reviewer', type: 'subagent' }]);
+	});
+
+	it('highlights /skill invocations when the skill name is valid', () => {
+		const highlights = getMessageHighlights(
+			'Run /skill careful and /skill python-testing',
+			validCommands,
+			validSubagents,
+			validSkills,
+		);
+		expect(highlights).toEqual([
+			{ start: 4, end: 18, content: '/skill careful', type: 'skill' },
+			{ start: 23, end: 43, content: '/skill python-testing', type: 'skill' },
+		]);
+	});
+
+	it('does not highlight /skill when the skill name is unknown', () => {
+		const highlights = getMessageHighlights(
+			'Run /skill missing',
+			validCommands,
+			validSubagents,
+			validSkills,
+		);
+		expect(highlights).toEqual([]);
 	});
 
 	it('parseMessageSegments preserves plain text around invalid command-like tokens', () => {

@@ -1,15 +1,14 @@
 /**
  * @file SlashCommandsDropdown - Slash commands picker
  * @description Uses universal DropdownMenu for consistent styling. Shows CLI commands,
- *              built-in snippets, and custom snippets with type badges.
+ *              skills, and subagents in separate sections.
  */
 
 import type React from 'react';
 import { useCallback, useMemo } from 'react';
 import type { CommandItem } from '../../constants';
-
 import { useChatInputState, useSettingsStore, useSlashCommandsState } from '../../store';
-import { type AnchorRectLike, DropdownMenu, type DropdownMenuItem } from '../ui';
+import { type AnchorRectLike, DropdownMenu } from '../ui';
 
 /**
  * Commands that are handled by dedicated UI and should not appear in the slash dropdown.
@@ -35,6 +34,8 @@ const getTypeLabel = (type: string, source?: string) => {
 			return 'Command';
 		case 'subagent':
 			return 'Subagent';
+		case 'skill':
+			return 'Skill';
 		default:
 			return 'Prompt';
 	}
@@ -52,6 +53,7 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 	anchorRect,
 }) => {
 	const agentResources = useSettingsStore(state => state.resources.agent.items);
+	const skillResources = useSettingsStore(state => state.resources.skill.items);
 
 	const { input, setInput } = useChatInputState();
 	const { slashFilter, setShowSlashCommands, setSlashFilter } = useSlashCommandsState();
@@ -68,19 +70,15 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 	 */
 	const replaceCurrentCommand = useCallback(
 		(newCommand: string) => {
-			// Find the last / in the input to replace from there
 			const lastSlashIndex = input.lastIndexOf('/');
 			if (lastSlashIndex >= 0) {
-				// Find where the command ends (next space or end of string)
 				const afterSlash = input.substring(lastSlashIndex);
 				const spaceIndex = afterSlash.indexOf(' ');
 				const commandEnd = spaceIndex >= 0 ? lastSlashIndex + spaceIndex : input.length;
-				// Replace only the command part
 				const before = input.substring(0, lastSlashIndex);
 				const after = input.substring(commandEnd);
 				setInput(`${before}${newCommand}${after}`);
 			} else {
-				// No slash found, just append
 				setInput(input.trim() ? `${input} ${newCommand} ` : `${newCommand} `);
 			}
 		},
@@ -92,7 +90,6 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 			if (text) {
 				replaceCurrentCommand(text);
 			} else {
-				// Clear command if empty text
 				const lastSlashIndex = input.lastIndexOf('/');
 				if (lastSlashIndex >= 0) {
 					const afterSlash = input.substring(lastSlashIndex);
@@ -107,7 +104,15 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 		[input, setInput, replaceCurrentCommand],
 	);
 
-	const allCommands = useMemo(() => {
+	const sections = useMemo(() => {
+		const skillList: CommandItem[] = skillResources.map(skill => ({
+			id: skill.name,
+			name: skill.name,
+			description: skill.description ?? '',
+			type: 'skill' as const,
+			prompt: skill.name,
+		}));
+
 		const subagentList: CommandItem[] = agentResources
 			.filter(
 				agent =>
@@ -130,32 +135,38 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 			},
 		].filter(command => !CLI_COMMANDS_UI_BLOCKLIST.has(command.name));
 
-		return [...runtimeCommands, ...subagentList];
-	}, [agentResources]);
+		return [
+			{ title: 'Skills', items: skillList },
+			{ title: 'Commands', items: [...runtimeCommands, ...subagentList] },
+		];
+	}, [agentResources, skillResources]);
 
-	const filteredCommands = useMemo(() => {
+	const filteredSections = useMemo(() => {
 		const term = slashFilter.toLowerCase().replace(/^\//, '');
 		if (!term) {
-			return allCommands;
+			return sections.filter(section => section.items.length > 0);
 		}
-		return allCommands.filter(cmd => {
-			const name = cmd.name || '';
-			const description = cmd.description || '';
-			return name.toLowerCase().includes(term) || description.toLowerCase().includes(term);
-		});
-	}, [allCommands, slashFilter]);
+		return sections
+			.map(section => ({
+				...section,
+				items: section.items.filter(cmd => {
+					const name = cmd.name || '';
+					const description = cmd.description || '';
+					return name.toLowerCase().includes(term) || description.toLowerCase().includes(term);
+				}),
+			}))
+			.filter(section => section.items.length > 0);
+	}, [sections, slashFilter]);
 
 	const handleSelect = useCallback(
 		(cmd: CommandItem) => {
 			if (cmd.type === 'cli' || cmd.type === 'custom') {
-				// Execute CLI + custom commands through the chat pipeline (extension-side).
-				// OpenCode commands are detected by MessageHandler and routed to SDK session.command().
 				replaceCurrentCommand(`/${cmd.id} `);
+			} else if (cmd.type === 'skill') {
+				replaceCurrentCommand(`/skill ${cmd.prompt} `);
 			} else if (cmd.type === 'subagent') {
-				// Subagent type - insert @agent-name
 				replaceCurrentCommand(`${cmd.prompt} `);
 			} else {
-				// Snippet type - insert prompt text directly
 				onSelectCommand(cmd.prompt || '');
 			}
 			onClose();
@@ -163,29 +174,30 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 		[onClose, onSelectCommand, replaceCurrentCommand],
 	);
 
-	const items = useMemo(
-		(): DropdownMenuItem<CommandItem>[] =>
-			filteredCommands.map(cmd => {
-				// Build full tooltip: description + prompt body
-				// For subagents, prompt is just "@name" — skip it, show only description
-				const parts: string[] = [];
-				if (cmd.description) parts.push(cmd.description);
-				if (cmd.prompt && cmd.type !== 'subagent') parts.push(cmd.prompt);
-				const tooltipContent = parts.length > 0 ? parts.join('\n\n') : undefined;
-				return {
-					id: `${cmd.type}-${cmd.id}`,
-					label: `/${cmd.name}`,
-					description: tooltipContent,
-					meta: getTypeLabel(cmd.type, cmd.source),
-					data: cmd,
-				};
-			}),
-		[filteredCommands],
+	const dropdownSections = useMemo(
+		() =>
+			filteredSections.map(section => ({
+				title: section.title,
+				items: section.items.map(cmd => {
+					const parts: string[] = [];
+					if (cmd.description) parts.push(cmd.description);
+					if (cmd.prompt && cmd.type !== 'subagent' && cmd.type !== 'skill') parts.push(cmd.prompt);
+					const tooltipContent = parts.length > 0 ? parts.join('\n\n') : undefined;
+					return {
+						id: `${cmd.type}-${cmd.id}`,
+						label: cmd.type === 'skill' ? cmd.name : `/${cmd.name}`,
+						description: tooltipContent,
+						meta: getTypeLabel(cmd.type, cmd.source),
+						data: cmd,
+					};
+				}),
+			})),
+		[filteredSections],
 	);
 
 	return (
 		<DropdownMenu
-			items={items}
+			sections={dropdownSections}
 			searchable
 			searchPlaceholder="Search commands..."
 			searchValue={slashFilter.replace(/^\//, '')}
@@ -196,8 +208,8 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 			keyHints={{}}
 			emptyMessage="No commands found"
 			position="top"
-			minWidth={200}
-			maxWidth={400}
+			minWidth={220}
+			maxWidth={420}
 			anchorElement={anchorElement}
 			anchorRect={anchorRect}
 		/>

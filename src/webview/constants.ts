@@ -14,7 +14,7 @@ export interface CommandItem {
 	id: string;
 	name: string;
 	description: string;
-	type: 'snippet' | 'cli' | 'custom' | 'subagent';
+	type: 'snippet' | 'cli' | 'custom' | 'subagent' | 'skill';
 	/** Original source from the OpenCode CLI (e.g. "command", "mcp", "skill"). */
 	source?: string;
 	prompt?: string;
