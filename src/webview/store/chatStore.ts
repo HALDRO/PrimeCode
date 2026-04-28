@@ -69,6 +69,13 @@ function getMcpServerNames(): string[] {
 	return Object.keys(useSettingsStore.getState().mcpServers || {});
 }
 
+function getSessionErrorMessage(error: unknown): string | null {
+	if (!error || typeof error !== 'object') return 'Unknown error';
+	const record = error as Record<string, unknown>;
+	if (record.name === 'MessageAbortedError') return null;
+	return 'message' in record ? String(record.message) : 'Unknown error';
+}
+
 export type {
 	AssistantMessage,
 	MaterializedView,
@@ -299,10 +306,8 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 			if (event.type === 'session.error') {
 				const { error } = event.properties;
 				if (error) {
-					const errorMsg =
-						'message' in (error as Record<string, unknown>)
-							? String((error as { message?: string }).message)
-							: 'Unknown error';
+					const errorMsg = getSessionErrorMessage(error);
+					if (!errorMsg) return;
 					useUIStore.getState().actions.pushNotification({
 						type: 'error',
 						content: errorMsg,
@@ -341,10 +346,8 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 				if (event.type === 'session.error') {
 					const { error } = event.properties;
 					if (error) {
-						const errorMsg =
-							'message' in (error as Record<string, unknown>)
-								? String((error as { message?: string }).message)
-								: 'Unknown error';
+						const errorMsg = getSessionErrorMessage(error);
+						if (!errorMsg) continue;
 						useUIStore.getState().actions.pushNotification({
 							type: 'error',
 							content: errorMsg,

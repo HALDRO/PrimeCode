@@ -505,7 +505,7 @@ describe('groupMessagesIntoSections', () => {
 			expect(result[0].stats.fileChanges).toBeNull();
 		});
 
-		it('should ignore summary diffs when raw tool diff is unavailable', () => {
+		it('should ignore session diffs when raw tool diff is unavailable', () => {
 			const msg = {
 				kind: 'user',
 				id: 'u1',
@@ -515,12 +515,36 @@ describe('groupMessagesIntoSections', () => {
 				},
 				parts: [],
 			} as unknown as Message;
-			const result = groupMessagesIntoSections([msg, assistantMsg('a1')], [], null, [], {}, false, [
-				{ file: '/a.ts', additions: 10, deletions: 2, status: 'modified' },
-				{ file: '/b.ts', additions: 5, deletions: 0, status: 'added' },
-			]);
+			const result = groupMessagesIntoSections([msg, assistantMsg('a1')], [], null, [], {}, false);
 
 			expect(result[0].stats.fileChanges).toBeNull();
+		});
+
+		it('should not show session-wide diff stats on a later message without tool changes', () => {
+			const msgs = [
+				userMsg('u1'),
+				{
+					kind: 'tool_use',
+					type: 'tool_use',
+					id: 't1',
+					timestamp: new Date().toISOString(),
+					toolName: 'apply_patch',
+					toolUseId: 'tu-1',
+					toolInput: '{}',
+					rawInput: {},
+					metadata: {
+						files: [{ filePath: '/a.ts', additions: 100, deletions: 0 }],
+					},
+				} as unknown as Message,
+				assistantMsg('a1'),
+				userMsg('u2'),
+				assistantMsg('a2'),
+			];
+
+			const result = groupMessagesIntoSections(msgs, [], null);
+
+			expect(result[0].stats.fileChanges).toEqual({ added: 100, removed: 0, files: 1 });
+			expect(result[1].stats.fileChanges).toBeNull();
 		});
 
 		it('should prefer raw tool metadata diff over summary diffs for footer stats', () => {

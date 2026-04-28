@@ -2,12 +2,7 @@
  * @file Zustand selectors for the SDK-native chat store.
  */
 
-import type {
-	AssistantMessage,
-	Message,
-	SnapshotFileDiff,
-	ToolPart,
-} from '@opencode-ai/sdk/v2/client';
+import type { AssistantMessage, Message, ToolPart } from '@opencode-ai/sdk/v2/client';
 import { useCallback, useMemo, useRef } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { parseModelId } from '../../common';
@@ -51,7 +46,6 @@ const EMPTY_TURN_TOKENS: Record<string, TokenUsage> = {};
 const EMPTY_QUEUE: QueuedMessageData[] = [];
 const EMPTY_CHILDREN: string[] = [];
 const EMPTY_SDK_MESSAGES: Message[] = [];
-const EMPTY_SESSION_DIFFS: SnapshotFileDiff[] = [];
 const DEFAULT_CONTEXT_WINDOW = 200000;
 
 function isAssistantMessage(msg: Message): msg is AssistantMessage {
@@ -289,27 +283,31 @@ export const useChildSessionSummary = (childSessionId: string | undefined) => {
 	const childCount = useChatStore((state: SessionStore) =>
 		childSessionId ? countSessionDescendants(state, childSessionId) : 0,
 	);
+	const childDiffStats = useChatStore(
+		useShallow((state: SessionStore) => {
+			if (!childSessionId) return { added: 0, removed: 0 };
+			const sections = state.materializedViews[childSessionId]?.sections ?? [];
+			let added = 0;
+			let removed = 0;
+			for (const section of sections) {
+				added += section.stats.fileChanges?.added ?? 0;
+				removed += section.stats.fileChanges?.removed ?? 0;
+			}
+			return { added, removed };
+		}),
+	);
 
 	return useMemo(() => {
-		const summary = session?.summary;
-		const diffStats = {
-			added:
-				summary?.additions ??
-				(summary?.diffs ?? EMPTY_SESSION_DIFFS).reduce((sum, d) => sum + d.additions, 0),
-			removed:
-				summary?.deletions ??
-				(summary?.diffs ?? EMPTY_SESSION_DIFFS).reduce((sum, d) => sum + d.deletions, 0),
-		};
 		const tokens = computeAssistantUsage(messages);
 		return {
 			title: session?.title,
 			isIdle: status?.type === 'idle',
-			diffStats,
+			diffStats: childDiffStats,
 			childCount,
 			tokens,
 			durationMs: tokens?.durationMs,
 		};
-	}, [childCount, messages, session?.summary, session?.title, status?.type]);
+	}, [childCount, childDiffStats, messages, session?.title, status?.type]);
 };
 
 export const useIsProcessing = () =>

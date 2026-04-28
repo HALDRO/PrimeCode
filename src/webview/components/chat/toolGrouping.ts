@@ -163,7 +163,7 @@ export const groupToolMessages = (
 // -----------------------------------------------------------------------------
 
 export const shouldTriggerCollapse = (msg: RenderNode): boolean => {
-	if (msg.kind === 'assistant' || msg.kind === 'thinking') {
+	if (msg.kind === 'assistant') {
 		return true;
 	}
 

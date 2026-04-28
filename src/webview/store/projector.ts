@@ -405,12 +405,6 @@ export function projectSession(
 	const turnTokensByParentId = buildTurnTokenMap(messages);
 	const revertedFromMessageId =
 		state.sessions.find(session => session.id === sessionId)?.revert?.messageID ?? null;
-	const cumulativeDiffs = (state.sessionDiff[sessionId] ?? []).map(diff => ({
-		file: diff.file,
-		additions: diff.additions,
-		deletions: diff.deletions,
-		status: diff.status,
-	}));
 	const isProcessing = state.sessionStatus[sessionId]?.type === 'busy';
 	const sections = groupMessagesIntoSections(
 		nodes,
@@ -419,7 +413,6 @@ export function projectSession(
 		[],
 		turnTokensByParentId,
 		isProcessing,
-		cumulativeDiffs,
 	);
 	const toolActivity = getRunningToolMeta(messages, state.parts);
 
@@ -774,12 +767,6 @@ export const groupMessagesIntoSections = (
 	changedFiles: ChangedFile[] = [],
 	turnTokens: Record<string, TokenUsage> = {},
 	isProcessing = false,
-	cumulativeDiffs: Array<{
-		file: string;
-		additions: number;
-		deletions: number;
-		status?: string;
-	}> = [],
 ): MessageSection[] => {
 	const visibleMsgs = msgs.filter(m => !('hidden' in m && m.hidden));
 	const sections: MessageSection[] = [];
@@ -812,7 +799,6 @@ export const groupMessagesIntoSections = (
 					changedFilesMap,
 					false,
 					turnTokens,
-					cumulativeDiffs,
 				);
 				sections.push(currentSection);
 				currentResponses = [];
@@ -849,7 +835,6 @@ export const groupMessagesIntoSections = (
 			changedFilesMap,
 			true,
 			turnTokens,
-			cumulativeDiffs,
 		);
 		sections.push(currentSection);
 	}
@@ -873,12 +858,6 @@ function computeSectionStats(
 	changedFilesMap: Map<string, ChangedFile[]>,
 	isLast: boolean,
 	turnTokens: Record<string, TokenUsage> = {},
-	cumulativeDiffs: Array<{
-		file: string;
-		additions: number;
-		deletions: number;
-		status?: string;
-	}> = [],
 ): SectionStats {
 	const userTs = new Date(section.userMessage.message.time.created).getTime();
 
@@ -933,12 +912,6 @@ function computeSectionStats(
 			added: rawDiffAdded,
 			removed: rawDiffRemoved,
 			files: rawDiffFiles.size,
-		};
-	} else if (isLast && cumulativeDiffs.length > 0) {
-		fileChanges = {
-			added: cumulativeDiffs.reduce((sum, diff) => sum + diff.additions, 0),
-			removed: cumulativeDiffs.reduce((sum, diff) => sum + diff.deletions, 0),
-			files: new Set(cumulativeDiffs.map(diff => diff.file)).size,
 		};
 	}
 

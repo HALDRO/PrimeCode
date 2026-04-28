@@ -584,7 +584,16 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 
 		const searchResultCount = searchEntries.length;
 
-		const hasBody = !isRead && fullText.trim().length > 0;
+		const rawInputText = useMemo(() => {
+			if (!rawInput || isRead || isSearch || isTodoWrite || isTaskResult) return '';
+			try {
+				return JSON.stringify(rawInput, null, 2);
+			} catch {
+				return String(rawInput);
+			}
+		}, [isRead, isSearch, isTaskResult, isTodoWrite, rawInput]);
+		const genericRawBody = rawInputText.trim();
+		const hasBody = !isRead && (fullText.trim().length > 0 || genericRawBody.length > 0);
 
 		const todos = useMemo((): Array<{ content: string; status: string }> => {
 			if (!isTodoWrite) return [];
@@ -716,10 +725,21 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 							</div>
 						))}
 					</div>
-				) : isError && hasBody ? (
+				) : isError && fullText.trim() ? (
 					<pre className="m-0 px-1 py-0.5 rounded-sm text-sm leading-(--line-height-code) whitespace-pre-wrap text-error opacity-100">
 						{fullText}
 					</pre>
+				) : genericRawBody ? (
+					<div className="flex flex-col gap-2">
+						{fullText.trim() && (
+							<pre className="m-0 px-1 py-0.5 rounded-sm text-sm leading-(--line-height-code) whitespace-pre-wrap text-vscode-descriptionForeground opacity-80">
+								{fullText}
+							</pre>
+						)}
+						<pre className="m-0 px-1 py-0.5 rounded-sm text-sm leading-(--line-height-code) whitespace-pre-wrap text-vscode-descriptionForeground opacity-80">
+							{genericRawBody}
+						</pre>
+					</div>
 				) : null}
 			</SimpleTool>
 		);

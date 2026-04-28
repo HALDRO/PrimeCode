@@ -24,7 +24,13 @@ import type { HandlerContext } from './handlers/types';
 import { UtilityHandler } from './handlers/UtilityHandler';
 
 /** Commands whose errors should not be surfaced as chat messages (file/UI ops). */
-const SILENT_COMMANDS = new Set(['openFile', 'openFileDiff', 'openExternal', 'getImageData']);
+const SILENT_COMMANDS = new Set([
+	'openFile',
+	'openFileDiff',
+	'openExternal',
+	'getImageData',
+	'stopRequest',
+]);
 
 export class ChatProvider implements vscode.WebviewViewProvider {
 	private view?: vscode.WebviewView;

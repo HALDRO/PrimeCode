@@ -534,6 +534,24 @@ describe('groupToolMessages', () => {
 			expect(flags[0]).toBe(true);
 		});
 
+		it('should not collapse a grouped tools item when followed only by thinking', () => {
+			const msgs = [
+				toolUse('1'),
+				toolResult('1r', 'tu-1'),
+				toolUse('2'),
+				toolResult('2r', 'tu-2'),
+				toolUse('3'),
+				toolResult('3r', 'tu-3'),
+				thinking('t1'),
+			];
+
+			const grouped = groupToolMessages(msgs, NO_MCP, false);
+			const firstItem = grouped[0];
+			expect(Array.isArray(firstItem)).toBe(true);
+			expect(grouped[1]).toBe(msgs[6]);
+			expect(getGroupedItemShouldCollapse(firstItem)).toBe(false);
+		});
+
 		it('should keep non-groupable completed tools outside SimpleToolGroup', () => {
 			// Card-style tools such as bash must stay standalone even when their
 			// completed update arrives between lightweight tools.

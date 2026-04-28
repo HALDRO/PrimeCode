@@ -897,16 +897,19 @@ export class SessionHandler implements WebviewMessageHandler {
 			this.context.sessionState.activateStopGuard(10_000, sid);
 		}
 
-		// Abort only the targeted sessions on the backend, not all active sessions.
-		try {
-			await Promise.allSettled(
-				[...sessionsToStop].map(sid =>
-					this.context.cli.abortSession ? this.context.cli.abortSession(sid) : Promise.resolve(),
-				),
-			);
-		} catch (error) {
-			logger.error('[SessionHandler] Abort failed:', error);
-		}
+		// Abort only the targeted sessions on the backend. User-initiated abort errors
+		// are intentionally not surfaced; OpenCode may race with natural completion.
+		await Promise.allSettled(
+			[...sessionsToStop].map(sid =>
+				this.context.cli.abortSession
+					? this.context.cli
+							.abortSession(sid)
+							.catch(error =>
+								logger.debug('[SessionHandler] Abort request ignored', { sid, error }),
+							)
+					: Promise.resolve(),
+			),
+		);
 
 		// NOW update UI — backend has confirmed the stop.
 		this.context.bridge.emit(targetId, 'status', { status: 'idle', statusText: 'Stopped' });
