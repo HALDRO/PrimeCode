@@ -36,6 +36,7 @@ export interface ResolvedFileChange {
 	filePath: string;
 	name: string;
 	lines: DiffLine[];
+	diffText: string;
 	hasDeleteChange: boolean;
 	stats: { added: number; removed: number };
 	firstChangedLine: number | undefined;
@@ -195,6 +196,7 @@ type ResolvedDiffData = {
 	lines: DiffLine[];
 	effectiveFilePath: string;
 	name: string;
+	diffText: string;
 	hasDeleteChange: boolean;
 	stats: { added: number; removed: number };
 	firstChangedLine: number | undefined;
@@ -249,6 +251,51 @@ const getPatchFileStats = (
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
 	value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
+
+function prefixDiffPath(path: string, prefix: 'a' | 'b'): string {
+	const normalized = path.replace(/\\/g, '/');
+	return normalized.startsWith(`${prefix}/`) ? normalized : `${prefix}/${normalized}`;
+}
+
+export function normalizeDiffForCopy(diffText: string, filePath: string): string {
+	const trimmed = diffText.trim();
+	if (!trimmed) return '';
+	if (trimmed.includes('diff --git')) {
+		return trimmed;
+	}
+	if (!filePath || !trimmed.includes('@@')) return trimmed;
+
+	const oldPath = prefixDiffPath(filePath, 'a');
+	const newPath = prefixDiffPath(filePath, 'b');
+	if (trimmed.includes('--- ') && trimmed.includes('+++ ')) {
+		return [`diff --git ${oldPath} ${newPath}`, trimmed].join('\n');
+	}
+
+	return [`diff --git ${oldPath} ${newPath}`, `--- ${oldPath}`, `+++ ${newPath}`, trimmed].join(
+		'\n',
+	);
+}
+
+export function buildUnifiedDiffFromLines(filePath: string, lines: DiffLine[]): string {
+	if (!filePath || lines.length === 0) return '';
+	const oldCount = lines.filter(line => line.type !== 'added').length;
+	const newCount = lines.filter(line => line.type !== 'removed').length;
+	const oldPath = prefixDiffPath(filePath, 'a');
+	const newPath = prefixDiffPath(filePath, 'b');
+	const body = lines.map(line => {
+		if (line.type === 'added') return `+${line.content}`;
+		if (line.type === 'removed') return `-${line.content}`;
+		return ` ${line.content}`;
+	});
+
+	return [
+		`diff --git ${oldPath} ${newPath}`,
+		`--- ${oldPath}`,
+		`+++ ${newPath}`,
+		`@@ -1,${oldCount} +1,${newCount} @@`,
+		...body,
+	].join('\n');
+}
 
 const getString = (
 	rec: Record<string, unknown> | undefined,
@@ -347,6 +394,7 @@ export function resolveFileChanges(params: {
 				filePath,
 				name: resolved.name,
 				lines: resolved.lines,
+				diffText: resolved.diffText,
 				hasDeleteChange: resolved.hasDeleteChange,
 				stats: getPatchFileStats(file, resolved.stats),
 				firstChangedLine: resolved.firstChangedLine,
@@ -365,6 +413,7 @@ export function resolveFileChanges(params: {
 					filePath: resolved.effectiveFilePath || params.fallbackFilePath || '',
 					name: resolved.name,
 					lines: resolved.lines,
+					diffText: resolved.diffText,
 					hasDeleteChange: resolved.hasDeleteChange,
 					stats: resolved.stats,
 					firstChangedLine: resolved.firstChangedLine,
@@ -386,6 +435,7 @@ function resolveSingleDiffData(params: {
 	let lines: DiffLine[] = [];
 	let effectiveFilePath = '';
 	let hasDeleteChange = false;
+	let rawDiffText = '';
 
 	const actionRec = asRecord(params.actionType);
 	if (actionRec?.type === 'FileEdit') {
@@ -409,6 +459,7 @@ function resolveSingleDiffData(params: {
 
 	const unifiedDiff = getString(meta, ['diff']);
 	if (unifiedDiff) {
+		rawDiffText = unifiedDiff;
 		const parsed = parseUnifiedDiff(unifiedDiff);
 		if (parsed) lines = parsed;
 		if (!effectiveFilePath) {
@@ -435,6 +486,7 @@ function resolveSingleDiffData(params: {
 			if (change.type === 'Write' && typeof change.content === 'string') {
 				lines = textToLines(change.content, 'added');
 			} else if (change.type === 'Edit' && typeof change.unifiedDiff === 'string') {
+				rawDiffText = change.unifiedDiff as string;
 				const parsed = parseUnifiedDiff(change.unifiedDiff as string);
 				if (parsed) lines = parsed;
 				else lines = textToLines(change.unifiedDiff as string, 'added');
@@ -451,6 +503,7 @@ function resolveSingleDiffData(params: {
 		const accMeta = asRecord(accRec?.metadata);
 		const diffText = getString(accMeta, ['diff']);
 		if (diffText) {
+			rawDiffText = diffText;
 			const parsed = parseUnifiedDiff(diffText);
 			if (parsed) lines = parsed;
 			else lines = textToLines(diffText, 'added');
@@ -461,6 +514,10 @@ function resolveSingleDiffData(params: {
 
 	if (!effectiveFilePath && metaPath) effectiveFilePath = metaPath;
 	if (!effectiveFilePath && params.fallbackFilePath) effectiveFilePath = params.fallbackFilePath;
+
+	const diffText = rawDiffText
+		? normalizeDiffForCopy(rawDiffText, effectiveFilePath)
+		: buildUnifiedDiffFromLines(effectiveFilePath, lines);
 
 	const anyDiffText =
 		unifiedDiff ||
@@ -478,6 +535,7 @@ function resolveSingleDiffData(params: {
 		lines,
 		effectiveFilePath,
 		name: effectiveFilePath ? getShortFileName(effectiveFilePath) : 'unknown',
+		diffText,
 		hasDeleteChange,
 		stats: computeStats(lines),
 		firstChangedLine,

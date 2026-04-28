@@ -8,6 +8,7 @@
 import type React from 'react';
 import { useState } from 'react';
 import { cn } from '../../lib/cn';
+import { copyTextToClipboard } from '../../utils/clipboard';
 import {
 	AlertCircleIcon,
 	CheckCircleIcon,
@@ -454,9 +455,10 @@ export const CLIStatusBar: React.FC<CLIStatusBarProps> = ({
 }) => {
 	const [copied, setCopied] = useState(false);
 	const config = CLI_CONFIG[variant];
+	const installCommand = `npm i -g ${config.package}`;
 
 	const handleCopy = () => {
-		navigator.clipboard.writeText(`npm install -g ${config.package}`);
+		void copyTextToClipboard(installCommand);
 		setCopied(true);
 		setTimeout(() => setCopied(false), 2000);
 	};

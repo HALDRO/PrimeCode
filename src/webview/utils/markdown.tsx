@@ -17,6 +17,7 @@ const REMARK_PLUGINS = [remarkGfm];
 import { CheckIcon, CopyIcon } from '../components/icons';
 import { IconButton, PathChip } from '../components/ui';
 import { cn } from '../lib/cn';
+import { copyTextToClipboard } from './clipboard';
 import {
 	findPathReferences,
 	type ParsedPathReference,
@@ -340,7 +341,7 @@ const CopyButton: React.FC<{ code: string; className?: string }> = ({ code, clas
 
 	const handleCopy = async () => {
 		try {
-			await navigator.clipboard.writeText(code);
+			await copyTextToClipboard(code);
 			setCopied(true);
 			if (timerRef.current !== null) {
 				clearTimeout(timerRef.current);

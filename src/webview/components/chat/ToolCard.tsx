@@ -28,6 +28,7 @@ import {
 	useQuestionRequestByToolUseId,
 	useToolResultByToolId,
 } from '../../store';
+import { copyTextToClipboard } from '../../utils/clipboard';
 import { formatDuration, formatToolName } from '../../utils/format';
 import { useVSCode } from '../../utils/vscode';
 import {
@@ -44,7 +45,7 @@ import { FileTypeIcon } from '../icons/FileTypeIcon';
 import { Button, CollapseOverlay, IconButton, PathChip, Tooltip } from '../ui';
 import { AccessGate } from './AccessGate';
 import { QuestionCard } from './QuestionCard';
-import type { DiffLine, ResolvedFileChange } from './SimpleDiff';
+import type { ResolvedFileChange } from './SimpleDiff';
 import { getDiffContentHeight, resolveFileChanges, SimpleDiff } from './SimpleDiff';
 import { InlineToolLine, SimpleTool } from './SimpleTool';
 
@@ -371,6 +372,7 @@ const FileEditCard: React.FC<FileEditCardProps> = ({
 		lines,
 		filePath: effectiveFilePath,
 		name,
+		diffText,
 		hasDeleteChange,
 		stats,
 		firstChangedLine,
@@ -452,18 +454,14 @@ const FileEditCard: React.FC<FileEditCardProps> = ({
 								'group-hover:opacity-100',
 							)}
 						>
-							{hasContent ? (
+							{hasContent && diffText.trim() ? (
 								<IconButton
 									icon={<CopyIcon size={14} />}
 									onClick={e => {
 										e.stopPropagation();
-										const content = lines
-											.filter((l: DiffLine) => l.type === 'added' || l.type === 'unchanged')
-											.map((l: DiffLine) => l.content)
-											.join('\n');
-										navigator.clipboard.writeText(content);
+										void copyTextToClipboard(diffText);
 									}}
-									title="Copy"
+									title="Copy diff"
 									size={20}
 									className="bg-(--surface-base)/80 backdrop-blur-sm"
 								/>
@@ -562,6 +560,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 				filePath: path,
 				name: path.split(/[/\\]/).pop() || path,
 				lines: [],
+				diffText: '',
 				hasDeleteChange: false,
 				stats: { added: 0, removed: 0 },
 				firstChangedLine: undefined,
@@ -832,7 +831,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 									icon={<CopyIcon size={14} />}
 									onClick={e => {
 										e.stopPropagation();
-										navigator.clipboard.writeText(meta);
+										void copyTextToClipboard(meta);
 									}}
 									title="Copy request"
 									size={20}
@@ -878,7 +877,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 									icon={<CopyIcon size={14} />}
 									onClick={e => {
 										e.stopPropagation();
-										navigator.clipboard.writeText(fullText);
+										void copyTextToClipboard(fullText);
 									}}
 									title="Copy"
 									size={20}

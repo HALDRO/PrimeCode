@@ -23,6 +23,7 @@ import {
 	useMcpServers,
 	useSubtaskAccessRequest,
 } from '../../store';
+import { copyTextToClipboard } from '../../utils/clipboard';
 import { formatNumber, formatToolName } from '../../utils/format';
 import { Markdown } from '../../utils/markdown';
 import {
@@ -37,8 +38,7 @@ import {
 	TokensIcon,
 	WandIcon,
 } from '../icons';
-import { DropdownMenu, IconButton, Tooltip } from '../ui';
-import type { DropdownMenuItem } from '../ui/Dropdown';
+import { IconButton } from '../ui';
 import { ScrollThumb } from '../ui/ScrollContainer';
 import { AccessGate } from './AccessGate';
 import { SubtaskGenerationStatus } from './GenerationStatus';
@@ -93,27 +93,6 @@ function formatAgentLabel(agent: string | undefined): string {
 function stripSubagentSuffix(title: string | undefined): string {
 	if (!title) return '';
 	return title.replace(/\s*\(@[^)]*subagent\)\s*$/i, '').trim();
-}
-
-function buildTaskCardPatches(items: Array<RenderNode | RenderNode[]>): string {
-	const patches: string[] = [];
-	const visit = (msg: RenderNode) => {
-		if (msg.kind === 'tool_use') {
-			const meta = msg.metadata as Record<string, unknown> | undefined;
-			const diff = meta?.diff;
-			if (typeof diff === 'string' && diff.trim()) {
-				patches.push(diff.trim());
-			}
-		}
-	};
-	for (const item of items) {
-		if (Array.isArray(item)) {
-			for (const child of item) visit(child);
-			continue;
-		}
-		visit(item);
-	}
-	return patches.join('\n\n');
 }
 
 function formatDiffCount(value: number): string {
@@ -210,7 +189,6 @@ const TaskCardItem = React.memo<{
 	const [expandState, setExpandState] = useState<SubtaskExpandState>('preview');
 	const [promptExpanded, setPromptExpanded] = useState(false);
 	const [previewResultExpanded, setPreviewResultExpanded] = useState(false);
-	const [showCopyMenu, setShowCopyMenu] = useState(false);
 	const mcpServers = useMcpServers();
 	const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
 	const pendingAccess = useSubtaskAccessRequest(message.id);
@@ -285,8 +263,6 @@ const TaskCardItem = React.memo<{
 	// Group child session items for rendering (both preview summary and expanded transcript)
 	const groupedChildren = useGroupedTranscript(childSessionItems, mcpServerNames, isRunning);
 	const toolSummary = useMemo(() => summarizePreviewTools(groupedChildren), [groupedChildren]);
-	const patchText = useMemo(() => buildTaskCardPatches(groupedChildren), [groupedChildren]);
-
 	const retryInfo = message.retryInfo;
 
 	const headerTitle = useMemo(
@@ -366,24 +342,7 @@ const TaskCardItem = React.memo<{
 		</div>
 	);
 
-	const copyMenuItems = useMemo<DropdownMenuItem<{ action: () => void }>[]>(() => {
-		const items: DropdownMenuItem<{ action: () => void }>[] = [];
-		if (taskResultContent) {
-			items.push({
-				id: 'copy-task-done',
-				label: 'Copy Task Done',
-				data: { action: () => void navigator.clipboard.writeText(taskResultContent) },
-			});
-		}
-		if (patchText.trim()) {
-			items.push({
-				id: 'copy-patches',
-				label: 'Copy Patch Diffs',
-				data: { action: () => void navigator.clipboard.writeText(patchText) },
-			});
-		}
-		return items;
-	}, [taskResultContent, patchText]);
+	const copyText = useMemo(() => taskResultContent.trim(), [taskResultContent]);
 
 	// Meta info block (model) — reused in result & expanded
 	const metaBlock = effectiveModelId ? (
@@ -428,40 +387,21 @@ const TaskCardItem = React.memo<{
 			}
 			headerRight={
 				<span className="flex items-center gap-3 text-sm text-vscode-descriptionForeground group-hover/subtask:opacity-100">
-					{copyMenuItems.length > 0 && (
+					{copyText.trim() && (
 						<div
 							className="relative opacity-0 pointer-events-none transition-opacity group-hover/subtask:opacity-100 group-hover/subtask:pointer-events-auto"
 							onMouseDown={e => e.stopPropagation()}
 							onClick={e => e.stopPropagation()}
 						>
-							<Tooltip content="Copy options" position="top" delay={200}>
-								<div>
-									<IconButton
-										icon={<CopyIcon size={12} />}
-										onClick={e => {
-											e.stopPropagation();
-											setShowCopyMenu(prev => !prev);
-										}}
-										title="Copy options"
-										size={18}
-									/>
-								</div>
-							</Tooltip>
-							{showCopyMenu && (
-								<DropdownMenu
-									items={copyMenuItems}
-									onSelect={item => {
-										item.action();
-										setShowCopyMenu(false);
-									}}
-									onClose={() => setShowCopyMenu(false)}
-									position="top"
-									align="right"
-									minWidth={180}
-									maxWidth={220}
-									keyHints={{}}
-								/>
-							)}
+							<IconButton
+								icon={<CopyIcon size={12} />}
+								onClick={e => {
+									e.stopPropagation();
+									void copyTextToClipboard(copyText);
+								}}
+								title="Copy"
+								size={18}
+							/>
 						</div>
 					)}
 					{(diffStats.added > 0 || diffStats.removed > 0) && (

@@ -19,6 +19,7 @@ import {
 import type { SectionStats } from '../../store/projector';
 import { useSettingsStore } from '../../store/settingsStore';
 import { useUIActions } from '../../store/uiStore';
+import { copyTextToClipboard } from '../../utils/clipboard';
 import { formatDuration, formatTime, formatTokens } from '../../utils/format';
 import { Markdown } from '../../utils/markdown';
 import { parseMessageSegments } from '../../utils/messageParser';
@@ -96,7 +97,7 @@ const CompactionCard = React.memo<{ compaction: MessageCompaction }>(({ compacti
 							icon={<CopyIcon size={14} />}
 							onClick={e => {
 								e.stopPropagation();
-								void navigator.clipboard.writeText(compaction.summary || '');
+								void copyTextToClipboard(compaction.summary || '');
 							}}
 							title="Copy summary"
 							size={20}

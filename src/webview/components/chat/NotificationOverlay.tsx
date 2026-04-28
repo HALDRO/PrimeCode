@@ -15,6 +15,7 @@ import {
 	useUIActions,
 } from '../../store';
 import type { NotificationSeverity, TransientNotification } from '../../store/uiStore';
+import { copyTextToClipboard } from '../../utils/clipboard';
 import { AlertCircleIcon, CheckIcon, CloseIcon, CopyIcon } from '../icons';
 import { IconButton } from '../ui';
 
@@ -73,7 +74,7 @@ const NotificationCard: React.FC<{
 	const handleCopy = useCallback(
 		(e: React.MouseEvent) => {
 			e.stopPropagation();
-			void navigator.clipboard.writeText(notification.content).then(() => {
+			void copyTextToClipboard(notification.content).then(() => {
 				setCopied(true);
 				setTimeout(() => setCopied(false), 2000);
 			});

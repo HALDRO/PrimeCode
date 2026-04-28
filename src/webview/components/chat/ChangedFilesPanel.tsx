@@ -4,12 +4,14 @@
  *              Header layout mirrors FileRow structure for perfect alignment.
  *              Also displays current Todo list status when available.
  *              Session-specific changed files and todo state come from chatStore.
- *              Copy operations read directly from chatStore + navigator.clipboard.
+ *              Copy operations read directly from chatStore + copyTextToClipboard.
  *              OPTIMIZED: Todo display extracted to separate component to isolate rerenders.
  */
 
 import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { extractCanonicalTaskResult } from '../../../common';
+import { buildToolActionType } from '../../../common/normalizedTypes';
 import { isMcpTool } from '../../constants';
 import { cn } from '../../lib/cn';
 import {
@@ -23,6 +25,7 @@ import {
 import type { ChangedFile } from '../../store/chatStore';
 import { useChatStore } from '../../store/chatStore';
 import { useUIActions } from '../../store/uiStore';
+import { copyTextToClipboard } from '../../utils/clipboard';
 import { useVSCode } from '../../utils/vscode';
 import {
 	AcceptIcon,
@@ -36,6 +39,7 @@ import {
 	TodoProgressIcon,
 } from '../icons';
 import { DropdownMenu, IconButton, PathChip, ScrollContainer, Tooltip } from '../ui';
+import { normalizeDiffForCopy, resolveFileChanges } from './SimpleDiff';
 
 interface TodoItem {
 	content: string;
@@ -97,10 +101,12 @@ function formatMessage(
 	if (m.kind === 'task_card') {
 		const parts: string[] = [];
 		if (m.result) {
+			const result = extractCanonicalTaskResult(m.result).trim();
+			if (!result) return undefined;
 			parts.push(
 				mode === 'all'
-					? `## Agent: ${m.agent ?? 'SubAgent'}\n${m.result}`
-					: `[${m.agent ?? 'SubAgent'}] ${m.result}`,
+					? `## Agent: ${m.agent ?? 'SubAgent'}\n${result}`
+					: `[${m.agent ?? 'SubAgent'}] ${result}`,
 			);
 		}
 		return parts.length > 0 ? parts.join('\n\n') : undefined;
@@ -135,30 +141,37 @@ function formatMessages(
  * Falls back to tool_use filePath header when no diff content available.
  */
 function buildPatches(msgs: RenderNode[]): string {
-	const resultMap = new Map<string, Record<string, unknown>>();
-
-	const visit = (m: RenderNode) => {
-		if (m.kind === 'tool_use' && m.toolUseId && m.metadata) {
-			resultMap.set(m.toolUseId, m.metadata as Record<string, unknown>);
-		}
-	};
-	for (const m of msgs) visit(m);
-
 	const patches: string[] = [];
-	const visitPatches = (m: RenderNode) => {
-		if (m.kind === 'tool_use') {
-			if (!m.toolUseId) return;
-			const meta = resultMap.get(m.toolUseId);
-			if (!meta) return;
-			const diff = meta.diff;
-			if (typeof diff === 'string' && diff.trim()) {
-				patches.push(diff.trim());
-			}
-		}
-	};
-	for (const m of msgs) visitPatches(m);
+	for (const m of msgs) {
+		if (m.kind !== 'tool_use') continue;
 
-	return patches.join('\n\n');
+		const actionType =
+			m.normalizedEntry?.entryType &&
+			typeof m.normalizedEntry.entryType === 'object' &&
+			'actionType' in m.normalizedEntry.entryType
+				? m.normalizedEntry.entryType.actionType
+				: buildToolActionType(m.toolName, m.rawInput ?? {});
+
+		const changes = resolveFileChanges({
+			actionType,
+			toolResultMetadata: m.metadata,
+			fallbackFilePath: m.filePath,
+		});
+
+		if (changes.length > 0) {
+			for (const change of changes) {
+				if (change.diffText.trim()) patches.push(change.diffText.trim());
+			}
+			continue;
+		}
+
+		const diff = m.metadata?.diff;
+		if (typeof diff === 'string' && diff.trim()) {
+			patches.push(normalizeDiffForCopy(diff, m.filePath || ''));
+		}
+	}
+
+	return patches.filter(Boolean).join('\n\n');
 }
 
 const CopyDropdown = React.memo<{
@@ -184,6 +197,75 @@ const CopyDropdown = React.memo<{
 	/>
 ));
 CopyDropdown.displayName = 'CopyDropdown';
+
+function useCopyMenuItems(): CopyMenuItem[] {
+	const mcpServers = useMcpServers();
+	const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
+
+	const handleCopyLastResponse = useCallback(() => {
+		const msgs = getActiveMessages();
+		if (!msgs) return;
+		const lastUserIdx = findLastUserIndex(msgs);
+		const slice = msgs.slice(Math.max(0, lastUserIdx));
+		const text = formatMessages(slice, 'last', mcpServerNames);
+		if (text) void copyTextToClipboard(text);
+	}, [mcpServerNames]);
+
+	const handleCopyAllMessages = useCallback(() => {
+		const msgs = getActiveMessages();
+		if (!msgs) return;
+		const text = formatMessages(msgs, 'all', mcpServerNames);
+		if (text) void copyTextToClipboard(text);
+	}, [mcpServerNames]);
+
+	const handleCopyLastDiffs = useCallback(() => {
+		const msgs = getActiveMessages();
+		if (!msgs) return;
+		const lastUserIdx = findLastUserIndex(msgs);
+		const text = buildPatches(msgs.slice(Math.max(0, lastUserIdx)));
+		if (text) void copyTextToClipboard(text);
+	}, []);
+
+	const handleCopyAllDiffs = useCallback(() => {
+		const msgs = getActiveMessages();
+		if (!msgs) return;
+		const text = buildPatches(msgs);
+		if (text) void copyTextToClipboard(text);
+	}, []);
+
+	return useMemo<CopyMenuItem[]>(
+		() => [
+			{ label: 'Copy Last Response', action: handleCopyLastResponse },
+			{ label: 'Copy All Messages', action: handleCopyAllMessages },
+			{ label: 'Copy Diffs (Last Response)', action: handleCopyLastDiffs },
+			{ label: 'Copy Diffs (All Session)', action: handleCopyAllDiffs },
+		],
+		[handleCopyLastResponse, handleCopyAllMessages, handleCopyLastDiffs, handleCopyAllDiffs],
+	);
+}
+
+const CopyActionsButton: React.FC<{ className?: string }> = React.memo(({ className }) => {
+	const [showCopyDropdown, setShowCopyDropdown] = useState(false);
+	const copyMenuItems = useCopyMenuItems();
+
+	return (
+		<div className={cn('relative', className)}>
+			{showCopyDropdown && (
+				<CopyDropdown items={copyMenuItems} onClose={() => setShowCopyDropdown(false)} />
+			)}
+			<IconButton
+				icon={<CopyIcon size={12} />}
+				onClick={e => {
+					e.stopPropagation();
+					setShowCopyDropdown(prev => !prev);
+				}}
+				title="Copy options"
+				size={20}
+			/>
+		</div>
+	);
+});
+CopyActionsButton.displayName = 'CopyActionsButton';
 
 /** Status icon for todo items */
 const TodoStatusIcon: React.FC<{ status: string }> = ({ status }) => {
@@ -324,11 +406,14 @@ TodoSection.displayName = 'TodoSection';
 /** Centered todo block shown when there are todos but no changed files yet */
 const StandaloneTodoPanel: React.FC = React.memo(() => (
 	<div className="w-full box-border relative bg-transparent">
-		<div className="flex justify-center">
-			<div className="@container/panel max-w-full bg-transparent border-none rounded-none">
-				<div className="flex items-center justify-center h-(--tool-header-height) px-(--tool-header-padding) text-(--changed-files-font-size) font-(family-name:--vscode-font-family)">
+		<div className="@container/panel relative h-(--tool-header-height) px-(--tool-header-padding) text-(--changed-files-font-size) font-(family-name:--vscode-font-family)">
+			<div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+				<div className="pointer-events-auto">
 					<TodoSection />
 				</div>
+			</div>
+			<div className="absolute right-(--tool-header-padding) top-1/2 -translate-y-1/2 flex items-center">
+				<CopyActionsButton />
 			</div>
 		</div>
 	</div>
@@ -422,10 +507,7 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 	const { postMessage } = useVSCode();
 	const { changedFiles, cumulativeDiffs } = useChangedFilesState();
 	const { showConfirmDialog } = useUIActions();
-	const mcpServers = useMcpServers();
-	const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
 	const [expanded, setExpanded] = useState(false);
-	const [showCopyDropdown, setShowCopyDropdown] = useState(false);
 
 	// Build a lookup map from cumulative diffs (original→current) when available
 	const cumulativeMap = useMemo(() => {
@@ -554,59 +636,12 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 		postMessage({ type: 'acceptAllFiles', filePaths });
 	}, [groupedFiles, postMessage]);
 
-	// ─── Copy operations: read directly from chatStore + clipboard ───
-
-	const handleCopyLastResponse = useCallback(() => {
-		const msgs = getActiveMessages();
-		if (!msgs) return;
-		const lastUserIdx = findLastUserIndex(msgs);
-		const slice = msgs.slice(Math.max(0, lastUserIdx));
-		const text = formatMessages(slice, 'last', mcpServerNames);
-		if (text) void navigator.clipboard.writeText(text);
-	}, [mcpServerNames]);
-
-	const handleCopyAllMessages = useCallback(() => {
-		const msgs = getActiveMessages();
-		if (!msgs) return;
-		const text = formatMessages(msgs, 'all', mcpServerNames);
-		if (text) void navigator.clipboard.writeText(text);
-	}, [mcpServerNames]);
-
-	const handleCopyLastDiffs = useCallback(() => {
-		const msgs = getActiveMessages();
-		if (!msgs) return;
-		const lastUserIdx = findLastUserIndex(msgs);
-		const text = buildPatches(msgs.slice(Math.max(0, lastUserIdx)));
-		if (text) void navigator.clipboard.writeText(text);
-	}, []);
-
-	const handleCopyAllDiffs = useCallback(() => {
-		const msgs = getActiveMessages();
-		if (!msgs) return;
-		const text = buildPatches(msgs);
-		if (text) void navigator.clipboard.writeText(text);
-	}, []);
-
-	const copyMenuItems = useMemo<CopyMenuItem[]>(
-		() => [
-			{ label: 'Copy Last Response', action: handleCopyLastResponse },
-			{ label: 'Copy All Messages', action: handleCopyAllMessages },
-			{ label: 'Copy Diffs (Last Response)', action: handleCopyLastDiffs },
-			{ label: 'Copy Diffs (All Session)', action: handleCopyAllDiffs },
-		],
-		[handleCopyLastResponse, handleCopyAllMessages, handleCopyLastDiffs, handleCopyAllDiffs],
-	);
-
 	if (groupedFiles.length === 0) {
 		return null;
 	}
 
 	return (
 		<div className="w-full box-border relative bg-transparent">
-			{showCopyDropdown && (
-				<CopyDropdown items={copyMenuItems} onClose={() => setShowCopyDropdown(false)} />
-			)}
-
 			<div
 				className={cn(
 					'bg-(--panel-header-bg) rounded-t-lg border border-(--panel-header-border) border-b-0',
@@ -651,19 +686,15 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 					</span>
 
 					{/* Center section - Todo status */}
-					<TodoSection />
+					<span className="absolute inset-0 flex items-center justify-center pointer-events-none">
+						<span className="pointer-events-auto">
+							<TodoSection />
+						</span>
+					</span>
 
 					{/* Right section - action buttons */}
 					<div className="flex items-center gap-1 ml-2 shrink-0">
-						<IconButton
-							icon={<CopyIcon size={12} />}
-							onClick={e => {
-								e.stopPropagation();
-								setShowCopyDropdown(!showCopyDropdown);
-							}}
-							title="Copy options"
-							size={20}
-						/>
+						<CopyActionsButton />
 
 						<Tooltip content="Keep all changes" position="top" delay={200}>
 							<button
