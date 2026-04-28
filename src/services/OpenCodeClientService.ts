@@ -18,6 +18,7 @@ import {
 	parseSessionQuestionRequest,
 	parseSessionTodoItem,
 } from '../common/schemas';
+import { OpenCodeConfigService } from './opencode/OpenCodeConfigService';
 
 interface OpenCodeModelConfig {
 	name: string;
@@ -148,11 +149,11 @@ function toProviderModel(model: ProviderListModel | ModelV2): OpenCodeProviderMo
 			? (modelRecord.capabilities as Record<string, unknown>)
 			: undefined;
 	const variantKeys = model.variants ? Object.keys(model.variants) : undefined;
-	const legacyReasoning = 'reasoning' in model ? model.reasoning : undefined;
+	const topLevelReasoning = 'reasoning' in model ? model.reasoning : undefined;
 	const reasoning =
 		typeof capabilitiesRecord?.reasoning === 'boolean'
 			? capabilitiesRecord.reasoning
-			: Boolean(legacyReasoning);
+			: Boolean(topLevelReasoning);
 	return {
 		id: model.id,
 		name: model.name || model.id,
@@ -163,6 +164,12 @@ function toProviderModel(model: ProviderListModel | ModelV2): OpenCodeProviderMo
 }
 
 export class OpenCodeClientService {
+	private readonly projectConfig = new OpenCodeConfigService();
+
+	private setWorkspaceRoot(workspaceRoot: string): void {
+		this.projectConfig.setWorkspaceRoot(workspaceRoot);
+	}
+
 	private async fetchRuntimeCollection(
 		baseUrl: string,
 		directory: string,
@@ -192,12 +199,13 @@ export class OpenCodeClientService {
 		};
 	}
 
-	async setProjectDefaultModel(workspaceRoot: string, model: string): Promise<void> {
-		const configPath = vscode.Uri.file(`${workspaceRoot}/opencode.json`);
-		const existing = await this.readProjectConfig(workspaceRoot);
-		existing.model = model;
-		const content = Buffer.from(this.compactJsonStringify(existing), 'utf-8');
-		await vscode.workspace.fs.writeFile(configPath, content);
+	async setProjectDefaultModel(
+		workspaceRoot: string,
+		model: string,
+	): Promise<{ contentHash: string }> {
+		this.setWorkspaceRoot(workspaceRoot);
+		const result = await this.projectConfig.setProjectField('model', model);
+		return { contentHash: result.contentHash };
 	}
 
 	async getConnectedProviders(
@@ -474,8 +482,8 @@ export class OpenCodeClientService {
 			headers?: Record<string, string>;
 			models?: EnrichedProxyModel[];
 		},
-	): Promise<void> {
-		const configPath = vscode.Uri.file(`${workspaceRoot}/opencode.json`);
+	): Promise<{ contentHash: string }> {
+		this.setWorkspaceRoot(workspaceRoot);
 		const existing = await this.readProjectConfig(workspaceRoot);
 		const { providerId, name, npm, baseUrl, apiKey = '', headers, models = [] } = input;
 		const protocol = getCustomEndpointProtocolFromNpm(npm);
@@ -541,33 +549,17 @@ export class OpenCodeClientService {
 			models: modelsRecord,
 		};
 
-		existing.provider = providerSection;
-
-		const content = Buffer.from(this.compactJsonStringify(existing), 'utf-8');
-		await vscode.workspace.fs.writeFile(configPath, content);
-	}
-
-	/**
-	 * JSON.stringify with indent 2, but short string arrays (e.g. modalities)
-	 * are kept on a single line for readability.
-	 */
-	private compactJsonStringify(obj: unknown): string {
-		const raw = JSON.stringify(obj, null, 2);
-		// Collapse arrays that contain only short strings onto one line.
-		// Matches: [\n  "text",\n  "image"\n] → ["text", "image"]
-		return raw.replace(/\[(?:\s*"[^"]+"\s*,?)+\s*\]/g, match => {
-			const items = Array.from(match.matchAll(/"([^"]+)"/g)).map(m => `"${m[1]}"`);
-			return `[${items.join(', ')}]`;
-		});
+		const result = await this.projectConfig.setProjectField('provider', providerSection);
+		return { contentHash: result.contentHash };
 	}
 
 	async deleteCustomProvider(
 		workspaceRoot: string,
 		input: { providerId: string; baseUrl?: string },
-	): Promise<void> {
-		const configPath = vscode.Uri.file(`${workspaceRoot}/opencode.json`);
+	): Promise<{ contentHash?: string }> {
+		this.setWorkspaceRoot(workspaceRoot);
 		const existing = await this.readProjectConfig(workspaceRoot);
-		if (!existing.provider) return;
+		if (!existing.provider) return {};
 		const { providerId, baseUrl } = input;
 
 		const idsToRemove = new Set<string>();
@@ -582,12 +574,12 @@ export class OpenCodeClientService {
 				idsToRemove.add(id);
 			}
 		}
-		if (idsToRemove.size === 0) return;
+		if (idsToRemove.size === 0) return {};
 		for (const id of idsToRemove) {
 			delete existing.provider[id];
 		}
-		const content = Buffer.from(JSON.stringify(existing, null, 2), 'utf-8');
-		await vscode.workspace.fs.writeFile(configPath, content);
+		const result = await this.projectConfig.setProjectField('provider', existing.provider);
+		return { contentHash: result.contentHash };
 	}
 
 	private findProxyProviderIdsByBaseUrl(

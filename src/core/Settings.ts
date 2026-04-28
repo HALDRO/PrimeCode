@@ -1,13 +1,10 @@
 /**
  * @file Settings
  * @description Unified settings manager for PrimeCode.
- * Combines agents config + MCP config + VS Code settings.
+ * Manages VS Code workspace/user settings.
  */
 
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { logger } from '../utils/logger';
 
 // =============================================================================
 // Types
@@ -44,17 +41,6 @@ export interface PrimeCodeSettings {
 
 	'promptImprove.model'?: string;
 	'promptImprove.template'?: string;
-}
-
-interface AgentsConfig {
-	commands: unknown[];
-	skills: unknown[];
-	subagents: unknown[];
-	rules: unknown[];
-}
-
-interface McpConfig {
-	mcpServers: Record<string, unknown>;
 }
 
 // =============================================================================
@@ -127,85 +113,6 @@ export class Settings implements ISettings {
 			'promptImprove.model': this.get('promptImprove.model'),
 			'promptImprove.template': this.get('promptImprove.template'),
 		};
-	}
-
-	// =============================================================================
-	// Agents Config (.opencode/config.json)
-	// =============================================================================
-
-	getAgentsConfigPath(): string {
-		if (!this.workspaceRoot) {
-			throw new Error('No workspace root');
-		}
-		return path.join(this.workspaceRoot, '.agents', 'config.json');
-	}
-
-	async getAgentsConfig(): Promise<AgentsConfig> {
-		const configPath = this.getAgentsConfigPath();
-
-		if (!fs.existsSync(configPath)) {
-			return { commands: [], skills: [], subagents: [], rules: [] };
-		}
-
-		try {
-			const content = await fs.promises.readFile(configPath, 'utf-8');
-			return JSON.parse(content);
-		} catch (error) {
-			logger.error('[Settings] Failed to read agents config:', error);
-			return { commands: [], skills: [], subagents: [], rules: [] };
-		}
-	}
-
-	async saveAgentsConfig(config: AgentsConfig): Promise<void> {
-		const configPath = this.getAgentsConfigPath();
-
-		try {
-			await fs.promises.mkdir(path.dirname(configPath), { recursive: true });
-			await fs.promises.writeFile(configPath, JSON.stringify(config, null, 2));
-		} catch (error) {
-			logger.error('[Settings] Failed to save agents config:', error);
-			throw error;
-		}
-	}
-
-	// =============================================================================
-	// MCP Config (.mcp.json or .opencode/mcp.json)
-	// =============================================================================
-
-	getMcpConfigPath(): string {
-		if (!this.workspaceRoot) {
-			throw new Error('No workspace root');
-		}
-
-		return path.join(this.workspaceRoot, '.opencode', 'mcp.json');
-	}
-
-	async getMcpConfig(): Promise<McpConfig> {
-		const configPath = this.getMcpConfigPath();
-
-		if (!fs.existsSync(configPath)) {
-			return { mcpServers: {} };
-		}
-
-		try {
-			const content = await fs.promises.readFile(configPath, 'utf-8');
-			return JSON.parse(content);
-		} catch (error) {
-			logger.error('[Settings] Failed to read MCP config:', error);
-			return { mcpServers: {} };
-		}
-	}
-
-	async saveMcpConfig(config: McpConfig): Promise<void> {
-		const configPath = this.getMcpConfigPath();
-
-		try {
-			await fs.promises.mkdir(path.dirname(configPath), { recursive: true });
-			await fs.promises.writeFile(configPath, JSON.stringify(config, null, 2));
-		} catch (error) {
-			logger.error('[Settings] Failed to save MCP config:', error);
-			throw error;
-		}
 	}
 
 	// =============================================================================

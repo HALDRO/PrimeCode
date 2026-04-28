@@ -9,10 +9,11 @@ import type React from 'react';
 import { useEffect, useState } from 'react';
 import { DISPLAY_NAMES } from '../../../../common/toolRegistry';
 import { useModelOptions } from '../../../hooks/useModelOptions';
+import { cn } from '../../../lib/cn';
 import { useSettingsStore } from '../../../store';
 import { useVSCode } from '../../../utils/vscode';
 import { ChevronDownIcon, ChevronRightIcon, EditIcon, PlusIcon, TrashIcon } from '../../icons';
-import { Button, Select, Switch, Tooltip } from '../../ui';
+import { Button, SegmentedControl, Select, Switch, Tooltip } from '../../ui';
 import {
 	EmptyState,
 	GroupTitle,
@@ -30,10 +31,10 @@ const MODE_OPTS = [
 	{ value: 'all', label: 'All' },
 ];
 const PERM_OPTS = [
-	{ value: '', label: 'Default' },
-	{ value: 'ask', label: 'Ask' },
-	{ value: 'allow', label: 'Allow' },
-	{ value: 'deny', label: 'Deny' },
+	{ value: '', label: 'Default', title: 'Use inherited/default permission' },
+	{ value: 'allow', label: 'Allow', title: 'Allow this permission for the agent' },
+	{ value: 'ask', label: 'Ask', title: 'Ask before using this permission for the agent' },
+	{ value: 'deny', label: 'Deny', title: 'Deny this permission for the agent' },
 ];
 
 interface FormState {
@@ -76,6 +77,18 @@ const EMPTY: FormState = {
 const iCls =
 	'w-full px-2 py-1.5 text-xs bg-vscode-input-background border border-vscode-input-border rounded text-vscode-input-foreground placeholder:text-vscode-input-placeholderForeground focus:outline-none focus:border-vscode-focusBorder';
 
+const AGENT_SOURCE_LABELS = {
+	builtin: 'Built-in',
+	project: 'Project file',
+	global: 'Global file',
+	runtime: 'Runtime',
+} as const;
+
+function getAgentVisibilityLabel(agent: { hidden?: boolean; sourceKind: 'builtin' | 'custom' }) {
+	if (!agent.hidden) return undefined;
+	return agent.sourceKind === 'builtin' ? 'Internal' : 'Not selectable';
+}
+
 const Sec: React.FC<{
 	title: string;
 	open: boolean;
@@ -111,7 +124,7 @@ const Fl: React.FC<{ label: string; id: string; hint?: string; children: React.R
 );
 
 export const SubagentsTab: React.FC = () => {
-	const { subagents } = useSettingsStore();
+	const { resources, resourceOps } = useSettingsStore();
 	const { postMessage } = useVSCode();
 	const modelOptions = useModelOptions();
 	const [isCreating, setIsCreating] = useState(false);
@@ -121,8 +134,21 @@ export const SubagentsTab: React.FC = () => {
 	const [showPerm, setShowPerm] = useState(false);
 
 	useEffect(() => {
-		postMessage({ type: 'getSubagents' });
+		postMessage({ type: 'getResources', kind: 'agent' });
 	}, [postMessage]);
+
+	const agentResources = resources.agent;
+	const agentItems = agentResources.items;
+	const toggleAgentDisabled = (resourceId: string, disabled: boolean) => {
+		postMessage({
+			type: 'applyResourceAction',
+			operationId: `agent-disable-${Date.now()}`,
+			resourceId,
+			action: 'setDisabled',
+			value: disabled,
+			scope: 'project',
+		});
+	};
 
 	const upd = <K extends keyof FormState>(k: K, v: FormState[K]) => setF(p => ({ ...p, [k]: v }));
 	const updPerm = (k: keyof FormState['perm'], v: string) =>
@@ -151,25 +177,34 @@ export const SubagentsTab: React.FC = () => {
 		const topP = f.topP ? Number.parseFloat(f.topP) : undefined;
 		const steps = f.steps ? Number.parseInt(f.steps, 10) : undefined;
 		postMessage({
-			type: 'createSubagent',
+			type: 'mutateResource',
+			kind: 'agent',
+			action: 'create',
 			name: f.name,
-			description: f.description,
-			content: f.content,
-			...(f.model && { model: f.model }),
-			...(temp !== undefined && !Number.isNaN(temp) && { temperature: temp }),
-			...(topP !== undefined && !Number.isNaN(topP) && { topP }),
-			...(f.mode && { mode: f.mode as 'subagent' | 'primary' | 'all' }),
-			...(f.color && { color: f.color }),
-			...(steps !== undefined && !Number.isNaN(steps) && { steps }),
-			...(tools && { tools }),
-			...(permission && { permission }),
+			payload: {
+				description: f.description,
+				content: f.content,
+				...(f.model && { model: f.model }),
+				...(temp !== undefined && !Number.isNaN(temp) && { temperature: temp }),
+				...(topP !== undefined && !Number.isNaN(topP) && { topP }),
+				...(f.mode && { mode: f.mode as 'subagent' | 'primary' | 'all' }),
+				...(f.color && { color: f.color }),
+				...(steps !== undefined && !Number.isNaN(steps) && { steps }),
+				...(tools && { tools }),
+				...(permission && { permission }),
+			},
 		});
 		reset();
 	};
 
 	return (
 		<>
-			<GroupTitle>Subagents</GroupTitle>
+			<GroupTitle>Agents</GroupTitle>
+			<p className="mx-(--gap-1) -mt-(--gap-1) mb-(--gap-3) text-xs text-vscode-descriptionForeground leading-relaxed">
+				Built-in agents are OpenCode defaults. Internal agents are used by OpenCode for system tasks
+				and are not shown for normal user selection. Turning Available off writes a project disable
+				override and reloads agents.
+			</p>
 			<SettingsGroup>
 				{!isCreating && (
 					<SettingRow
@@ -309,10 +344,11 @@ export const SubagentsTab: React.FC = () => {
 								{(['edit', 'bash', 'webfetch', 'doom_loop', 'external_directory'] as const).map(
 									k => (
 										<Fl key={k} label={k.replace('_', ' ')} id={`sa-perm-${k}`}>
-											<Select
+											<SegmentedControl
+												ariaLabel={`${k} permission`}
 												value={f.perm[k]}
-												onChange={e => updPerm(k, e.target.value)}
 												options={PERM_OPTS}
+												onChange={value => updPerm(k, value)}
 											/>
 										</Fl>
 									),
@@ -332,48 +368,88 @@ export const SubagentsTab: React.FC = () => {
 				</SettingsGroup>
 			)}
 
-			{/* Subagents List */}
+			{/* Agents List */}
 			<SettingsGroup>
-				{subagents.isLoading ? (
-					<div className="p-4 text-center text-vscode-descriptionForeground text-xs">
-						Loading subagents...
+				{resourceOps.status !== 'idle' && resourceOps.message && (
+					<div
+						className={cn(
+							'px-3 py-2 text-xs border-b border-(--alpha-10)',
+							resourceOps.status === 'error'
+								? 'text-vscode-errorForeground'
+								: 'text-vscode-descriptionForeground',
+						)}
+					>
+						{resourceOps.message}
 					</div>
-				) : subagents.items.length === 0 ? (
-					<EmptyState>No subagents found. Create one above.</EmptyState>
+				)}
+				{agentItems.length > 0 &&
+					agentItems.map((agent, idx) => {
+						const isProjectAgent = agent.source === 'project' && agent.sourcePath;
+						const sourceLabel = AGENT_SOURCE_LABELS[agent.source];
+						const visibilityLabel = getAgentVisibilityLabel(agent);
+						const toggleTooltip = agent.disabled
+							? 'Remove the project disable override and reload OpenCode agents'
+							: 'Write disable: true to project config or project agent file and reload OpenCode agents';
+						return (
+							<SettingRow
+								key={agent.id}
+								title={agent.mode === 'subagent' ? `@${agent.name}` : agent.name}
+								titleExtra={
+									<>
+										<SettingsBadge>{sourceLabel}</SettingsBadge>
+										{visibilityLabel && <SettingsBadge>{visibilityLabel}</SettingsBadge>}
+									</>
+								}
+								tooltip={agent.description || agent.sourcePath}
+								last={idx === agentItems.length - 1}
+							>
+								<SettingRowActions>
+									<Tooltip content={toggleTooltip} position="top" delay={200}>
+										<span className="flex items-center gap-1 text-xs text-vscode-descriptionForeground">
+											Available
+											<Switch
+												checked={!agent.disabled}
+												onChange={() => toggleAgentDisabled(agent.id, !agent.disabled)}
+											/>
+										</span>
+									</Tooltip>
+									{isProjectAgent && (
+										<Tooltip content="Edit project file" position="top" delay={200}>
+											<button
+												type="button"
+												onClick={() =>
+													postMessage({
+														type: 'openSubagentFile',
+														filePath: agent.sourcePath ?? '',
+													})
+												}
+												className="p-1 rounded hover:bg-vscode-list-hoverBackground text-vscode-descriptionForeground hover:text-vscode-foreground transition-colors"
+											>
+												<EditIcon size={12} />
+											</button>
+										</Tooltip>
+									)}
+									{isProjectAgent && (
+										<Tooltip content="Delete project file" position="top" delay={200}>
+											<button
+												type="button"
+												onClick={() => postMessage({ type: 'deleteSubagent', name: agent.name })}
+												className="p-1 rounded hover:bg-vscode-errorForeground/20 text-vscode-descriptionForeground hover:text-vscode-errorForeground transition-colors"
+											>
+												<TrashIcon size={12} />
+											</button>
+										</Tooltip>
+									)}
+								</SettingRowActions>
+							</SettingRow>
+						);
+					})}
+				{agentItems.length > 0 ? null : agentResources.isLoading ? (
+					<div className="p-4 text-center text-vscode-descriptionForeground text-xs">
+						Loading agents...
+					</div>
 				) : (
-					subagents.items.map((sa, idx) => (
-						<SettingRow
-							key={sa.name}
-							title={`@${sa.name}`}
-							tooltip={sa.description || sa.path}
-							last={idx === subagents.items.length - 1}
-						>
-							<SettingRowActions>
-								{sa.model && (
-									<SettingsBadge variant="blue">{sa.model.split('/').pop()}</SettingsBadge>
-								)}
-								{sa.mode && <SettingsBadge>{sa.mode}</SettingsBadge>}
-								<Tooltip content="Edit file" position="top" delay={200}>
-									<button
-										type="button"
-										onClick={() => postMessage({ type: 'openSubagentFile', filePath: sa.path })}
-										className="p-1 rounded hover:bg-vscode-list-hoverBackground text-vscode-descriptionForeground hover:text-vscode-foreground transition-colors"
-									>
-										<EditIcon size={12} />
-									</button>
-								</Tooltip>
-								<Tooltip content="Delete" position="top" delay={200}>
-									<button
-										type="button"
-										onClick={() => postMessage({ type: 'deleteSubagent', name: sa.name })}
-										className="p-1 rounded hover:bg-vscode-errorForeground/20 text-vscode-descriptionForeground hover:text-vscode-errorForeground transition-colors"
-									>
-										<TrashIcon size={12} />
-									</button>
-								</Tooltip>
-							</SettingRowActions>
-						</SettingRow>
-					))
+					<EmptyState>No agents found. Create one above.</EmptyState>
 				)}
 			</SettingsGroup>
 		</>

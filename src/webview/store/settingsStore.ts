@@ -23,22 +23,26 @@
 import { create } from 'zustand';
 import {
 	type Access,
+	type AgentResource,
 	type CLIProviderType,
+	type CommandResource,
 	type DiscoveryStatus,
 	type ExtensionMessage,
 	getCustomEndpointDedupeKey,
 	getProxyEndpointProtocol,
 	getProxyEndpointProviderId,
 	type LspStatusData,
+	type ManagedResource,
 	type MCPServersMap,
 	type OpenCodeProviderData,
 	type PlatformInfo,
+	type PluginResource,
 	type ProxyEndpointProtocol,
+	type ResourceKind,
 	type Rule,
+	type SkillResource,
 } from '../../common';
 import type { PermissionPolicies } from '../../common/permissions';
-
-export type CommandItem = import('../constants').CommandItem;
 
 // Re-export types for convenience
 export type {
@@ -58,6 +62,27 @@ import { handleSettingsData } from './settingsUtils';
 type PersistedSelectionState = {
 	modelVariants?: Record<string, string | undefined>;
 };
+
+type ResourceState<T extends ManagedResource = ManagedResource> = {
+	items: T[];
+	revision: number;
+	isLoading: boolean;
+	error?: string;
+};
+
+type ResourcesState = {
+	agent: ResourceState<AgentResource>;
+	command: ResourceState<CommandResource>;
+	skill: ResourceState<SkillResource>;
+	plugin: ResourceState<PluginResource>;
+};
+
+const emptyResourceState = <T extends ManagedResource>(): ResourceState<T> => ({
+	items: [],
+	revision: 0,
+	isLoading: false,
+	error: undefined,
+});
 
 function readPersistedSelectionState(): PersistedSelectionState {
 	const raw = vscode.getState();
@@ -172,61 +197,33 @@ const handleResourceListMessage = (
 	actions: SettingsActions,
 ): boolean => {
 	switch (message.type) {
-		case 'commandsList': {
+		case 'resourcesList': {
 			if (!message.data) return true;
-			const { custom, cli, isLoading, error, meta } = message.data as {
-				custom: ParsedCommand[];
-				cli?: Array<{ name: string; description?: string; source?: string }>;
-				isLoading: boolean;
-				error?: string;
-				meta?: { operation?: string; message?: string };
-			};
-			actions.setCommands({ custom, ...(cli !== undefined && { cli }), isLoading, error });
-			handleLoadingMeta(meta, error, actions.setResourceOps);
+			actions.setResources(message.data.kind, {
+				items: message.data.resources as never,
+				revision: message.data.revision,
+				isLoading: false,
+				error: message.data.error,
+			});
 			return true;
 		}
-		case 'skillsList': {
-			if (!message.data) return true;
-			const { skills, isLoading, error, meta } = message.data as {
-				skills: import('../../common').ParsedSkill[];
-				isLoading: boolean;
-				error?: string;
-				meta?: { operation?: string; message?: string };
-			};
-			actions.setSkills({ items: skills, isLoading, error });
-			handleLoadingMeta(meta, error, actions.setResourceOps);
-			return true;
-		}
-		case 'subagentsList': {
-			if (!message.data) return true;
-			const { subagents, isLoading, error, meta } = message.data as {
-				subagents: import('../../common').ParsedSubagent[];
-				isLoading: boolean;
-				error?: string;
-				meta?: { operation?: string; message?: string };
-			};
-			actions.setSubagents({ items: subagents, isLoading, error });
-			handleLoadingMeta(meta, error, actions.setResourceOps);
-			return true;
-		}
-		case 'agentsList': {
-			if (!message.data) return true;
-			const { agents, isLoading, error } = message.data as {
-				agents: SettingsState['agents']['items'];
-				isLoading: boolean;
-				error?: string;
-			};
-			actions.setAgents({ items: agents, isLoading, error });
-			return true;
-		}
-		case 'pluginsList': {
-			if (!message.data) return true;
-			const { plugins, isLoading, error } = message.data as {
-				plugins: string[];
-				isLoading: boolean;
-				error?: string;
-			};
-			actions.setPlugins({ items: plugins, isLoading, error });
+		case 'resourceOperation': {
+			if (message.data?.status === 'started') {
+				actions.setResourceOps({
+					lastAction: message.data.action,
+					status: 'working',
+					message: 'Applying project resource change...',
+				});
+			} else if (message.data?.status === 'completed') {
+				const ok =
+					message.data.result === 'verified' || message.data.result === 'config-written-unverified';
+				actions.setResourceOps({
+					lastAction: message.data.action,
+					status: ok ? 'success' : 'error',
+					message:
+						message.data.message ?? `Resource operation ${message.data.result ?? 'completed'}`,
+				});
+			}
 			return true;
 		}
 		case 'ruleList': {
@@ -388,11 +385,7 @@ export interface SettingsActions {
 	) => void;
 	removeProxyEndpoint: (endpointId: string) => void;
 	syncEnabledProxyModelsFromAvailable: () => void;
-	setSubagents: (subagents: Partial<SettingsState['subagents']>) => void;
-	setAgents: (agents: Partial<SettingsState['agents']>) => void;
-	setCommands: (commands: Partial<SettingsState['commands']>) => void;
-	setSkills: (skills: Partial<SettingsState['skills']>) => void;
-	setPlugins: (plugins: Partial<SettingsState['plugins']>) => void;
+	setResources: <K extends ResourceKind>(kind: K, resources: Partial<ResourcesState[K]>) => void;
 	setMcpServers: (servers: MCPServersMap) => void;
 	setMcpStatus: (status: SettingsState['mcpStatus']) => void;
 	setMcpInstalledMetadata: (
@@ -414,9 +407,6 @@ export interface SettingsActions {
 	setEnabledOpenCodeModels: (models: string[]) => void;
 	setModelVariant: (modelId: string, variant: string | undefined) => void;
 	getModelVariant: (modelId: string | undefined) => string | undefined;
-	// Unified provider visibility (disabled = hidden from dropdown but keeps model selection)
-	// Works for all providers: OpenAI Compatible (__openai_compatible__) and OpenCode providers
-	setDisabledProviders: (providers: string[]) => void;
 	// Discovery
 	setDiscoveryStatus: (status: DiscoveryStatus) => void;
 	// Rules
@@ -435,10 +425,6 @@ export interface SettingsActions {
 
 // Rule Type
 export type { Rule } from '../../common';
-
-// Command Types
-export type ParsedCommand = import('../../common').ParsedCommand;
-// export type CommandItem = import('../constants').CommandItem;
 
 export interface OpenCodeConfigData {
 	isLoading: boolean;
@@ -509,9 +495,6 @@ export interface SettingsState {
 	providerAuthState: ProviderAuthState | null;
 	// Enabled models for chat dropdown (format: "providerId/modelId")
 	enabledOpenCodeModels: string[];
-	// Unified disabled providers (hidden from dropdown but keeps model selection)
-	// Works for all providers: OpenAI Compatible (__openai_compatible__) and OpenCode providers
-	disabledProviders: string[];
 	// Session-only list of disconnected providers (to filter out stale CLI cache data)
 	sessionDisconnectedProviders: string[];
 
@@ -549,50 +532,7 @@ export interface SettingsState {
 	mcpInstalledMetadata: Record<string, import('../../common').InstalledMcpServerMetadata>;
 	lspStatus: LspStatusData[];
 
-	// Commands
-	commands: {
-		builtin: CommandItem[];
-		custom: ParsedCommand[];
-		/** CLI commands fetched dynamically from the OpenCode server */
-		cli: Array<{ name: string; description?: string; source?: string }>;
-		isLoading: boolean;
-		error?: string;
-	};
-
-	skills: {
-		items: import('../../common').ParsedSkill[];
-		isLoading: boolean;
-		error?: string;
-	};
-
-	// Subagents
-	subagents: {
-		items: import('../../common').ParsedSubagent[];
-		isLoading: boolean;
-		error?: string;
-	};
-
-	// CLI Agents (primary agents from OpenCode: build, plan, custom)
-	agents: {
-		items: Array<{
-			id: string;
-			mode?: string;
-			description?: string;
-			model?: string;
-			variant?: string;
-			builtIn?: boolean;
-			hidden?: boolean;
-		}>;
-		isLoading: boolean;
-		error?: string;
-	};
-
-	// Plugins
-	plugins: {
-		items: string[];
-		isLoading: boolean;
-		error?: string;
-	};
+	resources: ResourcesState;
 
 	// Resource operations feedback in Settings
 	resourceOps: {
@@ -649,7 +589,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 	availableProviders: [],
 	providerAuthState: null,
 	enabledOpenCodeModels: [],
-	disabledProviders: [],
 	sessionDisconnectedProviders: [],
 
 	discoveryStatus: {
@@ -700,36 +639,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 	mcpInstalledMetadata: {},
 	lspStatus: [],
 
-	commands: {
-		builtin: [],
-		custom: [],
-		cli: [],
-		isLoading: false,
-		error: undefined,
-	},
-
-	skills: {
-		items: [],
-		isLoading: false,
-		error: undefined,
-	},
-
-	plugins: {
-		items: [],
-		isLoading: false,
-		error: undefined,
-	},
-
-	subagents: {
-		items: [],
-		isLoading: false,
-		error: undefined,
-	},
-
-	agents: {
-		items: [],
-		isLoading: false,
-		error: undefined,
+	resources: {
+		agent: emptyResourceState<AgentResource>(),
+		command: emptyResourceState<CommandResource>(),
+		skill: emptyResourceState<SkillResource>(),
+		plugin: emptyResourceState<PluginResource>(),
 	},
 
 	mcpConfig: {
@@ -860,26 +774,17 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 					),
 				})),
 			})),
-		setCommands: commands =>
-			set(state => ({
-				commands: { ...state.commands, ...commands },
-			})),
-		setSkills: skills =>
-			set(state => ({
-				skills: { ...state.skills, ...skills },
-			})),
-		setPlugins: (plugins: Partial<SettingsState['plugins']>) =>
-			set(state => ({
-				plugins: { ...state.plugins, ...plugins },
-			})),
-		setSubagents: subagents =>
-			set(state => ({
-				subagents: { ...state.subagents, ...subagents },
-			})),
-		setAgents: agents =>
-			set(state => ({
-				agents: { ...state.agents, ...agents },
-			})),
+		setResources: (kind, resources) =>
+			set(state => {
+				const current = state.resources[kind];
+				if (resources.revision !== undefined && resources.revision < current.revision) return state;
+				return {
+					resources: {
+						...state.resources,
+						[kind]: { ...current, ...resources },
+					},
+				};
+			}),
 		setMcpServers: mcpServers => {
 			set({ mcpServers });
 			useChatStore.getState().actions.rebuildMaterializedViews();
@@ -946,8 +851,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 		setProviderAuthState: providerAuthState => set({ providerAuthState }),
 		// Model selection for OpenCode
 		setEnabledOpenCodeModels: enabledOpenCodeModels => set({ enabledOpenCodeModels }),
-		// Unified provider visibility (disabled = hidden from dropdown but keeps model selection)
-		setDisabledProviders: disabledProviders => set({ disabledProviders }),
 		setDiscoveryStatus: discoveryStatus => set({ discoveryStatus }),
 
 		setRules: rules => set({ rules }),

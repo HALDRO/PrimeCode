@@ -97,8 +97,8 @@ export function useChatInputController(
 	const isImproving = useIsImprovingPrompt();
 	const currentImproveRequestId = useImprovingPromptRequestId();
 	const promptVersions = usePromptVersions();
-	const subagentItems = useSettingsStore(s => s.subagents.items);
-	const agentItems = useSettingsStore(s => s.agents.items);
+	const agentResources = useSettingsStore(s => s.resources.agent.items);
+	const pushNotification = useUIStore(s => s.actions.pushNotification);
 	// Use reactive selector so the button re-renders immediately when agent changes.
 	// getSessionAgent() is an imperative getter that doesn't subscribe to store updates.
 	const selectedAgent = useSessionAgent();
@@ -109,10 +109,15 @@ export function useChatInputController(
 		if (!sessionModelId) return undefined;
 		const variants = getAvailableModelVariants(opencodeProviders, sessionModelId, proxyEndpoints);
 		const agentId = selectedAgent ?? 'build';
+		const selectedResource = agentResources.find(agent => agent.name === agentId);
 		const configured = getConfiguredAgentVariant({
-			agent:
-				agentItems.find(agent => agent.id === agentId) ??
-				subagentItems.find(agent => agent.name === agentId),
+			agent: selectedResource
+				? {
+						name: selectedResource.name,
+						model: selectedResource.model,
+						variant: selectedResource.variant,
+					}
+				: undefined,
 			effectiveModel: sessionModelId,
 			variants,
 		});
@@ -122,22 +127,35 @@ export function useChatInputController(
 			configured,
 		});
 	}, [
-		agentItems,
+		agentResources,
 		opencodeProviders,
 		proxyEndpoints,
 		reactiveSessionVariant,
 		selectedAgent,
 		sessionModel,
-		subagentItems,
 	]);
 
 	// Build a set of valid agent names for @mention parsing
 	const validAgentNames = useMemo(() => {
 		const names = new Set<string>();
-		for (const sa of subagentItems) names.add(sa.name.toLowerCase());
-		for (const a of agentItems) names.add(a.id.toLowerCase());
+		for (const agent of agentResources) {
+			if (!agent.disabled && !agent.hidden) names.add(agent.name.toLowerCase());
+		}
 		return names;
-	}, [subagentItems, agentItems]);
+	}, [agentResources]);
+
+	useEffect(() => {
+		if (!selectedAgent) return;
+		const resource = agentResources.find(agent => agent.name === selectedAgent);
+		if (!resource || (!resource.disabled && !resource.hidden)) return;
+		setSessionAgent(undefined);
+		pushNotification({
+			type: 'system_notice',
+			content: `Agent ${selectedAgent} is no longer available. Switched back to Build.`,
+			timestamp: new Date().toISOString(),
+			autoDismissMs: 6000,
+		});
+	}, [agentResources, pushNotification, selectedAgent, setSessionAgent]);
 
 	const isControlled = controlledValue !== undefined;
 	const inputValue = isControlled ? controlledValue : storeInput;

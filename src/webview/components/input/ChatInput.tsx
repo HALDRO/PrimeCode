@@ -165,21 +165,22 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 			null,
 		);
 
-		const customCommands = useSettingsStore(s => s.commands.custom);
-		const cliCommands = useSettingsStore(s => s.commands.cli);
-		const subagents = useSettingsStore(s => s.subagents);
+		const agentResources = useSettingsStore(s => s.resources.agent.items);
 
-		const validCommands = useMemo(
-			() =>
-				new Set([
-					...cliCommands.map(c => c.name.toLowerCase()),
-					...customCommands.map(c => c.name.toLowerCase()),
-				]),
-			[cliCommands, customCommands],
-		);
+		const validCommands = useMemo(() => new Set<string>(['compact']), []);
 		const validSubagentNames = useMemo(
-			() => new Set(subagents.items.map(a => a.name.toLowerCase())),
-			[subagents.items],
+			() =>
+				new Set(
+					agentResources
+						.filter(
+							agent =>
+								!agent.disabled &&
+								!agent.hidden &&
+								(agent.mode === 'subagent' || agent.mode === 'all'),
+						)
+						.map(agent => agent.name.toLowerCase()),
+				),
+			[agentResources],
 		);
 
 		useEffect(() => {

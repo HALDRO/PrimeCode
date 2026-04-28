@@ -63,11 +63,20 @@ export const AgentDropdown: React.FC<AgentDropdownProps> = ({
 	onSelect,
 	onClose,
 }) => {
-	const agents = useSettingsStore(state => state.agents);
+	const agentResources = useSettingsStore(state => state.resources.agent.items);
 
 	const items = useMemo<DropdownMenuItem<AgentData>[]>(() => {
-		const agentItems = agents.items
-			.filter(a => !a.hidden && (a.mode === 'primary' || a.mode === undefined))
+		const agentItems = agentResources
+			.filter(
+				resource =>
+					!resource.disabled &&
+					!resource.hidden &&
+					(resource.mode === 'primary' || resource.mode === undefined),
+			)
+			.map(resource => ({
+				id: resource.name,
+				description: resource.description,
+			}))
 			.map(a => ({
 				id: a.id,
 				label: getAgentLabel(a.id),
@@ -96,7 +105,7 @@ export const AgentDropdown: React.FC<AgentDropdownProps> = ({
 		}
 
 		return agentItems;
-	}, [agents.items]);
+	}, [agentResources]);
 
 	const handleSelect = useCallback(
 		(agent: AgentData) => {

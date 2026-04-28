@@ -626,7 +626,6 @@ export type OpenCodeProviderData = Static<typeof OpenCodeProviderDataSchema>;
 export const RuleSchema = Type.Object({
 	name: Type.String(),
 	path: Type.String(),
-	isEnabled: Type.Boolean(),
 	source: Type.Union([Type.Literal('opencode')]),
 	content: Type.Optional(Type.String()),
 	isReadOnly: Type.Optional(Type.Boolean()),
@@ -658,6 +657,11 @@ export const ParsedSkillSchema = Type.Object({
 	content: Type.String(),
 	version: Type.Optional(Type.String()),
 	path: Type.String(),
+	policy: Type.Optional(
+		Type.Union([Type.Literal('allow'), Type.Literal('ask'), Type.Literal('deny')]),
+	),
+	policySource: Type.Optional(Type.Union([Type.Literal('exact'), Type.Literal('wildcard')])),
+	policyPattern: Type.Optional(Type.String()),
 });
 export type ParsedSkill = Static<typeof ParsedSkillSchema>;
 
@@ -702,24 +706,14 @@ export const ParsedSubagentSchema = Type.Object({
 });
 export type ParsedSubagent = Static<typeof ParsedSubagentSchema>;
 
-/**
- * Shared payload fields for CreateSubagent commands in `protocol.ts`.
- * Derived from ParsedSubagent to avoid duplicating the permission/tools shape.
- */
-export type SubagentCommandFields = {
-	type: 'createSubagent';
-	name: string;
-	description: string;
-	content: string;
-	model?: string;
-	temperature?: number;
-	topP?: number;
-	mode?: ParsedSubagent['mode'];
-	color?: string;
-	steps?: number;
-	tools?: ParsedSubagent['tools'];
-	permission?: ParsedSubagent['permission'];
-};
+// Resource management messages are protocol-typed in protocol.ts.
+export const ResourceKindSchema = Type.Union([
+	Type.Literal('agent'),
+	Type.Literal('command'),
+	Type.Literal('skill'),
+	Type.Literal('plugin'),
+]);
+export const ResourceActionSchema = Type.Union([Type.Literal('setDisabled')]);
 
 // =============================================================================
 // Discovery Status

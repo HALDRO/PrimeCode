@@ -331,35 +331,21 @@ const mockVSCodeApi: VSCodeApi = {
 			});
 		} else if (msg.type === 'getRules') {
 			dispatchGlobalMessage('ruleList', {
-				rules: [
-					{ name: 'base.md', path: '.opencode/rules/base.md', isEnabled: true, source: 'opencode' },
-				],
+				rules: [{ name: 'base.md', path: '.opencode/rules/base.md', source: 'opencode' }],
 			});
-		} else if (msg.type === 'toggleRule') {
-			const { path: rp, enabled } = msg as unknown as { path: string; enabled: boolean };
-			if (rp) {
-				dispatchGlobalMessage('ruleUpdated', {
-					rule: { name: rp.split('/').pop(), path: rp, isEnabled: enabled, source: 'opencode' },
-				});
-				mockVSCodeApi.postMessage({ type: 'getRules' });
-			}
 		} else if (msg.type === 'createRule') {
 			const { name } = msg as unknown as { name: string };
 			dispatchGlobalMessage('ruleUpdated', {
 				rule: {
 					name: name ?? 'new-rule.md',
 					path: `.opencode/rules/${name ?? 'new-rule.md'}`,
-					isEnabled: true,
 					source: 'opencode',
 				},
 			});
 		} else if (msg.type === 'getPermissions') {
 			dispatchGlobalMessage('permissionsUpdated', {
-				policies: { edit: 'allow', terminal: 'allow', network: 'allow' },
+				policies: { edit: 'allow', bash: 'allow', webfetch: 'allow' },
 			});
-		} else if (msg.type === 'setPermissions') {
-			const { policies } = msg as unknown as { policies: Record<string, string> };
-			if (policies) dispatchGlobalMessage('permissionsUpdated', { policies });
 		} else if (msg.type === 'reloadAllProviders') {
 			mockVSCodeApi.postMessage({ type: 'loadOpenCodeProviders' });
 			mockVSCodeApi.postMessage({ type: 'loadAvailableProviders' });
@@ -421,8 +407,6 @@ const mockVSCodeApi: VSCodeApi = {
 			dispatchGlobalMessage('openCodeStatus', { installed: true, version: '0.1.0' });
 		} else if (msg.type === 'getAccess') {
 			dispatchGlobalMessage('accessData', []);
-		} else if (msg.type === 'getCommands') {
-			dispatchGlobalMessage('commandsList', { custom: [], isLoading: false });
 		} else if (msg.type === 'setOpenCodeProviderAuth') {
 			const { providerId } = msg as unknown as { providerId: string };
 			setTimeout(() => {

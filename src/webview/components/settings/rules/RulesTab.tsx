@@ -2,7 +2,7 @@ import type React from 'react';
 import { useSettingsStore } from '../../../store';
 import { useVSCode } from '../../../utils/vscode';
 import { EditIcon } from '../../icons';
-import { Button, Switch, Tooltip } from '../../ui';
+import { Button, Tooltip } from '../../ui';
 import {
 	EmptyState,
 	GroupTitle,
@@ -15,33 +15,34 @@ import {
 export const RulesTab: React.FC = () => {
 	const { postMessage } = useVSCode();
 	const { discoveryStatus, rules } = useSettingsStore();
-	const { hasAgentsMd } = discoveryStatus.rules;
+	const { hasAgentsMd, ruleFiles } = discoveryStatus.rules;
+	const agentsMdBadges = (
+		<>
+			{!hasAgentsMd && <SettingsBadge>Not found</SettingsBadge>}
+			{ruleFiles.some(file => file.startsWith('Project')) && <SettingsBadge>Project</SettingsBadge>}
+			{ruleFiles.some(file => file.startsWith('Global')) && <SettingsBadge>Global</SettingsBadge>}
+		</>
+	);
 
 	const handleOpenAgents = () => postMessage({ type: 'openFile', filePath: 'AGENTS.md' });
-
-	const handleToggleRule = (path: string, enabled: boolean, source: 'opencode') => {
-		postMessage({ type: 'toggleRule', path, enabled, source });
-	};
 
 	return (
 		<>
 			<GroupTitle>Core Rules</GroupTitle>
+			<p className="mx-(--gap-1) -mt-(--gap-1) mb-(--gap-3) text-xs text-vscode-descriptionForeground leading-relaxed">
+				OpenCode rules are instruction sources such as AGENTS.md and configured instruction files.
+				OpenCode has no per-rule enabled flag; edit a rule file to change it.
+			</p>
 			<SettingsGroup>
 				<SettingRow
 					title="AGENTS.md"
-					tooltip="Auto-generated from first enabled rule in .opencode/rules/"
+					titleExtra={agentsMdBadges}
+					tooltip={ruleFiles.join('\n') || 'No AGENTS.md found'}
 					last
 				>
-					<div className="flex items-center gap-2">
-						{hasAgentsMd ? (
-							<SettingsBadge variant="green">Active</SettingsBadge>
-						) : (
-							<SettingsBadge>Not Generated</SettingsBadge>
-						)}
-						<Button size="sm" variant="secondary" onClick={handleOpenAgents}>
-							View
-						</Button>
-					</div>
+					<Button size="sm" variant="secondary" onClick={handleOpenAgents}>
+						View
+					</Button>
 				</SettingRow>
 			</SettingsGroup>
 
@@ -67,10 +68,6 @@ export const RulesTab: React.FC = () => {
 										<EditIcon size={12} />
 									</button>
 								</Tooltip>
-								<Switch
-									checked={rule.isEnabled}
-									onChange={v => handleToggleRule(rule.path, v, rule.source)}
-								/>
 							</SettingRowActions>
 						</SettingRow>
 					))

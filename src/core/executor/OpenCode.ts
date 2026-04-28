@@ -1447,6 +1447,11 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		this._agentsCache.clear();
 	}
 
+	/** Invalidate the MCP status cache so the next getMcpStatus() call fetches fresh data. */
+	clearMcpCache(): void {
+		this._mcpCache.clear();
+	}
+
 	// Aliases previously provided by CLIRunner facade
 	/** Alias for ensureServer — used by ChatProvider. */
 	async start(config: CLIConfig): Promise<void> {

@@ -4,22 +4,113 @@ import {
 	isProxyEndpointProviderId,
 	OPENAI_COMPATIBLE_PROVIDER_ID,
 } from '../../common';
-import type { CommandOf, WebviewCommand } from '../../common/protocol';
+import type {
+	CommandListItem,
+	CommandOf,
+	ManagedResource,
+	PluginListItem,
+	ResourceKind,
+	SkillListItem,
+	WebviewCommand,
+} from '../../common/protocol';
+import type { ParsedCommand, ParsedSkill } from '../../common/schemas';
 import type { PrimeCodeSettings } from '../../core/Settings';
 import type { RulesService } from '../../services/RulesService';
 import { logger } from '../../utils/logger';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
+type ResourceAdapter = {
+	list: () => Promise<{ resources: ManagedResource[]; revision: number }>;
+	create?: (name: string, payload: Record<string, unknown>) => Promise<void>;
+	delete?: (name: string) => Promise<void>;
+	refresh?: () => void;
+};
+
 export class SettingsHandler implements WebviewMessageHandler {
 	private rulesService: RulesService | null = null;
+	private resourceRevision: Record<ResourceKind, number> = {
+		agent: 0,
+		command: 0,
+		skill: 0,
+		plugin: 0,
+	};
+	private readonly resourceAdapters: Record<ResourceKind, ResourceAdapter>;
 
 	constructor(private context: HandlerContext) {
 		this.rulesService = context.services.rules;
+		this.resourceAdapters = this.createResourceAdapters();
 	}
 
 	setWorkspaceRoot(root: string) {
 		this.context.services.setWorkspaceRoot(root);
 		this.rulesService = this.context.services.rules;
+	}
+
+	private createResourceAdapters(): Record<ResourceKind, ResourceAdapter> {
+		return {
+			agent: {
+				list: () => this.context.services.agentResources.listAgents(this.context.cli),
+				create: (name, payload) =>
+					this.context.services.resources.save('subagents', {
+						name,
+						description: getPayloadString(payload, 'description'),
+						prompt: getPayloadString(payload, 'content'),
+						model: getOptionalPayloadString(payload, 'model'),
+						temperature: getOptionalPayloadNumber(payload, 'temperature'),
+						topP: getOptionalPayloadNumber(payload, 'topP'),
+						mode: getAgentMode(payload.mode),
+						color: getOptionalPayloadString(payload, 'color'),
+						steps: getOptionalPayloadNumber(payload, 'steps'),
+						tools: getRecordPayload<boolean>(payload.tools, value => typeof value === 'boolean'),
+						permission: getRecordPayload(payload.permission),
+					}),
+				delete: name => this.context.services.resources.delete('subagents', name),
+				refresh: () => this.context.cli.clearAgentsCache?.(),
+			},
+			command: {
+				list: async () => ({
+					resources: await this.listCommands(),
+					revision: this.nextResourceRevision('command'),
+				}),
+				create: (name, payload) =>
+					this.context.services.resources.save('commands', {
+						name,
+						description: getPayloadString(payload, 'description'),
+						template: getPayloadString(payload, 'content'),
+					}),
+				delete: name => this.context.services.resources.delete('commands', name),
+				refresh: () => this.context.cli.clearCommandsCache?.(),
+			},
+			skill: {
+				list: async () => ({
+					resources: await this.listSkills(),
+					revision: this.nextResourceRevision('skill'),
+				}),
+				create: (name, payload) =>
+					this.context.services.resources.save('skills', {
+						name,
+						description: getPayloadString(payload, 'description'),
+						content: getPayloadString(payload, 'content'),
+						version: '0.1.0',
+					}),
+				delete: name => this.context.services.resources.delete('skills', name),
+				refresh: () => this.context.cli.clearSkillsCache?.(),
+			},
+			plugin: {
+				list: async () => ({
+					resources: await this.listPlugins(),
+					revision: this.nextResourceRevision('plugin'),
+				}),
+				create: async name => {
+					await this.context.services.openCodeConfig.addProjectPlugin(name);
+					this.context.services.mcpConfigWatcher.notifyUiSave();
+				},
+				delete: async name => {
+					await this.context.services.openCodeConfig.removeProjectPlugin(name);
+					this.context.services.mcpConfigWatcher.notifyUiSave();
+				},
+			},
+		};
 	}
 
 	async handleMessage(msg: WebviewCommand): Promise<void> {
@@ -30,52 +121,25 @@ export class SettingsHandler implements WebviewMessageHandler {
 			case 'updateSettings':
 				await this.onUpdateSettings(msg);
 				break;
-			case 'getCommands':
-				await this.onGetCommands();
-				break;
-			case 'getSkills':
-				await this.onGetSkills();
-				break;
-			case 'getSubagents':
-				await this.onGetSubagents();
-				break;
-			case 'getAgents':
-				await this.onGetAgents();
-				break;
-			case 'getPlugins':
-				await this.onGetPlugins();
-				break;
 			case 'getRules':
 				await this.onGetRules();
 				break;
-
-			// Resource CRUD
-			case 'createCommand':
-				await this.onCreateResource('commands', msg);
+			case 'getResources':
+				await this.onGetResources(msg);
 				break;
-			case 'deleteCommand':
-				await this.onDeleteResource('commands', msg);
+			case 'mutateResource':
+				await this.onMutateResource(msg);
 				break;
-			case 'createSkill':
-				await this.onCreateResource('skills', msg);
-				break;
-			case 'deleteSkill':
-				await this.onDeleteResource('skills', msg);
-				break;
-			case 'createSubagent':
-				await this.onCreateResource('subagents', msg);
+			case 'applyResourceAction':
+				await this.onApplyResourceAction(msg);
 				break;
 			case 'deleteSubagent':
-				await this.onDeleteResource('subagents', msg);
-				break;
-			case 'addPlugin':
-				await this.onAddPlugin(msg);
-				break;
-			case 'removePlugin':
-				await this.onRemovePlugin(msg);
-				break;
-			case 'toggleRule':
-				await this.onToggleRule(msg);
+				await this.onMutateResource({
+					type: 'mutateResource',
+					kind: 'agent',
+					action: 'delete',
+					name: msg.name,
+				});
 				break;
 			case 'createRule':
 				await this.onCreateRule(msg);
@@ -304,193 +368,204 @@ export class SettingsHandler implements WebviewMessageHandler {
 		}
 	}
 
-	private async onGetCommands(): Promise<void> {
-		this.context.bridge.data('commandsList', { custom: [], isLoading: true });
+	private async onGetResources(msg: CommandOf<'getResources'>): Promise<void> {
+		const kinds: ResourceKind[] = msg.kind ? [msg.kind] : ['agent', 'command', 'skill', 'plugin'];
+		await Promise.all(kinds.map(kind => this.sendResourceList(kind, msg.requestId)));
+	}
+
+	private async onApplyResourceAction(msg: CommandOf<'applyResourceAction'>): Promise<void> {
+		this.context.bridge.data('resourceOperation', {
+			operationId: msg.operationId,
+			resourceId: msg.resourceId,
+			action: msg.action,
+			status: 'started',
+		});
+
 		try {
-			const [commands, cliCommands] = await Promise.all([
-				this.context.services.resources.getAll('commands'),
-				this.fetchCliCommands(),
+			if (msg.action !== 'setDisabled' || typeof msg.value !== 'boolean') {
+				throw new Error('Unsupported resource action payload');
+			}
+			const resources = await this.context.services.agentResources.buildAgentResources(
+				this.context.cli,
+			);
+			const resource = resources.find(item => item.id === msg.resourceId);
+			if (!resource) throw new Error('Resource not found');
+
+			const result = await this.context.services.openCodeApply.setAgentDisabled(
+				this.context.cli,
+				resource,
+				msg.value,
+			);
+			this.context.bridge.data('resourceOperation', {
+				operationId: msg.operationId,
+				resourceId: msg.resourceId,
+				action: msg.action,
+				status: 'completed',
+				result: result.result,
+				message: result.message,
+				revision: result.revision,
+			});
+			this.sendResources('agent', result.resources, result.revision, undefined, msg.operationId);
+		} catch (error) {
+			const { resources, revision } = await this.context.services.agentResources.listAgents(
+				this.context.cli,
+			);
+			this.context.bridge.data('resourceOperation', {
+				operationId: msg.operationId,
+				resourceId: msg.resourceId,
+				action: msg.action,
+				status: 'completed',
+				result: 'error',
+				message: error instanceof Error ? error.message : String(error),
+				revision,
+			});
+			this.sendResources('agent', resources, revision, undefined, msg.operationId);
+		}
+	}
+
+	private sendResources(
+		kind: ResourceKind,
+		resources: ManagedResource[],
+		revision: number,
+		requestId?: string,
+		operationId?: string,
+	): void {
+		this.context.bridge.data('resourcesList', {
+			kind,
+			resources,
+			revision,
+			requestId,
+			operationId,
+		});
+	}
+
+	private nextResourceRevision(kind: ResourceKind): number {
+		this.resourceRevision[kind] += 1;
+		return this.resourceRevision[kind];
+	}
+
+	private async sendResourceList(kind: ResourceKind, requestId?: string): Promise<void> {
+		try {
+			const { resources, revision } = await this.resourceAdapters[kind].list();
+			this.context.bridge.data('resourcesList', { kind, resources, revision, requestId });
+		} catch (error) {
+			this.context.bridge.data('resourcesList', {
+				kind,
+				resources: [],
+				revision: this.nextResourceRevision(kind),
+				requestId,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+
+	private async listCommands(): Promise<Array<CommandListItem & { kind: 'command'; id: string }>> {
+		try {
+			const [project, global] = await Promise.all([
+				this.context.services.resources.getAll('commands') as Promise<ParsedCommand[]>,
+				this.context.services.resources.getGlobalCommands(),
 			]);
-			// Deduplicate: remove CLI commands that already exist in custom list
-			const customNames = new Set(commands.map(c => c.name));
-			const dedupedCli = cliCommands.filter(c => !customNames.has(c.name));
-			this.context.bridge.data('commandsList', {
-				custom: commands,
-				cli: dedupedCli.map(c => ({
-					name: c.name,
-					description: c.description,
-					source: c.source,
+			return this.mergeByPath<CommandListItem>([
+				...project.map(command => ({
+					...command,
+					source: 'project' as const,
+					locationScope: 'project' as const,
 				})),
-				isLoading: false,
-			});
-		} catch (error) {
-			this.context.bridge.data('commandsList', {
-				custom: [],
-				isLoading: false,
-				error: error instanceof Error ? error.message : String(error),
-			});
+				...global.map(command => ({
+					...command,
+					source: 'global' as const,
+					locationScope: 'global' as const,
+				})),
+			]).map(command => ({ ...command, kind: 'command' as const, id: command.path }));
+		} catch {
+			return [];
 		}
 	}
 
-	/**
-	 * Fetch built-in CLI commands from the running OpenCode server.
-	 * Merges server commands with PrimeCode-internal commands (e.g. compact)
-	 * that are handled locally but not registered on the server.
-	 * Returns empty array if server is not available.
-	 */
-	private async fetchCliCommands(): Promise<
-		Array<{ name: string; description?: string; source?: string }>
-	> {
-		// Commands handled internally by PrimeCode (not registered on the server)
-		const internalCommands: Array<{ name: string; description?: string; source?: string }> = [
-			{ name: 'compact', description: 'Summarize and compact session context', source: 'command' },
-		];
-
+	private async listSkills(): Promise<Array<SkillListItem & { kind: 'skill'; id: string }>> {
 		try {
-			const client = this.context.cli.getSdkClient();
-			const serverInfo = this.context.cli.getOpenCodeServerInfo();
-			if (!client || !serverInfo?.directory) return internalCommands;
-			const { data } = await client.command.list({ directory: serverInfo.directory });
-			const serverCommands = (data ?? []) as Array<{
-				name: string;
-				description?: string;
-				source?: string;
-			}>;
-			// Filter out skills — they are fetched separately via GET /skill and shown
-			// in the skills settings panel. The OpenCode CLI /command endpoint includes
-			// skills with source: "skill" by design, but we don't want them in the
-			// slash command dropdown (they'd appear as duplicate "CLI" entries).
-			const filteredCommands = serverCommands.filter(c => c.source !== 'skill');
-			// Merge: internal first, then server (skip duplicates)
-			const names = new Set(internalCommands.map(c => c.name));
-			return [...internalCommands, ...filteredCommands.filter(c => !names.has(c.name))];
-		} catch (error) {
-			logger.warn('[SettingsHandler] Failed to fetch CLI commands:', error);
-			return internalCommands;
+			const [projectAndExternal, global] = await Promise.all([
+				this.context.services.resources.getAll('skills') as Promise<ParsedSkill[]>,
+				this.context.services.resources.getGlobalSkillsIncludingExternal(),
+			]);
+			return this.mergeByPath<SkillListItem>([
+				...projectAndExternal.map(skill => this.skillItem(skill, 'project')),
+				...global.map(skill => this.skillItem(skill, 'global')),
+			]).map(skill => ({ ...skill, kind: 'skill' as const, id: skill.path }));
+		} catch {
+			return [];
 		}
 	}
 
-	private async onGetSkills(): Promise<void> {
-		this.context.bridge.data('skillsList', { skills: [], isLoading: true });
+	private skillItem(skill: ParsedSkill, locationScope: 'project' | 'global'): SkillListItem {
+		const format = getSkillFormat(skill.path);
+		return {
+			...skill,
+			source: format === 'opencode' ? locationScope : ('external' as const),
+			locationScope,
+			format,
+		};
+	}
+
+	private async listPlugins(): Promise<Array<PluginListItem & { kind: 'plugin' }>> {
 		try {
-			// Primary: fetch from CLI server (GET /skill) — includes all discovery phases
-			const serverInfo = this.context.cli.getOpenCodeServerInfo();
-			const cliSkills =
-				serverInfo?.directory && this.context.cli.listSkills
-					? await this.context.cli.listSkills(serverInfo.directory)
-					: null;
-
-			if (cliSkills && cliSkills.length > 0) {
-				// Map CLI skill format to ParsedSkill-compatible shape
-				const skills = cliSkills.map(s => ({
-					name: s.name,
-					description: s.description ?? '',
-					content: s.content ?? '',
-					path: s.location ?? '',
-				}));
-				this.context.bridge.data('skillsList', { skills, isLoading: false });
-				return;
-			}
-
-			// Fallback: read local skill directories directly (.opencode + external interop dirs)
-			const skills = await this.context.services.resources.getAllSkillsIncludingExternal();
-			this.context.bridge.data('skillsList', { skills, isLoading: false });
-		} catch (error) {
-			this.context.bridge.data('skillsList', {
-				skills: [],
-				isLoading: false,
-				error: error instanceof Error ? error.message : String(error),
-			});
+			const [projectFiles, globalFiles, projectConfig, globalConfig] = await Promise.all([
+				this.context.services.resources.getProjectPluginFiles(),
+				this.context.services.resources.getGlobalPluginFiles(),
+				this.context.services.openCodeConfig.getProjectPlugins(),
+				this.context.services.openCodeConfig.getGlobalPlugins(),
+			]);
+			return this.mergePlugins([
+				...projectFiles.map(file => this.pluginFileItem(file, 'project' as const)),
+				...globalFiles.map(file => this.pluginFileItem(file, 'global' as const)),
+				...projectConfig.map(name => this.pluginConfigItem(name, 'project' as const)),
+				...globalConfig.map(name => this.pluginConfigItem(name, 'global' as const)),
+			]).map(plugin => ({ ...plugin, kind: 'plugin' as const }));
+		} catch {
+			return [];
 		}
 	}
 
-	private async onGetSubagents(): Promise<void> {
-		this.context.bridge.data('subagentsList', { subagents: [], isLoading: true });
-		try {
-			const subagents = await this.context.services.resources.getAll('subagents');
-			this.context.bridge.data('subagentsList', { subagents, isLoading: false });
-		} catch (error) {
-			this.context.bridge.data('subagentsList', {
-				subagents: [],
-				isLoading: false,
-				error: error instanceof Error ? error.message : String(error),
-			});
+	private mergeByPath<T extends { path: string; name: string }>(items: T[]): T[] {
+		const byPath = new Map<string, T>();
+		for (const item of items) {
+			byPath.set(item.path, item);
 		}
+		return [...byPath.values()].sort((a, b) => a.name.localeCompare(b.name));
 	}
 
-	private async onGetAgents(): Promise<void> {
-		this.context.bridge.data('agentsList', { agents: [], isLoading: true });
-		try {
-			const serverInfo = this.context.cli.getOpenCodeServerInfo();
-			if (!serverInfo?.directory) {
-				this.context.bridge.data('agentsList', { agents: [], isLoading: false });
-				return;
-			}
-			const data = await this.context.cli.listAgents(serverInfo.directory);
-			// CLI returns Array<Agent> with `name` field — normalize to `id` for the UI
-			const agents = Array.isArray(data)
-				? data
-						.filter((a): a is Record<string, unknown> => a != null && typeof a === 'object')
-						.map(a => ({
-							id: typeof a.name === 'string' ? a.name : String(a.name ?? ''),
-							mode: typeof a.mode === 'string' ? a.mode : undefined,
-							description: typeof a.description === 'string' ? a.description : undefined,
-							model: typeof a.model === 'string' ? a.model : undefined,
-							variant: typeof a.variant === 'string' ? a.variant : undefined,
-							builtIn: typeof a.builtIn === 'boolean' ? a.builtIn : undefined,
-							hidden: typeof a.hidden === 'boolean' ? a.hidden : undefined,
-						}))
-				: [];
-			this.context.bridge.data('agentsList', { agents, isLoading: false });
-		} catch (error) {
-			this.context.bridge.data('agentsList', {
-				agents: [],
-				isLoading: false,
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
+	private pluginFileItem(path: string, source: 'project' | 'global'): PluginListItem {
+		const name =
+			path
+				.split(/[\\/]/)
+				.pop()
+				?.replace(/\.(mjs|js|ts)$/u, '') || path;
+		return {
+			id: `${source}:file:${path}`,
+			name,
+			path,
+			source,
+			locationScope: source,
+			origin: 'file',
+		};
 	}
 
-	private async onGetPlugins(): Promise<void> {
-		this.context.bridge.data('pluginsList', { plugins: [], isLoading: true });
-		try {
-			const plugins = await this.context.services.mcpConfig.getPlugins();
-			this.context.bridge.data('pluginsList', { plugins, isLoading: false });
-		} catch (error) {
-			this.context.bridge.data('pluginsList', {
-				plugins: [],
-				isLoading: false,
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
+	private pluginConfigItem(name: string, source: 'project' | 'global'): PluginListItem {
+		return {
+			id: `${source}:config:${name}`,
+			name,
+			source: source === 'project' ? 'config' : source,
+			locationScope: source,
+			origin: 'config',
+		};
 	}
 
-	private async onAddPlugin(msg: CommandOf<'addPlugin'>): Promise<void> {
-		try {
-			await this.context.services.mcpConfig.addPlugin(msg.plugin);
-			await this.onGetPlugins();
-		} catch (error) {
-			logger.error('[SettingsHandler] addPlugin failed:', error);
-			this.context.bridge.data('pluginsList', {
-				plugins: await this.context.services.mcpConfig.getPlugins().catch(() => []),
-				isLoading: false,
-				error: error instanceof Error ? error.message : String(error),
-			});
+	private mergePlugins(items: PluginListItem[]): PluginListItem[] {
+		const byId = new Map<string, PluginListItem>();
+		for (const item of items) {
+			byId.set(item.id, item);
 		}
-	}
-
-	private async onRemovePlugin(msg: CommandOf<'removePlugin'>): Promise<void> {
-		try {
-			await this.context.services.mcpConfig.removePlugin(msg.plugin);
-			await this.onGetPlugins();
-		} catch (error) {
-			logger.error('[SettingsHandler] removePlugin failed:', error);
-			this.context.bridge.data('pluginsList', {
-				plugins: await this.context.services.mcpConfig.getPlugins().catch(() => []),
-				isLoading: false,
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
+		return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
 	}
 
 	private async onGetRules(): Promise<void> {
@@ -512,117 +587,20 @@ export class SettingsHandler implements WebviewMessageHandler {
 	// Resource CRUD
 	// =========================================================================
 
-	private async onCreateResource(
-		type: import('../../services/ResourceService').ResourceType,
-		msg: WebviewCommand,
-	): Promise<void> {
-		const { name } = msg as {
-			name: string;
-		};
+	private async onMutateResource(msg: CommandOf<'mutateResource'>): Promise<void> {
+		const { name, kind, action, payload } = msg;
 		if (!name) return;
+		const adapter = this.resourceAdapters[kind];
 
 		try {
-			const item = this.buildResourceItem(type, msg);
-			await this.context.services.resources.save(type, item);
-			logger.info(`[SettingsHandler] Created ${type}: ${name}`);
-			// Refresh the list
-			await this.refreshResourceList(type);
+			if (action === 'delete') await adapter.delete?.(name);
+			else await adapter.create?.(name, payload ?? {});
+			logger.info(`[SettingsHandler] ${action} ${kind}: ${name}`);
+			adapter.refresh?.();
+			await this.sendResourceList(kind);
 		} catch (error) {
-			logger.error(`[SettingsHandler] Failed to create ${type}:`, error);
-			await this.refreshResourceList(type);
-		}
-	}
-
-	private async onDeleteResource(
-		type: import('../../services/ResourceService').ResourceType,
-		msg: WebviewCommand,
-	): Promise<void> {
-		const { name } = msg as { name: string };
-		if (!name) return;
-
-		try {
-			await this.context.services.resources.delete(type, name);
-			logger.info(`[SettingsHandler] Deleted ${type}: ${name}`);
-			await this.refreshResourceList(type);
-		} catch (error) {
-			logger.error(`[SettingsHandler] Failed to delete ${type}:`, error);
-			await this.refreshResourceList(type);
-		}
-	}
-
-	private buildResourceItem(
-		type: import('../../services/ResourceService').ResourceType,
-		msg: WebviewCommand,
-	): { name: string } & Record<string, unknown> {
-		const m = msg as unknown as Record<string, unknown>;
-		const name = String(m.name ?? '');
-
-		switch (type) {
-			case 'commands':
-				return { name, description: String(m.description ?? ''), prompt: String(m.content ?? '') };
-			case 'skills':
-				return {
-					name,
-					description: String(m.description ?? ''),
-					content: String(m.content ?? ''),
-					version: String(m.version ?? '0.1.0'),
-				};
-			case 'subagents': {
-				const toNum = (v: unknown) => (typeof v === 'number' ? v : undefined);
-				const toStr = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
-				const mode = m.mode as string | undefined;
-				return {
-					name,
-					description: String(m.description ?? ''),
-					prompt: String(m.content ?? ''),
-					model: toStr(m.model),
-					temperature: toNum(m.temperature),
-					topP: toNum(m.topP),
-					mode: mode === 'subagent' || mode === 'primary' || mode === 'all' ? mode : undefined,
-					color: toStr(m.color),
-					steps: toNum(m.steps),
-					tools:
-						typeof m.tools === 'object' && m.tools !== null
-							? (m.tools as Record<string, boolean>)
-							: undefined,
-					permission:
-						typeof m.permission === 'object' && m.permission !== null
-							? (m.permission as Record<string, unknown>)
-							: undefined,
-				};
-			}
-		}
-	}
-
-	private async refreshResourceList(
-		type: import('../../services/ResourceService').ResourceType,
-	): Promise<void> {
-		switch (type) {
-			case 'commands':
-				await this.onGetCommands();
-				break;
-			case 'skills':
-				await this.onGetSkills();
-				break;
-			case 'subagents':
-				await this.onGetSubagents();
-				break;
-		}
-	}
-
-	private async onToggleRule(msg: WebviewCommand): Promise<void> {
-		const { path: rulePath, enabled } = msg as { path: string; enabled: boolean };
-		if (!this.rulesService || !rulePath) return;
-
-		try {
-			await this.rulesService.toggleRule(rulePath, enabled);
-			await this.onGetRules();
-		} catch (error) {
-			logger.error('[SettingsHandler] toggleRule failed:', error);
-			this.context.bridge.data('ruleList', {
-				rules: await this.rulesService.getRules().catch(() => []),
-				error: error instanceof Error ? error.message : String(error),
-			});
+			logger.error(`[SettingsHandler] Failed to ${action} ${kind}:`, error);
+			await this.sendResourceList(kind);
 		}
 	}
 
@@ -657,4 +635,51 @@ export class SettingsHandler implements WebviewMessageHandler {
 			});
 		}
 	}
+}
+
+function getPayloadString(payload: Record<string, unknown>, key: string): string {
+	const value = payload[key];
+	return typeof value === 'string' ? value : '';
+}
+
+function getOptionalPayloadString(
+	payload: Record<string, unknown>,
+	key: string,
+): string | undefined {
+	const value = payload[key];
+	return typeof value === 'string' && value ? value : undefined;
+}
+
+function getOptionalPayloadNumber(
+	payload: Record<string, unknown>,
+	key: string,
+): number | undefined {
+	const value = payload[key];
+	return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function getRecordPayload<T = unknown>(
+	value: unknown,
+	isValue?: (value: unknown) => value is T,
+): Record<string, T> | undefined {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+	const entries = Object.entries(value as Record<string, unknown>).filter(
+		(entry): entry is [string, T] => !isValue || isValue(entry[1]),
+	);
+	return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function getAgentMode(input: unknown): 'primary' | 'subagent' | 'all' | undefined {
+	return input === 'primary' || input === 'subagent' || input === 'all' ? input : undefined;
+}
+
+function getSkillFormat(path: string): SkillListItem['format'] {
+	const normalized = path.replace(/\\/g, '/');
+	if (normalized.startsWith('.agents/') || normalized.includes('/.agents/')) {
+		return 'agent-compatible';
+	}
+	if (normalized.startsWith('.claude/') || normalized.includes('/.claude/')) {
+		return 'claude-compatible';
+	}
+	return 'opencode';
 }

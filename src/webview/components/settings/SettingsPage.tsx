@@ -11,6 +11,7 @@
 
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { TIMEOUTS } from '../../../common';
+import { PERMISSION_CATEGORIES } from '../../../common/permissions';
 import { SETTINGS_NAV_ITEMS, type SettingsTab } from '../../constants';
 import { cn } from '../../lib/cn';
 import { useMainSettings, useSettingsActions, useSettingsStore, useUIActions } from '../../store';
@@ -25,7 +26,15 @@ import {
 	ShieldIcon,
 	SparklesIcon,
 } from '../icons';
-import { Button, IconButton, ScrollContainer, Select, Switch, Tooltip } from '../ui';
+import {
+	Button,
+	IconButton,
+	ScrollContainer,
+	SegmentedControl,
+	Select,
+	Switch,
+	Tooltip,
+} from '../ui';
 import { McpSettingsPanel } from './McpSettingsPanel';
 import { PromptImproverSettings } from './PromptImproverSettings';
 import { AddProviderSection, ProviderManager } from './ProviderManager';
@@ -165,44 +174,28 @@ const PermissionsSettings: React.FC = () => {
 	type PolicyKey = keyof typeof policies;
 
 	const handlePolicyChange = (type: PolicyKey, value: 'ask' | 'allow' | 'deny') => {
-		const newPolicies = { ...policies, [type]: value };
-		postMessage({ type: 'setPermissions', policies: newPolicies, provider: 'opencode' });
+		postMessage({ type: 'setPermissionPolicy', category: type, policy: value });
 	};
 
 	const handlePreset = (preset: 'ask' | 'allow') => {
-		const newPolicies: typeof policies = {
-			read: preset,
-			edit: preset,
-			glob: preset,
-			grep: preset,
-			list: preset,
-			bash: preset,
-			task: preset,
-			skill: preset,
-			lsp: preset,
-			todoread: preset,
-			todowrite: preset,
-			webfetch: preset,
-			websearch: preset,
-			codesearch: preset,
-			external_directory: preset,
-			doom_loop: preset,
-		};
-		postMessage({ type: 'setPermissions', policies: newPolicies, provider: 'opencode' });
+		for (const category of PERMISSION_CATEGORIES) {
+			postMessage({ type: 'setPermissionPolicy', category, policy: preset });
+		}
 	};
 
 	const policyOptions = [
-		{ value: 'ask', label: 'Ask' },
-		{ value: 'allow', label: 'Allow' },
-		{ value: 'deny', label: 'Deny' },
+		{ value: 'allow', label: 'Allow', title: 'Allow this tool in the project' },
+		{ value: 'ask', label: 'Ask', title: 'Ask before using this tool in the project' },
+		{ value: 'deny', label: 'Deny', title: 'Deny this tool in the project' },
 	];
 
 	const policyRow = (key: PolicyKey, title: string, tooltip: string, last = false) => (
 		<SettingRow title={title} tooltip={tooltip} last={last}>
-			<Select
+			<SegmentedControl
+				ariaLabel={`${title} policy`}
 				value={policies[key]}
-				onChange={e => handlePolicyChange(key, e.target.value as 'ask' | 'allow' | 'deny')}
 				options={policyOptions}
+				onChange={value => handlePolicyChange(key, value as 'ask' | 'allow' | 'deny')}
 			/>
 		</SettingRow>
 	);

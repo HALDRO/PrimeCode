@@ -51,7 +51,7 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 	anchorElement,
 	anchorRect,
 }) => {
-	const { commands, subagents } = useSettingsStore();
+	const agentResources = useSettingsStore(state => state.resources.agent.items);
 
 	const { input, setInput } = useChatInputState();
 	const { slashFilter, setShowSlashCommands, setSlashFilter } = useSlashCommandsState();
@@ -108,34 +108,30 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 	);
 
 	const allCommands = useMemo(() => {
-		const customList: CommandItem[] = commands.custom.map(cmd => ({
-			id: cmd.name,
-			name: cmd.name,
-			description: cmd.description ?? '',
-			type: 'custom' as const,
-			prompt: cmd.template,
-		}));
-
-		const subagentList: CommandItem[] = subagents.items.map(agent => ({
-			id: agent.name,
-			name: agent.name,
-			description: agent.description ?? '',
-			type: 'subagent' as const,
-			prompt: `@${agent.name}`,
-		}));
-
-		const cliList: CommandItem[] = (commands.cli ?? [])
-			.filter(cmd => !CLI_COMMANDS_UI_BLOCKLIST.has(cmd.name))
-			.map(cmd => ({
-				id: cmd.name,
-				name: cmd.name,
-				description: cmd.description ?? '',
-				type: 'cli' as const,
-				source: cmd.source,
+		const subagentList: CommandItem[] = agentResources
+			.filter(
+				agent =>
+					!agent.disabled && !agent.hidden && (agent.mode === 'subagent' || agent.mode === 'all'),
+			)
+			.map(agent => ({
+				id: agent.name,
+				name: agent.name,
+				description: agent.description ?? '',
+				type: 'subagent' as const,
+				prompt: `@${agent.name}`,
 			}));
 
-		return [...customList, ...cliList, ...subagentList];
-	}, [commands.custom, commands.cli, subagents.items]);
+		const runtimeCommands: CommandItem[] = [
+			{
+				id: 'compact',
+				name: 'compact',
+				description: 'Summarize and compact session context',
+				type: 'cli' as const,
+			},
+		].filter(command => !CLI_COMMANDS_UI_BLOCKLIST.has(command.name));
+
+		return [...runtimeCommands, ...subagentList];
+	}, [agentResources]);
 
 	const filteredCommands = useMemo(() => {
 		const term = slashFilter.toLowerCase().replace(/^\//, '');

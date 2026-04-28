@@ -1,6 +1,6 @@
 /**
  * @file ResourceWatcherService
- * @description Watches `.opencode/`, `.agents/skills/`, `.claude/skills/` resource directories
+ * @description Watches `.opencode/`, `.claude/skills/`, and `.agents/skills/` resource directories
  *              for file changes and emits events so the UI auto-refreshes.
  *              Analogous to McpConfigWatcherService but for resource files.
  *              Debounces rapid changes to avoid excessive reloads.
@@ -24,13 +24,13 @@ const DEBOUNCE_MS = 300;
 const OPENCODE_GLOB = `${PATHS.OPENCODE_DIR}/**`;
 
 /**
- * Glob pattern for external .agents/skills/ directory (cross-agent interop).
+ * Glob patterns for external .claude/.agents skills directories (cross-agent interop).
  * Only skills are loaded from this directory — agents, commands, plugins are .opencode/-only.
  */
 const EXTERNAL_SKILLS_GLOBS = [
-	`${PATHS.EXTERNAL_AGENTS_SKILLS_DIR}/**`,
 	`${PATHS.EXTERNAL_CLAUDE_SKILLS_DIR}/**`,
-];
+	`${PATHS.EXTERNAL_AGENTS_SKILLS_DIR}/**`,
+] as const;
 
 /**
  * Maps a path segment to its resource type.
@@ -89,22 +89,20 @@ export class ResourceWatcherService implements vscode.Disposable {
 
 		this._disposables.push(opencodeWatcher);
 
-		// Watchers for external skill directories (.agents/skills/, .claude/skills/)
+		// Watchers for external .claude/.agents skills directories.
 		for (const glob of EXTERNAL_SKILLS_GLOBS) {
-			const watcher = vscode.workspace.createFileSystemWatcher(
+			const externalSkillsWatcher = vscode.workspace.createFileSystemWatcher(
 				new vscode.RelativePattern(workspaceRoot, glob),
 			);
-
-			watcher.onDidCreate(uri => this._routeExternalSkillEvent(uri));
-			watcher.onDidChange(uri => this._routeExternalSkillEvent(uri));
-			watcher.onDidDelete(uri => this._routeExternalSkillEvent(uri));
-
-			this._disposables.push(watcher);
+			externalSkillsWatcher.onDidCreate(uri => this._routeExternalSkillEvent(uri));
+			externalSkillsWatcher.onDidChange(uri => this._routeExternalSkillEvent(uri));
+			externalSkillsWatcher.onDidDelete(uri => this._routeExternalSkillEvent(uri));
+			this._disposables.push(externalSkillsWatcher);
 		}
 
 		this._started = true;
 		logger.info(
-			'[ResourceWatcherService] Started watching .opencode/, .agents/skills/, .claude/skills/',
+			'[ResourceWatcherService] Started watching .opencode/, .claude/skills/, and .agents/skills/',
 		);
 	}
 
@@ -151,7 +149,7 @@ export class ResourceWatcherService implements vscode.Disposable {
 		// Ignore events outside known resource directories
 	}
 
-	/** Route external skill directory events (.agents/skills/, .claude/skills/) → skills reload. */
+	/** Route external .claude/.agents skills events to skills reload. */
 	private _routeExternalSkillEvent(uri: vscode.Uri): void {
 		if (!uri.fsPath.endsWith('.md')) return;
 		this._scheduleReload('skills');

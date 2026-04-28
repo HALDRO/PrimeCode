@@ -49,8 +49,8 @@ export const McpSettingsPanel: React.FC = () => {
 
 	const deleteServer = (name: string) => postMessage({ type: 'deleteMCPServer', name });
 
-	const toggleEnabled = (name: string, config: MCPServerConfig, enabled: boolean) => {
-		postMessage({ type: 'saveMCPServer', name, config: { ...config, enabled } });
+	const toggleEnabled = (name: string, _config: MCPServerConfig, enabled: boolean) => {
+		postMessage({ type: 'setMCPServerEnabled', name, enabled });
 	};
 
 	return (

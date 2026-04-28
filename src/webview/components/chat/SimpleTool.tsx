@@ -2,7 +2,6 @@ import React, { type ReactNode, useEffect, useId, useMemo, useRef, useState } fr
 import type { NormalizedEntry } from '../../../common/normalizedTypes';
 import { TOOL_CARD_EXPANDED_MAX_HEIGHT } from '../../constants';
 import { cn } from '../../lib/cn';
-import { useSettingsStore } from '../../store';
 import { formatDuration, formatToolName } from '../../utils/format';
 import { Markdown } from '../../utils/markdown';
 import { useVSCode } from '../../utils/vscode';
@@ -315,7 +314,6 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 		showCollapseOverlay,
 	}) => {
 		const { postMessage } = useVSCode();
-		const availableSkills = useSettingsStore(state => state.skills.items);
 		const toolLower = toolName.toLowerCase();
 		const action =
 			normalizedEntry?.entryType &&
@@ -434,9 +432,7 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 				metaDisplay = getLeafName(meta);
 			}
 
-			const resolvedSkillPath =
-				skillPath ||
-				(skillName ? availableSkills.find(skill => skill.name === skillName)?.path : undefined);
+			const resolvedSkillPath = skillPath;
 
 			return {
 				label,
@@ -453,7 +449,7 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 				readOffset,
 				readLimit,
 			};
-		}, [action, availableSkills, rawInput, toolLower, toolName]);
+		}, [action, rawInput, toolLower, toolName]);
 
 		const metaNode = useMemo(() => {
 			if (!meta) return undefined;

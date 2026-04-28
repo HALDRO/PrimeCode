@@ -281,13 +281,13 @@ describe('groupToolMessages', () => {
 			expect((result[1] as Message[]).length).toBe(6);
 		});
 
-		it('should not group MCP tools', () => {
+		it('should not group OpenCode MCP tools', () => {
 			const mcpTool = (id: string): Message =>
 				({
 					type: 'tool_use',
 					id,
 					timestamp: new Date().toISOString(),
-					toolName: 'mcp__server__tool',
+					toolName: 'github_com_upstash_context7-mcp_resolve-library-id',
 					toolUseId: `tu-${id}`,
 				}) as Message;
 

@@ -153,12 +153,10 @@ export const ProviderManager: React.FC = () => {
 		providerAuthState,
 		proxyEndpoints,
 		enabledOpenCodeModels,
-		disabledProviders,
 	} = useSettingsStore();
 
 	const {
 		setProviderAuthState,
-		setSettings,
 		addProxyEndpoint,
 		updateProxyEndpoint,
 		removeProxyEndpoint,
@@ -271,14 +269,6 @@ export const ProviderManager: React.FC = () => {
 
 	const handleRefresh = () => {
 		postMessage({ type: 'syncAll' });
-	};
-
-	const handleToggleProviderEnabled = (providerId: string) => {
-		const nextDisabled = disabledProviders.includes(providerId)
-			? disabledProviders.filter(id => id !== providerId)
-			: [...disabledProviders, providerId];
-		setSettings({ disabledProviders: nextDisabled });
-		postMessage({ type: 'updateSettings', settings: { 'providers.disabled': nextDisabled } });
 	};
 
 	const persistProxyEndpoints = (
@@ -456,7 +446,7 @@ export const ProviderManager: React.FC = () => {
 							onToggle={() => handleToggleProvider(provider.id)}
 							last={idx === allProviders.length - 1}
 						>
-							<SettingRow title="Enable Provider">
+							<SettingRow title="Provider">
 								<div className="flex items-center gap-2">
 									{provider.connected && canDisconnect(provider) && (
 										<button
@@ -467,10 +457,6 @@ export const ProviderManager: React.FC = () => {
 											Disconnect
 										</button>
 									)}
-									<Switch
-										checked={!disabledProviders.includes(provider.id)}
-										onChange={() => handleToggleProviderEnabled(provider.id)}
-									/>
 								</div>
 							</SettingRow>
 
@@ -597,18 +583,15 @@ export const ProviderManager: React.FC = () => {
 										? `${enabledCount}/${modelCount} models`
 										: endpoint.baseUrl || 'Not configured'
 								}
-								badge={<SettingsBadge variant="blue">custom</SettingsBadge>}
 								statusDot={endpoint.baseUrl ? 'connected' : 'disconnected'}
 								expanded={expandedProvider === providerKey}
 								onToggle={() => handleToggleProvider(providerKey)}
 								last={idx === proxyEndpoints.length - 1}
 							>
 								<CustomEndpointConfig
-									enabled={!disabledProviders.includes(getProxyEndpointProviderId(endpoint.id))}
+									enabled={true}
 									endpoint={endpoint}
-									onToggle={() =>
-										handleToggleProviderEnabled(getProxyEndpointProviderId(endpoint.id))
-									}
+									onToggle={() => undefined}
 									onFieldChange={(field, value) =>
 										handleUpdateEndpointField(endpoint.id, field, value)
 									}
@@ -696,7 +679,10 @@ const CustomEndpointConfig: React.FC<CustomEndpointConfigProps> = ({
 
 	return (
 		<>
-			<SettingRow title="Enable Provider">
+			<SettingRow
+				title="Show In PrimeCode"
+				tooltip="This controls PrimeCode UI visibility only. It does not disable the provider in OpenCode runtime config."
+			>
 				<Switch checked={enabled} onChange={onToggle} />
 			</SettingRow>
 			<SettingRow title="Name">

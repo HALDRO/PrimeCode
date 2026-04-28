@@ -1,8 +1,8 @@
 /**
  * @file McpConfigService
  * @description Manages project-level MCP server configuration.
- *              Reads/writes `opencode.json` from the workspace root.
- *              Emits change events when project config is saved through this service.
+ *              Reads `opencode.json` from the workspace root.
+ *              Project writes are centralized in OpenCodeConfigService.
  *              Includes runtime schema validation for config files.
  */
 
@@ -117,9 +117,6 @@ export function mcpServersToConfigMap(
 
 export class McpConfigService {
 	private _workspaceRoot: string | undefined;
-	private _onConfigChanged = new vscode.EventEmitter<McpConfig>();
-
-	public readonly onConfigChanged = this._onConfigChanged.event;
 
 	constructor() {
 		this._workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -150,17 +147,6 @@ export class McpConfigService {
 	// =========================================================================
 
 	/**
-	 * Ensure .opencode directory exists
-	 */
-	private async _ensureDir(dirPath: string): Promise<void> {
-		try {
-			await vscode.workspace.fs.createDirectory(vscode.Uri.file(dirPath));
-		} catch (error) {
-			logger.error(`[McpConfigService] Failed to create directory ${dirPath}:`, error);
-		}
-	}
-
-	/**
 	 * Read JSON file safely with optional schema validation
 	 */
 	private async _readJsonFile<T>(filePath: string, schema?: TSchema): Promise<T | null> {
@@ -184,31 +170,6 @@ export class McpConfigService {
 				logger.warn(`[McpConfigService] Failed to read/parse ${filePath}:`, error);
 			}
 			return null;
-		}
-	}
-
-	/**
-	 * Write JSON file with atomic write pattern (tmp + rename).
-	 * Prevents config corruption if the process crashes mid-write.
-	 */
-	private async _writeJsonFile(filePath: string, data: unknown): Promise<void> {
-		const dir = path.dirname(filePath);
-		await this._ensureDir(dir);
-		const content = new TextEncoder().encode(JSON.stringify(data, null, 2));
-		const targetUri = vscode.Uri.file(filePath);
-		const tmpUri = vscode.Uri.file(`${filePath}.tmp`);
-		try {
-			await vscode.workspace.fs.writeFile(tmpUri, content);
-			await vscode.workspace.fs.rename(tmpUri, targetUri, { overwrite: true });
-		} catch (error) {
-			// Cleanup tmp file on failure, fall back to direct write
-			try {
-				await vscode.workspace.fs.delete(tmpUri);
-			} catch {
-				/* tmp may not exist */
-			}
-			logger.warn('[McpConfigService] Atomic write failed, falling back to direct write:', error);
-			await vscode.workspace.fs.writeFile(targetUri, content);
 		}
 	}
 
@@ -238,170 +199,11 @@ export class McpConfigService {
 	}
 
 	/**
-	 * Save project-level MCP config to opencode.json
-	 */
-	public async saveProjectConfig(config: McpConfig): Promise<void> {
-		const configPath = this.getProjectMcpConfigPath();
-		if (!configPath) {
-			logger.warn('[McpConfigService] No workspace root, cannot save project config');
-			return;
-		}
-
-		await this._writeJsonFile(configPath, config);
-		this._onConfigChanged.fire(config);
-		logger.info('[McpConfigService] Saved project MCP config');
-	}
-
-	/**
-	 * Add or update a server in project config.
-	 * If the existing file is corrupted (invalid JSON/schema), we attempt to
-	 * read the raw JSON without schema validation so we don't silently discard
-	 * the user's other servers.
-	 */
-	public async saveServer(name: string, server: McpServer): Promise<void> {
-		let config = await this.loadProjectConfig();
-
-		if (!config) {
-			// Schema validation failed or file is missing — try raw read
-			const configPath = this.getProjectMcpConfigPath();
-			if (configPath) {
-				const raw = await this._readJsonFile<McpConfig>(configPath);
-				if (raw) {
-					logger.warn(
-						'[McpConfigService] Config failed schema validation, using raw JSON to preserve data',
-					);
-					config = raw;
-				}
-			}
-		}
-
-		config ??= { mcp: {} };
-		const mcp = config.mcp ?? {};
-		mcp[name] = server;
-		await this.saveProjectConfig({ ...config, mcp });
-	}
-
-	/**
-	 * Delete a server from project config.
-	 * Falls back to raw JSON read when schema validation fails,
-	 * same as saveServer, to avoid silent no-ops.
-	 */
-	public async deleteServer(name: string): Promise<void> {
-		let config = await this.loadProjectConfig();
-
-		if (!config) {
-			const configPath = this.getProjectMcpConfigPath();
-			if (configPath) {
-				const raw = await this._readJsonFile<McpConfig>(configPath);
-				if (raw) {
-					logger.warn(
-						'[McpConfigService] Config failed schema validation, using raw JSON to preserve data',
-					);
-					config = raw;
-				}
-			}
-		}
-
-		if (!config?.mcp) {
-			logger.warn('[McpConfigService] Cannot delete server: config is missing or corrupted');
-			return;
-		}
-
-		delete config.mcp[name];
-		await this.saveProjectConfig({ ...config, mcp: config.mcp });
-	}
-
-	/**
-	 * Update a top-level field in opencode.json (e.g. `permission`, `plugin`).
-	 * Uses the same atomic-write + raw-read-fallback pattern as saveServer/deleteServer
-	 * so all writers go through a single code path.
-	 */
-	public async updateProjectField(key: string, value: unknown): Promise<void> {
-		const configPath = this.getProjectMcpConfigPath();
-		if (!configPath) {
-			logger.warn('[McpConfigService] No workspace root, cannot update project field');
-			return;
-		}
-
-		let existing: Record<string, unknown> = {};
-		try {
-			const raw = await this._readJsonFile<Record<string, unknown>>(configPath);
-			if (raw) existing = raw;
-		} catch {
-			// File doesn't exist — start fresh
-		}
-
-		existing[key] = value;
-		await this._writeJsonFile(configPath, existing);
-		this._onConfigChanged.fire(existing as McpConfig);
-		logger.info(`[McpConfigService] Updated project field: ${key}`);
-	}
-
-	/**
 	 * Check if opencode.json exists in project
 	 */
 	public async hasProjectConfig(): Promise<boolean> {
 		const configPath = this.getProjectMcpConfigPath();
 		if (!configPath) return false;
 		return this._fileExists(configPath);
-	}
-
-	/**
-	 * Ensure opencode.json exists, creating with default template if needed
-	 * Returns the path to the config file
-	 */
-	public async ensureProjectConfig(): Promise<string | undefined> {
-		const configPath = this.getProjectMcpConfigPath();
-		if (!configPath) return undefined;
-
-		const exists = await this._fileExists(configPath);
-		if (!exists) {
-			const defaultConfig: McpConfig = { mcp: {} };
-			await this.saveProjectConfig(defaultConfig);
-		}
-
-		return configPath;
-	}
-
-	// =========================================================================
-	// Plugins Operations
-	// =========================================================================
-
-	/**
-	 * Get list of plugins from opencode.json
-	 * Plugins are stored in the `plugin` field as string[]
-	 */
-	public async getPlugins(): Promise<string[]> {
-		const configPath = this.getProjectMcpConfigPath();
-		if (!configPath) return [];
-
-		const config = await this._readJsonFile<Record<string, unknown>>(configPath);
-		if (!config) return [];
-
-		const plugins = config.plugin;
-		return Array.isArray(plugins) ? plugins.filter((p): p is string => typeof p === 'string') : [];
-	}
-
-	/**
-	 * Add a plugin to opencode.json
-	 */
-	public async addPlugin(plugin: string): Promise<void> {
-		const existing = await this.getPlugins();
-		if (!existing.includes(plugin)) {
-			await this.updateProjectField('plugin', [...existing, plugin]);
-			logger.info(`[McpConfigService] Added plugin: ${plugin}`);
-		}
-	}
-
-	/**
-	 * Remove a plugin from opencode.json
-	 */
-	public async removePlugin(plugin: string): Promise<void> {
-		const existing = await this.getPlugins();
-		await this.updateProjectField(
-			'plugin',
-			existing.filter(p => p !== plugin),
-		);
-		logger.info(`[McpConfigService] Removed plugin: ${plugin}`);
 	}
 }

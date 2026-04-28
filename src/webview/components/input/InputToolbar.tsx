@@ -53,18 +53,17 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({
 		null,
 	);
 
-	// Check if there are custom (non-builtin) agents that need a dropdown
-	const agents = useSettingsStore(state => state.agents);
-	const hasCustomAgents = useMemo(
-		() =>
-			agents.items.some(
-				a =>
-					!a.hidden &&
-					(a.mode === 'primary' || a.mode === undefined) &&
-					!BUILTIN_TOGGLE_IDS.has(a.id),
-			),
-		[agents.items],
-	);
+	// Check if there are custom (non-builtin) agents that need a dropdown.
+	const agentResources = useSettingsStore(state => state.resources.agent.items);
+	const hasCustomAgents = useMemo(() => {
+		return agentResources.some(
+			agent =>
+				!agent.disabled &&
+				!agent.hidden &&
+				(agent.mode === 'primary' || agent.mode === undefined) &&
+				!BUILTIN_TOGGLE_IDS.has(agent.name),
+		);
+	}, [agentResources]);
 
 	/** Toggle between build and plan on click. */
 	const handleAgentToggle = () => {

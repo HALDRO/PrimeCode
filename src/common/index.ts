@@ -8,11 +8,18 @@ export * from './constants';
 export * from './normalizedTypes';
 // Protocol: unified Extension ↔ Webview message contract (named exports to avoid collisions with schemas)
 export type {
+	AgentResource,
+	CommandListItem,
 	CommandOf,
+	CommandResource,
 	ExtensionMessage,
 	LspStatusData,
+	ManagedResource,
 	PermissionPolicies,
+	PluginListItem,
+	PluginResource,
 	QuestionAnswer,
+	ResourceKind,
 	SessionAccessPayload,
 	SessionCompletePayload,
 	SessionDeleteMessagesAfterPayload,
@@ -41,6 +48,8 @@ export type {
 	SessionTodoPayload,
 	SessionTurnTokensPayload,
 	SessionUserMessagePayload,
+	SkillListItem,
+	SkillResource,
 	ToolActivityInfo,
 	WebviewCommand,
 } from './protocol';

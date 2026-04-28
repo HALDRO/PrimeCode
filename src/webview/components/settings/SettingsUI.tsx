@@ -67,6 +67,7 @@ export const SettingsGroup: React.FC<SettingsGroupProps> = ({ children, classNam
 
 interface SettingRowProps {
 	title: string;
+	titleExtra?: React.ReactNode;
 	tooltip?: string;
 	last?: boolean;
 	children: React.ReactNode;
@@ -75,6 +76,7 @@ interface SettingRowProps {
 
 export const SettingRow: React.FC<SettingRowProps> = ({
 	title,
+	titleExtra,
 	tooltip,
 	last = false,
 	children,
@@ -89,7 +91,12 @@ export const SettingRow: React.FC<SettingRowProps> = ({
 				className,
 			)}
 		>
-			<span className="flex-1 text-sm text-vscode-foreground whitespace-nowrap">{title}</span>
+			<div className="flex-1 min-w-0 flex items-center justify-start gap-2">
+				<span className="text-sm text-vscode-foreground whitespace-nowrap truncate">{title}</span>
+				{titleExtra && (
+					<div className="shrink-0 inline-flex items-center gap-1.5">{titleExtra}</div>
+				)}
+			</div>
 			<div className="shrink-0 ml-auto">{children}</div>
 		</div>
 	);
@@ -359,15 +366,37 @@ export const SettingsBadge: React.FC<SettingsBadgeProps> = ({
 	variant = 'default',
 	className,
 }) => {
-	const variantClasses = {
-		default: 'text-vscode-descriptionForeground',
-		blue: 'bg-(--alpha-10) text-vscode-button-background',
-		purple: 'bg-(--alpha-10) text-vscode-focusBorder',
-		green: 'bg-(--alpha-10) text-vscode-editorGutter-addedBackground',
+	const variantStyles: Record<NonNullable<SettingsBadgeProps['variant']>, React.CSSProperties> = {
+		default: {
+			backgroundColor: 'color-mix(in srgb, var(--surface-base) 88%, var(--vscode-foreground) 12%)',
+			borderColor: 'color-mix(in srgb, var(--surface-base) 82%, var(--vscode-foreground) 18%)',
+			color: 'var(--vscode-foreground)',
+		},
+		blue: {
+			backgroundColor: 'color-mix(in srgb, var(--surface-base) 86%, var(--color-info) 14%)',
+			borderColor: 'color-mix(in srgb, var(--surface-base) 70%, var(--color-info) 30%)',
+			color: 'var(--color-info)',
+		},
+		purple: {
+			backgroundColor: 'color-mix(in srgb, var(--surface-base) 86%, var(--color-accent) 14%)',
+			borderColor: 'color-mix(in srgb, var(--surface-base) 70%, var(--color-accent) 30%)',
+			color: 'var(--color-accent)',
+		},
+		green: {
+			backgroundColor: 'color-mix(in srgb, var(--surface-base) 86%, var(--color-success) 14%)',
+			borderColor: 'color-mix(in srgb, var(--surface-base) 70%, var(--color-success) 30%)',
+			color: 'var(--color-success)',
+		},
 	};
 
 	return (
-		<span className={cn('text-xs px-1 rounded', variantClasses[variant], className)}>
+		<span
+			className={cn(
+				'inline-flex items-center box-border ml-1 min-h-[18px] px-2 py-px rounded-md border text-[11px] leading-[14px] font-medium whitespace-nowrap',
+				className,
+			)}
+			style={variantStyles[variant]}
+		>
 			{children}
 		</span>
 	);

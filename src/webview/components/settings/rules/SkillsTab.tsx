@@ -1,9 +1,10 @@
 import type React from 'react';
 import { useEffect, useState } from 'react';
+import type { SkillListItem } from '../../../../common';
 import { useSettingsStore } from '../../../store';
 import { useVSCode } from '../../../utils/vscode';
 import { EditIcon, PlusIcon, TrashIcon } from '../../icons';
-import { Button, Tooltip } from '../../ui';
+import { Button } from '../../ui';
 import {
 	EmptyState,
 	GroupTitle,
@@ -13,44 +14,58 @@ import {
 	SettingsGroup,
 } from '../SettingsUI';
 
-export const SkillsTab: React.FC = () => {
-	const { skills } = useSettingsStore();
-	const { postMessage } = useVSCode();
+const inputClass =
+	'w-full px-2 py-1.5 text-xs bg-vscode-input-background border border-vscode-input-border rounded text-vscode-input-foreground placeholder:text-vscode-input-placeholderForeground focus:outline-none focus:border-vscode-focusBorder';
 
-	// Skills State
+const canDeleteSkill = (skill: SkillListItem) => skill.source === 'project';
+
+const SKILL_SCOPE_LABELS = {
+	project: 'Project',
+	global: 'Global',
+} as const;
+
+export const SkillsTab: React.FC = () => {
+	const skills = useSettingsStore(state => state.resources.skill);
+	const { postMessage } = useVSCode();
 	const [isCreatingSkill, setIsCreatingSkill] = useState(false);
 	const [newSkillName, setNewSkillName] = useState('');
 	const [newSkillDesc, setNewSkillDesc] = useState('');
 	const [newSkillContent, setNewSkillContent] = useState('');
 
 	useEffect(() => {
-		postMessage({ type: 'getSkills' });
+		postMessage({ type: 'getResources', kind: 'skill' });
 	}, [postMessage]);
 
 	const handleCreateSkill = () => {
-		if (!newSkillName || !newSkillContent) {
-			return;
-		}
-
+		if (!newSkillName || !newSkillContent) return;
 		postMessage({
-			type: 'createSkill',
+			type: 'mutateResource',
+			kind: 'skill',
+			action: 'create',
 			name: newSkillName,
-			description: newSkillDesc,
-			content: newSkillContent,
+			payload: {
+				description: newSkillDesc,
+				content: newSkillContent,
+			},
 		});
-
 		setIsCreatingSkill(false);
 		setNewSkillName('');
 		setNewSkillDesc('');
 		setNewSkillContent('');
 	};
 
-	const handleDeleteSkill = (name: string) => postMessage({ type: 'deleteSkill', name });
+	const handleDeleteSkill = (name: string) =>
+		postMessage({ type: 'mutateResource', kind: 'skill', action: 'delete', name });
 	const handleOpenSkill = (filePath: string) => postMessage({ type: 'openSkillFile', filePath });
 
 	return (
 		<>
 			<GroupTitle>Skills</GroupTitle>
+			<p className="mx-(--gap-1) -mt-(--gap-1) mb-(--gap-3) text-xs text-vscode-descriptionForeground leading-relaxed">
+				Skills are discovered from OpenCode skill folders and compatible .claude/.agents folders.
+				OpenCode does not have a file-level skill enable switch; access is controlled by
+				permission.skill policies or by disabling the skill tool for an agent.
+			</p>
 			<SettingsGroup>
 				{!isCreatingSkill && (
 					<SettingRow title="New Skill" tooltip="Create a new skill under .opencode/skills/" last>
@@ -68,7 +83,6 @@ export const SkillsTab: React.FC = () => {
 						<h3 className="text-xs font-semibold uppercase tracking-wider text-vscode-descriptionForeground">
 							New Skill
 						</h3>
-
 						<div className="flex flex-col gap-1">
 							<label htmlFor="skill-name" className="text-xs text-vscode-descriptionForeground">
 								Name (Folder/ID)
@@ -79,10 +93,9 @@ export const SkillsTab: React.FC = () => {
 								value={newSkillName}
 								onChange={e => setNewSkillName(e.target.value)}
 								placeholder="my-skill"
-								className="w-full px-2 py-1.5 text-xs bg-vscode-input-background border border-vscode-input-border rounded text-vscode-input-foreground placeholder:text-vscode-input-placeholderForeground focus:outline-none focus:border-vscode-focusBorder"
+								className={inputClass}
 							/>
 						</div>
-
 						<div className="flex flex-col gap-1">
 							<label htmlFor="skill-desc" className="text-xs text-vscode-descriptionForeground">
 								Description
@@ -93,10 +106,9 @@ export const SkillsTab: React.FC = () => {
 								value={newSkillDesc}
 								onChange={e => setNewSkillDesc(e.target.value)}
 								placeholder="What does this skill do?"
-								className="w-full px-2 py-1.5 text-xs bg-vscode-input-background border border-vscode-input-border rounded text-vscode-input-foreground placeholder:text-vscode-input-placeholderForeground focus:outline-none focus:border-vscode-focusBorder"
+								className={inputClass}
 							/>
 						</div>
-
 						<div className="flex flex-col gap-1">
 							<label htmlFor="skill-content" className="text-xs text-vscode-descriptionForeground">
 								Instructions / Content
@@ -105,11 +117,10 @@ export const SkillsTab: React.FC = () => {
 								id="skill-content"
 								value={newSkillContent}
 								onChange={e => setNewSkillContent(e.target.value)}
-								className="w-full h-24 px-2 py-1.5 text-xs font-mono bg-vscode-input-background border border-vscode-input-border rounded text-vscode-input-foreground placeholder:text-vscode-input-placeholderForeground focus:outline-none focus:border-vscode-focusBorder resize-y"
+								className={`${inputClass} h-24 font-mono resize-y`}
 								placeholder="Describe when and how a model should use this skill..."
 							/>
 						</div>
-
 						<div className="flex justify-end gap-2 mt-2">
 							<Button size="sm" variant="secondary" onClick={() => setIsCreatingSkill(false)}>
 								Cancel
@@ -126,41 +137,33 @@ export const SkillsTab: React.FC = () => {
 				</SettingsGroup>
 			)}
 
+			<GroupTitle>Installed Skills</GroupTitle>
 			<SettingsGroup>
-				{skills.isLoading ? (
-					<div className="p-4 text-center text-vscode-descriptionForeground text-xs">
-						Loading skills...
+				{skills.error && (
+					<div className="px-3 py-2 text-xs text-vscode-errorForeground border-b border-(--alpha-10)">
+						{skills.error}
 					</div>
-				) : skills.items.length === 0 ? (
-					<EmptyState>No skills found. Create one above.</EmptyState>
+				)}
+				{skills.items.length === 0 ? (
+					<EmptyState>{skills.isLoading ? 'Loading skills...' : 'No skills found'}</EmptyState>
 				) : (
-					skills.items.map((skill, i) => (
+					skills.items.map((skill, index) => (
 						<SettingRow
-							key={skill.path}
+							key={`${skill.source}:${skill.path}`}
 							title={skill.name}
-							tooltip={skill.path}
-							last={i === skills.items.length - 1}
+							titleExtra={<SettingsBadge>{SKILL_SCOPE_LABELS[skill.locationScope]}</SettingsBadge>}
+							tooltip={skill.description || skill.path}
+							last={index === skills.items.length - 1}
 						>
 							<SettingRowActions>
-								<Tooltip content="Edit file" position="top" delay={200}>
-									<button
-										type="button"
-										onClick={() => handleOpenSkill(skill.path)}
-										className="p-1 rounded hover:bg-vscode-list-hoverBackground text-vscode-descriptionForeground hover:text-vscode-foreground transition-colors"
-									>
-										<EditIcon size={12} />
-									</button>
-								</Tooltip>
-								<SettingsBadge>Skill</SettingsBadge>
-								<Tooltip content="Delete" position="top" delay={200}>
-									<button
-										type="button"
-										onClick={() => handleDeleteSkill(skill.name)}
-										className="p-1 rounded hover:bg-vscode-errorForeground/20 text-vscode-descriptionForeground hover:text-vscode-errorForeground transition-colors"
-									>
+								<Button size="xs" variant="ghost" onClick={() => handleOpenSkill(skill.path)}>
+									<EditIcon size={12} />
+								</Button>
+								{canDeleteSkill(skill) && (
+									<Button size="xs" variant="ghost" onClick={() => handleDeleteSkill(skill.name)}>
 										<TrashIcon size={12} />
-									</button>
-								</Tooltip>
+									</Button>
+								)}
 							</SettingRowActions>
 						</SettingRow>
 					))

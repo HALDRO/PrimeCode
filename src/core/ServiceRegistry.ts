@@ -4,6 +4,9 @@ import { McpConfigWatcherService } from '../services/McpConfigWatcherService';
 import { ModelsDevService } from '../services/ModelsDevService';
 import { McpManagementService } from '../services/mcp/McpManagementService';
 import { OpenCodeClientService } from '../services/OpenCodeClientService';
+import { AgentResourceService } from '../services/opencode/AgentResourceService';
+import { OpenCodeApplyService } from '../services/opencode/OpenCodeApplyService';
+import { OpenCodeConfigService } from '../services/opencode/OpenCodeConfigService';
 import { ResourceService } from '../services/ResourceService';
 import { ResourceWatcherService } from '../services/ResourceWatcherService';
 import { RulesService } from '../services/RulesService';
@@ -15,6 +18,9 @@ export class ServiceRegistry implements vscode.Disposable {
 	public readonly mcpConfigWatcher: McpConfigWatcherService;
 	public readonly mcpManagement: McpManagementService;
 	public readonly openCodeClient: OpenCodeClientService;
+	public readonly openCodeConfig: OpenCodeConfigService;
+	public readonly agentResources: AgentResourceService;
+	public readonly openCodeApply: OpenCodeApplyService;
 	public readonly modelsDev: ModelsDevService;
 	public rules: RulesService | null = null; // RulesService depends on workspace root
 
@@ -24,8 +30,14 @@ export class ServiceRegistry implements vscode.Disposable {
 		this.resources = new ResourceService();
 		this.resourceWatcher = new ResourceWatcherService(this.resources);
 		this.mcpConfig = new McpConfigService();
-
+		this.openCodeConfig = new OpenCodeConfigService();
 		this.mcpConfigWatcher = new McpConfigWatcherService(this.mcpConfig);
+		this.agentResources = new AgentResourceService(this.resources, this.openCodeConfig);
+		this.openCodeApply = new OpenCodeApplyService(
+			this.openCodeConfig,
+			this.agentResources,
+			this.mcpConfigWatcher,
+		);
 
 		this.openCodeClient = new OpenCodeClientService();
 		this.modelsDev = new ModelsDevService();
@@ -34,12 +46,13 @@ export class ServiceRegistry implements vscode.Disposable {
 			context,
 			msg => this._onMcpMessage.fire(msg),
 			this.mcpConfig,
+			this.openCodeConfig,
 		);
 
 		// Connect UI-save suppression: when McpManagement writes config,
 		// notify the watcher so it doesn't trigger a redundant reload.
-		this.mcpManagement.setOnConfigSaved(() => {
-			this.mcpConfigWatcher.notifyUiSave();
+		this.mcpManagement.setOnConfigSaved(contentHash => {
+			this.mcpConfigWatcher.notifyUiSave(contentHash);
 		});
 
 		// Initialize workspace-scoped services if workspace is already open
@@ -59,6 +72,7 @@ export class ServiceRegistry implements vscode.Disposable {
 
 	public setWorkspaceRoot(root: string) {
 		this.resources.setWorkspaceRoot(root);
+		this.openCodeConfig.setWorkspaceRoot(root);
 		this.rules = new RulesService(root);
 
 		// Restart watchers if they weren't started (workspace was missing at init)

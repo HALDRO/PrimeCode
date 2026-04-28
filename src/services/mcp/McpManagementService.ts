@@ -15,6 +15,7 @@ import {
 	mcpServersToConfigMap,
 	mcpServerToConfig,
 } from '../McpConfigService';
+import type { OpenCodeConfigService } from '../opencode/OpenCodeConfigService';
 import { McpClientService } from './McpClientService.js';
 
 // =========================================================================
@@ -36,10 +37,11 @@ const METADATA_DIR_NAME = 'mcp';
 const METADATA_FILENAME = 'installed-mcp-meta.json';
 
 type PostMessage = (msg: unknown) => void;
-type OnConfigSaved = () => void;
+type OnConfigSaved = (contentHash?: string) => void;
 
 export class McpManagementService {
 	private readonly _agentsConfig: McpConfigService;
+	private readonly _openCodeConfig: OpenCodeConfigService;
 	private readonly _mcpClient: McpClientService;
 	private _onConfigSaved: OnConfigSaved | undefined;
 
@@ -47,8 +49,10 @@ export class McpManagementService {
 		private readonly _context: vscode.ExtensionContext,
 		private readonly _postMessage: PostMessage,
 		agentsConfig: McpConfigService,
+		openCodeConfig: OpenCodeConfigService,
 	) {
 		this._agentsConfig = agentsConfig;
+		this._openCodeConfig = openCodeConfig;
 		this._mcpClient = new McpClientService();
 	}
 
@@ -83,7 +87,7 @@ export class McpManagementService {
 			}
 		}
 
-		await this.checkAgentsConfig();
+		await this.checkProjectMcpConfig();
 	}
 
 	public async pingMcpServers(): Promise<void> {
@@ -141,7 +145,7 @@ export class McpManagementService {
 		await this._deleteMCPServerFromConfig(name);
 	}
 
-	public async checkAgentsConfig(): Promise<void> {
+	public async checkProjectMcpConfig(): Promise<void> {
 		const hasProject = await this._agentsConfig.hasProjectConfig();
 		this._postMessage({
 			type: 'mcpConfigStatus',
@@ -154,7 +158,7 @@ export class McpManagementService {
 
 	public async openMcpConfig(): Promise<void> {
 		try {
-			const configPath = await this._agentsConfig.ensureProjectConfig();
+			const configPath = await this._openCodeConfig.ensureProjectConfig();
 			if (configPath) {
 				const uri = vscode.Uri.file(configPath);
 				await vscode.window.showTextDocument(uri);
@@ -166,10 +170,8 @@ export class McpManagementService {
 
 	public async saveMCPServerToConfig(name: string, server: McpServer): Promise<void> {
 		try {
-			// Notify watcher before save to suppress redundant reload
-			this._onConfigSaved?.();
-
-			await this._agentsConfig.saveServer(name, server);
+			const result = await this._openCodeConfig.setMcpServer(name, server);
+			this._onConfigSaved?.(result.contentHash);
 
 			const current = await this._loadInstalledMetadata();
 			if (!current[name]) {
@@ -193,10 +195,8 @@ export class McpManagementService {
 
 	private async _deleteMCPServerFromConfig(name: string): Promise<void> {
 		try {
-			// Notify watcher before delete to suppress redundant reload
-			this._onConfigSaved?.();
-
-			await this._agentsConfig.deleteServer(name);
+			const result = await this._openCodeConfig.deleteMcpServer(name);
+			this._onConfigSaved?.(result.contentHash);
 			await this._deleteInstalledMetadata(name);
 			this._postMessage({ type: 'mcpServerDeleted', data: { name } });
 			await this.loadMCPServers();

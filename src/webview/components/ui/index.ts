@@ -6,6 +6,7 @@ export * from './Dropdown';
 export * from './GlowDot';
 export * from './PathChip';
 export * from './ScrollContainer';
+export * from './SegmentedControl';
 export * from './Select';
 export * from './StatsDisplay';
 export * from './Switch';

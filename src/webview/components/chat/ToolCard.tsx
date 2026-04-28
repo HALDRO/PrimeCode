@@ -1,7 +1,7 @@
 /**
  * @file ToolCard - minimal unified tool UI
  * @description Minimal, reusable card for displaying tool calls/results in the chat.
- * Uses NormalizedEntry (ViewModel) for clean data access, falling back to legacy helpers only if needed.
+ * Uses NormalizedEntry (ViewModel) for clean data access.
  */
 
 import type { OverlayScrollbars } from 'overlayscrollbars';

@@ -14,10 +14,10 @@ import type {
 	MCPServerConfig,
 	MCPServersMap,
 	OpenCodeProviderData,
-	ParsedSubagent,
+	ParsedCommand,
+	ParsedSkill,
 	PlatformInfo,
 	QuestionInfo,
-	SubagentCommandFields,
 	WorkspaceFile,
 } from './schemas';
 
@@ -510,7 +510,7 @@ export type AccessDataMessage = BaseExtensionMessage<'accessData', Access>;
 // Rule Messages (global)
 // =============================================================================
 
-import type { ParsedCommand as _ParsedCommand, Rule } from './schemas';
+import type { Rule } from './schemas';
 
 export type RuleListMessage = BaseExtensionMessage<
 	'ruleList',
@@ -732,66 +732,89 @@ export type ImprovePromptCancelledMessage = BaseExtensionMessage<
 	{ requestId: string }
 >;
 
-// =============================================================================
-// Commands, Skills, Hooks, Subagents Messages (global)
-// =============================================================================
+export type ResourceKind = 'agent' | 'command' | 'skill' | 'plugin';
+export type ResourceAction = 'setDisabled';
+export type ResourceActionResult =
+	| 'verified'
+	| 'config-written-unverified'
+	| 'shadowed'
+	| 'requires-restart'
+	| 'stale'
+	| 'error';
 
-export type CommandsListMessage = BaseExtensionMessage<
-	'commandsList',
-	{
-		custom: _ParsedCommand[];
-		cli?: Array<{ name: string; description?: string }>;
-		isLoading: boolean;
-		error?: string;
-		meta?: { operation?: string; message?: string };
-	}
->;
+export type ResourceActionTarget =
+	| { type: 'project-config'; jsonPointer: string }
+	| { type: 'project-file'; path: string; frontmatterKey?: string };
 
-export type SkillsListMessage = BaseExtensionMessage<
-	'skillsList',
-	{
-		skills: import('./schemas').ParsedSkill[];
-		isLoading: boolean;
-		error?: string;
-		meta?: { operation?: string; message?: string };
-	}
->;
+export type AgentResource = {
+	id: string;
+	kind: 'agent';
+	name: string;
+	description?: string;
+	source: 'project' | 'global' | 'builtin' | 'runtime';
+	sourceKind: 'builtin' | 'custom';
+	hasProjectOverride: boolean;
+	sourcePath?: string;
+	disabled: boolean;
+	hidden?: boolean;
+	mode?: 'primary' | 'subagent' | 'all';
+	model?: string;
+	variant?: string;
+	action?: {
+		type: 'setDisabled';
+		target: ResourceActionTarget;
+	};
+};
 
-export type SubagentsListMessage = BaseExtensionMessage<
-	'subagentsList',
-	{
-		subagents: ParsedSubagent[];
-		isLoading: boolean;
-		error?: string;
-		meta?: { operation?: string; message?: string };
-	}
->;
+export type CommandResource = CommandListItem & { kind: 'command'; id: string };
+export type SkillResource = SkillListItem & { kind: 'skill'; id: string };
+export type PluginResource = PluginListItem & { kind: 'plugin' };
+export type ManagedResource = AgentResource | CommandResource | SkillResource | PluginResource;
 
-export type AgentsListMessage = BaseExtensionMessage<
-	'agentsList',
+export type ResourcesListMessage = BaseExtensionMessage<
+	'resourcesList',
 	{
-		agents: Array<{
-			id: string;
-			mode?: string;
-			description?: string;
-			model?: string;
-			variant?: string;
-			builtIn?: boolean;
-			hidden?: boolean;
-		}>;
-		isLoading: boolean;
-		error?: string;
-	}
->;
-
-export type PluginsListMessage = BaseExtensionMessage<
-	'pluginsList',
-	{
-		plugins: string[];
-		isLoading: boolean;
+		kind: ResourceKind;
+		resources: ManagedResource[];
+		revision: number;
+		requestId?: string;
+		operationId?: string;
 		error?: string;
 	}
 >;
+
+export type ResourceOperationMessage = BaseExtensionMessage<
+	'resourceOperation',
+	{
+		operationId: string;
+		resourceId?: string;
+		action?: ResourceAction;
+		status: 'started' | 'completed';
+		result?: ResourceActionResult;
+		message?: string;
+		revision?: number;
+	}
+>;
+
+export type CommandListItem = ParsedCommand & {
+	source: 'project' | 'global';
+	locationScope: 'project' | 'global';
+};
+
+export type SkillListItem = ParsedSkill & {
+	source: 'project' | 'global' | 'external';
+	locationScope: 'project' | 'global';
+	format: 'opencode' | 'agent-compatible' | 'claude-compatible';
+};
+
+export type PluginListItem = {
+	id: string;
+	name: string;
+	path?: string;
+	source: 'project' | 'global' | 'config';
+	locationScope: 'project' | 'global';
+	origin: 'file' | 'config';
+};
 
 // =============================================================================
 // Discovery, Project, Editor, SSE Messages (global)
@@ -904,11 +927,8 @@ export type ExtensionMessage =
 	| McpServerErrorMessage
 	| McpStatusMessage
 	| McpConfigStatusMessage
-	| CommandsListMessage
-	| SkillsListMessage
-	| SubagentsListMessage
-	| AgentsListMessage
-	| PluginsListMessage
+	| ResourcesListMessage
+	| ResourceOperationMessage
 	| CliDiagnosticsMessage
 	| ConversationListMessage
 	| AllConversationsClearedMessage
@@ -1029,23 +1049,31 @@ export interface UpdateSettingsCommand {
 	type: 'updateSettings';
 	settings: Record<string, unknown>;
 }
-export interface GetCommandsCommand {
-	type: 'getCommands';
-}
-export interface GetSkillsCommand {
-	type: 'getSkills';
-}
-export interface GetSubagentsCommand {
-	type: 'getSubagents';
-}
-export interface GetAgentsCommand {
-	type: 'getAgents';
-}
-export interface GetPluginsCommand {
-	type: 'getPlugins';
-}
 export interface GetRulesCommand {
 	type: 'getRules';
+}
+
+export interface GetResourcesCommand {
+	type: 'getResources';
+	kind?: ResourceKind;
+	requestId?: string;
+}
+
+export interface MutateResourceCommand {
+	type: 'mutateResource';
+	kind: ResourceKind;
+	action: 'create' | 'delete' | 'update';
+	name: string;
+	payload?: Record<string, unknown>;
+}
+
+export interface ApplyResourceActionCommand {
+	type: 'applyResourceAction';
+	operationId: string;
+	resourceId?: string;
+	action: ResourceAction;
+	value?: boolean | string;
+	scope: 'project';
 }
 
 // =============================================================================
@@ -1059,6 +1087,11 @@ export interface SaveMCPServerCommand {
 	type: 'saveMCPServer';
 	name: string;
 	config: MCPServerConfig;
+}
+export interface SetMCPServerEnabledCommand {
+	type: 'setMCPServerEnabled';
+	name: string;
+	enabled: boolean;
 }
 export interface DeleteMCPServerCommand {
 	type: 'deleteMCPServer';
@@ -1156,10 +1189,10 @@ export interface QuestionRejectCommand {
 export interface GetPermissionsCommand {
 	type: 'getPermissions';
 }
-export interface SetPermissionsCommand {
-	type: 'setPermissions';
-	policies: Partial<PermissionPolicies>;
-	provider?: string;
+export interface SetPermissionPolicyCommand {
+	type: 'setPermissionPolicy';
+	category: PermissionCategory;
+	policy: PermissionPolicyValue;
 }
 export interface SetAutoAcceptCommand {
 	type: 'setAutoAccept';
@@ -1278,40 +1311,23 @@ export interface ProxyFetchAbortCommand {
 }
 
 // =============================================================================
-// Agents CRUD Commands (Skills / Commands / Subagents)
+// Resource file open commands
 // =============================================================================
-
-export interface CreateSkillCommand {
-	type: 'createSkill';
-	name: string;
-	description: string;
-	content: string;
-}
-export interface DeleteSkillCommand {
-	type: 'deleteSkill';
-	name: string;
-}
 export interface OpenSkillFileCommand {
 	type: 'openSkillFile';
 	filePath: string;
 }
 
-export interface CreateCommandCommand {
-	type: 'createCommand';
-	name: string;
-	description: string;
-	content: string;
-}
-export interface DeleteCommandCommand {
-	type: 'deleteCommand';
-	name: string;
-}
 export interface OpenCommandFileCommand {
 	type: 'openCommandFile';
 	filePath: string;
 }
 
-export type CreateSubagentCommand = SubagentCommandFields;
+export interface OpenPluginFileCommand {
+	type: 'openPluginFile';
+	filePath: string;
+}
+
 export interface DeleteSubagentCommand {
 	type: 'deleteSubagent';
 	name: string;
@@ -1319,22 +1335,6 @@ export interface DeleteSubagentCommand {
 export interface OpenSubagentFileCommand {
 	type: 'openSubagentFile';
 	filePath: string;
-}
-
-export interface AddPluginCommand {
-	type: 'addPlugin';
-	plugin: string;
-}
-export interface RemovePluginCommand {
-	type: 'removePlugin';
-	plugin: string;
-}
-
-export interface ToggleRuleCommand {
-	type: 'toggleRule';
-	path: string;
-	enabled: boolean;
-	source: 'opencode';
 }
 
 export interface CreateRuleCommand {
@@ -1456,14 +1456,13 @@ export type WebviewCommand =
 	| RenameConversationCommand
 	| GetSettingsCommand
 	| UpdateSettingsCommand
-	| GetCommandsCommand
-	| GetSkillsCommand
-	| GetSubagentsCommand
-	| GetAgentsCommand
-	| GetPluginsCommand
 	| GetRulesCommand
+	| GetResourcesCommand
+	| MutateResourceCommand
+	| ApplyResourceActionCommand
 	| LoadMCPServersCommand
 	| SaveMCPServerCommand
+	| SetMCPServerEnabledCommand
 	| DeleteMCPServerCommand
 	| OpenMcpConfigCommand
 	| ReloadAllProvidersCommand
@@ -1481,7 +1480,7 @@ export type WebviewCommand =
 	| QuestionResponseCommand
 	| QuestionRejectCommand
 	| GetPermissionsCommand
-	| SetPermissionsCommand
+	| SetPermissionPolicyCommand
 	| SetAutoAcceptCommand
 	| CheckDiscoveryStatusCommand
 	| GetAccessCommand
@@ -1499,18 +1498,11 @@ export type WebviewCommand =
 	| UnrevertCommand
 	| ProxyFetchCommand
 	| ProxyFetchAbortCommand
-	| CreateSkillCommand
-	| DeleteSkillCommand
 	| OpenSkillFileCommand
-	| CreateCommandCommand
-	| DeleteCommandCommand
 	| OpenCommandFileCommand
-	| CreateSubagentCommand
+	| OpenPluginFileCommand
 	| DeleteSubagentCommand
 	| OpenSubagentFileCommand
-	| AddPluginCommand
-	| RemovePluginCommand
-	| ToggleRuleCommand
 	| CreateRuleCommand
 	| DeleteRuleCommand
 	| AcceptFileCommand

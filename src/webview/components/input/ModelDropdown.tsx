@@ -48,7 +48,6 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 		proxyEndpoints,
 		opencodeProviders,
 		enabledOpenCodeModels,
-		disabledProviders,
 		setLastSelectedModel,
 		setSessionModel,
 	} = useModelSelection();
@@ -63,11 +62,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 		return (
 			opencodeProviders
 				// First filter out disabled providers and 'oai' (shown as OpenAI Compatible)
-				.filter(
-					provider =>
-						!disabledProviders.includes(provider.id) &&
-						provider.id !== OPENAI_COMPATIBLE_PROVIDER_ID,
-				)
+				.filter(provider => provider.id !== OPENAI_COMPATIBLE_PROVIDER_ID)
 				.map(provider => ({
 					...provider,
 					models: provider.models.filter((model: { id: string; name: string }) => {
@@ -77,7 +72,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 				}))
 				.filter(provider => provider.models.length > 0)
 		);
-	}, [opencodeProviders, enabledOpenCodeModels, disabledProviders]);
+	}, [opencodeProviders, enabledOpenCodeModels]);
 
 	const onClose = useCallback(() => {
 		setShowModelDropdown(false);
@@ -176,7 +171,6 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 		for (const endpoint of proxyEndpoints) {
 			if (!endpoint.enabledModels.length || !endpoint.models.length) continue;
 			const providerId = getProxyEndpointProviderId(endpoint.id);
-			if (disabledProviders.includes(providerId)) continue;
 			for (const model of endpoint.models) {
 				if (!endpoint.enabledModels.includes(model.id)) continue;
 				const modelId = `${providerId}/${model.id}`;
@@ -214,13 +208,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 		}
 
 		return result;
-	}, [
-		activeModelForHighlight,
-		filteredOpencodeProviders,
-		proxyEndpoints,
-		disabledProviders,
-		extraItems,
-	]);
+	}, [activeModelForHighlight, filteredOpencodeProviders, proxyEndpoints, extraItems]);
 
 	return (
 		<DropdownMenu

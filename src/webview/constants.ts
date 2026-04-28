@@ -87,7 +87,6 @@ export const isToolInList = (toolName: string | undefined, list: readonly string
 
 /**
  * Check if tool is an MCP tool based on naming conventions:
- * - Legacy prefixed format: mcp__server__tool or mcp_server_tool
  * - OpenCode format: ServerName_tool-name (PascalCase server + underscore + tool)
  *
  * @param toolName - The tool name to check
@@ -96,11 +95,6 @@ export const isToolInList = (toolName: string | undefined, list: readonly string
 export const isMcpTool = (toolName: string | undefined, mcpServerNames?: string[]): boolean => {
 	if (!toolName) {
 		return false;
-	}
-
-	// Legacy prefixed format
-	if (toolName.startsWith('mcp__') || toolName.startsWith('mcp_')) {
-		return true;
 	}
 
 	// OpenCode format: ServerName_tool-name
@@ -121,9 +115,7 @@ export const isMcpTool = (toolName: string | undefined, mcpServerNames?: string[
 /**
  * Extract display-friendly server name and tool name from an MCP tool identifier.
  *
- * Handles both formats:
- * - Legacy: mcp__server__tool or mcp_server_tool
- * - OpenCode: github_com_upstash_context7-mcp_resolve-library-id
+ * Handles OpenCode format: github_com_upstash_context7-mcp_resolve-library-id
  *
  * @returns `{ server, tool }` with human-readable names, or null if not MCP
  */
@@ -132,24 +124,6 @@ export const getMcpToolDisplayInfo = (
 	mcpServerNames?: string[],
 ): { server: string; tool: string } | null => {
 	if (!toolName) return null;
-
-	// Legacy prefixed format: mcp__server__tool or mcp_server_tool
-	if (toolName.startsWith('mcp__')) {
-		const rest = toolName.slice(5); // strip "mcp__"
-		const idx = rest.indexOf('__');
-		if (idx !== -1) {
-			return { server: rest.slice(0, idx), tool: rest.slice(idx + 2) };
-		}
-		return { server: rest, tool: rest };
-	}
-	if (toolName.startsWith('mcp_')) {
-		const rest = toolName.slice(4); // strip "mcp_"
-		const idx = rest.indexOf('_');
-		if (idx !== -1) {
-			return { server: rest.slice(0, idx), tool: rest.slice(idx + 1) };
-		}
-		return { server: rest, tool: rest };
-	}
 
 	// OpenCode format: match against known server names
 	if (mcpServerNames && mcpServerNames.length > 0) {

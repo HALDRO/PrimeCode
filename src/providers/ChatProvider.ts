@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { mapPermissionRuntimePayloadToRequest } from '../common';
 import { PERMISSION_CATEGORIES, type PermissionCategory } from '../common/permissions';
-import type { WebviewCommand } from '../common/protocol';
+import type { ResourceKind, WebviewCommand } from '../common/protocol';
 import { resolveToolName } from '../common/toolRegistry';
 import { OpenCodeExecutor } from '../core/executor/OpenCode';
 import type { ServiceRegistry } from '../core/ServiceRegistry';
@@ -83,6 +83,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			...baseContext,
 			// Lazy getter — ToolHandler is created below but the closure captures `this`
 			getPermissionPolicies: () => this.toolHandler.getPermissionPolicies(),
+			setPermissionPolicy: (category, policy) =>
+				this.toolHandler.setPermissionPolicy(category, policy),
 			getSessionAutoAccept: (sessionId: string) => this.toolHandler.isAutoAccept(sessionId),
 			getSessionAutoAcceptState: (sessionId: string) =>
 				this.toolHandler.getSessionAutoAcceptState(sessionId),
@@ -157,9 +159,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		// Single-point OpenCode initialization with retry polling
 		this.scheduleOpenCodeInit();
 
-		// Forward CLI events to webview
-		// NOTE: Legacy pipeline removed. SDK events now flow directly via bridge.sendSdkEvent().
-
 		// Watch settings changes
 		this.disposables.push(
 			vscode.workspace.onDidChangeConfiguration(e => {
@@ -185,6 +184,12 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		);
 
 		// Wire up ResourceWatcher — auto-refresh UI when .opencode/ resource files change
+		const resourceKindByWatcherType: Partial<Record<string, ResourceKind>> = {
+			subagents: 'agent',
+			commands: 'command',
+			skills: 'skill',
+			plugins: 'plugin',
+		};
 		this.disposables.push(
 			this.services.resourceWatcher.onResourceChanged(async e => {
 				logger.info(`[ChatProvider] Resource changed: ${e.resourceType}, refreshing UI`);
@@ -193,29 +198,13 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 						await this.settingsHandler.handleMessage({ type: 'getRules' });
 						return;
 					}
-					// For skills: invalidate CLI cache and re-fetch via handler (uses CLI API)
-					if (e.resourceType === 'skills') {
-						this.cli.clearSkillsCache?.();
-						await this.settingsHandler.handleMessage({ type: 'getSkills' });
-						return;
-					}
-					// For commands: invalidate CLI cache and re-fetch via handler
-					// (CLI GET /command includes builtins + .opencode/commands/ + MCP prompts)
-					if (e.resourceType === 'commands') {
-						this.cli.clearCommandsCache?.();
-						await this.settingsHandler.handleMessage({ type: 'getCommands' });
-						return;
-					}
-					// For subagents (.opencode/agents/): invalidate agents CLI cache
-					// and re-fetch both agents (CLI API) and subagents (local files)
-					if (e.resourceType === 'subagents') {
-						this.cli.clearAgentsCache?.();
-						await Promise.all([
-							this.settingsHandler.handleMessage({ type: 'getSubagents' }),
-							this.settingsHandler.handleMessage({ type: 'getAgents' }),
-						]);
-						return;
-					}
+
+					const kind = resourceKindByWatcherType[e.resourceType];
+					if (!kind) return;
+					if (kind === 'agent') this.cli.clearAgentsCache?.();
+					if (kind === 'command') this.cli.clearCommandsCache?.();
+					if (kind === 'skill') this.cli.clearSkillsCache?.();
+					await this.settingsHandler.handleMessage({ type: 'getResources', kind });
 				} catch (error) {
 					logger.error(`[ChatProvider] Failed to refresh ${e.resourceType}:`, error);
 				}
@@ -365,22 +354,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			[
 				'getSettings',
 				'updateSettings',
-				'getCommands',
-				'getSkills',
-				'getSubagents',
-				'getAgents',
-				'getPlugins',
 				'getRules',
-				// Resource CRUD
-				'createCommand',
-				'deleteCommand',
-				'createSkill',
-				'deleteSkill',
-				'createSubagent',
+				'getResources',
+				'mutateResource',
+				'applyResourceAction',
 				'deleteSubagent',
-				'addPlugin',
-				'removePlugin',
-				'toggleRule',
 				'createRule',
 				'deleteRule',
 			],
@@ -390,7 +368,13 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		// MCP
 		r.register(
 			this.mcpHandler,
-			['loadMCPServers', 'saveMCPServer', 'deleteMCPServer', 'openMcpConfig'],
+			[
+				'loadMCPServers',
+				'saveMCPServer',
+				'setMCPServerEnabled',
+				'deleteMCPServer',
+				'openMcpConfig',
+			],
 			'mcp',
 		);
 
@@ -421,7 +405,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				'questionResponse',
 				'questionReject',
 				'getPermissions',
-				'setPermissions',
+				'setPermissionPolicy',
 				'setAutoAccept',
 				'checkDiscoveryStatus',
 				'getAccess',
@@ -470,6 +454,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				'proxyFetchAbort',
 				'openCommandFile',
 				'openSkillFile',
+				'openPluginFile',
 				'openSubagentFile',
 				'acceptFile',
 				'acceptAllFiles',
@@ -516,16 +501,14 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		// Send server URL first so webview can establish SSE health polling immediately
 		this.sendServerInfo();
 
+		await this.providerHandler.handleMessage({ type: 'reloadAllProviders' });
+
 		const requests: Promise<unknown>[] = [
 			this.settingsHandler.handleMessage({ type: 'getSettings' }),
 			this.toolHandler.handleMessage({ type: 'getPermissions' }),
 			this.toolHandler.handleMessage({ type: 'getAccess' }),
-			this.settingsHandler.handleMessage({ type: 'getCommands' }),
-			this.settingsHandler.handleMessage({ type: 'getSkills' }),
-			this.settingsHandler.handleMessage({ type: 'getSubagents' }),
-			this.settingsHandler.handleMessage({ type: 'getAgents' }),
+			this.settingsHandler.handleMessage({ type: 'getResources' }),
 			this.mcpHandler.handleMessage({ type: 'loadMCPServers' }),
-			this.providerHandler.handleMessage({ type: 'reloadAllProviders' }),
 			this.toolHandler.handleMessage({ type: 'checkDiscoveryStatus' }),
 			this.settingsHandler.handleMessage({ type: 'getRules' }),
 			this.refreshLspStatus(),
@@ -658,10 +641,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			}
 		}
 	}
-
-	// ─── Legacy handleCliEvent + relay methods removed ──────────────────────
-	// SDK events now flow directly: executor → bridge.sendSdkEvent() → webview.
-	// Permission auto-approve is handled by the permission interceptor in the executor.
 
 	private handleSettingsChange(): void {
 		this.settings.refresh();

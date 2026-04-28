@@ -2,7 +2,7 @@
  * @file McpClientService
  * @description Service for connecting to MCP servers and retrieving their capabilities (tools, resources).
  *              Uses @modelcontextprotocol/sdk to establish connections via stdio or HTTP transports.
- *              Supports both StreamableHTTP (modern) and SSE (legacy) protocols based on config type.
+ *              Supports StreamableHTTP and SSE protocols based on config type.
  *              Provides methods to ping servers, list tools, and manage connection lifecycle.
  *              Implements resource cleanup pattern to prevent zombie connections.
  */

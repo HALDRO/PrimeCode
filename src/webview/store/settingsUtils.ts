@@ -91,8 +91,6 @@ export const handleSettingsData = (
 		mappedSettings.opencodeAgent = settings['opencode.agent'];
 	if (settings['opencode.enabledModels'] !== undefined)
 		mappedSettings.enabledOpenCodeModels = settings['opencode.enabledModels'];
-	if (settings['providers.disabled'] !== undefined)
-		mappedSettings.disabledProviders = settings['providers.disabled'];
 
 	actions.setSettings(mappedSettings);
 };

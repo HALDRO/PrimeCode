@@ -32,6 +32,7 @@ export class UtilityHandler implements WebviewMessageHandler {
 				return this.handleProxyFetchAbort(msg);
 			case 'openCommandFile':
 			case 'openSkillFile':
+			case 'openPluginFile':
 			case 'openSubagentFile':
 				return this.handleOpenResourceFile(msg);
 			case 'acceptFile':

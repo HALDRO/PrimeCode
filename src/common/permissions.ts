@@ -106,41 +106,6 @@ export function isPermissionCategory(key: string): key is PermissionCategory {
 }
 
 // =============================================================================
-// Legacy Migration
-// =============================================================================
-
-/**
- * Legacy permission keys that should be migrated to new categories.
- * Maps old keys to new keys for backward compatibility.
- */
-export const LEGACY_PERMISSION_MAPPING: Record<string, PermissionCategory> = {
-	terminal: 'bash',
-	network: 'webfetch',
-};
-
-/**
- * Migrates legacy permission policies to current schema.
- * Converts old keys (terminal, network) to new keys (bash, webfetch).
- */
-export function migrateLegacyPolicies(
-	stored: Record<string, unknown>,
-): Partial<PermissionPolicies> {
-	const migrated: Partial<PermissionPolicies> = {};
-
-	for (const [key, value] of Object.entries(stored)) {
-		// Check if it's a legacy key that needs migration
-		const targetKey = LEGACY_PERMISSION_MAPPING[key] || key;
-
-		// Only include valid categories with valid values
-		if (isPermissionCategory(targetKey) && isValidPolicyValue(value)) {
-			migrated[targetKey] = value;
-		}
-	}
-
-	return migrated;
-}
-
-// =============================================================================
 // Utilities
 // =============================================================================
 

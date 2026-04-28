@@ -744,7 +744,6 @@ export const useModelSelection = () => {
 			proxyEndpoints: state.proxyEndpoints,
 			opencodeProviders: state.opencodeProviders,
 			enabledOpenCodeModels: state.enabledOpenCodeModels,
-			disabledProviders: state.disabledProviders,
 			getModelVariant: state.actions.getModelVariant,
 			setModelVariant: state.actions.setModelVariant,
 			setLastSelectedModel: state.actions.setLastSelectedModel,
@@ -865,10 +864,15 @@ export const useSessionVariant = () => {
 		);
 		const selected = state.modelVariants[sessionModelId];
 		const agentId = activeSessionAgent ?? 'build';
+		const agentResource = state.resources.agent.items.find(agent => agent.name === agentId);
 		const configured = getConfiguredAgentVariant({
-			agent:
-				state.agents.items.find(agent => agent.id === agentId) ??
-				state.subagents.items.find(agent => agent.name === agentId),
+			agent: agentResource
+				? {
+						name: agentResource.name,
+						model: agentResource.model,
+						variant: agentResource.variant,
+					}
+				: undefined,
 			effectiveModel: sessionModelId,
 			variants,
 		});

@@ -190,10 +190,6 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 	// ── Paste ────────────────────────────────────────────────────────────
 	// Only intercept when clipboard contains images. Text paste is never blocked.
 
-	// Legacy compat: keep pendingPasteText so ChatInput can read it,
-	// but it will always be null (paste is never blocked).
-	const [pendingPasteText] = useState<string | null>(null);
-
 	const handlePaste = useCallback(
 		(e: React.ClipboardEvent) => {
 			const clipboardData = e.clipboardData;
@@ -253,13 +249,11 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 
 	return {
 		attachedImages,
-		pendingPasteText,
 		isDragOver,
 		addFile,
 		addImage: addAttachedImage,
 		removeImage,
 		clearAll,
-		clearPendingPaste: () => {},
 		handleDragOver,
 		handleDragLeave,
 		handleDrop,

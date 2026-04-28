@@ -1,9 +1,10 @@
 import {
 	DEFAULT_POLICIES,
-	migrateLegacyPolicies,
-	PERMISSION_CATEGORIES,
+	isPermissionCategory,
+	isValidPolicyValue,
+	type PermissionCategory,
+	type PermissionPolicyValue,
 	policiesToServerFormat,
-	VALID_POLICY_VALUES,
 } from '../../common/permissions';
 import type { CommandOf, PermissionPolicies, WebviewCommand } from '../../common/protocol';
 import { resolveToolName } from '../../common/toolRegistry';
@@ -47,10 +48,11 @@ export class ToolHandler implements WebviewMessageHandler {
 		this.policies = { ...DEFAULT_POLICIES };
 
 		if (stored) {
-			// Migrate legacy policies (terminal → bash, network → webfetch)
-			const migrated = migrateLegacyPolicies(stored);
-			// Merge migrated policies into defaults
-			this.policies = { ...this.policies, ...migrated };
+			for (const [key, value] of Object.entries(stored)) {
+				if (isPermissionCategory(key) && isValidPolicyValue(value)) {
+					this.policies[key] = value;
+				}
+			}
 		}
 
 		logger.info('[ToolHandler] Initialized policies', {
@@ -76,8 +78,8 @@ export class ToolHandler implements WebviewMessageHandler {
 			case 'getPermissions':
 				await this.onGetPermissions();
 				break;
-			case 'setPermissions':
-				await this.onSetPermissions(msg);
+			case 'setPermissionPolicy':
+				await this.setPermissionPolicy(msg.category, msg.policy);
 				break;
 			case 'setAutoAccept':
 				this.onSetAutoAccept(msg);
@@ -130,6 +132,14 @@ export class ToolHandler implements WebviewMessageHandler {
 
 	getPermissionPolicies(): PermissionPolicies {
 		return { ...this.policies };
+	}
+
+	async setPermissionPolicy(
+		category: PermissionCategory,
+		policy: PermissionPolicyValue,
+	): Promise<void> {
+		this.policies[category] = policy;
+		await this.persistPolicies();
 	}
 
 	private async onAccessResponse(msg: CommandOf<'accessResponse'>): Promise<void> {
@@ -192,32 +202,11 @@ export class ToolHandler implements WebviewMessageHandler {
 		this.context.bridge.permissionsUpdated({ ...this.policies });
 	}
 
-	private async onSetPermissions(msg: CommandOf<'setPermissions'>): Promise<void> {
-		const incoming = msg.policies;
-		logger.info('[ToolHandler] onSetPermissions called', {
-			hasIncoming: !!incoming,
-			incomingTask: incoming?.task,
-			incomingExtDir: incoming?.external_directory,
-		});
-		if (incoming) {
-			// Merge incoming policies with current policies
-			for (const key of PERMISSION_CATEGORIES) {
-				const val = incoming[key];
-				if (val && VALID_POLICY_VALUES.has(val)) {
-					this.policies[key] = val;
-				}
-			}
-		}
-		logger.info('[ToolHandler] Policies after update', {
-			task: this.policies.task,
-			external_directory: this.policies.external_directory,
-			bash: this.policies.bash,
-			edit: this.policies.edit,
-		});
+	private async persistPolicies(): Promise<void> {
 		await this.context.extensionContext.workspaceState.update(POLICIES_KEY, this.policies);
 		this.context.bridge.permissionsUpdated({ ...this.policies });
 
-		// Sync all categories to running OpenCode server via PATCH /config.
+		// Sync all categories to project opencode.json through the canonical writer.
 		void this.syncPoliciesToServer().catch(e =>
 			logger.warn('[ToolHandler] Failed to sync policies to server:', e),
 		);
@@ -226,13 +215,16 @@ export class ToolHandler implements WebviewMessageHandler {
 	/**
 	 * Persist current permission policies into the project's `opencode.json`.
 	 *
-	 * Uses McpConfigService.updateProjectField to ensure atomic writes and
-	 * proper event emission, avoiding race conditions with MCP config saves.
+	 * Uses OpenCodeConfigService so project opencode.json writes stay centralized.
 	 */
 	private async syncPoliciesToServer(): Promise<void> {
 		const serverPermission = policiesToServerFormat(this.policies);
 		try {
-			await this.context.services.mcpConfig.updateProjectField('permission', serverPermission);
+			const result = await this.context.services.openCodeConfig.setProjectField(
+				'permission',
+				serverPermission,
+			);
+			this.context.services.mcpConfigWatcher.notifyUiSave(result.contentHash);
 			logger.info('[ToolHandler] Policies written to opencode.json', serverPermission);
 		} catch (e) {
 			logger.warn('[ToolHandler] Failed to write opencode.json:', e);
@@ -240,11 +232,16 @@ export class ToolHandler implements WebviewMessageHandler {
 	}
 
 	private async onCheckDiscoveryStatus(): Promise<void> {
-		// Best-effort discovery based on existing files/services.
+		const instructionSources =
+			(await this.context.services.rules?.getInstructionSources().catch(error => {
+				logger.warn('[ToolHandler] Failed to inspect AGENTS.md sources', error);
+				return [];
+			})) ?? [];
+
 		this.context.bridge.data('discoveryStatus', {
 			rules: {
-				hasAgentsMd: true,
-				ruleFiles: [],
+				hasAgentsMd: instructionSources.length > 0,
+				ruleFiles: instructionSources.map(source => `${source.label}: ${source.path}`),
 			},
 			permissions: {},
 			skills: [],

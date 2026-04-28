@@ -1,6 +1,6 @@
 /**
  * @file Rules Service
- * @description Manages rule files in `.opencode/rules/` (active) and `.opencode/rules/disabled/` (inactive).
+ * @description Manages rule files in `.opencode/rules/`.
  */
 
 import * as path from 'node:path';
@@ -8,13 +8,19 @@ import * as vscode from 'vscode';
 import { PATHS } from '../common/constants';
 import { logger } from '../utils/logger';
 import { normalizeToPosixPath } from '../utils/path';
+import { getGlobalOpenCodeDir } from './opencode/OpenCodeConfigService';
 
 export interface Rule {
 	name: string;
 	path: string;
-	isEnabled: boolean;
 	source: 'opencode';
 	content?: string;
+}
+
+export interface InstructionSource {
+	path: string;
+	scope: 'project' | 'global';
+	label: string;
 }
 
 export class RulesService {
@@ -33,36 +39,18 @@ export class RulesService {
 		return resolved;
 	}
 
-	/**
-	 * Get all rules from `.opencode/rules/` (active and disabled)
-	 */
+	/** Get all project rule files from `.opencode/rules/`. */
 	public async getRules(): Promise<Rule[]> {
 		const rules: Rule[] = [];
 		const rulesDir = path.join(this._workspaceRoot, PATHS.OPENCODE_RULES_DIR);
-		const disabledDir = path.join(rulesDir, 'disabled');
 
 		try {
-			// Active rules
 			if (await this._dirExists(rulesDir)) {
 				const files = await this._findMdFiles(rulesDir, false);
 				for (const file of files) {
 					rules.push({
 						name: file,
 						path: normalizeToPosixPath(path.join(PATHS.OPENCODE_RULES_DIR, file)),
-						isEnabled: true,
-						source: 'opencode',
-					});
-				}
-			}
-
-			// Disabled rules
-			if (await this._dirExists(disabledDir)) {
-				const files = await this._findMdFiles(disabledDir, false);
-				for (const file of files) {
-					rules.push({
-						name: file,
-						path: normalizeToPosixPath(path.join(PATHS.OPENCODE_RULES_DIR, 'disabled', file)),
-						isEnabled: false,
 						source: 'opencode',
 					});
 				}
@@ -72,6 +60,32 @@ export class RulesService {
 		}
 
 		return rules.sort((a, b) => a.name.localeCompare(b.name));
+	}
+
+	public async getInstructionSources(): Promise<InstructionSource[]> {
+		const sources: InstructionSource[] = [];
+		const projectAgentsPath = path.join(this._workspaceRoot, 'AGENTS.md');
+		if (await this._fileExists(projectAgentsPath)) {
+			sources.push({
+				path: normalizeToPosixPath('AGENTS.md'),
+				scope: 'project',
+				label: 'Project AGENTS.md',
+			});
+		}
+
+		const globalDir = getGlobalOpenCodeDir();
+		if (globalDir) {
+			const globalAgentsPath = path.join(globalDir, 'AGENTS.md');
+			if (await this._fileExists(globalAgentsPath)) {
+				sources.push({
+					path: normalizeToPosixPath(globalAgentsPath),
+					scope: 'global',
+					label: 'Global ~/.config/opencode/AGENTS.md',
+				});
+			}
+		}
+
+		return sources;
 	}
 
 	/**
@@ -92,54 +106,8 @@ export class RulesService {
 		return {
 			name: safeName,
 			path: normalizeToPosixPath(path.join(PATHS.OPENCODE_RULES_DIR, safeName)),
-			isEnabled: true,
 			source: 'opencode',
 		};
-	}
-
-	/**
-	 * Toggle rule enabled/disabled and auto-sync
-	 */
-	public async toggleRule(rulePath: string, enabled: boolean): Promise<void> {
-		this._assertInsideWorkspace(rulePath);
-
-		const rulesDir = path.join(this._workspaceRoot, PATHS.OPENCODE_RULES_DIR);
-		const disabledDir = path.join(rulesDir, 'disabled');
-		const fullPath = path.join(this._workspaceRoot, rulePath);
-		const fileName = path.basename(rulePath);
-
-		const rulesDirUri = vscode.Uri.file(rulesDir);
-		const disabledDirUri = vscode.Uri.file(disabledDir);
-		try {
-			await vscode.workspace.fs.createDirectory(rulesDirUri);
-		} catch {
-			/* may exist */
-		}
-		try {
-			await vscode.workspace.fs.createDirectory(disabledDirUri);
-		} catch {
-			/* may exist */
-		}
-
-		const targetDir = enabled ? rulesDir : disabledDir;
-		const sourceUri = vscode.Uri.file(fullPath);
-		const targetUri = vscode.Uri.file(path.join(targetDir, fileName));
-
-		// Guard against overwriting an existing file with the same name
-		try {
-			await vscode.workspace.fs.stat(targetUri);
-			throw new Error(`Rule "${fileName}" already exists in the target directory`);
-		} catch (e) {
-			// stat throws when file doesn't exist — that's the expected case
-			if (e instanceof Error && e.message.includes('already exists')) throw e;
-		}
-
-		try {
-			await vscode.workspace.fs.rename(sourceUri, targetUri);
-		} catch (error) {
-			logger.error(`[RulesService] Failed to toggle rule ${rulePath}:`, error);
-			throw error;
-		}
 	}
 
 	/**
@@ -165,6 +133,15 @@ export class RulesService {
 		try {
 			const stat = await vscode.workspace.fs.stat(vscode.Uri.file(dirPath));
 			return (stat.type & vscode.FileType.Directory) !== 0;
+		} catch {
+			return false;
+		}
+	}
+
+	private async _fileExists(filePath: string): Promise<boolean> {
+		try {
+			const stat = await vscode.workspace.fs.stat(vscode.Uri.file(filePath));
+			return (stat.type & vscode.FileType.File) !== 0;
 		} catch {
 			return false;
 		}

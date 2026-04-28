@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useSettingsStore } from '../../../store';
 import { useVSCode } from '../../../utils/vscode';
 import { EditIcon, PlusIcon, TrashIcon } from '../../icons';
-import { Button, Tooltip } from '../../ui';
+import { Button } from '../../ui';
 import {
 	EmptyState,
 	GroupTitle,
@@ -13,8 +13,16 @@ import {
 	SettingsGroup,
 } from '../SettingsUI';
 
+const inputClass =
+	'w-full px-2 py-1.5 text-xs bg-vscode-input-background border border-vscode-input-border rounded text-vscode-input-foreground placeholder:text-vscode-input-placeholderForeground focus:outline-none focus:border-vscode-focusBorder';
+
+const COMMAND_SCOPE_LABELS = {
+	project: 'Project',
+	global: 'Global',
+} as const;
+
 export const CommandsTab: React.FC = () => {
-	const { commands } = useSettingsStore();
+	const commands = useSettingsStore(state => state.resources.command);
 	const { postMessage } = useVSCode();
 
 	// Create command form state
@@ -23,9 +31,8 @@ export const CommandsTab: React.FC = () => {
 	const [newDescription, setNewDescription] = useState('');
 	const [newContent, setNewContent] = useState('');
 
-	// Initial load
 	useEffect(() => {
-		postMessage({ type: 'getCommands' });
+		postMessage({ type: 'getResources', kind: 'command' });
 	}, [postMessage]);
 
 	const handleCreate = () => {
@@ -34,10 +41,14 @@ export const CommandsTab: React.FC = () => {
 		}
 
 		postMessage({
-			type: 'createCommand',
+			type: 'mutateResource',
+			kind: 'command',
+			action: 'create',
 			name: newName,
-			description: newDescription,
-			content: newContent,
+			payload: {
+				description: newDescription,
+				content: newContent,
+			},
 		});
 
 		setIsCreating(false);
@@ -46,18 +57,18 @@ export const CommandsTab: React.FC = () => {
 		setNewContent('');
 	};
 
-	const handleDelete = (name: string) => {
-		postMessage({ type: 'deleteCommand', name });
-	};
-
-	const handleOpen = (filePath: string) => {
-		postMessage({ type: 'openCommandFile', filePath });
-	};
+	const handleDelete = (name: string) =>
+		postMessage({ type: 'mutateResource', kind: 'command', action: 'delete', name });
+	const handleOpen = (filePath: string) => postMessage({ type: 'openCommandFile', filePath });
 
 	return (
 		<>
 			{/* Actions Bar */}
 			<GroupTitle>Commands</GroupTitle>
+			<p className="mx-(--gap-1) -mt-(--gap-1) mb-(--gap-3) text-xs text-vscode-descriptionForeground leading-relaxed">
+				Commands are OpenCode command files or config entries. OpenCode does not expose an enabled
+				flag for command files, so this tab supports create, edit and delete for project commands.
+			</p>
 			<SettingsGroup>
 				{!isCreating && (
 					<SettingRow
@@ -91,7 +102,7 @@ export const CommandsTab: React.FC = () => {
 								value={newName}
 								onChange={e => setNewName(e.target.value)}
 								placeholder="Command name (e.g., commit)"
-								className="w-full px-2 py-1.5 text-xs bg-vscode-input-background border border-vscode-input-border rounded text-vscode-input-foreground placeholder:text-vscode-input-placeholderForeground focus:outline-none focus:border-vscode-focusBorder"
+								className={inputClass}
 							/>
 						</div>
 
@@ -105,7 +116,7 @@ export const CommandsTab: React.FC = () => {
 								value={newDescription}
 								onChange={e => setNewDescription(e.target.value)}
 								placeholder="Description"
-								className="w-full px-2 py-1.5 text-xs bg-vscode-input-background border border-vscode-input-border rounded text-vscode-input-foreground placeholder:text-vscode-input-placeholderForeground focus:outline-none focus:border-vscode-focusBorder"
+								className={inputClass}
 							/>
 						</div>
 
@@ -117,7 +128,7 @@ export const CommandsTab: React.FC = () => {
 								id="prompt-content"
 								value={newContent}
 								onChange={e => setNewContent(e.target.value)}
-								className="w-full h-24 px-2 py-1.5 text-xs font-mono bg-vscode-input-background border border-vscode-input-border rounded text-vscode-input-foreground placeholder:text-vscode-input-placeholderForeground focus:outline-none focus:border-vscode-focusBorder resize-y"
+								className={`${inputClass} h-24 font-mono resize-y`}
 								placeholder="Enter prompt content here..."
 							/>
 						</div>
@@ -134,42 +145,37 @@ export const CommandsTab: React.FC = () => {
 				</SettingsGroup>
 			)}
 
-			{/* Custom Commands List */}
+			<GroupTitle>Installed Commands</GroupTitle>
 			<SettingsGroup>
-				{commands.isLoading ? (
-					<div className="p-4 text-center text-vscode-descriptionForeground text-xs">
-						Loading commands...
+				{commands.error && (
+					<div className="px-3 py-2 text-xs text-vscode-errorForeground border-b border-(--alpha-10)">
+						{commands.error}
 					</div>
-				) : commands.custom.length === 0 ? (
-					<EmptyState>No custom commands found. Create one above.</EmptyState>
+				)}
+				{commands.items.length === 0 ? (
+					<EmptyState>
+						{commands.isLoading ? 'Loading commands...' : 'No commands found'}
+					</EmptyState>
 				) : (
-					commands.custom.map((cmd, idx) => (
+					commands.items.map((command, index) => (
 						<SettingRow
-							key={cmd.name}
-							title={`/${cmd.name}`}
-							tooltip={cmd.description}
-							last={idx === commands.custom.length - 1}
+							key={`${command.source}:${command.path}`}
+							title={command.name}
+							titleExtra={
+								<SettingsBadge>{COMMAND_SCOPE_LABELS[command.locationScope]}</SettingsBadge>
+							}
+							tooltip={command.description || command.path}
+							last={index === commands.items.length - 1}
 						>
 							<SettingRowActions>
-								<Tooltip content="Edit file" position="top" delay={200}>
-									<button
-										type="button"
-										onClick={() => handleOpen(cmd.path)}
-										className="p-1 rounded hover:bg-vscode-list-hoverBackground text-vscode-descriptionForeground hover:text-vscode-foreground transition-colors"
-									>
-										<EditIcon size={12} />
-									</button>
-								</Tooltip>
-								<SettingsBadge>Custom</SettingsBadge>
-								<Tooltip content="Delete" position="top" delay={200}>
-									<button
-										type="button"
-										onClick={() => handleDelete(cmd.name)}
-										className="p-1 rounded hover:bg-vscode-errorForeground/20 text-vscode-descriptionForeground hover:text-vscode-errorForeground transition-colors"
-									>
+								<Button size="xs" variant="ghost" onClick={() => handleOpen(command.path)}>
+									<EditIcon size={12} />
+								</Button>
+								{command.source === 'project' && (
+									<Button size="xs" variant="ghost" onClick={() => handleDelete(command.name)}>
 										<TrashIcon size={12} />
-									</button>
-								</Tooltip>
+									</Button>
+								)}
 							</SettingRowActions>
 						</SettingRow>
 					))

@@ -21,22 +21,16 @@ export interface ModelOption {
 export function useModelOptions(includeDefault = true): ModelOption[] {
 	const opencodeProviders = useSettingsStore(s => s.opencodeProviders);
 	const enabledOpenCodeModels = useSettingsStore(s => s.enabledOpenCodeModels);
-	const disabledProviders = useSettingsStore(s => s.disabledProviders);
 	const proxyEndpoints = useSettingsStore(s => s.proxyEndpoints);
 
 	return useMemo(() => {
 		const opts: ModelOption[] = [];
 		if (includeDefault) opts.push({ value: '', label: 'Default (inherit)' });
 
-		const disabledSet = new Set(disabledProviders);
 		const enabledSet = new Set(enabledOpenCodeModels);
 
 		for (const provider of opencodeProviders) {
-			if (
-				disabledSet.has(provider.id) ||
-				provider.id === OPENAI_COMPATIBLE_PROVIDER_ID ||
-				isProxyEndpointProviderId(provider.id)
-			)
+			if (provider.id === OPENAI_COMPATIBLE_PROVIDER_ID || isProxyEndpointProviderId(provider.id))
 				continue;
 			for (const model of provider.models) {
 				const compositeId = `${provider.id}/${model.id}`;
@@ -47,7 +41,6 @@ export function useModelOptions(includeDefault = true): ModelOption[] {
 
 		for (const endpoint of proxyEndpoints) {
 			const providerId = getProxyEndpointProviderId(endpoint.id);
-			if (disabledSet.has(providerId)) continue;
 			const enabled = new Set(endpoint.enabledModels);
 			for (const model of endpoint.models) {
 				if (!enabled.has(model.id)) continue;
@@ -59,5 +52,5 @@ export function useModelOptions(includeDefault = true): ModelOption[] {
 		}
 
 		return opts;
-	}, [opencodeProviders, enabledOpenCodeModels, disabledProviders, proxyEndpoints, includeDefault]);
+	}, [opencodeProviders, enabledOpenCodeModels, proxyEndpoints, includeDefault]);
 }

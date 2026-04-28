@@ -398,9 +398,7 @@ const useStickyMessageSettings = () =>
 		useShallow(state => ({
 			opencodeProviders: state.opencodeProviders,
 			proxyEndpoints: state.proxyEndpoints,
-			customCommands: state.commands.custom,
-			cliCommands: state.commands.cli,
-			subagentItems: state.subagents.items,
+			agentResources: state.resources.agent.items,
 		})),
 	);
 
@@ -417,20 +415,17 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 		const chatActions = useChatActions();
 		const { setEditingMessageId } = chatActions;
 		const activeModelID = useActiveModelID();
-		const { opencodeProviders, proxyEndpoints, customCommands, cliCommands, subagentItems } =
-			useStickyMessageSettings();
+		const { opencodeProviders, proxyEndpoints, agentResources } = useStickyMessageSettings();
 
-		const validCommands = useMemo(
-			() =>
-				new Set([
-					...cliCommands.map(c => c.name.toLowerCase()),
-					...customCommands.map(c => c.name.toLowerCase()),
-				]),
-			[cliCommands, customCommands],
-		);
+		const validCommands = useMemo(() => new Set<string>(['compact']), []);
 		const validSubagents = useMemo(
-			() => new Set(subagentItems.map(a => a.name.toLowerCase())),
-			[subagentItems],
+			() =>
+				new Set(
+					agentResources
+						.filter(agent => !agent.disabled && !agent.hidden)
+						.map(agent => agent.name.toLowerCase()),
+				),
+			[agentResources],
 		);
 
 		// Stats come from props (pre-computed in groupMessagesIntoSections)

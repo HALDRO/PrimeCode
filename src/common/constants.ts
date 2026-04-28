@@ -198,8 +198,8 @@ export const PATHS = {
 	OPENCODE_AGENTS_DIR: '.opencode/agents',
 
 	// External skill directories (cross-agent interop: .agents standard)
-	EXTERNAL_AGENTS_SKILLS_DIR: '.agents/skills',
 	EXTERNAL_CLAUDE_SKILLS_DIR: '.claude/skills',
+	EXTERNAL_AGENTS_SKILLS_DIR: '.agents/skills',
 } as const;
 
 // =============================================================================

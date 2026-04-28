@@ -255,7 +255,11 @@ export class ProviderHandler implements WebviewMessageHandler {
 		if (model && parseModelId(model)) {
 			const workspaceRoot = this.context.settings.getWorkspaceRoot();
 			if (!workspaceRoot) return;
-			await this.context.services.openCodeClient.setProjectDefaultModel(workspaceRoot, model);
+			const result = await this.context.services.openCodeClient.setProjectDefaultModel(
+				workspaceRoot,
+				model,
+			);
+			this.context.services.mcpConfigWatcher.notifyUiSave(result.contentHash);
 			this.context.bridge.data('openCodeModelSet', { model });
 		}
 	}
@@ -265,7 +269,11 @@ export class ProviderHandler implements WebviewMessageHandler {
 		if (model && parseModelId(model)) {
 			const workspaceRoot = this.context.settings.getWorkspaceRoot();
 			if (!workspaceRoot) return;
-			await this.context.services.openCodeClient.setProjectDefaultModel(workspaceRoot, model);
+			const result = await this.context.services.openCodeClient.setProjectDefaultModel(
+				workspaceRoot,
+				model,
+			);
+			this.context.services.mcpConfigWatcher.notifyUiSave(result.contentHash);
 			this.context.bridge.send({ type: 'modelSelected', model });
 		}
 	}
@@ -445,15 +453,19 @@ export class ProviderHandler implements WebviewMessageHandler {
 				providerId || (endpointId ? getProxyEndpointProviderId(endpointId) : '');
 
 			if (!enabledModelIds?.length) {
-				await this.context.services.openCodeClient.upsertCustomProvider(workspaceRoot, {
-					providerId: resolvedProviderId,
-					name: providerName || defaultName,
-					npm,
-					baseUrl,
-					apiKey,
-					headers: customHeaders,
-					models: [],
-				});
+				const result = await this.context.services.openCodeClient.upsertCustomProvider(
+					workspaceRoot,
+					{
+						providerId: resolvedProviderId,
+						name: providerName || defaultName,
+						npm,
+						baseUrl,
+						apiKey,
+						headers: customHeaders,
+						models: [],
+					},
+				);
+				this.context.services.mcpConfigWatcher.notifyUiSave(result.contentHash);
 				const sdkClient = this.context.cli.getSdkClient();
 				if (sdkClient) {
 					await sdkClient.instance.dispose().catch((err: unknown) => {
@@ -503,15 +515,19 @@ export class ProviderHandler implements WebviewMessageHandler {
 				}
 			}
 
-			await this.context.services.openCodeClient.upsertCustomProvider(workspaceRoot, {
-				providerId: resolvedProviderId,
-				name: providerName || defaultName,
-				npm,
-				baseUrl,
-				apiKey,
-				headers: customHeaders,
-				models: enrichedModels,
-			});
+			const result = await this.context.services.openCodeClient.upsertCustomProvider(
+				workspaceRoot,
+				{
+					providerId: resolvedProviderId,
+					name: providerName || defaultName,
+					npm,
+					baseUrl,
+					apiKey,
+					headers: customHeaders,
+					models: enrichedModels,
+				},
+			);
+			this.context.services.mcpConfigWatcher.notifyUiSave(result.contentHash);
 
 			// Trigger OpenCode config reload
 			const sdkClient = this.context.cli.getSdkClient();
@@ -530,10 +546,16 @@ export class ProviderHandler implements WebviewMessageHandler {
 		if (!workspaceRoot || !msg.providerId) return;
 
 		try {
-			await this.context.services.openCodeClient.deleteCustomProvider(workspaceRoot, {
-				providerId: msg.providerId,
-				baseUrl: msg.baseUrl,
-			});
+			const result = await this.context.services.openCodeClient.deleteCustomProvider(
+				workspaceRoot,
+				{
+					providerId: msg.providerId,
+					baseUrl: msg.baseUrl,
+				},
+			);
+			if (result.contentHash) {
+				this.context.services.mcpConfigWatcher.notifyUiSave(result.contentHash);
+			}
 			const sdkClient = this.context.cli.getSdkClient();
 			if (sdkClient) {
 				await sdkClient.instance.dispose().catch((err: unknown) => {

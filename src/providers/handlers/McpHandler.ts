@@ -16,6 +16,9 @@ export class McpHandler implements WebviewMessageHandler {
 			case 'saveMCPServer':
 				await this.onSaveMcpServer(msg);
 				break;
+			case 'setMCPServerEnabled':
+				await this.onSetMcpServerEnabled(msg);
+				break;
 			case 'deleteMCPServer':
 				await this.onDeleteMcpServer(msg);
 				break;
@@ -104,6 +107,30 @@ export class McpHandler implements WebviewMessageHandler {
 		await this.context.services.mcpManagement.saveMCPServer(msg.name, msg.config);
 	}
 
+	private async onSetMcpServerEnabled(msg: CommandOf<'setMCPServerEnabled'>): Promise<void> {
+		try {
+			const result = await this.context.services.openCodeConfig.patchProjectConfig(config => {
+				const mcp = ensureRecord(config, 'mcp');
+				const entry = ensureRecord(mcp, msg.name);
+				entry.enabled = msg.enabled;
+				return config;
+			});
+			this.context.services.mcpConfigWatcher.notifyUiSave(result.contentHash);
+			this.context.cli.clearMcpCache?.();
+
+			const connection = this.context.cli.getConnectionDetails();
+			if (connection.serverUrl && connection.isServerOwner) {
+				await this.context.cli.restartServer();
+			}
+
+			await this.onLoadMcpServers();
+		} catch (error) {
+			this.context.bridge.data('mcpServerError', {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+
 	private async onDeleteMcpServer(msg: CommandOf<'deleteMCPServer'>): Promise<void> {
 		await this.context.services.mcpManagement.deleteMCPServer(msg.name);
 	}
@@ -117,4 +144,14 @@ export class McpHandler implements WebviewMessageHandler {
 			d.dispose();
 		}
 	}
+}
+
+function ensureRecord(parent: Record<string, unknown>, key: string): Record<string, unknown> {
+	const value = parent[key];
+	if (value && typeof value === 'object' && !Array.isArray(value)) {
+		return value as Record<string, unknown>;
+	}
+	const next: Record<string, unknown> = {};
+	parent[key] = next;
+	return next;
 }

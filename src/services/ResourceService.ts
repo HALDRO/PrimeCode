@@ -12,6 +12,11 @@ import type { ParsedCommand, ParsedSkill, ParsedSubagent } from '../common';
 import { PATHS } from '../common/constants';
 import { parseFrontmatter, stringifyFrontmatter } from '../utils/frontmatter';
 import { normalizeToPosixPath } from '../utils/path';
+import {
+	getGlobalAgentsDir,
+	getGlobalClaudeDir,
+	getGlobalOpenCodeDir,
+} from './opencode/OpenCodeConfigService';
 
 // =============================================================================
 // Types
@@ -261,18 +266,81 @@ export class ResourceService {
 	public async getAllSkillsIncludingExternal(): Promise<ParsedSkill[]> {
 		if (!this._workspaceRoot) return [];
 
-		const [workspaceSkills, agentsSkills, claudeSkills] = await Promise.all([
+		const [workspaceSkills, claudeSkills, agentsSkills] = await Promise.all([
 			this.getSkillsFromRelativeDir(PATHS.OPENCODE_SKILLS_DIR),
-			this.getSkillsFromRelativeDir(PATHS.EXTERNAL_AGENTS_SKILLS_DIR),
 			this.getSkillsFromRelativeDir(PATHS.EXTERNAL_CLAUDE_SKILLS_DIR),
+			this.getSkillsFromRelativeDir(PATHS.EXTERNAL_AGENTS_SKILLS_DIR),
 		]);
 
 		const merged = new Map<string, ParsedSkill>();
-		for (const skill of [...workspaceSkills, ...agentsSkills, ...claudeSkills]) {
+		for (const skill of [...workspaceSkills, ...claudeSkills, ...agentsSkills]) {
 			merged.set(skill.path, skill);
 		}
 
 		return [...merged.values()].sort((a, b) => a.name.localeCompare(b.name));
+	}
+
+	public async getGlobalSubagents(): Promise<ParsedSubagent[]> {
+		const configDir = getGlobalOpenCodeDir();
+		if (!configDir) return [];
+		const cfg = CONFIGS.subagents as ResourceConfig<ParsedSubagent>;
+		return this.getAllFlatFromAbsoluteDir(cfg, path.join(configDir, 'agents'), (...s) =>
+			normalizeToPosixPath(path.join(configDir, 'agents', ...s)),
+		) as Promise<ParsedSubagent[]>;
+	}
+
+	public async getGlobalCommands(): Promise<ParsedCommand[]> {
+		const configDir = getGlobalOpenCodeDir();
+		if (!configDir) return [];
+		const cfg = CONFIGS.commands as ResourceConfig<ParsedCommand>;
+		return this.getAllFlatFromAbsoluteDir(cfg, path.join(configDir, 'commands'), (...s) =>
+			normalizeToPosixPath(path.join(configDir, 'commands', ...s)),
+		) as Promise<ParsedCommand[]>;
+	}
+
+	public async getGlobalSkillsIncludingExternal(): Promise<ParsedSkill[]> {
+		const configDir = getGlobalOpenCodeDir();
+		const claudeDir = getGlobalClaudeDir();
+		const agentsDir = getGlobalAgentsDir();
+		const [openCodeSkills, claudeSkills, agentsSkills] = await Promise.all([
+			configDir
+				? this.getSkillsFromAbsoluteDir(path.join(configDir, 'skills'), (...s) =>
+						normalizeToPosixPath(path.join(configDir, 'skills', ...s)),
+					)
+				: Promise.resolve([]),
+			claudeDir
+				? this.getSkillsFromAbsoluteDir(path.join(claudeDir, 'skills'), (...s) =>
+						normalizeToPosixPath(path.join(claudeDir, 'skills', ...s)),
+					)
+				: Promise.resolve([]),
+			agentsDir
+				? this.getSkillsFromAbsoluteDir(path.join(agentsDir, 'skills'), (...s) =>
+						normalizeToPosixPath(path.join(agentsDir, 'skills', ...s)),
+					)
+				: Promise.resolve([]),
+		]);
+
+		const merged = new Map<string, ParsedSkill>();
+		for (const skill of [...openCodeSkills, ...claudeSkills, ...agentsSkills]) {
+			merged.set(skill.path, skill);
+		}
+		return [...merged.values()].sort((a, b) => a.name.localeCompare(b.name));
+	}
+
+	public async getProjectPluginFiles(): Promise<string[]> {
+		if (!this._workspaceRoot) return [];
+		return this.getPluginFilesFromDir(
+			path.join(this._workspaceRoot, PATHS.OPENCODE_PLUGINS_DIR),
+			file => normalizeToPosixPath(path.join(PATHS.OPENCODE_PLUGINS_DIR, file)),
+		);
+	}
+
+	public async getGlobalPluginFiles(): Promise<string[]> {
+		const configDir = getGlobalOpenCodeDir();
+		if (!configDir) return [];
+		return this.getPluginFilesFromDir(path.join(configDir, 'plugins'), file =>
+			normalizeToPosixPath(path.join(configDir, 'plugins', file)),
+		);
 	}
 
 	public async save(
@@ -338,6 +406,29 @@ export class ResourceService {
 	): Promise<ResourceItem[]> {
 		const entries = await vscode.workspace.fs.readDirectory(dir);
 		const buildPath = (...s: string[]) => normalizeToPosixPath(path.join(cfg.dir, ...s));
+
+		const results = await Promise.all(
+			entries
+				.filter(([name, type]) => type === vscode.FileType.File && name.endsWith('.md'))
+				.map(([name]) => {
+					const uri = vscode.Uri.joinPath(dir, name);
+					return this._loadResource(cfg, uri, name, buildPath);
+				}),
+		);
+
+		return results
+			.filter((item): item is ResourceItem => item !== null)
+			.sort((a, b) => a.name.localeCompare(b.name));
+	}
+
+	private async getAllFlatFromAbsoluteDir(
+		cfg: ResourceConfig<ResourceItem>,
+		dirPath: string,
+		buildPath: (...s: string[]) => string,
+	): Promise<ResourceItem[]> {
+		const dir = vscode.Uri.file(dirPath);
+		if (!(await this.fileExists(dir))) return [];
+		const entries = await vscode.workspace.fs.readDirectory(dir);
 
 		const results = await Promise.all(
 			entries
@@ -434,6 +525,52 @@ export class ResourceService {
 		return results
 			.filter((item): item is ParsedSkill => item !== null)
 			.sort((a, b) => a.name.localeCompare(b.name));
+	}
+
+	private async getSkillsFromAbsoluteDir(
+		dirPath: string,
+		buildPath: (...s: string[]) => string,
+	): Promise<ParsedSkill[]> {
+		const cfg = CONFIGS.skills as ResourceConfig<ParsedSkill>;
+		const dir = vscode.Uri.file(dirPath);
+		if (!(await this.fileExists(dir))) return [];
+
+		const entries = await vscode.workspace.fs.readDirectory(dir);
+		const results = await Promise.all(
+			entries
+				.filter(([, type]) => type === vscode.FileType.Directory)
+				.map(async ([name]) => {
+					const skillFileUri = vscode.Uri.joinPath(dir, name, 'SKILL.md');
+					if (!(await this.fileExists(skillFileUri))) return null;
+					return this._loadResource(
+						cfg as ResourceConfig<ResourceItem>,
+						skillFileUri,
+						name,
+						buildPath,
+					) as Promise<ParsedSkill | null>;
+				}),
+		);
+
+		return results
+			.filter((item): item is ParsedSkill => item !== null)
+			.sort((a, b) => a.name.localeCompare(b.name));
+	}
+
+	private async getPluginFilesFromDir(
+		dirPath: string,
+		buildPath: (file: string) => string,
+	): Promise<string[]> {
+		const dir = vscode.Uri.file(dirPath);
+		if (!(await this.fileExists(dir))) return [];
+		const entries = await vscode.workspace.fs.readDirectory(dir);
+		return entries
+			.filter(
+				([name, type]) =>
+					type === vscode.FileType.File &&
+					(name.endsWith('.js') || name.endsWith('.mjs') || name.endsWith('.ts')),
+			)
+			.map(([name]) => buildPath(name))
+			.sort((a, b) => a.localeCompare(b));
 	}
 
 	// =========================================================================

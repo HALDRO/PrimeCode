@@ -1,5 +1,9 @@
 import type * as vscode from 'vscode';
-import type { PermissionPolicies } from '../../common/permissions';
+import type {
+	PermissionCategory,
+	PermissionPolicies,
+	PermissionPolicyValue,
+} from '../../common/permissions';
 import type { WebviewCommand } from '../../common/protocol';
 import type { ISessionState, ISettings } from '../../core/contracts';
 import type { OpenCodeExecutor } from '../../core/executor/OpenCode';
@@ -20,6 +24,11 @@ export interface HandlerContext {
 	sessionGraph: SessionGraph;
 	/** Returns current permission policies from ToolHandler. Used by SessionHandler for reconnect. */
 	getPermissionPolicies?: () => PermissionPolicies;
+	/** Applies a permission policy through ToolHandler so in-memory, storage, and project config stay in sync. */
+	setPermissionPolicy?: (
+		category: PermissionCategory,
+		policy: PermissionPolicyValue,
+	) => Promise<void>;
 	/** Returns whether runtime auto-accept is enabled for a session. */
 	getSessionAutoAccept?: (sessionId: string) => boolean;
 	/** Returns effective + explicit permission auto-accept state for a session. */

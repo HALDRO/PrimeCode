@@ -159,10 +159,6 @@ export class OutboundBridge {
 		this.send({ type: 'sdk_event_batch', events });
 	}
 
-	// =========================================================================
-	// Session Events — typed helpers (legacy, used during migration)
-	// =========================================================================
-
 	public emit<T extends SessionEventType>(
 		targetId: string,
 		eventType: T,
