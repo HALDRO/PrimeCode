@@ -53,6 +53,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 	/** Guards against duplicate syncAll calls during startup. */
 	private hasSynced = false;
+	private didStartupRuntimeReload = false;
 	private readonly bridge = new OutboundBridge();
 	private readonly router = new CommandRouter();
 
@@ -95,6 +96,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				this.hasSynced = false;
 				await this.syncAllOrDefer('manual-server-restart');
 			},
+			reloadOpenCodeRuntime: source => this.reloadOpenCodeRuntime(source),
 		};
 
 		this.sessionHandler = new SessionHandler(handlerContext);
@@ -105,6 +107,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.fileHandler = new FileHandler(handlerContext);
 		this.sseHandler = new SseHandler(handlerContext);
 		this.utilityHandler = new UtilityHandler(handlerContext);
+
+		this.services.mcpConfigWatcher.setOpenCodeReloadCallback(() =>
+			this.reloadOpenCodeRuntime('opencode-config'),
+		);
 
 		// Build declarative command router
 		this.buildRouter();
@@ -179,7 +185,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.disposables.push(
 			this.services.mcpConfigWatcher.onConfigChanged(async e => {
 				this.bridge.data('mcpConfigReloaded', { source: e.source, timestamp: e.timestamp });
-				await this.settingsHandler.handleMessage({ type: 'getSettings' });
+				this.hasSynced = false;
+				await this.syncAllOrDefer(`opencode-config-${e.source}`);
 			}),
 		);
 
@@ -194,6 +201,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			this.services.resourceWatcher.onResourceChanged(async e => {
 				logger.info(`[ChatProvider] Resource changed: ${e.resourceType}, refreshing UI`);
 				try {
+					await this.reloadOpenCodeRuntime(`resource:${e.resourceType}`);
 					if (e.resourceType === 'rules') {
 						await this.settingsHandler.handleMessage({ type: 'getRules' });
 						return;
@@ -221,6 +229,28 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				}
 			}),
 		);
+	}
+
+	private async reloadOpenCodeRuntime(source: string): Promise<void> {
+		const sdkClient = this.cli.getSdkClient();
+		if (!sdkClient) return;
+
+		try {
+			logger.info('[ChatProvider] Reloading OpenCode runtime', { source });
+			await sdkClient.instance.dispose();
+			this.cli.clearAgentsCache?.();
+			this.cli.clearCommandsCache?.();
+			this.cli.clearSkillsCache?.();
+			this.cli.clearMcpCache?.();
+		} catch (error) {
+			logger.error('[ChatProvider] Failed to reload OpenCode runtime:', { source, error });
+		}
+	}
+
+	private async reloadOpenCodeRuntimeOnStartup(): Promise<void> {
+		if (this.didStartupRuntimeReload) return;
+		this.didStartupRuntimeReload = true;
+		await this.reloadOpenCodeRuntime('startup');
 	}
 
 	/**
@@ -293,6 +323,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			logger.info('[ChatProvider] Starting OpenCode server...');
 			await this.cli.start(config);
 			logger.info('[ChatProvider] OpenCode server started successfully');
+			await this.reloadOpenCodeRuntimeOnStartup();
 
 			// Notify webview of server URL so it can establish SSE health polling
 			this.sendServerInfo(true);

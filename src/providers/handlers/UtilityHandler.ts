@@ -267,13 +267,9 @@ export class UtilityHandler implements WebviewMessageHandler {
 	// ─── Connection Status ─────────────────────────────────────────────
 
 	private async handleRestartOpenCode(): Promise<void> {
-		logger.info('[UtilityHandler] Restarting OpenCode server...');
-		const success = await this.context.cli.restartServer();
-		if (success) {
-			await this.context.refreshAfterServerRestart?.();
-		} else {
-			logger.error('[UtilityHandler] Failed to restart OpenCode server');
-		}
+		logger.info('[UtilityHandler] Reloading OpenCode runtime...');
+		await this.context.reloadOpenCodeRuntime?.('manual-header');
+		await this.context.refreshAfterServerRestart?.();
 	}
 
 	private handleReloadExtension(): void {

@@ -17,6 +17,7 @@ export class OpenCodeApplyService {
 		cli: OpenCodeExecutor,
 		resource: AgentResource,
 		disabled: boolean,
+		reloadRuntime?: (source: string) => Promise<void>,
 	): Promise<{
 		result: ResourceActionResult;
 		message?: string;
@@ -40,7 +41,7 @@ export class OpenCodeApplyService {
 				await setAgentFileDisabled(target.path, disabled);
 			}
 			cli.clearAgentsCache();
-			const applied = await this.applyAgentChange(cli);
+			const applied = await this.applyAgentChange(cli, reloadRuntime);
 			if (!applied.ok) {
 				return this.result(cli, applied.result, applied.message);
 			}
@@ -52,6 +53,7 @@ export class OpenCodeApplyService {
 
 	private async applyAgentChange(
 		cli: OpenCodeExecutor,
+		reloadRuntime?: (source: string) => Promise<void>,
 	): Promise<{ ok: true } | { ok: false; result: ResourceActionResult; message: string }> {
 		const connection = cli.getConnectionDetails();
 		if (!connection.serverUrl) {
@@ -62,24 +64,8 @@ export class OpenCodeApplyService {
 			};
 		}
 
-		if (!connection.isServerOwner) {
-			return {
-				ok: false,
-				result: 'requires-restart',
-				message:
-					'Project override was written, but this window does not own the OpenCode server. Restart OpenCode to apply it.',
-			};
-		}
-
-		const restarted = await cli.restartServer();
+		await reloadRuntime?.('settings:agent:setDisabled');
 		cli.clearAgentsCache();
-		if (!restarted) {
-			return {
-				ok: false,
-				result: 'stale',
-				message: 'Project override was written, but OpenCode could not be restarted to apply it.',
-			};
-		}
 
 		return { ok: true };
 	}

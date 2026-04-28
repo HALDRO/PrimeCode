@@ -738,7 +738,6 @@ export type ResourceActionResult =
 	| 'verified'
 	| 'config-written-unverified'
 	| 'shadowed'
-	| 'requires-restart'
 	| 'stale'
 	| 'error';
 

@@ -10,13 +10,14 @@
 import * as vscode from 'vscode';
 import { logger } from '../utils/logger';
 import type { McpConfigService } from './McpConfigService';
+import { getGlobalOpenCodeDir } from './opencode/OpenCodeConfigService';
 
 // =============================================================================
 // Constants
 // =============================================================================
 
 const DEBOUNCE_MS = 500;
-const MCP_CONFIG_PATTERN = '**/opencode.json';
+const OPENCODE_CONFIG_FILES = ['opencode.json', 'opencode.jsonc'] as const;
 /** Ignore file-watcher events for this long after start() to avoid startup noise. */
 const STARTUP_GRACE_MS = 3000;
 
@@ -36,7 +37,7 @@ type ReloadCallback = () => Promise<void>;
 // =============================================================================
 
 export class McpConfigWatcherService implements vscode.Disposable {
-	private _watcher: vscode.FileSystemWatcher | undefined;
+	private _watchers: vscode.FileSystemWatcher[] = [];
 	private _debounceTimer: ReturnType<typeof setTimeout> | undefined;
 	private _disposables: vscode.Disposable[] = [];
 	private _isReloading = false;
@@ -62,7 +63,7 @@ export class McpConfigWatcherService implements vscode.Disposable {
 	 * Start watching for MCP config changes
 	 */
 	public start(): void {
-		if (this._watcher) {
+		if (this._watchers.length > 0) {
 			logger.debug('[McpConfigWatcherService] Watcher already started');
 			return;
 		}
@@ -73,18 +74,13 @@ export class McpConfigWatcherService implements vscode.Disposable {
 			return;
 		}
 
-		// Watch for opencode.json changes
-		this._watcher = vscode.workspace.createFileSystemWatcher(
-			new vscode.RelativePattern(workspaceRoot, MCP_CONFIG_PATTERN),
-		);
-
-		this._watcher.onDidChange(uri => this._handleFileChange(uri, 'change'));
-		this._watcher.onDidCreate(uri => this._handleFileChange(uri, 'create'));
-		this._watcher.onDidDelete(uri => this._handleFileChange(uri, 'delete'));
-
-		this._disposables.push(this._watcher);
+		this._watchConfigFiles(workspaceRoot);
+		const globalOpenCodeDir = getGlobalOpenCodeDir();
+		if (globalOpenCodeDir) {
+			this._watchConfigFiles(globalOpenCodeDir);
+		}
 		this._startedAt = Date.now();
-		logger.info('[McpConfigWatcherService] Started watching opencode.json');
+		logger.info('[McpConfigWatcherService] Started watching opencode config files');
 	}
 
 	/**
@@ -100,7 +96,7 @@ export class McpConfigWatcherService implements vscode.Disposable {
 			d.dispose();
 		}
 		this._disposables = [];
-		this._watcher = undefined;
+		this._watchers = [];
 
 		this._onConfigChanged.dispose();
 		logger.info('[McpConfigWatcherService] Disposed');
@@ -145,11 +141,25 @@ export class McpConfigWatcherService implements vscode.Disposable {
 	public notifyUiSave(contentHash?: string): void {
 		this._lastUiSaveHash = contentHash;
 		logger.debug('[McpConfigWatcherService] UI save notified', { hash: contentHash ?? 'none' });
+		void this._performReload('manual');
 	}
 
 	// =========================================================================
 	// Private Methods
 	// =========================================================================
+
+	private _watchConfigFiles(basePath: string): void {
+		for (const file of OPENCODE_CONFIG_FILES) {
+			const watcher = vscode.workspace.createFileSystemWatcher(
+				new vscode.RelativePattern(basePath, file),
+			);
+			watcher.onDidChange(uri => this._handleFileChange(uri, 'change'));
+			watcher.onDidCreate(uri => this._handleFileChange(uri, 'create'));
+			watcher.onDidDelete(uri => this._handleFileChange(uri, 'delete'));
+			this._watchers.push(watcher);
+			this._disposables.push(watcher);
+		}
+	}
 
 	/**
 	 * Handle file system change event with debouncing.

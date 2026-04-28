@@ -28,6 +28,7 @@ type ResourceItem = ParsedCommand | ParsedSkill | ParsedSubagent;
 
 interface ResourceConfig<T extends ResourceItem> {
 	dir: string;
+	aliases?: readonly string[];
 	/** If true, uses subdirectory layout: <dir>/<name>/SKILL.md */
 	subdirLayout: boolean;
 	getFileName: (name: string) => string;
@@ -60,6 +61,7 @@ interface SaveHelpers {
 const CONFIGS: Record<ResourceType, ResourceConfig<ResourceItem>> = {
 	commands: {
 		dir: PATHS.OPENCODE_COMMANDS_DIR,
+		aliases: ['.opencode/command'],
 		subdirLayout: false,
 		getFileName: name => `${name}.md`,
 		getNameFromFileName: fn => fn.replace(/\.md$/, ''),
@@ -85,6 +87,7 @@ const CONFIGS: Record<ResourceType, ResourceConfig<ResourceItem>> = {
 
 	skills: {
 		dir: PATHS.OPENCODE_SKILLS_DIR,
+		aliases: ['.opencode/skill'],
 		subdirLayout: true,
 		getFileName: name => `${name}.md`,
 		getNameFromFileName: fn => fn.replace(/\.md$/, ''),
@@ -107,6 +110,7 @@ const CONFIGS: Record<ResourceType, ResourceConfig<ResourceItem>> = {
 
 	subagents: {
 		dir: PATHS.OPENCODE_AGENTS_DIR,
+		aliases: ['.opencode/agent'],
 		subdirLayout: false,
 		getFileName: name => `${name}.md`,
 		getNameFromFileName: fn => fn.replace(/\.md$/, ''),
@@ -250,14 +254,19 @@ export class ResourceService {
 			return this.getAllSkillsIncludingExternal();
 		}
 		const cfg = CONFIGS[type];
-		const dir = this.dirUri(cfg.dir);
-		await this.ensureDir(dir);
 
 		try {
-			if (cfg.subdirLayout) {
-				return await this.getAllSubdir(cfg, dir);
-			}
-			return await this.getAllFlat(cfg, dir);
+			const results = await Promise.all(
+				this.configDirs(cfg).map(async relativeDir => {
+					const dir = this.dirUri(relativeDir);
+					if (!(await this.fileExists(dir))) return [];
+					if (cfg.subdirLayout) {
+						return await this.getAllSubdir(cfg, dir, relativeDir);
+					}
+					return await this.getAllFlat(cfg, dir, relativeDir);
+				}),
+			);
+			return this.mergeByPath(results.flat());
 		} catch {
 			return [];
 		}
@@ -266,14 +275,20 @@ export class ResourceService {
 	public async getAllSkillsIncludingExternal(): Promise<ParsedSkill[]> {
 		if (!this._workspaceRoot) return [];
 
-		const [workspaceSkills, claudeSkills, agentsSkills] = await Promise.all([
+		const [workspaceSkills, workspaceSkillAliases, claudeSkills, agentsSkills] = await Promise.all([
 			this.getSkillsFromRelativeDir(PATHS.OPENCODE_SKILLS_DIR),
+			this.getSkillsFromRelativeDir('.opencode/skill'),
 			this.getSkillsFromRelativeDir(PATHS.EXTERNAL_CLAUDE_SKILLS_DIR),
 			this.getSkillsFromRelativeDir(PATHS.EXTERNAL_AGENTS_SKILLS_DIR),
 		]);
 
 		const merged = new Map<string, ParsedSkill>();
-		for (const skill of [...workspaceSkills, ...claudeSkills, ...agentsSkills]) {
+		for (const skill of [
+			...workspaceSkills,
+			...workspaceSkillAliases,
+			...claudeSkills,
+			...agentsSkills,
+		]) {
 			merged.set(skill.path, skill);
 		}
 
@@ -284,8 +299,9 @@ export class ResourceService {
 		const configDir = getGlobalOpenCodeDir();
 		if (!configDir) return [];
 		const cfg = CONFIGS.subagents as ResourceConfig<ParsedSubagent>;
-		return this.getAllFlatFromAbsoluteDir(cfg, path.join(configDir, 'agents'), (...s) =>
-			normalizeToPosixPath(path.join(configDir, 'agents', ...s)),
+		return this.getAllFlatFromAbsoluteDirs(
+			cfg,
+			this.configDirs(cfg).map(relativeDir => this.globalConfigDir(configDir, relativeDir)),
 		) as Promise<ParsedSubagent[]>;
 	}
 
@@ -293,8 +309,9 @@ export class ResourceService {
 		const configDir = getGlobalOpenCodeDir();
 		if (!configDir) return [];
 		const cfg = CONFIGS.commands as ResourceConfig<ParsedCommand>;
-		return this.getAllFlatFromAbsoluteDir(cfg, path.join(configDir, 'commands'), (...s) =>
-			normalizeToPosixPath(path.join(configDir, 'commands', ...s)),
+		return this.getAllFlatFromAbsoluteDirs(
+			cfg,
+			this.configDirs(cfg).map(relativeDir => this.globalConfigDir(configDir, relativeDir)),
 		) as Promise<ParsedCommand[]>;
 	}
 
@@ -302,12 +319,16 @@ export class ResourceService {
 		const configDir = getGlobalOpenCodeDir();
 		const claudeDir = getGlobalClaudeDir();
 		const agentsDir = getGlobalAgentsDir();
+		const openCodeSkillPromises = configDir
+			? this.configDirs(CONFIGS.skills).map(relativeDir => {
+					const dir = this.globalConfigDir(configDir, relativeDir);
+					return this.getSkillsFromAbsoluteDir(dir.dir, (...s) =>
+						normalizeToPosixPath(path.join(dir.label, ...s)),
+					);
+				})
+			: [];
 		const [openCodeSkills, claudeSkills, agentsSkills] = await Promise.all([
-			configDir
-				? this.getSkillsFromAbsoluteDir(path.join(configDir, 'skills'), (...s) =>
-						normalizeToPosixPath(path.join(configDir, 'skills', ...s)),
-					)
-				: Promise.resolve([]),
+			Promise.all(openCodeSkillPromises).then(items => items.flat()),
 			claudeDir
 				? this.getSkillsFromAbsoluteDir(path.join(claudeDir, 'skills'), (...s) =>
 						normalizeToPosixPath(path.join(claudeDir, 'skills', ...s)),
@@ -329,18 +350,27 @@ export class ResourceService {
 
 	public async getProjectPluginFiles(): Promise<string[]> {
 		if (!this._workspaceRoot) return [];
-		return this.getPluginFilesFromDir(
-			path.join(this._workspaceRoot, PATHS.OPENCODE_PLUGINS_DIR),
-			file => normalizeToPosixPath(path.join(PATHS.OPENCODE_PLUGINS_DIR, file)),
+		const files = await Promise.all(
+			['.opencode/plugins', '.opencode/plugin'].map(relativeDir =>
+				this.getPluginFilesFromDir(path.join(this._workspaceRoot as string, relativeDir), file =>
+					normalizeToPosixPath(path.join(relativeDir, file)),
+				),
+			),
 		);
+		return [...new Set(files.flat())].sort((a, b) => a.localeCompare(b));
 	}
 
 	public async getGlobalPluginFiles(): Promise<string[]> {
 		const configDir = getGlobalOpenCodeDir();
 		if (!configDir) return [];
-		return this.getPluginFilesFromDir(path.join(configDir, 'plugins'), file =>
-			normalizeToPosixPath(path.join(configDir, 'plugins', file)),
+		const files = await Promise.all(
+			['plugins', 'plugin'].map(relativeDir =>
+				this.getPluginFilesFromDir(path.join(configDir, relativeDir), file =>
+					normalizeToPosixPath(path.join(configDir, relativeDir, file)),
+				),
+			),
 		);
+		return [...new Set(files.flat())].sort((a, b) => a.localeCompare(b));
 	}
 
 	public async save(
@@ -403,9 +433,10 @@ export class ResourceService {
 	private async getAllFlat(
 		cfg: ResourceConfig<ResourceItem>,
 		dir: vscode.Uri,
+		relativeDir: string = cfg.dir,
 	): Promise<ResourceItem[]> {
 		const entries = await vscode.workspace.fs.readDirectory(dir);
-		const buildPath = (...s: string[]) => normalizeToPosixPath(path.join(cfg.dir, ...s));
+		const buildPath = (...s: string[]) => normalizeToPosixPath(path.join(relativeDir, ...s));
 
 		const results = await Promise.all(
 			entries
@@ -444,6 +475,20 @@ export class ResourceService {
 			.sort((a, b) => a.name.localeCompare(b.name));
 	}
 
+	private async getAllFlatFromAbsoluteDirs(
+		cfg: ResourceConfig<ResourceItem>,
+		dirs: Array<{ dir: string; label: string }>,
+	): Promise<ResourceItem[]> {
+		const results = await Promise.all(
+			dirs.map(({ dir, label }) =>
+				this.getAllFlatFromAbsoluteDir(cfg, dir, (...s) =>
+					normalizeToPosixPath(path.join(label, ...s)),
+				),
+			),
+		);
+		return this.mergeByPath(results.flat());
+	}
+
 	private async saveFlat(
 		cfg: ResourceConfig<ResourceItem>,
 		item: Partial<ResourceItem> & { name: string },
@@ -463,9 +508,10 @@ export class ResourceService {
 	private async getAllSubdir(
 		cfg: ResourceConfig<ResourceItem>,
 		dir: vscode.Uri,
+		relativeDir: string = cfg.dir,
 	): Promise<ResourceItem[]> {
 		const entries = await vscode.workspace.fs.readDirectory(dir);
-		const buildPath = (...s: string[]) => normalizeToPosixPath(path.join(cfg.dir, ...s));
+		const buildPath = (...s: string[]) => normalizeToPosixPath(path.join(relativeDir, ...s));
 
 		const results = await Promise.all(
 			entries
@@ -580,6 +626,24 @@ export class ResourceService {
 	private get workspaceRoot(): string {
 		if (!this._workspaceRoot) throw new Error('Workspace root not set');
 		return this._workspaceRoot;
+	}
+
+	private configDirs(cfg: ResourceConfig<ResourceItem>): string[] {
+		return [cfg.dir, ...(cfg.aliases ?? [])];
+	}
+
+	private globalConfigDir(configDir: string, relativeDir: string): { dir: string; label: string } {
+		const withoutPrefix = relativeDir.replace(/^\.opencode[\\/]/, '');
+		const absolute = path.join(configDir, withoutPrefix);
+		return { dir: absolute, label: absolute };
+	}
+
+	private mergeByPath<T extends ResourceItem>(items: T[]): T[] {
+		const merged = new Map<string, T>();
+		for (const item of items) {
+			merged.set(item.path, item);
+		}
+		return [...merged.values()].sort((a, b) => a.name.localeCompare(b.name));
 	}
 
 	private dirUri(relativePath: string): vscode.Uri {

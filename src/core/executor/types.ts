@@ -111,6 +111,8 @@ export interface CLIExecutor extends EventEmitter {
 	clearCommandsCache?(): void;
 	/** Invalidate the agents cache so the next listAgents() call fetches fresh data. */
 	clearAgentsCache?(): void;
+	/** Invalidate the MCP status cache so the next getMcpStatus() call fetches fresh data. */
+	clearMcpCache?(): void;
 	listSessions(config: CLIConfig): Promise<
 		Array<{
 			id: string;

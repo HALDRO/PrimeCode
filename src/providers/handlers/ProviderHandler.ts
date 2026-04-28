@@ -196,10 +196,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 			}
 
 			await this.context.services.openCodeClient.setProviderAuth(sdkClient, providerId, apiKey);
-
-			await sdkClient.instance.dispose().catch((err: unknown) => {
-				console.warn('[ProviderHandler] instance.dispose() after auth set failed:', err);
-			});
+			await this.context.reloadOpenCodeRuntime?.('provider:auth');
 
 			this.context.bridge.data('openCodeAuthResult', { success: true, providerId });
 			await this.onReloadAllProviders();
@@ -466,12 +463,6 @@ export class ProviderHandler implements WebviewMessageHandler {
 					},
 				);
 				this.context.services.mcpConfigWatcher.notifyUiSave(result.contentHash);
-				const sdkClient = this.context.cli.getSdkClient();
-				if (sdkClient) {
-					await sdkClient.instance.dispose().catch((err: unknown) => {
-						console.warn('[ProviderHandler] instance.dispose() after sync failed:', err);
-					});
-				}
 				return;
 			}
 
@@ -528,14 +519,6 @@ export class ProviderHandler implements WebviewMessageHandler {
 				},
 			);
 			this.context.services.mcpConfigWatcher.notifyUiSave(result.contentHash);
-
-			// Trigger OpenCode config reload
-			const sdkClient = this.context.cli.getSdkClient();
-			if (sdkClient) {
-				await sdkClient.instance.dispose().catch((err: unknown) => {
-					console.warn('[ProviderHandler] instance.dispose() after sync failed:', err);
-				});
-			}
 		} catch (syncErr) {
 			console.warn('[ProviderHandler] Failed to sync proxy models to opencode.json:', syncErr);
 		}
@@ -555,12 +538,6 @@ export class ProviderHandler implements WebviewMessageHandler {
 			);
 			if (result.contentHash) {
 				this.context.services.mcpConfigWatcher.notifyUiSave(result.contentHash);
-			}
-			const sdkClient = this.context.cli.getSdkClient();
-			if (sdkClient) {
-				await sdkClient.instance.dispose().catch((err: unknown) => {
-					console.warn('[ProviderHandler] instance.dispose() after remove failed:', err);
-				});
 			}
 		} catch (error) {
 			console.warn('[ProviderHandler] Failed to remove proxy endpoint:', error);

@@ -147,11 +147,12 @@ export class McpManagementService {
 
 	public async checkProjectMcpConfig(): Promise<void> {
 		const hasProject = await this._agentsConfig.hasProjectConfig();
+		const projectPath = await this._agentsConfig.getProjectMcpConfigPath();
 		this._postMessage({
 			type: 'mcpConfigStatus',
 			data: {
 				hasProjectConfig: hasProject,
-				projectPath: this._agentsConfig.getProjectMcpConfigPath(),
+				projectPath,
 			},
 		});
 	}

@@ -13,12 +13,7 @@ import * as vscode from 'vscode';
 import { type McpConfig, McpConfigSchema, type McpServer } from '../common';
 import { PATHS } from '../common/constants';
 import { logger } from '../utils/logger';
-
-// =============================================================================
-// Constants
-// =============================================================================
-
-const MCP_CONFIG_FILE = PATHS.OPENCODE_CONFIG;
+import { parseProjectConfigText, resolveProjectConfigPath } from './opencode/OpenCodeConfigService';
 
 // =============================================================================
 // Conversion Utilities
@@ -137,9 +132,9 @@ export class McpConfigService {
 	/**
 	 * Get path to project-level opencode.json
 	 */
-	public getProjectMcpConfigPath(): string | undefined {
+	public async getProjectMcpConfigPath(): Promise<string | undefined> {
 		if (!this._workspaceRoot) return undefined;
-		return path.join(this._workspaceRoot, MCP_CONFIG_FILE);
+		return resolveProjectConfigPath(this._workspaceRoot);
 	}
 
 	// =========================================================================
@@ -152,7 +147,7 @@ export class McpConfigService {
 	private async _readJsonFile<T>(filePath: string, schema?: TSchema): Promise<T | null> {
 		try {
 			const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(filePath));
-			const data = JSON.parse(new TextDecoder().decode(bytes));
+			const data = parseProjectConfigText(new TextDecoder().decode(bytes), filePath);
 
 			// Runtime validation if schema is provided
 			if (schema && !Value.Check(schema as TSchema, data)) {
@@ -193,7 +188,7 @@ export class McpConfigService {
 	 * Load project-level MCP config from opencode.json
 	 */
 	public async loadProjectConfig(): Promise<McpConfig | null> {
-		const configPath = this.getProjectMcpConfigPath();
+		const configPath = await this.getProjectMcpConfigPath();
 		if (!configPath) return null;
 		return this._readJsonFile<McpConfig>(configPath, McpConfigSchema);
 	}
@@ -202,7 +197,7 @@ export class McpConfigService {
 	 * Check if opencode.json exists in project
 	 */
 	public async hasProjectConfig(): Promise<boolean> {
-		const configPath = this.getProjectMcpConfigPath();
+		const configPath = await this.getProjectMcpConfigPath();
 		if (!configPath) return false;
 		return this._fileExists(configPath);
 	}

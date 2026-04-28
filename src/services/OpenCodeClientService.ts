@@ -18,7 +18,11 @@ import {
 	parseSessionQuestionRequest,
 	parseSessionTodoItem,
 } from '../common/schemas';
-import { OpenCodeConfigService } from './opencode/OpenCodeConfigService';
+import {
+	OpenCodeConfigService,
+	parseProjectConfigText,
+	resolveProjectConfigPath,
+} from './opencode/OpenCodeConfigService';
 
 interface OpenCodeModelConfig {
 	name: string;
@@ -183,10 +187,14 @@ export class OpenCodeClientService {
 	}
 
 	private async readProjectConfig(workspaceRoot: string): Promise<OpenCodeJsonConfig> {
-		const configPath = vscode.Uri.file(`${workspaceRoot}/opencode.json`);
+		const resolvedPath = await resolveProjectConfigPath(workspaceRoot);
+		const configPath = vscode.Uri.file(resolvedPath);
 		try {
 			const raw = await vscode.workspace.fs.readFile(configPath);
-			return JSON.parse(Buffer.from(raw).toString('utf-8')) as OpenCodeJsonConfig;
+			return parseProjectConfigText(
+				Buffer.from(raw).toString('utf-8'),
+				resolvedPath,
+			) as OpenCodeJsonConfig;
 		} catch {
 			return {};
 		}

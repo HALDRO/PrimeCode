@@ -25,6 +25,10 @@ export class OpenCodeConfigService {
 		return this.workspaceRoot ? path.join(this.workspaceRoot, PATHS.OPENCODE_CONFIG) : undefined;
 	}
 
+	public async resolveProjectConfigPath(): Promise<string | undefined> {
+		return this.workspaceRoot ? resolveProjectConfigPath(this.workspaceRoot) : undefined;
+	}
+
 	public getGlobalConfigDir(): string | undefined {
 		return getGlobalOpenCodeDir();
 	}
@@ -35,7 +39,7 @@ export class OpenCodeConfigService {
 	}
 
 	public async ensureProjectConfig(): Promise<string | undefined> {
-		const configPath = this.getProjectConfigPath();
+		const configPath = await this.resolveProjectConfigPath();
 		if (!configPath) return undefined;
 		await this.patchProjectConfig(config => config);
 		return configPath;
@@ -44,7 +48,7 @@ export class OpenCodeConfigService {
 	public async patchProjectConfig(
 		mutator: (config: ProjectConfig) => undefined | ProjectConfig,
 	): Promise<{ path: string; config: ProjectConfig; contentHash: string }> {
-		const configPath = this.requireConfigPath();
+		const configPath = await this.requireConfigPath();
 		const uri = vscode.Uri.file(configPath);
 		const document = await this.readProjectConfigDocument(uri, configPath);
 		const current = document.config;
@@ -106,7 +110,7 @@ export class OpenCodeConfigService {
 	}
 
 	public async getProjectPlugins(): Promise<string[]> {
-		const configPath = this.getProjectConfigPath();
+		const configPath = await this.resolveProjectConfigPath();
 		if (!configPath) return [];
 		return readStringArray(
 			(await this.readProjectConfig(vscode.Uri.file(configPath), configPath)).plugin,
@@ -145,7 +149,7 @@ export class OpenCodeConfigService {
 	}
 
 	public async getAgentDisabledOverrides(): Promise<Record<string, boolean>> {
-		const configPath = this.getProjectConfigPath();
+		const configPath = await this.resolveProjectConfigPath();
 		if (!configPath) return {};
 		const config = await this.readProjectConfig(vscode.Uri.file(configPath), configPath);
 		const agent = config.agent;
@@ -160,7 +164,7 @@ export class OpenCodeConfigService {
 	}
 
 	public async readProjectConfigForInspection(): Promise<ProjectConfig> {
-		const configPath = this.getProjectConfigPath();
+		const configPath = await this.resolveProjectConfigPath();
 		if (!configPath) return {};
 		return this.readProjectConfig(vscode.Uri.file(configPath), configPath);
 	}
@@ -183,8 +187,8 @@ export class OpenCodeConfigService {
 		return { config: {} };
 	}
 
-	private requireConfigPath(): string {
-		const configPath = this.getProjectConfigPath();
+	private async requireConfigPath(): Promise<string> {
+		const configPath = await this.resolveProjectConfigPath();
 		if (!configPath) throw new Error('No workspace root is available for opencode.json');
 		return configPath;
 	}
@@ -225,6 +229,14 @@ export function getGlobalOpenCodeDir(): string | undefined {
 	if (xdgConfigHome) return path.join(xdgConfigHome, 'opencode');
 	const home = process.env.HOME || process.env.USERPROFILE;
 	return home ? path.join(home, '.config', 'opencode') : undefined;
+}
+
+export async function resolveProjectConfigPath(workspaceRoot: string): Promise<string> {
+	const jsonPath = path.join(workspaceRoot, PATHS.OPENCODE_CONFIG);
+	const jsoncPath = path.join(workspaceRoot, `${PATHS.OPENCODE_CONFIG}c`);
+	if (await fileExists(vscode.Uri.file(jsonPath))) return jsonPath;
+	if (await fileExists(vscode.Uri.file(jsoncPath))) return jsoncPath;
+	return jsonPath;
 }
 
 export function getGlobalAgentsDir(): string | undefined {
@@ -330,6 +342,10 @@ function parseConfigText(text: string, filePath: string): ProjectConfig {
 		}
 		throw error;
 	}
+}
+
+export function parseProjectConfigText(text: string, filePath: string): ProjectConfig {
+	return parseConfigText(text, filePath);
 }
 
 function formatProjectConfig(config: ProjectConfig, previousText: string | undefined): string {

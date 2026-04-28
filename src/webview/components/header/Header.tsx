@@ -51,10 +51,9 @@ const ConnectionStatusMenu: React.FC<{
 		root: string;
 		status: 'connected' | 'error';
 	}>;
-	restartDisabled: boolean;
 	onClose: () => void;
 	anchorRef: React.RefObject<HTMLButtonElement | null>;
-}> = ({ serverStatus, connectionDetails, lspStatus, restartDisabled, onClose, anchorRef }) => {
+}> = ({ serverStatus, connectionDetails, lspStatus, onClose, anchorRef }) => {
 	const { postMessage } = useVSCode();
 	const menuRef = useRef<HTMLDivElement>(null);
 	const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
@@ -195,14 +194,12 @@ const ConnectionStatusMenu: React.FC<{
 			<div className="py-1">
 				<button
 					type="button"
-					disabled={restartDisabled}
 					className="w-full text-left px-3 py-1.5 text-xs text-vscode-foreground hover:bg-(--alpha-10) transition-colors flex items-center gap-2"
 					onClick={() => {
-						if (restartDisabled) return;
 						postMessage({ type: 'restartOpenCode' });
 						onClose();
 					}}
-					title={restartDisabled ? 'Only the server-owning window can restart OpenCode' : undefined}
+					title="Reload OpenCode runtime state, resources, providers, and MCP"
 				>
 					<svg
 						width="14"
@@ -214,7 +211,7 @@ const ConnectionStatusMenu: React.FC<{
 					>
 						<path d="M12.75 8a4.5 4.5 0 0 1-8.61 1.834l-1.391.565A6.001 6.001 0 0 0 14.25 8 6 6 0 0 0 3.5 4.334V2.5H2v4h4V5H3.934A4.5 4.5 0 0 1 12.75 8z" />
 					</svg>
-					Restart OpenCode
+					Reload OpenCode
 				</button>
 				<button
 					type="button"
@@ -272,7 +269,6 @@ export const Header: React.FC = React.memo(() => {
 	const [tabsOverflowing, setTabsOverflowing] = useState(false);
 	const statusBtnRef = useRef<HTMLButtonElement>(null);
 	const tabsScrollerRef = useRef<HTMLDivElement>(null);
-	const restartDisabled = connectionDetails?.isServerOwner === false;
 	const lastSseActivityAtRef = useRef<number>(0);
 
 	const sessions: TabInfo[] = useMemo(() => sessionOrder.map(id => ({ id })), [sessionOrder]);
@@ -641,7 +637,6 @@ export const Header: React.FC = React.memo(() => {
 								serverStatus={serverStatus}
 								connectionDetails={connectionDetails}
 								lspStatus={lspStatus}
-								restartDisabled={restartDisabled}
 								onClose={handleStatusMenuClose}
 								anchorRef={statusBtnRef}
 							/>

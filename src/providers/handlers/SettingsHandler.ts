@@ -395,6 +395,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 				this.context.cli,
 				resource,
 				msg.value,
+				this.context.reloadOpenCodeRuntime,
 			);
 			this.context.bridge.data('resourceOperation', {
 				operationId: msg.operationId,
@@ -597,6 +598,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 			else await adapter.create?.(name, payload ?? {});
 			logger.info(`[SettingsHandler] ${action} ${kind}: ${name}`);
 			adapter.refresh?.();
+			await this.context.reloadOpenCodeRuntime?.(`settings:${kind}:${action}`);
 			await this.sendResourceList(kind);
 		} catch (error) {
 			logger.error(`[SettingsHandler] Failed to ${action} ${kind}:`, error);
@@ -610,6 +612,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 
 		try {
 			await this.rulesService.createRule(name, content ?? '');
+			await this.context.reloadOpenCodeRuntime?.('settings:rules:create');
 			await this.onGetRules();
 		} catch (error) {
 			logger.error('[SettingsHandler] createRule failed:', error);
@@ -626,6 +629,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 
 		try {
 			await this.rulesService.deleteRule(rulePath);
+			await this.context.reloadOpenCodeRuntime?.('settings:rules:delete');
 			await this.onGetRules();
 		} catch (error) {
 			logger.error('[SettingsHandler] deleteRule failed:', error);

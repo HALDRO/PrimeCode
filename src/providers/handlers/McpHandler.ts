@@ -118,11 +118,6 @@ export class McpHandler implements WebviewMessageHandler {
 			this.context.services.mcpConfigWatcher.notifyUiSave(result.contentHash);
 			this.context.cli.clearMcpCache?.();
 
-			const connection = this.context.cli.getConnectionDetails();
-			if (connection.serverUrl && connection.isServerOwner) {
-				await this.context.cli.restartServer();
-			}
-
 			await this.onLoadMcpServers();
 		} catch (error) {
 			this.context.bridge.data('mcpServerError', {

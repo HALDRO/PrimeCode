@@ -6,9 +6,15 @@
  *              Debounces rapid changes to avoid excessive reloads.
  */
 
+import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { PATHS } from '../common/constants';
 import { logger } from '../utils/logger';
+import {
+	getGlobalAgentsDir,
+	getGlobalClaudeDir,
+	getGlobalOpenCodeDir,
+} from './opencode/OpenCodeConfigService';
 import type { ResourceService, ResourceType } from './ResourceService';
 
 // =============================================================================
@@ -17,37 +23,28 @@ import type { ResourceService, ResourceType } from './ResourceService';
 
 const DEBOUNCE_MS = 300;
 
-/**
- * Single glob pattern for the entire .opencode/ tree.
- * We use one FileSystemWatcher and route events by path segment.
- */
-const OPENCODE_GLOB = `${PATHS.OPENCODE_DIR}/**`;
+const PROJECT_INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md', 'CONTEXT.md'] as const;
+const GLOBAL_CLAUDE_INSTRUCTION_FILES = ['CLAUDE.md'] as const;
+const OPENCODE_RESOURCE_SPECS = [
+	{ type: 'commands', dirs: ['command', 'commands'], pattern: '**/*.md' },
+	{ type: 'skills', dirs: ['skill', 'skills'], pattern: '**/SKILL.md' },
+	{ type: 'subagents', dirs: ['agent', 'agents'], pattern: '**/*.md' },
+	{ type: 'plugins', dirs: ['plugin', 'plugins'], pattern: '*.{ts,js}' },
+	{ type: 'rules', dirs: ['rules'], pattern: '**/*.md' },
+] as const satisfies ReadonlyArray<{
+	type: ResourceType | 'plugins' | 'rules';
+	dirs: readonly string[];
+	pattern: string;
+}>;
 
-/**
- * Glob patterns for external .claude/.agents skills directories (cross-agent interop).
- * Only skills are loaded from this directory — agents, commands, plugins are .opencode/-only.
- */
-const EXTERNAL_SKILLS_GLOBS = [
-	`${PATHS.EXTERNAL_CLAUDE_SKILLS_DIR}/**`,
-	`${PATHS.EXTERNAL_AGENTS_SKILLS_DIR}/**`,
-] as const;
-
-/**
- * Maps a path segment to its resource type.
- * Order doesn't matter — first match wins during routing.
- */
-const PATH_SEGMENT_TO_TYPE: [segment: string, type: ResourceType][] = [
-	[PATHS.OPENCODE_COMMANDS_DIR, 'commands'],
-	[PATHS.OPENCODE_SKILLS_DIR, 'skills'],
-	[PATHS.OPENCODE_AGENTS_DIR, 'subagents'],
-];
+const COMPATIBLE_SKILL_DIRS = ['.claude/skills', '.agents/skills'] as const;
 
 // =============================================================================
 // Types
 // =============================================================================
 
 export interface ResourceChangeEvent {
-	resourceType: ResourceType | 'rules';
+	resourceType: ResourceType | 'plugins' | 'rules';
 	timestamp: number;
 }
 
@@ -57,7 +54,10 @@ export interface ResourceChangeEvent {
 
 export class ResourceWatcherService implements vscode.Disposable {
 	private _disposables: vscode.Disposable[] = [];
-	private _debounceTimers = new Map<ResourceType | 'rules', ReturnType<typeof setTimeout>>();
+	private _debounceTimers = new Map<
+		ResourceType | 'plugins' | 'rules',
+		ReturnType<typeof setTimeout>
+	>();
 	private _started = false;
 
 	private readonly _onResourceChanged = new vscode.EventEmitter<ResourceChangeEvent>();
@@ -78,31 +78,12 @@ export class ResourceWatcherService implements vscode.Disposable {
 			return;
 		}
 
-		// Watcher for the entire .opencode/ tree — saves OS file descriptors
-		const opencodeWatcher = vscode.workspace.createFileSystemWatcher(
-			new vscode.RelativePattern(workspaceRoot, OPENCODE_GLOB),
-		);
-
-		opencodeWatcher.onDidCreate(uri => this._routeEvent(uri));
-		opencodeWatcher.onDidChange(uri => this._routeEvent(uri));
-		opencodeWatcher.onDidDelete(uri => this._routeEvent(uri));
-
-		this._disposables.push(opencodeWatcher);
-
-		// Watchers for external .claude/.agents skills directories.
-		for (const glob of EXTERNAL_SKILLS_GLOBS) {
-			const externalSkillsWatcher = vscode.workspace.createFileSystemWatcher(
-				new vscode.RelativePattern(workspaceRoot, glob),
-			);
-			externalSkillsWatcher.onDidCreate(uri => this._routeExternalSkillEvent(uri));
-			externalSkillsWatcher.onDidChange(uri => this._routeExternalSkillEvent(uri));
-			externalSkillsWatcher.onDidDelete(uri => this._routeExternalSkillEvent(uri));
-			this._disposables.push(externalSkillsWatcher);
-		}
+		this._registerProjectWatchers(workspaceRoot);
+		this._registerGlobalWatchers();
 
 		this._started = true;
 		logger.info(
-			'[ResourceWatcherService] Started watching .opencode/, .claude/skills/, and .agents/skills/',
+			'[ResourceWatcherService] Started watching project and global resource directories',
 		);
 	}
 
@@ -126,36 +107,66 @@ export class ResourceWatcherService implements vscode.Disposable {
 	// Private
 	// =========================================================================
 
-	/** Route a file event to the correct resource type based on its path. */
-	private _routeEvent(uri: vscode.Uri): void {
-		// Early exit: only .md files are resource files
-		if (!uri.fsPath.endsWith('.md')) return;
+	private _registerProjectWatchers(workspaceRoot: string): void {
+		this._registerOpenCodeResourceWatchers(path.join(workspaceRoot, PATHS.OPENCODE_DIR));
+		this._registerInstructionWatchers(workspaceRoot, PROJECT_INSTRUCTION_FILES);
 
-		// Normalize to forward slashes for reliable segment matching
-		const fsPath = uri.fsPath.replace(/\\/g, '/');
-		for (const [segment, type] of PATH_SEGMENT_TO_TYPE) {
-			if (fsPath.includes(`/${segment}/`) || fsPath.endsWith(`/${segment}`)) {
-				this._scheduleReload(type);
-				return;
+		for (const compatibleDir of COMPATIBLE_SKILL_DIRS) {
+			this._watchPattern(workspaceRoot, `${compatibleDir}/**/SKILL.md`, 'skills');
+		}
+	}
+
+	private _registerGlobalWatchers(): void {
+		const globalOpenCodeDir = getGlobalOpenCodeDir();
+		if (globalOpenCodeDir) {
+			this._registerOpenCodeResourceWatchers(globalOpenCodeDir);
+			this._registerInstructionWatchers(globalOpenCodeDir, ['AGENTS.md']);
+		}
+
+		const globalClaudeDir = getGlobalClaudeDir();
+		if (globalClaudeDir) {
+			this._watchPattern(globalClaudeDir, 'skills/**/SKILL.md', 'skills');
+			this._registerInstructionWatchers(globalClaudeDir, GLOBAL_CLAUDE_INSTRUCTION_FILES);
+		}
+
+		const globalAgentsDir = getGlobalAgentsDir();
+		if (globalAgentsDir) {
+			this._watchPattern(globalAgentsDir, 'skills/**/SKILL.md', 'skills');
+		}
+	}
+
+	private _registerOpenCodeResourceWatchers(configDir: string): void {
+		for (const spec of OPENCODE_RESOURCE_SPECS) {
+			for (const dir of spec.dirs) {
+				this._watchPattern(configDir, `${dir}/${spec.pattern}`, spec.type);
 			}
 		}
-		if (
-			fsPath.includes(`/${PATHS.OPENCODE_RULES_DIR}/`) ||
-			fsPath.endsWith(`/${PATHS.OPENCODE_RULES_DIR}`)
-		) {
-			this._scheduleReload('rules');
-			return;
+	}
+
+	private _registerInstructionWatchers(
+		basePath: string,
+		files: readonly (typeof PROJECT_INSTRUCTION_FILES)[number][],
+	): void {
+		for (const file of files) {
+			this._watchPattern(basePath, file, 'rules');
 		}
-		// Ignore events outside known resource directories
 	}
 
-	/** Route external .claude/.agents skills events to skills reload. */
-	private _routeExternalSkillEvent(uri: vscode.Uri): void {
-		if (!uri.fsPath.endsWith('.md')) return;
-		this._scheduleReload('skills');
+	private _watchPattern(
+		basePath: string,
+		pattern: string,
+		type: ResourceType | 'plugins' | 'rules',
+	): void {
+		const watcher = vscode.workspace.createFileSystemWatcher(
+			new vscode.RelativePattern(basePath, pattern),
+		);
+		watcher.onDidCreate(() => this._scheduleReload(type));
+		watcher.onDidChange(() => this._scheduleReload(type));
+		watcher.onDidDelete(() => this._scheduleReload(type));
+		this._disposables.push(watcher);
 	}
 
-	private _scheduleReload(type: ResourceType | 'rules'): void {
+	private _scheduleReload(type: ResourceType | 'plugins' | 'rules'): void {
 		const existing = this._debounceTimers.get(type);
 		if (existing) clearTimeout(existing);
 

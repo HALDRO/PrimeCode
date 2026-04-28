@@ -40,6 +40,8 @@ export interface HandlerContext {
 	clearSessionAutoAccept?: (sessionId: string) => void;
 	/** Refresh webview bootstrap after a successful manual server restart. */
 	refreshAfterServerRestart?: () => Promise<void>;
+	/** Hot-reload OpenCode runtime state so config/resources are re-read without killing the process. */
+	reloadOpenCodeRuntime?: (source: string) => Promise<void>;
 }
 
 export interface WebviewMessageHandler {

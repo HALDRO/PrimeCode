@@ -42,7 +42,7 @@ describe('settingsStore resource revisions', () => {
 		expect(state.items.map(item => item.name)).toEqual(['build']);
 	});
 
-	it('treats requires-restart resource operations as non-successful', () => {
+	it('treats stale resource operations as non-successful', () => {
 		const actions = useSettingsStore.getState().actions;
 
 		actions.handleExtensionMessage({
@@ -52,13 +52,13 @@ describe('settingsStore resource revisions', () => {
 				resourceId: 'agent:runtime:review',
 				action: 'setDisabled',
 				status: 'completed',
-				result: 'requires-restart',
-				message: 'Restart OpenCode to apply it.',
+				result: 'stale',
+				message: 'OpenCode did not reflect the refreshed state.',
 			},
 		});
 
 		const state = useSettingsStore.getState().resourceOps;
 		expect(state.status).toBe('error');
-		expect(state.message).toBe('Restart OpenCode to apply it.');
+		expect(state.message).toBe('OpenCode did not reflect the refreshed state.');
 	});
 });
