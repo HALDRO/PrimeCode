@@ -101,7 +101,7 @@ describe('chatStore restore', () => {
 		expect(useChatStore.getState().sessionModel[SESSION_ID]).toBe('openai/gpt-5');
 	});
 
-	it('does not copy the previous session model into a newly created session', () => {
+	it('copies the active session model into a newly created session', () => {
 		useSettingsStore.getState().actions.setLastSelectedModel('anthropic/claude-sonnet-4');
 		useChatStore.getState().actions.updateSessionModel('openai/gpt-5', SESSION_ID);
 
@@ -109,8 +109,36 @@ describe('chatStore restore', () => {
 
 		const state = useChatStore.getState();
 		expect(state.activeSessionId).toBe('session-2');
-		expect(state.sessionModel['session-2']).toBe('anthropic/claude-sonnet-4');
+		expect(state.sessionModel['session-2']).toBe('openai/gpt-5');
 		expect(state.sessionModel[SESSION_ID]).toBe('openai/gpt-5');
+	});
+
+	it('uses the latest selected model for new sessions after switching models', () => {
+		useSettingsStore.getState().actions.setLastSelectedModel('anthropic/claude-sonnet-4');
+		useChatStore.getState().actions.updateSessionModel('openai/gpt-5', SESSION_ID);
+		useSettingsStore.getState().actions.setLastSelectedModel('openai/gpt-5');
+
+		useChatStore.getState().actions.handleSessionCreated('session-2');
+
+		const state = useChatStore.getState();
+		expect(state.sessionModel[SESSION_ID]).toBe('openai/gpt-5');
+		expect(state.sessionModel['session-2']).toBe('openai/gpt-5');
+	});
+
+	it('initializes already-created empty sessions when global model is restored', () => {
+		expect(useChatStore.getState().sessionModel[SESSION_ID]).toBeUndefined();
+
+		useSettingsStore.getState().actions.setLastSelectedModel('anthropic/claude-sonnet-4');
+
+		expect(useChatStore.getState().sessionModel[SESSION_ID]).toBe('anthropic/claude-sonnet-4');
+	});
+
+	it('does not overwrite an explicit session model when global model is restored', () => {
+		useChatStore.getState().actions.updateSessionModel('openai/gpt-5', SESSION_ID);
+
+		useSettingsStore.getState().actions.setLastSelectedModel('anthropic/claude-sonnet-4');
+
+		expect(useChatStore.getState().sessionModel[SESSION_ID]).toBe('openai/gpt-5');
 	});
 
 	it('seeds restored sessions from the global model when history has no model yet', () => {

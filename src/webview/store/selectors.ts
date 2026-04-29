@@ -181,7 +181,7 @@ function messagesStructurallyEqual(prev: RenderNode[], next: RenderNode[]): bool
 			if (
 				p.isRunning !== n.isRunning ||
 				p.status !== n.status ||
-				p.resultContent !== n.resultContent
+				p.streamingOutput !== n.streamingOutput
 			)
 				return false;
 		}
@@ -636,6 +636,31 @@ export const useToolResultByToolId = (toolUseId: string | undefined, sessionId?:
 			}
 		}
 		return undefined;
+	}, [messages, parts, toolUseId]);
+};
+
+export const useToolPartByToolUseId = (toolUseId: string | undefined, sessionId?: string) => {
+	const targetSessionId = useChatStore((state: SessionStore) => sessionId || state.activeSessionId);
+	const messages = useChatStore((state: SessionStore) =>
+		targetSessionId ? (state.messages[targetSessionId] ?? EMPTY_SDK_MESSAGES) : EMPTY_SDK_MESSAGES,
+	);
+	const parts = useChatStore((state: SessionStore) => state.parts);
+	const prevRef = useRef<ToolPart | undefined>(undefined);
+
+	return useMemo(() => {
+		if (!toolUseId) return undefined;
+		for (const msg of messages) {
+			const messageParts = parts[msg.id];
+			if (!messageParts) continue;
+			for (const part of messageParts) {
+				if (part.type !== 'tool') continue;
+				const toolPart = part as ToolPart;
+				if (toolPart.callID !== toolUseId) continue;
+				prevRef.current = toolPart;
+				return toolPart;
+			}
+		}
+		return prevRef.current;
 	}, [messages, parts, toolUseId]);
 };
 

@@ -259,7 +259,7 @@ export const HistoryDropdown: React.FC = () => {
 					setHoveredId(item.id);
 				}}
 				onMouseLeave={() => setHoveredId(null)}
-				className={`flex items-center p-(--gap-2) pl-(--gap-4) gap-(--gap-3) min-h-(--h-md) text-md relative rounded-md transition-colors hover:bg-(--alpha-8) ${isEditing ? 'cursor-default' : 'cursor-pointer'} ${selected || isHovered ? 'bg-vscode-list-hoverBackground' : isActive ? 'bg-(--alpha-5)' : 'bg-transparent'}`}
+				className={`flex items-center px-(--gap-3) py-(--gap-2) gap-(--gap-3) min-h-(--h-md) text-md relative rounded-md transition-colors hover:bg-(--alpha-8) ${isEditing ? 'cursor-default' : 'cursor-pointer'} ${selected || isHovered ? 'bg-vscode-list-hoverBackground' : isActive ? 'bg-(--alpha-5)' : 'bg-transparent'}`}
 			>
 				{isEditing ? (
 					<input

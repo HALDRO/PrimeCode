@@ -261,11 +261,6 @@ function projectMessages(messages: Message[], parts: Record<string, Part[]>): Re
 				const input = 'input' in tp.state ? tp.state.input : {};
 				const output = 'output' in tp.state ? (tp.state as { output?: string }).output : undefined;
 				const title = 'title' in tp.state ? (tp.state as { title?: string }).title : undefined;
-				const metadata =
-					tp.metadata ??
-					('metadata' in tp.state
-						? (tp.state as { metadata?: Record<string, unknown> }).metadata
-						: undefined);
 
 				nodes.push({
 					kind: 'tool_use',
@@ -273,14 +268,11 @@ function projectMessages(messages: Message[], parts: Record<string, Part[]>): Re
 					type: 'tool_use',
 					toolName: tp.tool,
 					toolUseId: tp.callID,
-					toolInput: JSON.stringify(input),
 					rawInput: input as Record<string, unknown>,
 					streamingOutput: output,
 					isRunning,
 					status,
 					title,
-					resultContent: output,
-					metadata: metadata as Record<string, unknown> | undefined,
 					timestamp,
 				} satisfies RenderToolUseMessage);
 			}
@@ -294,7 +286,11 @@ function projectMessages(messages: Message[], parts: Record<string, Part[]>): Re
 // Task card materialization
 // ---------------------------------------------------------------------------
 
-function materializeTaskCards(sessionId: string, baseItems: RenderNode[]): RenderNode[] {
+function materializeTaskCards(
+	sessionId: string,
+	baseItems: RenderNode[],
+	parts: Record<string, Part[]> = {},
+): RenderNode[] {
 	const items: RenderNode[] = [];
 	let afterCompletedTask = false;
 
@@ -302,19 +298,36 @@ function materializeTaskCards(sessionId: string, baseItems: RenderNode[]): Rende
 		if (item.kind === 'tool_use' && item.toolName.toLowerCase() === 'task') {
 			const toolCallId = item.toolUseId;
 			const taskInput = item.rawInput ?? {};
+			let taskMetadata: Record<string, unknown> | undefined;
+			let taskResult: string | undefined;
+			for (const messageParts of Object.values(parts)) {
+				for (const part of messageParts) {
+					if (part.type !== 'tool') continue;
+					const toolPart = part as ToolPart;
+					if (toolPart.callID !== toolCallId) continue;
+					taskMetadata = (toolPart.metadata ??
+						('metadata' in toolPart.state
+							? ((toolPart.state as { metadata?: Record<string, unknown> }).metadata ?? undefined)
+							: undefined)) as Record<string, unknown> | undefined;
+					taskResult =
+						'output' in toolPart.state ? (toolPart.state.output ?? undefined) : undefined;
+					break;
+				}
+				if (taskMetadata || taskResult !== undefined) break;
+			}
 			const childSessionId =
-				typeof item.metadata?.sessionId === 'string' ? item.metadata.sessionId : undefined;
+				typeof taskMetadata?.sessionId === 'string' ? taskMetadata.sessionId : undefined;
 			const metadataModel =
-				item.metadata && typeof item.metadata.model === 'object'
-					? (item.metadata.model as { providerID?: string; modelID?: string })
+				taskMetadata && typeof taskMetadata.model === 'object'
+					? (taskMetadata.model as { providerID?: string; modelID?: string })
 					: undefined;
 			const childModelId =
 				metadataModel?.providerID && metadataModel?.modelID
 					? `${metadataModel.providerID}/${metadataModel.modelID}`
 					: undefined;
 			const result =
-				item.status === 'completed' && typeof item.resultContent === 'string'
-					? item.resultContent.trim()
+				item.status === 'completed' && typeof taskResult === 'string'
+					? taskResult.trim()
 					: undefined;
 
 			const node: RenderTaskCardNode = {
@@ -399,7 +412,7 @@ export function projectSession(
 	if (!messages || messages.length === 0) return EMPTY_VIEW;
 
 	const rawNodes = projectMessages(messages, state.parts);
-	const nodes = materializeTaskCards(sessionId, rawNodes);
+	const nodes = materializeTaskCards(sessionId, rawNodes, state.parts);
 	const nodeIds = nodes.map(n => n.id);
 	const nodesById = buildNodesById(nodes);
 	const turnTokensByParentId = buildTurnTokenMap(messages);
@@ -413,6 +426,7 @@ export function projectSession(
 		[],
 		turnTokensByParentId,
 		isProcessing,
+		state.parts,
 	);
 	const toolActivity = getRunningToolMeta(messages, state.parts);
 
@@ -597,7 +611,6 @@ export function applyToolDelta(
 	const updatedNode: RenderToolUseMessage = {
 		...existingNode,
 		streamingOutput: (existingNode.streamingOutput ?? '') + delta,
-		resultContent: (existingNode.resultContent ?? '') + delta,
 	};
 
 	const nodesById = { ...prev.nodesById, [callID]: updatedNode };
@@ -767,6 +780,7 @@ export const groupMessagesIntoSections = (
 	changedFiles: ChangedFile[] = [],
 	turnTokens: Record<string, TokenUsage> = {},
 	isProcessing = false,
+	parts: Record<string, Part[]> = {},
 ): MessageSection[] => {
 	const visibleMsgs = msgs.filter(m => !('hidden' in m && m.hidden));
 	const sections: MessageSection[] = [];
@@ -796,6 +810,7 @@ export const groupMessagesIntoSections = (
 				currentSection.stats = computeSectionStats(
 					currentSection,
 					currentResponses,
+					parts,
 					changedFilesMap,
 					false,
 					turnTokens,
@@ -832,6 +847,7 @@ export const groupMessagesIntoSections = (
 		currentSection.stats = computeSectionStats(
 			currentSection,
 			currentResponses,
+			parts,
 			changedFilesMap,
 			true,
 			turnTokens,
@@ -855,6 +871,7 @@ export const groupMessagesIntoSections = (
 function computeSectionStats(
 	section: MessageSection,
 	rawResponses: RenderNode[],
+	parts: Record<string, Part[]>,
 	changedFilesMap: Map<string, ChangedFile[]>,
 	isLast: boolean,
 	turnTokens: Record<string, TokenUsage> = {},
@@ -877,6 +894,20 @@ function computeSectionStats(
 
 	for (const response of rawResponses) {
 		if (response.kind !== 'tool_use') continue;
+		let toolMetadata: Record<string, unknown> | undefined;
+		for (const messageParts of Object.values(parts)) {
+			for (const part of messageParts) {
+				if (part.type !== 'tool') continue;
+				const toolPart = part as ToolPart;
+				if (toolPart.callID !== response.toolUseId) continue;
+				toolMetadata = (toolPart.metadata ??
+					('metadata' in toolPart.state
+						? ((toolPart.state as { metadata?: Record<string, unknown> }).metadata ?? undefined)
+						: undefined)) as Record<string, unknown> | undefined;
+				break;
+			}
+			if (toolMetadata) break;
+		}
 		const actionType =
 			response.normalizedEntry?.entryType &&
 			typeof response.normalizedEntry.entryType === 'object' &&
@@ -885,7 +916,7 @@ function computeSectionStats(
 				: buildToolActionType(response.toolName, response.rawInput ?? {});
 		const resolvedChanges = resolveFileChanges({
 			actionType,
-			toolResultMetadata: response.metadata,
+			toolResultMetadata: toolMetadata,
 			fallbackFilePath: response.filePath,
 		});
 		if (resolvedChanges.length > 0) {

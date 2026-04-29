@@ -182,6 +182,7 @@ export function computeDiffLineStats(
  * Supports both `patch` and `patchText` input fields.
  * Parses multiple header formats:
  *   - `*** Add File: <path>`  / `*** Update File: <path>` / `*** Delete File: <path>`
+ *   - `*** <path>` legacy single-line file headers emitted by older skills/tools
  * Filters out control lines like `*** Begin Patch` / `*** End Patch`.
  * Falls back to structured `files[]` array if present.
  * Returns an empty array for non-patch inputs.
@@ -199,6 +200,17 @@ export function extractPatchFilePaths(input: Record<string, unknown>): string[] 
 		for (const match of patch.matchAll(/^\*{3}\s+(?:Add|Update|Delete)\s+File:\s*(.+?)$/gm)) {
 			const p = match[1].trim();
 			if (p && p !== '/dev/null') paths.push(p);
+		}
+		if (paths.length > 0) return paths;
+
+		// Legacy format: "*** path". Ignore control/meta lines.
+		const CONTROL_WORDS = new Set(['Begin', 'End', 'Move']);
+		for (const match of patch.matchAll(/^\*{3}\s+(.+?)$/gm)) {
+			const raw = match[1].trim();
+			const firstWord = raw.split(/\s/)[0];
+			if (!raw || raw === '/dev/null' || CONTROL_WORDS.has(firstWord) || raw.includes(':'))
+				continue;
+			paths.push(raw);
 		}
 		if (paths.length > 0) return paths;
 	}

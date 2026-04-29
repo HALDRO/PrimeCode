@@ -684,6 +684,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 				modelVariants: get().modelVariants,
 			});
 			set({ lastSelectedModel });
+			useChatStore.getState().actions.initializeUnassignedSessionModels(lastSelectedModel);
 		},
 		setModelVariant: (modelId, variant) =>
 			set(state => {
@@ -935,7 +936,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
 				case 'openCodeModelSet':
 					if (message.data) {
-						actions.setLastSelectedModel(message.data.model ?? 'default');
+						if (message.data.model) actions.setLastSelectedModel(message.data.model);
 					}
 					break;
 

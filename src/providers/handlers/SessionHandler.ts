@@ -1,3 +1,4 @@
+import type { Part } from '@opencode-ai/sdk/v2/client';
 import * as vscode from 'vscode';
 import type { ConversationIndexEntry, OpenCodeProviderData } from '../../common';
 import { generateId, parseModelId } from '../../common';
@@ -8,6 +9,7 @@ import { parseSessionUpdatedRuntimePayload } from '../../common/schemas';
 import type { CLIConfig } from '../../core/executor/types';
 import { buildOptimisticPromptParts } from '../../core/promptParts';
 import { logger } from '../../utils/logger';
+import { sanitizePartForHistory } from '../../utils/toolPartSanitizer';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
 export class SessionHandler implements WebviewMessageHandler {
@@ -410,9 +412,11 @@ export class SessionHandler implements WebviewMessageHandler {
 			(a, b) => a.info.time.created - b.info.time.created,
 		);
 		const SKIP_PARTS = new Set(['patch', 'step-start', 'step-finish', 'snapshot']);
-		const partsByMessageId: Record<string, import('@opencode-ai/sdk/v2/client').Part[]> = {};
+		const partsByMessageId: Record<string, Part[]> = {};
 		for (const entry of entries) {
-			partsByMessageId[entry.info.id] = entry.parts.filter(part => !SKIP_PARTS.has(part.type));
+			partsByMessageId[entry.info.id] = entry.parts
+				.filter(part => !SKIP_PARTS.has(part.type))
+				.map(sanitizePartForHistory);
 		}
 
 		this.context.bridge.data('restore_session', {

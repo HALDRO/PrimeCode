@@ -15,6 +15,7 @@ import {
 	isFileEditTool,
 	isMcpTool,
 	isToolMatch,
+	resolveToolName,
 	TOOL_CARD_EXPANDED_MAX_HEIGHT,
 	TOOL_CARD_PREVIEW_MAX_HEIGHT,
 } from '../../constants';
@@ -26,6 +27,7 @@ import {
 	useAccessRequestByToolUseId,
 	useMcpServers,
 	useQuestionRequestByToolUseId,
+	useToolPartByToolUseId,
 	useToolResultByToolId,
 } from '../../store';
 import { copyTextToClipboard } from '../../utils/clipboard';
@@ -79,6 +81,17 @@ type ToolResult = ToolResultView;
 
 type ToolCardCategory = 'inline' | 'mcp' | 'bash' | 'diff' | 'websearch' | 'webfetch' | 'summarize';
 
+const RAW_INLINE_KNOWN_TOOLS = new Set([
+	'read',
+	'grep',
+	'glob',
+	'list',
+	'skill',
+	'todowrite',
+	'todoread',
+	'task',
+]);
+
 const getActionType = (
 	normalizedEntry: ToolUse['normalizedEntry'],
 	toolName: string,
@@ -109,7 +122,9 @@ const getToolCardCategory = (
 	if (actionType?.type === 'WebFetch' || toolName.toLowerCase() === 'webfetch') return 'webfetch';
 	if (isMcpTool(toolName, mcpServerNames)) return 'mcp';
 	if (isSummarize) return 'summarize';
-	return hasAccessRequest ? 'mcp' : 'inline';
+	if (hasAccessRequest) return 'mcp';
+	const canonical = resolveToolName(toolName);
+	return !canonical || RAW_INLINE_KNOWN_TOOLS.has(canonical) ? 'inline' : 'diff';
 };
 
 export const shouldHideRunningFileEditTool = (
@@ -495,6 +510,16 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 
 		const { toolUseId, filePath, rawInput } = toolUse;
 		const toolName = toolUse.toolName ?? '';
+		const toolPart = useToolPartByToolUseId(toolUseId, sessionId);
+		const liveToolOutput =
+			toolPart && 'output' in toolPart.state
+				? (toolPart.state.output ?? '')
+				: toolUse.streamingOutput;
+		const liveToolMetadata = (toolPart?.metadata ??
+			('metadata' in (toolPart?.state ?? {})
+				? ((toolPart?.state as { metadata?: Record<string, unknown> } | undefined)?.metadata ??
+					undefined)
+				: undefined)) as Record<string, unknown> | undefined;
 		const selectorToolResult = useToolResultByToolId(
 			providedToolResult ? undefined : toolUseId,
 			sessionId,
@@ -508,10 +533,10 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 						type: 'tool_result',
 						toolUseId,
 						toolName,
-						content: toolUse.resultContent || toolUse.streamingOutput || '',
+						content: liveToolOutput || '',
 						isError: toolUse.status === 'error',
 						title: toolUse.title,
-						metadata: toolUse.metadata,
+						metadata: liveToolMetadata,
 						timestamp: toolUse.timestamp,
 					}
 				: undefined);
@@ -534,7 +559,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		// Use metadata from toolResult (final) or from the tool_use message itself
 		// (streaming). tool_streaming events merge metadata into the tool_use message
 		// via mergeOrAddMessage, so we can pick up incremental file data as it arrives.
-		const streamingMetadata = toolUse.metadata;
+		const streamingMetadata = liveToolMetadata;
 		const effectiveMetadata = toolResult?.metadata ?? streamingMetadata;
 		const fileChanges = useMemo(
 			() =>
@@ -657,7 +682,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 			return '';
 		}, [actionType, isBash, isWebSearch, isWebFetch, isMcp, rawInput]);
 
-		const fullText = content || toolUse.streamingOutput || '';
+		const fullText = content || liveToolOutput || toolUse.streamingOutput || '';
 		const hasBody = fullText.trim().length > 0;
 		const lineCount = useMemo(
 			() => (hasBody ? fullText.split('\n').length : 0),
@@ -670,10 +695,10 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 			scrollToBottom(instance);
 		}, []);
 		useEffect(() => {
-			if (!isRunning || !toolUse.streamingOutput) return;
+			if (!isRunning || !fullText) return;
 			const el = streamingViewportRef.current;
 			if (el) el.scrollTop = el.scrollHeight;
-		}, [isRunning, toolUse.streamingOutput]);
+		}, [fullText, isRunning]);
 
 		if (!toolName) return null;
 		if (shouldHideWhileRunning) return null;

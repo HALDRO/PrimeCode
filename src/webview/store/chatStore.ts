@@ -60,7 +60,11 @@ function syncSessionModelFromMessages(state: SessionStore, sessionId: string): v
 	}
 }
 
-function getNewSessionSeedModel(): string | undefined {
+function getNewSessionSeedModel(state?: SessionStore): string | undefined {
+	const activeSessionModel = state?.activeSessionId
+		? state.sessionModel[state.activeSessionId]
+		: undefined;
+	if (activeSessionModel) return activeSessionModel;
 	const model = useSettingsStore.getState().lastSelectedModel;
 	return model && model !== 'default' ? model : undefined;
 }
@@ -181,14 +185,11 @@ export interface RenderToolUseMessage {
 	type: 'tool_use';
 	toolName: string;
 	toolUseId: string;
-	toolInput: string;
 	rawInput: Record<string, unknown>;
 	streamingOutput?: string;
 	isRunning?: boolean;
 	status?: 'pending' | 'running' | 'completed' | 'error' | 'cancelled';
 	title?: string;
-	resultContent?: string;
-	metadata?: Record<string, unknown>;
 	timestamp: string;
 	normalizedEntry?: NormalizedEntry;
 	filePath?: string;
@@ -258,6 +259,7 @@ export interface SessionActions {
 	appendInput: (text: string, sessionId?: string) => void;
 	updateSessionAgent: (agent: string | undefined, sessionId?: string) => void;
 	updateSessionModel: (model: string | undefined, sessionId?: string) => void;
+	initializeUnassignedSessionModels: (model: string | undefined) => void;
 	setEditingMessageId: (id: string | null) => void;
 	setEditDraft: (messageId: string, text: string) => void;
 	clearEditDraft: (messageId: string) => void;
@@ -592,7 +594,7 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 						state.sessionOrder.push(sessionId);
 					}
 					if (!state.messages[sessionId]) state.messages[sessionId] = [];
-					state.sessionModel[sessionId] ??= getNewSessionSeedModel();
+					state.sessionModel[sessionId] ??= getNewSessionSeedModel(state);
 					state.activeSessionId = sessionId;
 				}),
 			);
@@ -605,7 +607,7 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 						state.sessionOrder.push(sessionId);
 					}
 					if (!state.messages[sessionId]) state.messages[sessionId] = [];
-					state.sessionModel[sessionId] ??= getNewSessionSeedModel();
+					state.sessionModel[sessionId] ??= getNewSessionSeedModel(state);
 					state.activeSessionId = sessionId;
 					state.editingMessageId = null;
 					state.editDrafts = {};
@@ -679,6 +681,22 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 					}),
 				);
 			}
+		},
+
+		initializeUnassignedSessionModels: model => {
+			const initialModel = model && model !== 'default' ? model : undefined;
+			if (!initialModel) return;
+			set(
+				produce((s: SessionStore) => {
+					const sessionIds = new Set<string>(s.sessionOrder);
+					if (s.activeSessionId) sessionIds.add(s.activeSessionId);
+					for (const sessionId of sessionIds) {
+						if (s.sessionModel[sessionId] === undefined) {
+							s.sessionModel[sessionId] = initialModel;
+						}
+					}
+				}),
+			);
 		},
 
 		setEditingMessageId: id => set({ editingMessageId: id }),

@@ -208,6 +208,7 @@ interface ApplyPatchMetadataFile {
 	path?: string;
 	type?: 'add' | 'update' | 'delete' | 'move';
 	status?: 'add' | 'update' | 'delete' | 'move';
+	binary?: boolean;
 	diff?: string;
 	before?: string;
 	after?: string;
@@ -245,8 +246,8 @@ const getPatchFileStats = (
 	file: ApplyPatchMetadataFile,
 	fallback: { added: number; removed: number },
 ) => ({
-	added: typeof file.additions === 'number' ? file.additions : fallback.added,
-	removed: typeof file.deletions === 'number' ? file.deletions : fallback.removed,
+	added: file.binary ? 0 : typeof file.additions === 'number' ? file.additions : fallback.added,
+	removed: file.binary ? 0 : typeof file.deletions === 'number' ? file.deletions : fallback.removed,
 });
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
@@ -364,12 +365,17 @@ export function resolveFileChanges(params: {
 			const filePath = getPatchFilePath(file);
 			if (!filePath) continue;
 			const status = getPatchFileStatus(file);
+			const isBinary = file.binary === true;
 
 			// Prefer per-file diff; fall back to the relevant slice of top-level diff
 			let fileDiff = typeof file.diff === 'string' ? file.diff : undefined;
+			if (isBinary) fileDiff = undefined;
 			if (!fileDiff && topDiff) {
-				fileDiff =
-					patchFiles.length === 1 ? topDiff : extractFileDiffFromUnified(topDiff, filePath);
+				fileDiff = isBinary
+					? undefined
+					: patchFiles.length === 1
+						? topDiff
+						: extractFileDiffFromUnified(topDiff, filePath);
 			}
 
 			const resolved = resolveSingleDiffData({
@@ -393,7 +399,7 @@ export function resolveFileChanges(params: {
 			changes.push({
 				filePath,
 				name: resolved.name,
-				lines: resolved.lines,
+				lines: isBinary ? [] : resolved.lines,
 				diffText: resolved.diffText,
 				hasDeleteChange: resolved.hasDeleteChange,
 				stats: getPatchFileStats(file, resolved.stats),

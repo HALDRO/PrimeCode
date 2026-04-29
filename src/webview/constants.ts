@@ -72,6 +72,7 @@ export {
 	isTaskTool,
 	isToolMatch,
 	NON_GROUPABLE_TOOLS,
+	resolveToolName,
 } from '../common/toolRegistry';
 
 /**

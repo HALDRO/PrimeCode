@@ -14,6 +14,7 @@ import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk/v2/c
 import { parseModelId } from '../../common';
 import { PERMISSION_CATEGORIES } from '../../common/permissions';
 import { logger } from '../../utils/logger';
+import { sanitizePartForHistory } from '../../utils/toolPartSanitizer';
 import { buildPromptParts } from '../promptParts';
 import type { CLIConfig, CLIExecutor } from './types';
 
@@ -1291,6 +1292,12 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (!envelope || typeof envelope.type !== 'string') return;
 
 		const props = (envelope.properties ?? {}) as Record<string, unknown>;
+		if (envelope.type === 'message.part.updated') {
+			const part = props.part as Part | undefined;
+			if (part) {
+				envelope.properties = { ...props, part: sanitizePartForHistory(part) };
+			}
+		}
 		const sessionId = typeof props.sessionID === 'string' ? props.sessionID : undefined;
 
 		// Skip deleted sessions

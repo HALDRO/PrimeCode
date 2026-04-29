@@ -6,9 +6,11 @@
  *              instead of maintaining a parallel local restore control plane.
  */
 
+import type { Part } from '@opencode-ai/sdk/v2/client';
 import * as vscode from 'vscode';
 import type { CommandOf, WebviewCommand } from '../../common/protocol';
 import { logger } from '../../utils/logger';
+import { sanitizePartForHistory } from '../../utils/toolPartSanitizer';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
 export class RestoreHandler implements WebviewMessageHandler {
@@ -98,9 +100,11 @@ export class RestoreHandler implements WebviewMessageHandler {
 			(a, b) => a.info.time.created - b.info.time.created,
 		);
 		const skipParts = new Set(['patch', 'step-start', 'step-finish', 'snapshot']);
-		const partsByMessageId: Record<string, import('@opencode-ai/sdk/v2/client').Part[]> = {};
+		const partsByMessageId: Record<string, Part[]> = {};
 		for (const entry of entries) {
-			partsByMessageId[entry.info.id] = entry.parts.filter(part => !skipParts.has(part.type));
+			partsByMessageId[entry.info.id] = entry.parts
+				.filter(part => !skipParts.has(part.type))
+				.map(sanitizePartForHistory);
 		}
 
 		this.context.bridge.data('restore_session', {

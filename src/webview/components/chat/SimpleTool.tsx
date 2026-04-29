@@ -1,7 +1,8 @@
 import React, { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { NormalizedEntry } from '../../../common/normalizedTypes';
-import { TOOL_CARD_EXPANDED_MAX_HEIGHT } from '../../constants';
+import { resolveToolName, TOOL_CARD_EXPANDED_MAX_HEIGHT } from '../../constants';
 import { cn } from '../../lib/cn';
+import { useSettingsStore } from '../../store';
 import { formatDuration, formatToolName } from '../../utils/format';
 import { Markdown } from '../../utils/markdown';
 import { useVSCode } from '../../utils/vscode';
@@ -314,7 +315,10 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 		showCollapseOverlay,
 	}) => {
 		const { postMessage } = useVSCode();
+		const availableSkills = useSettingsStore(state => state.resources.skill.items);
 		const toolLower = toolName.toLowerCase();
+		const canonicalToolName = resolveToolName(toolName);
+		const isKnownTool = Boolean(canonicalToolName);
 		const action =
 			normalizedEntry?.entryType &&
 			typeof normalizedEntry.entryType === 'object' &&
@@ -432,7 +436,9 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 				metaDisplay = getLeafName(meta);
 			}
 
-			const resolvedSkillPath = skillPath;
+			const resolvedSkillPath =
+				skillPath ||
+				(skillName ? availableSkills.find(skill => skill.name === skillName)?.path : undefined);
 
 			return {
 				label,
@@ -449,7 +455,7 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 				readOffset,
 				readLimit,
 			};
-		}, [action, rawInput, toolLower, toolName]);
+		}, [action, availableSkills, rawInput, toolLower, toolName]);
 
 		const metaNode = useMemo(() => {
 			if (!meta) return undefined;
@@ -585,13 +591,13 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 		const searchResultCount = searchEntries.length;
 
 		const rawInputText = useMemo(() => {
-			if (!rawInput || isRead || isSearch || isTodoWrite || isTaskResult) return '';
+			if (!rawInput || isKnownTool || isRead || isSearch || isTodoWrite || isTaskResult) return '';
 			try {
 				return JSON.stringify(rawInput, null, 2);
 			} catch {
 				return String(rawInput);
 			}
-		}, [isRead, isSearch, isTaskResult, isTodoWrite, rawInput]);
+		}, [isKnownTool, isRead, isSearch, isTaskResult, isTodoWrite, rawInput]);
 		const genericRawBody = rawInputText.trim();
 		const hasBody = !isRead && (fullText.trim().length > 0 || genericRawBody.length > 0);
 

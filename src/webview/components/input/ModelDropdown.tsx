@@ -9,9 +9,14 @@
 
 import type React from 'react';
 import { useCallback, useMemo } from 'react';
-import { getProxyEndpointProviderId, OPENAI_COMPATIBLE_PROVIDER_ID } from '../../../common';
+import {
+	getProxyEndpointProviderId,
+	OPENAI_COMPATIBLE_PROVIDER_ID,
+	parseModelId,
+} from '../../../common';
 import { cn } from '../../lib/cn';
 import { useModelDropdownState, useModelSelection, useSessionModel } from '../../store';
+import { useVSCode } from '../../utils/vscode';
 import { BrainSideIcon, ZapIcon } from '../icons';
 import { type DropdownItemRenderProps, DropdownMenu, type DropdownMenuItem } from '../ui';
 
@@ -52,6 +57,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 		setSessionModel,
 	} = useModelSelection();
 	const { setShowModelDropdown } = useModelDropdownState();
+	const { postMessage } = useVSCode();
 	const sessionModel = useSessionModel();
 
 	const sessionScopedModel = sessionModel;
@@ -86,12 +92,17 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 				onClose();
 				return;
 			}
+			if (!parseModelId(model.id)) {
+				onClose();
+				return;
+			}
 			setLastSelectedModel(model.id);
 			// Persist per-session override (so different chats can use different models)
-			setSessionModel(model.id === 'default' ? undefined : model.id);
+			setSessionModel(model.id);
+			postMessage({ type: 'setOpenCodeModel', model: model.id });
 			onClose();
 		},
-		[onClose, onSelectOverride, setLastSelectedModel, setSessionModel],
+		[onClose, onSelectOverride, postMessage, setLastSelectedModel, setSessionModel],
 	);
 
 	// Custom render for model items with purple dot for active model
@@ -104,7 +115,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 					onClick={props.onSelect}
 					onMouseEnter={props.onHover}
 					className={cn(
-						'flex items-center gap-(--gap-1-5) pl-(--gap-4) pr-(--gap-3) py-0 my-px rounded-md cursor-pointer h-(--dropdown-item-height) text-sm leading-[1.2] transition-colors',
+						'flex items-center gap-(--gap-1-5) px-(--gap-3) py-0 my-px rounded-md cursor-pointer h-(--dropdown-item-height) text-sm leading-[1.2] transition-colors',
 						item.disabled
 							? 'cursor-not-allowed opacity-50 text-(--alpha-30)'
 							: 'text-(--alpha-90) hover:bg-(--alpha-8)',

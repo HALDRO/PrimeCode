@@ -114,7 +114,19 @@ function formatMessage(
 	// Include completed tool output from MCP, WebSearch, WebFetch
 	if (m.kind === 'tool_use' && isCopyableToolResult(m, mcpServerNames)) {
 		const toolName = m.toolName ?? 'Tool';
-		const content = m.resultContent ?? m.streamingOutput ?? '';
+		const content = (() => {
+			const state = useChatStore.getState();
+			for (const messageParts of Object.values(state.parts)) {
+				for (const part of messageParts) {
+					if (part.type !== 'tool') continue;
+					const toolPart = part as import('@opencode-ai/sdk/v2/client').ToolPart;
+					if (toolPart.callID !== m.toolUseId) continue;
+					if ('output' in toolPart.state) return toolPart.state.output ?? '';
+					return m.streamingOutput ?? '';
+				}
+			}
+			return m.streamingOutput ?? '';
+		})();
 		if (!content.trim()) return undefined;
 		const prefix = mode === 'all' ? `## ${toolName}\n` : '';
 		return `${prefix}${content}`;
@@ -152,9 +164,25 @@ function buildPatches(msgs: RenderNode[]): string {
 				? m.normalizedEntry.entryType.actionType
 				: buildToolActionType(m.toolName, m.rawInput ?? {});
 
+		const metadata = (() => {
+			const state = useChatStore.getState();
+			for (const messageParts of Object.values(state.parts)) {
+				for (const part of messageParts) {
+					if (part.type !== 'tool') continue;
+					const toolPart = part as import('@opencode-ai/sdk/v2/client').ToolPart;
+					if (toolPart.callID !== m.toolUseId) continue;
+					return (toolPart.metadata ??
+						('metadata' in toolPart.state
+							? ((toolPart.state as { metadata?: Record<string, unknown> }).metadata ?? undefined)
+							: undefined)) as Record<string, unknown> | undefined;
+				}
+			}
+			return undefined;
+		})();
+
 		const changes = resolveFileChanges({
 			actionType,
-			toolResultMetadata: m.metadata,
+			toolResultMetadata: metadata,
 			fallbackFilePath: m.filePath,
 		});
 
@@ -165,7 +193,7 @@ function buildPatches(msgs: RenderNode[]): string {
 			continue;
 		}
 
-		const diff = m.metadata?.diff;
+		const diff = metadata?.diff;
 		if (typeof diff === 'string' && diff.trim()) {
 			patches.push(normalizeDiffForCopy(diff, m.filePath || ''));
 		}

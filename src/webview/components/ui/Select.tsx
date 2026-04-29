@@ -78,14 +78,12 @@ export const Select: React.FC<SelectProps> = ({
 								onClick={onSelect}
 								onMouseEnter={onHover}
 								className={cn(
-									'flex items-center px-(--gap-4) py-(--gap-1) my-px rounded-md cursor-pointer h-(--dropdown-item-height) text-sm leading-[1.2] transition-colors hover:bg-(--alpha-8)',
+									'flex items-center px-(--gap-3) py-(--gap-1) my-px rounded-md cursor-pointer h-(--dropdown-item-height) text-sm leading-[1.2] transition-colors hover:bg-(--alpha-8)',
 									hovered ? 'bg-(--alpha-10) text-vscode-foreground' : 'text-(--alpha-70)',
 									isSelected && 'text-(--color-accent) font-medium bg-(--color-accent)/10',
 								)}
 							>
-								<span className="flex-1 whitespace-nowrap pr-(--gap-4) leading-[1.2]">
-									{item.label}
-								</span>
+								<span className="flex-1 whitespace-nowrap leading-[1.2]">{item.label}</span>
 								{isSelected && (
 									<div className="shrink-0 ml-(--gap-2)">
 										<GlowDot color="var(--color-accent)" glow="var(--color-accent-glow)" size={4} />
