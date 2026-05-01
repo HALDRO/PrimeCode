@@ -5,9 +5,12 @@
  */
 
 import type React from 'react';
-import { useMemo, useRef, useState } from 'react';
-import { useAccessResponse } from '../../hooks/useAccessResponse';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { cn } from '../../lib/cn';
+import { openCodeRuntime } from '../../services/opencodeRuntime';
+import { useChatStore } from '../../store/chatStore';
+import { useSettingsStore } from '../../store/settingsStore';
+import { vscode } from '../../utils/vscode';
 import { CheckIcon, ChevronDownIcon, CloseIcon, ShieldIcon } from '../icons';
 import { DropdownMenu } from '../ui';
 
@@ -32,6 +35,7 @@ interface AccessGateProps {
 }
 
 type GateAction = 'allow-once' | 'always-allow' | 'deny';
+type AccessResponseType = 'once' | 'always' | 'reject';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -63,6 +67,62 @@ function getDisplayDetails(input: unknown, hideDetails?: boolean): string | null
 	} catch {
 		return null;
 	}
+}
+
+export function useAccessResponse({
+	requestId,
+	tool,
+	messageId,
+	sessionId,
+}: {
+	requestId: string;
+	tool: string;
+	messageId?: string;
+	sessionId?: string;
+}) {
+	const activeSessionId = useChatStore(state => state.activeSessionId);
+
+	return useCallback(
+		(isApproved: boolean, alwaysAllow = false) => {
+			const targetSessionId = sessionId ?? activeSessionId;
+			if (!targetSessionId || !requestId) return;
+			const response: AccessResponseType = isApproved
+				? alwaysAllow
+					? 'always'
+					: 'once'
+				: 'reject';
+
+			useChatStore.getState().actions.removePendingPermission(requestId, targetSessionId);
+
+			if (alwaysAllow && isApproved) {
+				const nextAccess = [...useSettingsStore.getState().access];
+				const key = tool.toLowerCase();
+				if (!nextAccess.some(entry => entry.toolName.toLowerCase() === key && entry.allowAll)) {
+					nextAccess.push({ toolName: tool, allowAll: true });
+					useSettingsStore.getState().actions.setAccess(nextAccess);
+					vscode.postMessage({ type: 'setAlwaysAllowTool', toolName: tool, allow: true });
+				}
+			}
+
+			void openCodeRuntime
+				.respondToPermission({
+					requestId,
+					toolName: tool,
+					approved: isApproved,
+					alwaysAllow,
+					response,
+				})
+				.catch(error => {
+					openCodeRuntime.showRuntimeError(error);
+					void openCodeRuntime
+						.refreshRuntimeState(targetSessionId)
+						.catch(openCodeRuntime.showRuntimeError);
+				});
+
+			void messageId;
+		},
+		[activeSessionId, messageId, requestId, sessionId, tool],
+	);
 }
 
 // ---------------------------------------------------------------------------

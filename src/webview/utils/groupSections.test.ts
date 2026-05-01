@@ -10,8 +10,8 @@ vi.mock('../components/chat/SimpleTool', () => ({
 	groupToolMessages: (msgs: unknown[]) => msgs,
 }));
 
-import type { ChangedFile, RenderNode } from '../store';
-import { groupMessagesIntoSections } from '../store/projector';
+import type { RenderNode } from '../store';
+import { groupMessagesIntoSections } from '../store/derived';
 
 type Message = RenderNode;
 
@@ -286,6 +286,23 @@ describe('groupMessagesIntoSections', () => {
 			expect(result[0].isRevertPoint).toBe(false);
 		});
 
+		it('treats the previous user turn as the visible restore point when server revert points at the next hidden turn', () => {
+			const msgs = [
+				userMsg('u1'),
+				assistantMsg('a1'),
+				userMsg('u2'),
+				assistantMsg('a2'),
+				userMsg('u3'),
+				assistantMsg('a3'),
+			];
+			const result = groupMessagesIntoSections(msgs, [], 'u2');
+
+			expect(result).toHaveLength(3);
+			expect(result[1].isRevertPoint).toBe(true);
+			expect(result[1].isReverted).toBe(true);
+			expect(result[2].isReverted).toBe(true);
+		});
+
 		it('restore on 1st of 4 messages should dim all 4 sections', () => {
 			const msgs = [userMsg('u1'), userMsg('u2'), userMsg('u3'), userMsg('u4')];
 			const result = groupMessagesIntoSections(msgs, [], 'u1');
@@ -432,7 +449,7 @@ describe('groupMessagesIntoSections', () => {
 			expect(result[0].stats.lastResponseTs).toBeNull();
 		});
 
-		it('should compute fileChanges from changedFiles matching toolUseIds', () => {
+		it('should keep fileChanges empty for tool_use messages', () => {
 			const msgs = [
 				userMsg('u1'),
 				{
@@ -457,50 +474,14 @@ describe('groupMessagesIntoSections', () => {
 				} as unknown as Message,
 				assistantMsg('a1'),
 			];
-			const changedFiles: ChangedFile[] = [
-				{
-					toolUseId: 'tu-1',
-					filePath: '/a.ts',
-					fileName: 'a.ts',
-					linesAdded: 10,
-					linesRemoved: 2,
-					timestamp: 0,
-				},
-				{
-					toolUseId: 'tu-2',
-					filePath: '/b.ts',
-					fileName: 'b.ts',
-					linesAdded: 5,
-					linesRemoved: 0,
-					timestamp: 0,
-				},
-				{
-					toolUseId: 'tu-other',
-					filePath: '/c.ts',
-					fileName: 'c.ts',
-					linesAdded: 100,
-					linesRemoved: 50,
-					timestamp: 0,
-				},
-			];
-			const result = groupMessagesIntoSections(msgs, [], null, changedFiles);
+			const result = groupMessagesIntoSections(msgs, [], null);
 
-			expect(result[0].stats.fileChanges).toEqual({ added: 15, removed: 2, files: 2 });
+			expect(result[0].stats.fileChanges).toBeNull();
 		});
 
 		it('should return null fileChanges when no tool_use messages match', () => {
 			const msgs = [userMsg('u1'), assistantMsg('a1')];
-			const changedFiles: ChangedFile[] = [
-				{
-					toolUseId: 'tu-other',
-					filePath: '/c.ts',
-					fileName: 'c.ts',
-					linesAdded: 100,
-					linesRemoved: 50,
-					timestamp: 0,
-				},
-			];
-			const result = groupMessagesIntoSections(msgs, [], null, changedFiles);
+			const result = groupMessagesIntoSections(msgs, [], null);
 
 			expect(result[0].stats.fileChanges).toBeNull();
 		});
@@ -515,12 +496,12 @@ describe('groupMessagesIntoSections', () => {
 				},
 				parts: [],
 			} as unknown as Message;
-			const result = groupMessagesIntoSections([msg, assistantMsg('a1')], [], null, [], {}, false);
+			const result = groupMessagesIntoSections([msg, assistantMsg('a1')], [], null, {}, false);
 
 			expect(result[0].stats.fileChanges).toBeNull();
 		});
 
-		it('should not show session-wide diff stats on a later message without tool changes', () => {
+		it('should not infer fileChanges from tool metadata on later messages', () => {
 			const msgs = [
 				userMsg('u1'),
 				{
@@ -543,11 +524,11 @@ describe('groupMessagesIntoSections', () => {
 
 			const result = groupMessagesIntoSections(msgs, [], null);
 
-			expect(result[0].stats.fileChanges).toEqual({ added: 100, removed: 0, files: 1 });
+			expect(result[0].stats.fileChanges).toBeNull();
 			expect(result[1].stats.fileChanges).toBeNull();
 		});
 
-		it('should prefer raw tool metadata diff over summary diffs for footer stats', () => {
+		it('should keep footer fileChanges empty even when tool metadata has a diff', () => {
 			const msg = {
 				kind: 'user',
 				id: 'u1',
@@ -588,9 +569,9 @@ describe('groupMessagesIntoSections', () => {
 					],
 				},
 			} as unknown as Message;
-			const result = groupMessagesIntoSections([msg, tool, assistantMsg('a1')], [], null, []);
+			const result = groupMessagesIntoSections([msg, tool, assistantMsg('a1')], [], null);
 
-			expect(result[0].stats.fileChanges).toEqual({ added: 3, removed: 0, files: 1 });
+			expect(result[0].stats.fileChanges).toBeNull();
 		});
 
 		it('should use real turnTokens for tokenCount', () => {
@@ -608,7 +589,7 @@ describe('groupMessagesIntoSections', () => {
 			const turnTokens = {
 				u1: { input: 50, output: 50, total: 100, usage: 25, cacheRead: 0 },
 			};
-			const result = groupMessagesIntoSections(msgs, [], null, [], turnTokens);
+			const result = groupMessagesIntoSections(msgs, [], null, turnTokens);
 
 			expect(result[0].stats.tokenCount).toBe(25);
 		});

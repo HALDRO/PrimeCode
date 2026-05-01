@@ -6,6 +6,7 @@
 
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { openCodeRuntime } from '../../services/opencodeRuntime';
 import {
 	type ConversationIndexEntry,
 	useActiveSessionId,
@@ -14,7 +15,6 @@ import {
 } from '../../store';
 import { useUIActions } from '../../store/uiStore';
 import { formatRelativeTime } from '../../utils/format';
-import { useVSCode } from '../../utils/vscode';
 import { MessageIcon, PencilIcon, TrashIcon } from '../icons';
 import {
 	Button,
@@ -69,7 +69,6 @@ const groupByDate = (
 };
 
 export const HistoryDropdown: React.FC = () => {
-	const { postMessage } = useVSCode();
 	const { conversationList, setShowHistoryDropdown } = useHistoryDropdownState();
 	const activeSessionId = useActiveSessionId();
 	const sessionOrder = useChatStore(state => state.sessionOrder);
@@ -132,10 +131,10 @@ export const HistoryDropdown: React.FC = () => {
 		if (conversationList.length === 0) {
 			setIsLoading(true);
 		}
-		postMessage({ type: 'getConversationList' });
+		void openCodeRuntime.refreshConversationList().finally(() => setIsLoading(false));
 		const timeout = setTimeout(() => setIsLoading(false), 2000);
 		return () => clearTimeout(timeout);
-	}, [postMessage, conversationList.length]);
+	}, [conversationList.length]);
 
 	// Clear loading as soon as the conversation list is populated
 	useEffect(() => {
@@ -156,10 +155,10 @@ export const HistoryDropdown: React.FC = () => {
 			if (editingId) {
 				return;
 			}
-			postMessage({ type: 'loadConversation', filename: conv.filename });
+			void openCodeRuntime.loadConversation(conv.sessionId);
 			onClose();
 		},
-		[postMessage, onClose, editingId],
+		[onClose, editingId],
 	);
 
 	const handleRename = useCallback((conv: ConversationIndexEntry) => {
@@ -170,24 +169,17 @@ export const HistoryDropdown: React.FC = () => {
 	const handleRenameSubmit = useCallback(
 		(conv: ConversationIndexEntry) => {
 			if (editValue.trim()) {
-				postMessage({
-					type: 'renameConversation',
-					filename: conv.filename,
-					newTitle: editValue.trim(),
-				});
+				void openCodeRuntime.renameConversation(conv.sessionId, editValue.trim());
 			}
 			setEditingId(null);
 			setEditValue('');
 		},
-		[editValue, postMessage],
+		[editValue],
 	);
 
-	const handleDelete = useCallback(
-		(conv: ConversationIndexEntry) => {
-			postMessage({ type: 'deleteConversation', filename: conv.filename });
-		},
-		[postMessage],
-	);
+	const handleDelete = useCallback((conv: ConversationIndexEntry) => {
+		void openCodeRuntime.deleteConversation(conv.sessionId);
+	}, []);
 
 	// Handle edit mode keyboard
 	useEffect(() => {
@@ -228,11 +220,11 @@ export const HistoryDropdown: React.FC = () => {
 				confirmLabel: 'Clear All',
 				cancelLabel: 'Cancel',
 				onConfirm: () => {
-					postMessage({ type: 'clearAllConversations' });
+					void openCodeRuntime.clearAllConversations();
 				},
 			});
 		}, 50);
-	}, [showConfirmDialog, postMessage, onClose]);
+	}, [showConfirmDialog, onClose]);
 
 	const sections = useMemo(() => groupByDate(conversationList), [conversationList]);
 

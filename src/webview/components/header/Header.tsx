@@ -5,23 +5,20 @@
  * creates a real session and responds with lifecycle events — no client-side draft IDs.
  */
 
-import React, {
-	startTransition,
-	useCallback,
-	useEffect,
-	useLayoutEffect,
-	useMemo,
-	useRef,
-	useState,
-} from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useShallow } from 'zustand/react/shallow';
 import { cn } from '../../lib/cn';
-import { useChatActions, useChatStore, useHistoryDropdownState, useUIActions } from '../../store';
+import { openCodeRuntime } from '../../services/opencodeRuntime';
+import {
+	isSessionProcessing,
+	useChatStore,
+	useHistoryDropdownState,
+	useUIActions,
+} from '../../store';
 import type { SessionStore } from '../../store/chatStore';
 import { useSettingsStore } from '../../store/settingsStore';
 import { useUIStore } from '../../store/uiStore';
-import { proxyEventSource } from '../../utils/proxyEventSource';
 import { proxyFetch } from '../../utils/proxyFetch';
 import { useVSCode } from '../../utils/vscode';
 import { CloseIcon, MessageIcon } from '../icons';
@@ -242,13 +239,11 @@ const ConnectionStatusMenu: React.FC<{
 export const Header: React.FC = React.memo(() => {
 	const HEALTH_POLL_INTERVAL_MS = 10_000;
 	const HEALTH_FETCH_TIMEOUT_MS = 3_000;
-	const SSE_HEARTBEAT_TIMEOUT_MS = 15_000;
 
 	// Optimized selectors
 	const { showHistoryDropdown } = useHistoryDropdownState();
 	const { setServerStatus, showConfirmDialog } = useUIActions();
 	const { postMessage } = useVSCode();
-	const { switchSession, closeSession } = useChatActions();
 
 	// PERF: Only subscribe to sessionOrder and activeSessionId — NOT sessionsById.
 	// sessionsById changes on every streaming event (Immer produce), but tabs only
@@ -261,7 +256,6 @@ export const Header: React.FC = React.memo(() => {
 	);
 	const serverUrl = useUIStore(state => state.serverUrl);
 	const serverStatus = useUIStore(state => state.serverStatus);
-	const serverUrlVersion = useUIStore(state => state.serverUrlVersion);
 	const connectionDetails = useUIStore(state => state.connectionDetails);
 	const lspStatus = useSettingsStore(state => state.lspStatus);
 
@@ -269,8 +263,6 @@ export const Header: React.FC = React.memo(() => {
 	const [tabsOverflowing, setTabsOverflowing] = useState(false);
 	const statusBtnRef = useRef<HTMLButtonElement>(null);
 	const tabsScrollerRef = useRef<HTMLDivElement>(null);
-	const lastSseActivityAtRef = useRef<number>(0);
-
 	const sessions: TabInfo[] = useMemo(() => sessionOrder.map(id => ({ id })), [sessionOrder]);
 
 	useLayoutEffect(() => {
@@ -297,64 +289,6 @@ export const Header: React.FC = React.memo(() => {
 			resizeObserver.disconnect();
 		};
 	}, []);
-
-	// SSE is transport-only: if the stream goes stale, re-subscribe without
-	// inferring anything about server process state.
-	useEffect(() => {
-		if (!serverUrl) {
-			setServerStatus('disconnected');
-			return;
-		}
-
-		let disposed = false;
-		let unsubscribeCurrent: (() => void) | null = null;
-		let heartbeatTimer: number | null = null;
-
-		const clearHeartbeat = () => {
-			if (heartbeatTimer !== null) {
-				window.clearTimeout(heartbeatTimer);
-				heartbeatTimer = null;
-			}
-		};
-
-		const scheduleHeartbeat = () => {
-			clearHeartbeat();
-			heartbeatTimer = window.setTimeout(() => {
-				if (disposed) return;
-				if (Date.now() - lastSseActivityAtRef.current < SSE_HEARTBEAT_TIMEOUT_MS) return;
-				unsubscribeCurrent?.();
-				subscribe();
-			}, SSE_HEARTBEAT_TIMEOUT_MS);
-		};
-
-		const markActivity = () => {
-			lastSseActivityAtRef.current = Date.now();
-			setServerStatus('connected');
-			scheduleHeartbeat();
-		};
-
-		const subscribe = () => {
-			unsubscribeCurrent = proxyEventSource(
-				`${serverUrl}/event?v=${serverUrlVersion}`,
-				() => {
-					markActivity();
-				},
-				() => {
-					setServerStatus('error');
-				},
-			);
-		};
-
-		lastSseActivityAtRef.current = Date.now();
-		subscribe();
-		scheduleHeartbeat();
-
-		return () => {
-			disposed = true;
-			clearHeartbeat();
-			unsubscribeCurrent?.();
-		};
-	}, [serverUrl, setServerStatus, serverUrlVersion]);
 
 	useEffect(() => {
 		if (!serverUrl) return;
@@ -423,51 +357,20 @@ export const Header: React.FC = React.memo(() => {
 		};
 	}, [serverUrl, setServerStatus]);
 
-	const handleSwitchSession = useCallback(
-		(sessionId: string) => {
-			// OPTIMIZED: Wrap expensive session switch in startTransition so React
-			// prioritizes keeping the UI responsive (tab click feels instant) over
-			// the heavy re-render of the new message list.
-			startTransition(() => {
-				switchSession(sessionId);
-			});
-			// postMessage is async/fast, safe to keep outside transition
-			postMessage({ type: 'switchSession', sessionId });
-		},
-		[postMessage, switchSession],
-	);
+	const handleSwitchSession = useCallback((sessionId: string) => {
+		openCodeRuntime.switchSession(sessionId);
+	}, []);
 
-	const doCloseSession = useCallback(
-		(sessionId: string) => {
-			const isClosingActive = sessionId === activeSessionId;
-			closeSession(sessionId);
-			postMessage({ type: 'closeSession', sessionId });
-
-			// When closing the active tab, closeSession in Zustand silently picks a new
-			// activeSessionId but never notifies the backend. Without a switchSession
-			// message the backend won't restore the newly-active session,
-			// leaving the user with an empty chat.
-			if (isClosingActive) {
-				// Read the new activeSessionId that closeSession just set.
-				const newActiveId = useChatStore.getState().activeSessionId;
-				if (newActiveId) {
-					startTransition(() => {
-						switchSession(newActiveId);
-					});
-					postMessage({ type: 'switchSession', sessionId: newActiveId });
-				}
-			}
-		},
-		[activeSessionId, closeSession, postMessage, switchSession],
-	);
+	const doCloseSession = useCallback((sessionId: string) => {
+		openCodeRuntime.closeSession(sessionId);
+	}, []);
 
 	const handleCloseSession = useCallback(
 		(sessionId: string) => {
 			const state = useChatStore.getState();
-			const status = state.sessionStatus[sessionId];
-			const isSessionProcessing = status?.type === 'busy' || status?.type === 'retry';
+			const processing = isSessionProcessing(state, sessionId);
 
-			if (isSessionProcessing) {
+			if (processing) {
 				showConfirmDialog({
 					title: 'Close active session?',
 					message: 'This session is still processing. Are you sure you want to close it?',
@@ -494,10 +397,9 @@ export const Header: React.FC = React.memo(() => {
 	}, []);
 
 	const SessionTab: React.FC<{ sessionId: string; index: number }> = ({ sessionId, index }) => {
-		const isProcessing = useChatStore((state: SessionStore) => {
-			const status = state.sessionStatus[sessionId];
-			return status?.type === 'busy' || status?.type === 'retry';
-		});
+		const isProcessing = useChatStore((state: SessionStore) =>
+			isSessionProcessing(state, sessionId),
+		);
 		const isActive = sessionId === activeSessionId;
 		const [hasFinishedWhileInactive, setHasFinishedWhileInactive] = useState(false);
 		const prevProcessingRef = useRef(isProcessing);

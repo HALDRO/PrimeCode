@@ -5,13 +5,14 @@
  */
 
 import { useCallback, useEffect, useMemo } from 'react';
-import { generateId, resolveModelDisplayName } from '../../common';
+import { resolveModelDisplayName } from '../../common';
 import { extractInlineAttachmentPayload } from '../../common/inlineAttachments';
 import {
 	getAvailableModelVariants,
 	getConfiguredAgentVariant,
 	resolveEffectiveVariant,
 } from '../lib/modelVariants';
+import { openCodeRuntime } from '../services/opencodeRuntime';
 import {
 	useChatActions,
 	useChatStore,
@@ -29,7 +30,6 @@ import {
 } from '../store';
 import { useSettingsStore } from '../store/settingsStore';
 import { useUIStore } from '../store/uiStore';
-import { useSessionMessage, useVSCode } from '../utils/vscode';
 
 interface AttachmentState {
 	images: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
@@ -80,8 +80,6 @@ export function useChatInputController(
 	options: UseChatInputControllerOptions,
 ): ChatInputController {
 	const { controlledValue, controlledOnChange, controlledOnSend, attachments } = options;
-	const { postMessage } = useVSCode();
-	const { postSessionMessage } = useSessionMessage();
 
 	const storeInput = useStoreInput();
 	const {
@@ -97,7 +95,9 @@ export function useChatInputController(
 	const isImproving = useIsImprovingPrompt();
 	const currentImproveRequestId = useImprovingPromptRequestId();
 	const promptVersions = usePromptVersions();
+	const activeSessionId = useChatStore(state => state.activeSessionId);
 	const agentResources = useSettingsStore(s => s.resources.agent.items);
+	const lastSelectedModel = useSettingsStore(s => s.lastSelectedModel);
 	const pushNotification = useUIStore(s => s.actions.pushNotification);
 	// Use reactive selector so the button re-renders immediately when agent changes.
 	// getSessionAgent() is an imperative getter that doesn't subscribe to store updates.
@@ -205,23 +205,8 @@ export function useChatInputController(
 	const ensureSessionForSend = useCallback(async (): Promise<string | undefined> => {
 		const existing = useChatStore.getState().activeSessionId;
 		if (existing) return existing;
-
-		postMessage({ type: 'createSession' });
-
-		return await new Promise<string | undefined>(resolve => {
-			const timeoutId = window.setTimeout(() => {
-				unsubscribe();
-				resolve(useChatStore.getState().activeSessionId);
-			}, 3000);
-
-			const unsubscribe = useChatStore.subscribe(state => {
-				if (!state.activeSessionId) return;
-				window.clearTimeout(timeoutId);
-				unsubscribe();
-				resolve(state.activeSessionId);
-			});
-		});
-	}, [postMessage]);
+		return await openCodeRuntime.createSession();
+	}, []);
 
 	// Send message
 	const handleSend = useCallback(async () => {
@@ -254,6 +239,8 @@ export function useChatInputController(
 			return;
 		}
 
+		const originalInputValue = inputValue;
+
 		const builtAttachments = {
 			files: inlinePayload.files.length > 0 ? inlinePayload.files : undefined,
 			codeSnippets:
@@ -278,8 +265,6 @@ export function useChatInputController(
 
 		const hasAttachments =
 			builtAttachments.files || builtAttachments.codeSnippets || builtAttachments.images;
-		const sessionModelId = sessionModel;
-		if (!sessionModelId) return;
 
 		// Parse @agent from text as fallback when selectedAgent is not set via InputToolbar.
 		// Only match known subagent/CLI agent names to avoid false positives with @filenames.
@@ -297,25 +282,30 @@ export function useChatInputController(
 			}
 		}
 
-		// Generate a stable message ID on the client so the extension
-		// can reuse the same ID — messages come from SDK events now.
-		const clientMessageID = generateId('msg');
 		const targetSessionId = await ensureSessionForSend();
 
-		postSessionMessage({
-			type: 'sendMessage',
-			text: inputValue.trim(),
-			...(targetSessionId ? { sessionId: targetSessionId } : {}),
-			clientMessageID,
-			agent,
-			model: sessionModelId,
-			...(validSessionVariant ? { variant: validSessionVariant } : {}),
-			attachments: hasAttachments ? builtAttachments : undefined,
-		});
-
+		if (!targetSessionId) return;
+		const sessionModelId =
+			useChatStore.getState().sessionModel[targetSessionId] ??
+			(sessionModel && sessionModel !== 'default' ? sessionModel : undefined) ??
+			(lastSelectedModel && lastSelectedModel !== 'default' ? lastSelectedModel : undefined);
 		updateSessionInput('');
 		attachments.clearAll();
 		clearPromptVersions();
+		try {
+			await openCodeRuntime.sendMessage({
+				sessionId: targetSessionId,
+				text: inputValue.trim(),
+				agent,
+				model: sessionModelId,
+				variant: validSessionVariant,
+				attachments: hasAttachments ? builtAttachments : undefined,
+			});
+		} catch (error) {
+			console.error('[PrimeCode][Send] request-failed', error);
+			updateSessionInput(originalInputValue);
+			throw error;
+		}
 	}, [
 		inputValue,
 		attachments,
@@ -323,27 +313,24 @@ export function useChatInputController(
 		controlledOnSend,
 		selectedAgent,
 		validSessionVariant,
-		postSessionMessage,
 		updateSessionInput,
 		clearPromptVersions,
+		lastSelectedModel,
 		sessionModel,
 		validAgentNames.has,
 		ensureSessionForSend,
 	]);
 
-	const handleStop = useCallback(
-		() => postSessionMessage({ type: 'stopRequest' }),
-		[postSessionMessage],
-	);
+	const handleStop = useCallback(() => {
+		if (!activeSessionId) return;
+		void openCodeRuntime.abortSession(activeSessionId).catch(openCodeRuntime.showRuntimeError);
+	}, [activeSessionId]);
 
 	// Prompt improver
 	const handleImprovePrompt = useCallback(() => {
 		if (isImproving) {
 			if (currentImproveRequestId) {
-				postMessage({
-					type: 'cancelImprovePrompt',
-					requestId: currentImproveRequestId,
-				});
+				openCodeRuntime.cancelImprovePrompt(currentImproveRequestId);
 			}
 			setImprovingPrompt(false, null);
 			return;
@@ -361,12 +348,10 @@ export function useChatInputController(
 
 		const requestId = crypto.randomUUID();
 		setImprovingPrompt(true, requestId);
-		postMessage({
-			type: 'improvePromptRequest',
-			text: inputValue,
-			requestId,
-		});
-	}, [inputValue, isImproving, currentImproveRequestId, postMessage, setImprovingPrompt]);
+		void openCodeRuntime
+			.improvePrompt(inputValue, requestId)
+			.catch(openCodeRuntime.showRuntimeError);
+	}, [inputValue, isImproving, currentImproveRequestId, setImprovingPrompt]);
 
 	// Model display name
 	const modelDisplayName = useMemo(() => {

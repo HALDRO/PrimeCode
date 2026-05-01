@@ -209,7 +209,6 @@ export class ModelsDevService implements vscode.Disposable {
 			this.lastFetchTime = Date.now();
 			this.knownIds = []; // force rebuild on next lookup
 			this.flatIndex.clear();
-			logger.info('[ModelsDevService] models.dev data refreshed');
 			return this.cache;
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);

@@ -53,7 +53,6 @@ function createState(overrides: Partial<SessionStore>): SessionStore {
 		sessionAutoAccept: {},
 		sessionModel: {},
 		sessionAgent: {},
-		queuedMessages: {},
 		childSessionIdsByParentId: {},
 		originatingToolCallBySessionId: {},
 		actions: {} as SessionStore['actions'],

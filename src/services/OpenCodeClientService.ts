@@ -170,7 +170,7 @@ function toProviderModel(model: ProviderListModel | ModelV2): OpenCodeProviderMo
 export class OpenCodeClientService {
 	private readonly projectConfig = new OpenCodeConfigService();
 
-	private setWorkspaceRoot(workspaceRoot: string): void {
+	public setWorkspaceRoot(workspaceRoot: string): void {
 		this.projectConfig.setWorkspaceRoot(workspaceRoot);
 	}
 

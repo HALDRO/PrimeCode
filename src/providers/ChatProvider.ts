@@ -1,11 +1,10 @@
+import { createOpencodeClient } from '@opencode-ai/sdk/v2/client';
 import * as vscode from 'vscode';
-import { mapPermissionRuntimePayloadToRequest } from '../common';
-import { PERMISSION_CATEGORIES, type PermissionCategory } from '../common/permissions';
-import type { ResourceKind, WebviewCommand } from '../common/protocol';
-import { resolveToolName } from '../common/toolRegistry';
+import { generateId, parseModelId } from '../common';
+import type { QueuedMessageData, SendMessageAttachments, WebviewCommand } from '../common/protocol';
 import { OpenCodeExecutor } from '../core/executor/OpenCode';
+import { buildPromptParts } from '../core/promptParts';
 import type { ServiceRegistry } from '../core/ServiceRegistry';
-import { SessionGraph, SessionManager, SessionState } from '../core/SessionManager';
 import { Settings } from '../core/Settings';
 import { CommandRouter } from '../transport/CommandRouter';
 
@@ -15,10 +14,7 @@ import { getHtml } from '../utils/webviewHtml';
 import { FileHandler } from './handlers/FileHandler';
 import { McpHandler } from './handlers/McpHandler';
 import { ProviderHandler } from './handlers/ProviderHandler';
-import { RestoreHandler } from './handlers/RestoreHandler';
-import { SessionHandler } from './handlers/SessionHandler';
 import { SettingsHandler } from './handlers/SettingsHandler';
-import { SseHandler } from './handlers/SseHandler';
 import { ToolHandler } from './handlers/ToolHandler';
 import type { HandlerContext } from './handlers/types';
 import { UtilityHandler } from './handlers/UtilityHandler';
@@ -32,29 +28,50 @@ const SILENT_COMMANDS = new Set([
 	'stopRequest',
 ]);
 
+const MAX_MESSAGE_QUEUE_SIZE = 4;
+
+type BackendSendParams = {
+	sessionId: string;
+	text: string;
+	messageID?: string;
+	model?: string;
+	agent?: string;
+	variant?: string;
+	attachments?: SendMessageAttachments;
+};
+
 export class ChatProvider implements vscode.WebviewViewProvider {
 	private view?: vscode.WebviewView;
 	private webviewDidLaunch = false;
 	private readonly deferredUiOpens: Array<'openHistory' | 'openSettings'> = [];
 	private cli: OpenCodeExecutor;
 	private settings: Settings;
-	private sessionState: SessionState;
 	private disposables: vscode.Disposable[] = [];
-	private sessionGraph = new SessionGraph();
-	private sessionManager = new SessionManager();
 
 	/** Monotonic revision for server rendezvous updates sent to the webview. */
 	private serverInfoRevision = 0;
+	private backendStatusAbort: AbortController | null = null;
+	private backendStatusRun: Promise<void> | null = null;
+	private backendStatusKey: string | null = null;
+	private readonly backendBusySessions = new Set<string>();
+	private readonly awaitingBackendBusy = new Set<string>();
+	// This backend-owned queue layer is intentionally kept in the extension.
+	// The webview-only approach looked simpler, but status/idle ordering across
+	// the SDK stream, webview runtime, and VS Code bridge caused repeat races.
+	// Keeping queue ownership next to the normalized backend lifecycle makes
+	// dequeue happen from one authority instead of several competing consumers.
+	private readonly pendingMessages = new Map<string, QueuedMessageData[]>();
+	private readonly sendingLock = new Set<string>();
+	private readonly pendingIdleDrain = new Set<string>();
+	private readonly suppressNextIdleDrain = new Set<string>();
+	private queueIdCounter = 0;
 
 	// Handlers
-	private sessionHandler: SessionHandler;
 	private settingsHandler: SettingsHandler;
 	private mcpHandler: McpHandler;
 	private providerHandler: ProviderHandler;
 	private toolHandler: ToolHandler;
 	private fileHandler: FileHandler;
-	private sseHandler: SseHandler;
-	private restoreHandler: RestoreHandler;
 	private utilityHandler: UtilityHandler;
 
 	/** Guards against duplicate syncAll calls during startup. */
@@ -68,10 +85,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		private services: ServiceRegistry,
 	) {
 		this.settings = new Settings();
-		this.sessionState = new SessionState();
 		this.cli = new OpenCodeExecutor();
-		// Wire up bridge for direct SDK event forwarding to webview
-		this.cli.setBridge(this.bridge);
 
 		// Initialize Handlers — single shared context
 		const baseContext = {
@@ -79,22 +93,31 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			settings: this.settings,
 			cli: this.cli,
 			bridge: this.bridge,
-			sessionState: this.sessionState,
-			sessionManager: this.sessionManager,
 			services: this.services,
-			sessionGraph: this.sessionGraph,
 		};
-		this.restoreHandler = new RestoreHandler(baseContext);
-
 		const handlerContext: HandlerContext = {
 			...baseContext,
 			// Lazy getter — ToolHandler is created below but the closure captures `this`
 			getPermissionPolicies: () => this.toolHandler.getPermissionPolicies(),
 			setPermissionPolicy: (category, policy) =>
 				this.toolHandler.setPermissionPolicy(category, policy),
-			getSessionAutoAccept: (sessionId: string) => this.toolHandler.isAutoAccept(sessionId),
+			getSessionAutoAccept: (sessionId: string) => this.toolHandler.isAutoAcceptAsync(sessionId),
 			getSessionAutoAcceptState: (sessionId: string) =>
 				this.toolHandler.getSessionAutoAcceptState(sessionId),
+			getParentSessionId: async (sessionId: string) => {
+				const client = this.cli.getSdkClient() as {
+					session?: {
+						get?: (input: {
+							sessionID: string;
+							directory: string;
+						}) => Promise<{ data?: { parentID?: string } }>;
+					};
+				} | null;
+				const directory = this.settings.getWorkspaceRoot();
+				if (!client?.session?.get || !directory) return undefined;
+				const result = await client.session.get({ sessionID: sessionId, directory });
+				return typeof result.data?.parentID === 'string' ? result.data.parentID : undefined;
+			},
 			clearSessionAutoAccept: (sessionId: string) =>
 				this.toolHandler.clearSessionAutoAccept(sessionId),
 			refreshAfterServerRestart: async () => {
@@ -105,68 +128,15 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			reloadOpenCodeRuntime: source => this.reloadOpenCodeRuntime(source),
 		};
 
-		this.sessionHandler = new SessionHandler(handlerContext);
 		this.settingsHandler = new SettingsHandler(handlerContext);
 		this.mcpHandler = new McpHandler(handlerContext);
 		this.providerHandler = new ProviderHandler(handlerContext);
 		this.toolHandler = new ToolHandler(handlerContext);
 		this.fileHandler = new FileHandler(handlerContext);
-		this.sseHandler = new SseHandler(handlerContext);
 		this.utilityHandler = new UtilityHandler(handlerContext);
-
-		this.services.mcpConfigWatcher.setOpenCodeReloadCallback(() =>
-			this.reloadOpenCodeRuntime('opencode-config'),
-		);
 
 		// Build declarative command router
 		this.buildRouter();
-
-		// Register permission interceptor for auto-approve logic
-		// This runs in the executor BEFORE SDK events are forwarded to the webview.
-		this.cli.setPermissionInterceptor((sessionId, props) => {
-			const request = mapPermissionRuntimePayloadToRequest(props, sessionId);
-			if (!request) return false;
-
-			let rootSessionId = sessionId;
-			while (this.sessionGraph.getParent(rootSessionId)) {
-				rootSessionId = this.sessionGraph.getParent(rootSessionId) ?? rootSessionId;
-			}
-
-			const autoRespond = (approved: boolean, alwaysAllow?: boolean) => {
-				void this.cli
-					.respondToPermission({ requestId: request.id, approved, alwaysAllow })
-					.catch(error => logger.error('[ChatProvider] permission auto-response failed:', error));
-			};
-
-			const isAutoApprove = Boolean(this.settings.get('access.autoApprove'));
-			const isAutoAccept = this.toolHandler.isAutoAccept(rootSessionId);
-			if (isAutoApprove || isAutoAccept) {
-				autoRespond(true);
-				return true;
-			}
-
-			const alwaysAllowByTool = this.toolHandler.getAlwaysAllowByTool();
-			const normalizedTool =
-				resolveToolName(request.permission) ?? request.permission.toLowerCase();
-			if (alwaysAllowByTool[normalizedTool]) {
-				autoRespond(true, true);
-				return true;
-			}
-
-			const policies = this.toolHandler.getPermissionPolicies();
-			const policyCategory = PERMISSION_CATEGORIES.includes(
-				request.permission as PermissionCategory,
-			)
-				? (request.permission as PermissionCategory)
-				: undefined;
-			const policyValue = policyCategory ? policies[policyCategory] : undefined;
-			if (policyValue === 'allow' || policyValue === 'deny') {
-				autoRespond(policyValue === 'allow');
-				return true;
-			}
-
-			return false; // Not auto-approved — forward to webview
-		});
 
 		// Single-point OpenCode initialization with retry polling
 		this.scheduleOpenCodeInit();
@@ -187,54 +157,37 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			}),
 		);
 
-		// Wire up McpConfigWatcher config change events
-		this.disposables.push(
-			this.services.mcpConfigWatcher.onConfigChanged(async e => {
-				this.bridge.data('mcpConfigReloaded', { source: e.source, timestamp: e.timestamp });
-				this.hasSynced = false;
-				await this.syncAllOrDefer(`opencode-config-${e.source}`);
-			}),
-		);
+		this.services.mcpConfigWatcher.start(async source => {
+			this.hasSynced = false;
+			await this.reloadOpenCodeRuntime(`opencode-config:${source}`);
+			await this.mcpHandler.handleMessage({ type: 'loadMCPServers' });
+			await this.syncAllOrDefer(`opencode-config-${source}`);
+		});
 
-		// Wire up ResourceWatcher — auto-refresh UI when .opencode/ resource files change
-		const resourceKindByWatcherType: Partial<Record<string, ResourceKind>> = {
-			subagents: 'agent',
-			commands: 'command',
-			skills: 'skill',
-			plugins: 'plugin',
-		};
-		this.disposables.push(
-			this.services.resourceWatcher.onResourceChanged(async e => {
-				logger.info(`[ChatProvider] Resource changed: ${e.resourceType}, refreshing UI`);
-				try {
-					await this.reloadOpenCodeRuntime(`resource:${e.resourceType}`);
-					if (e.resourceType === 'rules') {
-						await this.settingsHandler.handleMessage({ type: 'getRules' });
-						return;
-					}
-
-					const kind = resourceKindByWatcherType[e.resourceType];
-					if (!kind) return;
-					if (kind === 'agent') this.cli.clearAgentsCache?.();
-					if (kind === 'command') this.cli.clearCommandsCache?.();
-					if (kind === 'skill') this.cli.clearSkillsCache?.();
-					await this.settingsHandler.handleMessage({ type: 'getResources', kind });
-				} catch (error) {
-					logger.error(`[ChatProvider] Failed to refresh ${e.resourceType}:`, error);
-				}
-			}),
-		);
+		this.services.resourceWatcher.start(resourceType => this.handleResourceChange(resourceType));
 
 		// Keep services in sync when workspace folders change at runtime
 		this.disposables.push(
 			vscode.workspace.onDidChangeWorkspaceFolders(() => {
 				const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 				if (workspaceRoot) {
-					logger.info('[ChatProvider] Workspace folder changed, updating services');
 					this.services.setWorkspaceRoot(workspaceRoot);
+					this.restartWorkspaceWatchers();
 				}
 			}),
 		);
+	}
+
+	private restartWorkspaceWatchers(): void {
+		this.services.mcpConfigWatcher.dispose();
+		this.services.resourceWatcher.dispose();
+		this.services.mcpConfigWatcher.start(async source => {
+			this.hasSynced = false;
+			await this.reloadOpenCodeRuntime(`opencode-config:${source}`);
+			await this.mcpHandler.handleMessage({ type: 'loadMCPServers' });
+			await this.syncAllOrDefer(`opencode-config-${source}`);
+		});
+		this.services.resourceWatcher.start(resourceType => this.handleResourceChange(resourceType));
 	}
 
 	private async reloadOpenCodeRuntime(source: string): Promise<void> {
@@ -242,7 +195,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		if (!sdkClient) return;
 
 		try {
-			logger.info('[ChatProvider] Reloading OpenCode runtime', { source });
 			await sdkClient.instance.dispose();
 			this.cli.clearAgentsCache?.();
 			this.cli.clearCommandsCache?.();
@@ -250,6 +202,38 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			this.cli.clearMcpCache?.();
 		} catch (error) {
 			logger.error('[ChatProvider] Failed to reload OpenCode runtime:', { source, error });
+		}
+	}
+
+	private async handleResourceChange(
+		resourceType: 'commands' | 'skills' | 'subagents' | 'plugins' | 'rules',
+	): Promise<void> {
+		try {
+			await this.reloadOpenCodeRuntime(`resource:${resourceType}`);
+			if (resourceType === 'rules') {
+				await this.settingsHandler.handleMessage({ type: 'getRules' });
+				return;
+			}
+
+			switch (resourceType) {
+				case 'commands':
+					this.cli.clearCommandsCache?.();
+					await this.settingsHandler.handleMessage({ type: 'getResources', kind: 'command' });
+					return;
+				case 'skills':
+					this.cli.clearSkillsCache?.();
+					await this.settingsHandler.handleMessage({ type: 'getResources', kind: 'skill' });
+					return;
+				case 'subagents':
+					this.cli.clearAgentsCache?.();
+					await this.settingsHandler.handleMessage({ type: 'getResources', kind: 'agent' });
+					return;
+				case 'plugins':
+					await this.settingsHandler.handleMessage({ type: 'getResources', kind: 'plugin' });
+					return;
+			}
+		} catch (error) {
+			logger.error(`[ChatProvider] Failed to refresh ${resourceType}:`, error);
 		}
 	}
 
@@ -269,7 +253,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 		const autoStart = this.settings.get('opencode.autoStart') !== false;
 		if (!autoStart) {
-			logger.info('[ChatProvider] OpenCode autoStart is disabled');
 			return;
 		}
 
@@ -281,12 +264,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		}
 
 		// Workspace not ready yet — wait for the event instead of polling
-		logger.info('[ChatProvider] Workspace root not available, waiting for event...');
 		const disposable = vscode.workspace.onDidChangeWorkspaceFolders(() => {
 			const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 			if (workspaceRoot) {
 				disposable.dispose();
-				logger.info('[ChatProvider] Workspace root appeared via event, starting OpenCode');
 				void this.doStartOpenCode(workspaceRoot);
 			}
 		});
@@ -298,7 +279,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.services.setWorkspaceRoot(workspaceRoot);
 
 		// Skip if server is already running
-		const serverInfo = this.cli.getOpenCodeServerInfo();
+		const serverInfo = this.cli.getAdminInfo();
 		if (serverInfo?.baseUrl) {
 			logger.debug('[ChatProvider] OpenCode server already running');
 			return;
@@ -326,24 +307,18 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		};
 
 		try {
-			logger.info('[ChatProvider] Starting OpenCode server...');
-			await this.cli.start(config);
-			logger.info('[ChatProvider] OpenCode server started successfully');
+			await this.cli.ensureServer(config);
 			await this.reloadOpenCodeRuntimeOnStartup();
 
 			// Notify webview of server URL so it can establish SSE health polling
 			this.sendServerInfo(true);
-
-			// If webviewDidLaunch arrived before the server was ready, run deferred
-			// session restoration NOW — before syncAll, which can take 10-15s.
-			// Tab restoration only needs the CLI server, not providers/MCP/models.
-			await this.sessionHandler.onServerReady();
+			this.startBackendStatusBridge();
 
 			// Hydrate all UI-visible state after server connection (providers, proxy models, MCP, etc.)
 			await this.syncAllOrDefer('opencode-start');
 		} catch (error) {
 			logger.warn('[ChatProvider] Failed to start OpenCode:', error);
-			this.bridge.data('showNotification', {
+			this.bridge.showNotification({
 				notification: {
 					id: `system_notice-${Date.now()}`,
 					type: 'system_notice',
@@ -362,26 +337,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private buildRouter(): void {
 		const r = this.router;
 
-		// Session
 		r.register(
-			this.sessionHandler,
-			[
-				'createSession',
-				'switchSession',
-				'closeSession',
-				'sendMessage',
-				'stopRequest',
-				'cancelQueuedMessage',
-				'forceQueuedMessage',
-				'reorderQueue',
-				'improvePromptRequest',
-				'cancelImprovePrompt',
-				'getConversationList',
-				'loadConversation',
-				'deleteConversation',
-				'clearAllConversations',
-				'renameConversation',
-			],
+			{
+				handleMessage: msg => this.handleSessionCommand(msg),
+			},
+			['sendMessage', 'stopRequest', 'cancelQueuedMessage', 'forceQueuedMessage', 'reorderQueue'],
 			'session',
 		);
 
@@ -438,12 +398,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		r.register(
 			this.toolHandler,
 			[
-				'accessResponse',
-				'questionResponse',
-				'questionReject',
 				'getPermissions',
 				'setPermissionPolicy',
 				'setAutoAccept',
+				'setAlwaysAllowTool',
 				'checkDiscoveryStatus',
 				'getAccess',
 				'checkCLIDiagnostics',
@@ -458,12 +416,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			'file',
 		);
 
-		// SSE
-		r.register(this.sseHandler, ['sseSubscribe', 'sseClose'], 'sse');
-
-		// Restore
-		r.register(this.restoreHandler, ['restoreMessage', 'unrevert'], 'restore');
-
 		// Orchestration
 		r.register(
 			{
@@ -473,7 +425,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 						await this.sendInitialState();
 						this.flushDeferredUiOpens();
 						await this.syncAllOrDefer('webview-launch');
-						await this.sessionHandler.handleMessage(msg);
 						return;
 					}
 					await this.syncAllOrDefer('webview-syncAll');
@@ -508,27 +459,22 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private async syncAllOrDefer(source: string): Promise<void> {
 		// When called from OpenCode startup, webview might not be ready yet.
 		if (!this.view) {
-			logger.info('[ChatProvider] syncAll deferred: webview not ready', { source });
 			return;
 		}
 		// If the server isn't ready yet, defer — provider/model fetches would return
 		// empty data, leaving the UI with only the hardcoded OpenAI Compatible entry.
-		const serverReady = !!this.cli.getOpenCodeServerInfo()?.baseUrl;
+		const serverReady = !!this.cli.getAdminInfo()?.baseUrl;
 		if (!serverReady) {
-			logger.info('[ChatProvider] syncAll deferred: server not ready', { source });
 			return;
 		}
 		// Prevent duplicate syncAll during startup (opencode-start vs webview-syncAll race).
 		// Explicit webview requests ('webview-syncAll') bypass the guard so the user
 		// can recover from partial failures without reloading the panel.
 		if (this.hasSynced && source !== 'webview-syncAll') {
-			logger.debug('[ChatProvider] syncAll skipped: already synced', { source });
 			return;
 		}
 		this.hasSynced = true;
-		logger.info('[ChatProvider] syncAll started', { source });
 		await this.syncAll();
-		logger.info('[ChatProvider] syncAll finished', { source });
 	}
 
 	private async syncAll(): Promise<void> {
@@ -537,6 +483,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 		// Send server URL first so webview can establish SSE health polling immediately
 		this.sendServerInfo();
+		this.startBackendStatusBridge();
 
 		await this.providerHandler.handleMessage({ type: 'reloadAllProviders' });
 
@@ -552,12 +499,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		];
 
 		const results = await Promise.allSettled(requests);
-		const rejected = results.filter(r => r.status === 'rejected').length;
-		logger.info('[ChatProvider] syncAll requests complete', {
-			total: results.length,
-			rejected,
-			durationMs: Date.now() - startedAt,
-		});
+		void startedAt;
+		void results;
 
 		// Auto-fetch models for custom proxy endpoints so they appear in the UI
 		// after restart without requiring the user to click "Fetch" manually.
@@ -589,17 +532,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			);
 
 		if (endpointRequests.length > 0) {
-			const results = await Promise.allSettled(endpointRequests);
-			const rejected = results.filter(r => r.status === 'rejected').length;
-			logger.info('[ChatProvider] Custom endpoint model fetch complete', {
-				total: results.length,
-				rejected,
-			});
+			await Promise.allSettled(endpointRequests);
 		}
 	}
 
 	resolveWebviewView(webviewView: vscode.WebviewView): void {
-		logger.info('[ChatProvider] resolveWebviewView called - webview is now initialized');
 		this.view = webviewView;
 		this.bridge.setView({ postMessage: msg => this.postMessage(msg) });
 
@@ -630,7 +567,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 		// Null out bridge view on dispose so messages are queued, not lost
 		webviewView.onDidDispose(() => {
-			logger.info('[ChatProvider] webview disposed — nulling bridge view');
 			this.webviewDidLaunch = false;
 			this.bridge.clearView();
 		});
@@ -654,34 +590,404 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			// Don't surface file/UI operation errors as chat messages — they are not actionable for the user
 			if (SILENT_COMMANDS.has(msg.type)) return;
 
-			const errorSessionId = this.sessionState.activeSessionId;
-			if (errorSessionId) {
-				this.bridge.data('showNotification', {
-					notification: {
-						id: `error-${Date.now()}`,
-						type: 'error',
-						content: error instanceof Error ? error.message : 'Unknown error',
-						timestamp: new Date().toISOString(),
-					},
-				});
-				this.bridge.emit(errorSessionId, 'status', {
-					status: 'error',
-					statusText: 'Error',
-				});
-			} else {
-				logger.warn(
-					'[ChatProvider] Error in handleWebviewMessage but no active session to report to',
-					{
-						error: error instanceof Error ? error.message : 'Unknown error',
-					},
-				);
+			this.bridge.showNotification({
+				notification: {
+					id: `error-${Date.now()}`,
+					type: 'error',
+					content: error instanceof Error ? error.message : 'Unknown error',
+					timestamp: new Date().toISOString(),
+				},
+			});
+		}
+	}
+
+	private async handleSessionCommand(msg: WebviewCommand): Promise<void> {
+		switch (msg.type) {
+			case 'sendMessage':
+				await this.handleSendMessageCommand(msg);
+				return;
+			case 'stopRequest':
+				await this.abortSession(msg.sessionId);
+				this.forceIdleWithoutDrain(msg.sessionId, 'local.stop');
+				return;
+			case 'cancelQueuedMessage':
+				this.cancelQueuedMessage(msg.sessionId, msg.queueId);
+				return;
+			case 'forceQueuedMessage':
+				await this.forceQueuedMessage(msg.sessionId, msg.queueId);
+				return;
+			case 'reorderQueue':
+				this.reorderQueue(msg.sessionId, msg.queueIds);
+				return;
+		}
+	}
+
+	private updateQueue(
+		sessionId: string,
+		mutator: (queue: QueuedMessageData[]) => QueuedMessageData[],
+	): QueuedMessageData[] {
+		const current = this.pendingMessages.get(sessionId) ?? [];
+		const next = mutator([...current]);
+		if (next.length === 0) this.pendingMessages.delete(sessionId);
+		else this.pendingMessages.set(sessionId, next);
+		return next;
+	}
+
+	private isBackendSessionBusy(sessionId: string): boolean {
+		return this.backendBusySessions.has(sessionId) || this.sendingLock.has(sessionId);
+	}
+
+	private enqueueMessage(params: BackendSendParams): void {
+		const queue = this.pendingMessages.get(params.sessionId) ?? [];
+		if (queue.length >= MAX_MESSAGE_QUEUE_SIZE) {
+			this.bridge.showNotification({
+				notification: {
+					type: 'system_notice',
+					content: 'Message queue is full. Wait for the current response to finish.',
+					timestamp: new Date().toISOString(),
+				},
+			});
+			return;
+		}
+
+		const entry: QueuedMessageData = {
+			queueId: `q-${Date.now()}-${++this.queueIdCounter}`,
+			messageId: params.messageID,
+			sessionId: params.sessionId,
+			text: params.text,
+			model: params.model,
+			agent: params.agent,
+			variant: params.variant,
+			attachments: params.attachments,
+			queuedAt: Date.now(),
+		};
+		queue.push(entry);
+		this.pendingMessages.set(params.sessionId, queue);
+		this.bridge.queueUpdate('enqueued', params.sessionId, [...queue]);
+	}
+
+	private async handleSendMessageCommand(
+		msg: Extract<WebviewCommand, { type: 'sendMessage' }>,
+	): Promise<void> {
+		if (!msg.sessionId) return;
+		if (this.isBackendSessionBusy(msg.sessionId)) {
+			this.enqueueMessage({
+				sessionId: msg.sessionId,
+				text: msg.text,
+				messageID: msg.messageID,
+				model: msg.model,
+				agent: msg.agent,
+				variant: msg.variant,
+				attachments: msg.attachments,
+			});
+			return;
+		}
+
+		await this.sendPromptAsync({
+			sessionId: msg.sessionId,
+			text: msg.text,
+			messageID: msg.messageID,
+			model: msg.model,
+			agent: msg.agent,
+			variant: msg.variant,
+			attachments: msg.attachments,
+		});
+	}
+
+	private async sendPromptAsync(params: BackendSendParams): Promise<void> {
+		const client = this.cli.getSdkClient();
+		const admin = this.cli.getAdminInfo();
+		if (!client || !admin?.directory) {
+			throw new Error('OpenCode server is unavailable');
+		}
+
+		const messageID = params.messageID ?? generateId('msg');
+		const parsedModel = params.model ? parseModelId(params.model) : undefined;
+		const promptClient = client as typeof client & {
+			session: typeof client.session & {
+				promptAsync?: (input: {
+					sessionID: string;
+					messageID: string;
+					agent?: string;
+					variant?: string;
+					model?: { providerID: string; modelID: string };
+					parts: Record<string, unknown>[];
+				}) => Promise<{ error?: unknown }>;
+			};
+		};
+		if (!promptClient.session.promptAsync) {
+			throw new Error('Session promptAsync API unavailable');
+		}
+
+		this.sendingLock.add(params.sessionId);
+		this.suppressNextIdleDrain.delete(params.sessionId);
+		this.awaitingBackendBusy.add(params.sessionId);
+		this.sendBackendRuntimeStatus(params.sessionId, 'busy', 'local.send');
+		try {
+			const result = await promptClient.session.promptAsync({
+				sessionID: params.sessionId,
+				messageID,
+				agent: params.agent,
+				variant: params.variant,
+				...(parsedModel
+					? { model: { providerID: parsedModel.providerId, modelID: parsedModel.modelId } }
+					: {}),
+				parts: this.buildRequestParts(params),
+			});
+			if (result?.error) {
+				throw new Error(`Message send failed: ${JSON.stringify(result.error)}`);
+			}
+		} catch (error) {
+			this.awaitingBackendBusy.delete(params.sessionId);
+			this.sendBackendRuntimeStatus(params.sessionId, 'idle', 'local.error');
+			throw error;
+		} finally {
+			this.sendingLock.delete(params.sessionId);
+			if (this.pendingIdleDrain.delete(params.sessionId)) {
+				void this.processQueueOnIdle(params.sessionId);
 			}
 		}
+	}
+
+	private sendBackendRuntimeStatus(sessionId: string, status: string, reason: string): void {
+		this.bridge.data('backendRuntimeStatus', {
+			sessionId,
+			status,
+			reason,
+			timestamp: new Date().toISOString(),
+		});
+	}
+
+	private buildRequestParts(params: BackendSendParams): Record<string, unknown>[] {
+		return buildPromptParts({
+			text: params.text,
+			attachments: params.attachments,
+		}) as Record<string, unknown>[];
+	}
+
+	private cancelQueuedMessage(sessionId: string, queueId: string): void {
+		let removed: QueuedMessageData | undefined;
+		const queue = this.updateQueue(sessionId, items => {
+			const index = items.findIndex(item => item.queueId === queueId);
+			if (index >= 0) removed = items.splice(index, 1)[0];
+			return items;
+		});
+		if (!removed) return;
+		this.bridge.queueUpdate(
+			'cancelled',
+			sessionId,
+			[...queue],
+			removed.text,
+			removed.attachments?.images ? { images: removed.attachments.images } : undefined,
+			removed.agent,
+		);
+	}
+
+	private reorderQueue(sessionId: string, queueIds: string[]): void {
+		const queue = this.pendingMessages.get(sessionId);
+		if (!queue || queue.length < 2) return;
+		const byId = new Map(queue.map(item => [item.queueId, item]));
+		const reordered = queueIds
+			.map(id => byId.get(id))
+			.filter((item): item is QueuedMessageData => Boolean(item));
+		for (const item of queue) {
+			if (!queueIds.includes(item.queueId)) reordered.push(item);
+		}
+		this.updateQueue(sessionId, () => reordered);
+		this.bridge.queueUpdate('enqueued', sessionId, [...reordered]);
+	}
+
+	private async forceQueuedMessage(sessionId: string, queueId: string): Promise<void> {
+		let entry: QueuedMessageData | undefined;
+		const queue = this.updateQueue(sessionId, items => {
+			const index = items.findIndex(item => item.queueId === queueId);
+			if (index >= 0) entry = items.splice(index, 1)[0];
+			return items;
+		});
+		if (!entry) return;
+		if (this.backendBusySessions.has(sessionId)) {
+			this.suppressNextIdleDrain.add(sessionId);
+			await this.abortSession(sessionId);
+			this.forceIdleWithoutDrain(sessionId, 'local.force');
+		}
+		this.bridge.queueUpdate('dequeued', sessionId, [...queue]);
+		await this.sendPromptAsync(entry);
+	}
+
+	private async processQueueOnIdle(sessionId: string): Promise<void> {
+		if (this.sendingLock.has(sessionId)) {
+			this.pendingIdleDrain.add(sessionId);
+			return;
+		}
+		let entry: QueuedMessageData | undefined;
+		const remaining = this.updateQueue(sessionId, queue => {
+			entry = queue.shift();
+			return queue;
+		});
+		if (!entry) return;
+		this.bridge.queueUpdate('dequeued', sessionId, [...remaining]);
+		try {
+			await this.sendPromptAsync(entry);
+		} catch (error) {
+			logger.error('[ChatProvider] Failed to send queued message', error);
+			this.bridge.queueUpdate(
+				'cancelled',
+				sessionId,
+				[...remaining],
+				entry.text,
+				entry.attachments?.images ? { images: entry.attachments.images } : undefined,
+				entry.agent,
+			);
+		}
+	}
+
+	private async abortSession(sessionId: string): Promise<void> {
+		const client = this.cli.getSdkClient();
+		const admin = this.cli.getAdminInfo();
+		if (!client || !admin?.directory) return;
+		await client.session
+			.abort({ sessionID: sessionId, directory: admin.directory })
+			.catch(error => {
+				logger.debug('[ChatProvider] Abort request ignored', { sessionId, error });
+			});
+	}
+
+	private forceIdleWithoutDrain(sessionId: string, reason: string): void {
+		this.awaitingBackendBusy.delete(sessionId);
+		this.backendBusySessions.delete(sessionId);
+		this.pendingIdleDrain.delete(sessionId);
+		this.suppressNextIdleDrain.delete(sessionId);
+		this.sendBackendRuntimeStatus(sessionId, 'idle', reason);
 	}
 
 	private handleSettingsChange(): void {
 		this.settings.refresh();
 		void this.settingsHandler.handleMessage({ type: 'getSettings' });
+	}
+
+	private startBackendStatusBridge(): void {
+		const admin = this.cli.getAdminInfo();
+		if (!admin?.baseUrl || !admin.directory) return;
+
+		const nextKey = `${admin.baseUrl}::${admin.directory}`;
+		if (this.backendStatusKey === nextKey && this.backendStatusRun) return;
+
+		this.stopBackendStatusBridge();
+		this.backendStatusKey = nextKey;
+		this.backendStatusAbort = new AbortController();
+		this.backendStatusRun = this.runBackendStatusBridge(
+			admin.baseUrl,
+			admin.directory,
+			this.backendStatusAbort.signal,
+		).finally(() => {
+			this.backendStatusRun = null;
+			this.backendStatusAbort = null;
+			this.backendStatusKey = null;
+		});
+	}
+
+	private stopBackendStatusBridge(): void {
+		this.backendStatusAbort?.abort();
+		this.backendStatusAbort = null;
+		this.backendStatusRun = null;
+		this.backendStatusKey = null;
+		this.backendBusySessions.clear();
+		this.awaitingBackendBusy.clear();
+		this.pendingIdleDrain.clear();
+		this.suppressNextIdleDrain.clear();
+	}
+
+	private forwardNormalizedBackendStatus(
+		sessionId: string,
+		status: string,
+		reason: 'session.idle' | 'session.status',
+	): void {
+		if (status === 'idle') {
+			if (this.awaitingBackendBusy.has(sessionId)) return;
+			if (!this.backendBusySessions.has(sessionId)) return;
+			this.backendBusySessions.delete(sessionId);
+			const shouldDrain = !this.suppressNextIdleDrain.delete(sessionId);
+			this.sendBackendRuntimeStatus(sessionId, 'idle', reason);
+			if (shouldDrain) {
+				void this.processQueueOnIdle(sessionId);
+			}
+			return;
+		}
+
+		if (status === 'busy' || status === 'retry') {
+			this.awaitingBackendBusy.delete(sessionId);
+			this.backendBusySessions.add(sessionId);
+		}
+
+		this.sendBackendRuntimeStatus(sessionId, status, reason);
+	}
+
+	private async runBackendStatusBridge(
+		baseUrl: string,
+		directory: string,
+		signal: AbortSignal,
+	): Promise<void> {
+		const client = createOpencodeClient({ baseUrl, directory });
+
+		while (!signal.aborted) {
+			try {
+				const subscription = await client.event.subscribe(
+					{ directory },
+					{
+						signal,
+						onSseError: () => {
+							// Webview owns connection chrome; this bridge is only for backend-owned session status.
+						},
+					},
+				);
+
+				for await (const event of subscription.stream as AsyncGenerator<unknown>) {
+					if (signal.aborted) break;
+					this.forwardBackendStatusEvent(event);
+				}
+			} catch (error) {
+				if (signal.aborted) break;
+				logger.warn('[ChatProvider] Backend status bridge stream failed', {
+					baseUrl,
+					error,
+				});
+				await new Promise(resolve => setTimeout(resolve, 250));
+			}
+		}
+	}
+
+	private forwardBackendStatusEvent(event: unknown): void {
+		const payload =
+			typeof event === 'object' &&
+			event !== null &&
+			'payload' in event &&
+			typeof (event as { payload?: unknown }).payload === 'object'
+				? ((event as { payload?: unknown }).payload as Record<string, unknown>)
+				: (event as Record<string, unknown> | null);
+
+		if (!payload || typeof payload.type !== 'string' || typeof payload.properties !== 'object') {
+			return;
+		}
+
+		if (payload.type === 'session.idle') {
+			const properties = payload.properties as Record<string, unknown>;
+			const sessionId = typeof properties.sessionID === 'string' ? properties.sessionID : null;
+			if (!sessionId) return;
+			this.forwardNormalizedBackendStatus(sessionId, 'idle', 'session.idle');
+			return;
+		}
+
+		if (payload.type === 'session.status') {
+			const properties = payload.properties as Record<string, unknown>;
+			const sessionId = typeof properties.sessionID === 'string' ? properties.sessionID : null;
+			const status =
+				typeof properties.status === 'object' && properties.status !== null
+					? (properties.status as Record<string, unknown>)
+					: null;
+			const statusType = typeof status?.type === 'string' ? status.type : null;
+			if (!sessionId || !statusType) return;
+			this.forwardNormalizedBackendStatus(sessionId, statusType, 'session.status');
+		}
 	}
 
 	private async sendInitialState(): Promise<void> {
@@ -715,15 +1021,21 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		if (forceRevisionBump) {
 			this.serverInfoRevision += 1;
 		}
-		const serverInfo = this.cli.getOpenCodeServerInfo();
+		const serverInfo = this.cli.getAdminInfo();
+		const workspaceRoot = this.settings.getWorkspaceRoot() ?? '';
 		if (serverInfo?.baseUrl) {
 			this.bridge.data('serverInfo', {
 				url: serverInfo.baseUrl,
 				revision: this.serverInfoRevision,
+				workspaceRoot,
 			});
 			return;
 		}
-		this.bridge.data('serverInfo', { url: '', revision: this.serverInfoRevision });
+		this.bridge.data('serverInfo', {
+			url: '',
+			revision: this.serverInfoRevision,
+			workspaceRoot,
+		});
 	}
 
 	public postMessage(msg: unknown): void {
@@ -768,15 +1080,15 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	}
 
 	public async createSessionFromCommand(): Promise<void> {
-		await this.sessionHandler.handleMessage({ type: 'createSession' });
+		this.postMessage({ type: 'requestNewSession' });
 	}
 
 	dispose(): void {
+		this.stopBackendStatusBridge();
 		for (const disposable of this.disposables) {
 			disposable.dispose();
 		}
 		this.cli.dispose();
 		this.mcpHandler.dispose();
-		this.sseHandler.dispose();
 	}
 }

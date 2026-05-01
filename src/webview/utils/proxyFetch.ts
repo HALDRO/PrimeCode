@@ -13,6 +13,10 @@ const pendingFetches = new Map<
 		resolve: (value: Response) => void;
 		reject: (reason?: unknown) => void;
 		abortController: AbortController;
+		streamController?: ReadableStreamDefaultController<Uint8Array>;
+		chunkBuffer?: Uint8Array[];
+		streamEnded?: boolean;
+		streamError?: string;
 	}
 >();
 
@@ -26,22 +30,109 @@ const initListener = () => {
 	window.addEventListener('message', event => {
 		const message = event.data;
 		// Handle proxy fetch results
+		if (message?.type === 'proxyFetchStreamChunk') {
+			const entry = pendingFetches.get(message.id);
+			if (!entry) return;
+			const chunk = message.chunk;
+			const uint8Array =
+				chunk instanceof Uint8Array
+					? chunk
+					: chunk instanceof ArrayBuffer
+						? new Uint8Array(chunk)
+						: ArrayBuffer.isView(chunk)
+							? new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+							: Array.isArray(chunk)
+								? new Uint8Array(chunk)
+								: typeof chunk === 'string'
+									? new TextEncoder().encode(chunk)
+									: new Uint8Array();
+			if (!entry.streamController) {
+				if (!entry.chunkBuffer) {
+					entry.chunkBuffer = [];
+				}
+				entry.chunkBuffer.push(uint8Array);
+				return;
+			}
+			entry.streamController.enqueue(uint8Array);
+			return;
+		}
+
+		if (message?.type === 'proxyFetchStreamEnd') {
+			const entry = pendingFetches.get(message.id);
+			if (!entry) return;
+			if (!entry.streamController) {
+				entry.streamEnded = true;
+				return;
+			}
+			entry.streamController.close();
+			pendingFetches.delete(message.id);
+			return;
+		}
+
+		if (message?.type === 'proxyFetchStreamError') {
+			const entry = pendingFetches.get(message.id);
+			if (!entry) return;
+			const errorMessage = message.error ?? 'Proxy stream failed';
+			if (!entry.streamController) {
+				entry.streamError = errorMessage;
+				return;
+			}
+			entry.streamController.error(new Error(errorMessage));
+			pendingFetches.delete(message.id);
+			return;
+		}
+
 		if (message?.type !== 'proxyFetchResult') return;
 
-		const { id, ok, status, statusText, headers, bodyText, error } = message;
+		const { id, ok, status, statusText, headers, bodyText, error, isStream } = message;
 
 		const entry = pendingFetches.get(id);
 		if (!entry) return;
 
-		pendingFetches.delete(id);
-
 		if (!ok) {
+			pendingFetches.delete(id);
 			entry.reject(new Error(error ?? 'Proxy fetch failed'));
 			return;
 		}
 
-		// Reconstruct Response object
 		const responseHeaders = new Headers(headers ?? {});
+		if (isStream) {
+			const response = new Response(
+				new ReadableStream<Uint8Array>({
+					start(controller) {
+						entry.streamController = controller;
+						for (const chunk of entry.chunkBuffer ?? []) {
+							controller.enqueue(chunk);
+						}
+						entry.chunkBuffer = undefined;
+						if (entry.streamError) {
+							controller.error(new Error(entry.streamError));
+							pendingFetches.delete(id);
+							return;
+						}
+						if (entry.streamEnded) {
+							controller.close();
+							pendingFetches.delete(id);
+						}
+					},
+					cancel() {
+						pendingFetches.delete(id);
+						vscode.postMessage({ type: 'proxyFetchAbort', id });
+					},
+				}),
+				{
+					status,
+					statusText,
+					headers: responseHeaders,
+				},
+			);
+			entry.resolve(response);
+			return;
+		}
+
+		pendingFetches.delete(id);
+
+		// Reconstruct Response object
 		const response = new Response(bodyText, {
 			status,
 			statusText,

@@ -57,11 +57,19 @@ export class UtilityHandler implements WebviewMessageHandler {
 	private async handleProxyFetch(msg: WebviewCommand): Promise<void> {
 		if (msg.type !== 'proxyFetch') return;
 		const { id, url, options } = msg;
+		const isEventStreamRequest = url.includes('/event');
+		const isTrackedOpencodeRequest =
+			url.includes('/session/') ||
+			url.includes('/event') ||
+			url.includes('/permission') ||
+			url.includes('/question');
 
 		const controller = new AbortController();
 		this.activeRequests.set(id, controller);
 
-		const timer = setTimeout(() => controller.abort(), PROXY_FETCH_TIMEOUT_MS);
+		const timer = isEventStreamRequest
+			? null
+			: setTimeout(() => controller.abort(), PROXY_FETCH_TIMEOUT_MS);
 
 		try {
 			const response = await fetch(url, {
@@ -70,12 +78,49 @@ export class UtilityHandler implements WebviewMessageHandler {
 				body: options?.body,
 				signal: controller.signal,
 			});
-			clearTimeout(timer);
-			const bodyText = await response.text();
+			if (timer) clearTimeout(timer);
 			const headers: Record<string, string> = {};
 			response.headers.forEach((value, key) => {
 				headers[key] = value;
 			});
+
+			if (isEventStreamRequest) {
+				this.context.bridge.send({
+					type: 'proxyFetchResult',
+					id,
+					ok: response.ok,
+					status: response.status,
+					statusText: response.statusText,
+					headers,
+					isStream: true,
+				});
+
+				if (!response.ok || !response.body) {
+					this.context.bridge.send({
+						type: 'proxyFetchStreamEnd',
+						id,
+					});
+					return;
+				}
+
+				const reader = response.body.getReader();
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+					if (!value || value.length === 0) continue;
+					this.context.bridge.send({
+						type: 'proxyFetchStreamChunk',
+						id,
+						chunk: value,
+					});
+				}
+				this.context.bridge.send({
+					type: 'proxyFetchStreamEnd',
+					id,
+				});
+				return;
+			}
+			const bodyText = await response.text();
 			this.context.bridge.send({
 				type: 'proxyFetchResult',
 				id,
@@ -86,7 +131,7 @@ export class UtilityHandler implements WebviewMessageHandler {
 				bodyText,
 			});
 		} catch (error) {
-			clearTimeout(timer);
+			if (timer) clearTimeout(timer);
 			if ((error as Error).name === 'AbortError') {
 				logger.warn('[UtilityHandler] proxyFetch timed out or aborted', { id, url });
 			} else {
@@ -98,6 +143,20 @@ export class UtilityHandler implements WebviewMessageHandler {
 				ok: false,
 				error: String(error),
 			});
+			if (isEventStreamRequest) {
+				this.context.bridge.send({
+					type: 'proxyFetchStreamError',
+					id,
+					error: String(error),
+				});
+			}
+			if (isTrackedOpencodeRequest) {
+				logger.error('[UtilityHandler] proxyFetch tracked request failed', {
+					id,
+					url,
+					error,
+				});
+			}
 		} finally {
 			this.activeRequests.delete(id);
 		}

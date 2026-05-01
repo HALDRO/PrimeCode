@@ -1,6 +1,8 @@
 import type { Message, Part } from '@opencode-ai/sdk/v2/client';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { useChatStore } from '../chatStore';
+import { isSessionProcessing, useChatStore } from '../chatStore';
+import { deriveSessionView } from '../derived';
+import type { WebviewSdkEvent } from '../eventReducer';
 import { useSettingsStore } from '../settingsStore';
 
 const SESSION_ID = 'session-1';
@@ -52,27 +54,48 @@ function createUserMessageWithModel(
 	};
 }
 
+function restoreFromEvents(events: WebviewSdkEvent[]) {
+	useChatStore.getState().actions.applyBatch(events);
+}
+
 describe('chatStore restore', () => {
 	beforeEach(() => {
 		resetStore();
-		useChatStore.getState().actions.handleSessionCreated(SESSION_ID);
+		useChatStore.getState().actions.applyTabState([SESSION_ID], SESSION_ID);
 	});
 
-	it('restores canonical session messages and parts from snapshot', () => {
+	it('restores canonical session messages and parts from sdk events', () => {
 		const first = createUserMessage('msg-1', 'first');
 		const second = createUserMessage('msg-2', 'second');
 
-		useChatStore.getState().actions.handleExtensionMessage({
-			type: 'restore_session',
-			data: {
-				sessionId: SESSION_ID,
-				messages: [first.message, second.message],
-				parts: {
-					[first.message.id]: [first.part],
-					[second.message.id]: [second.part],
+		restoreFromEvents([
+			{
+				type: 'message.updated',
+				properties: {
+					sessionID: SESSION_ID,
+					info: first.message,
 				},
-			},
-		});
+			} as never,
+			{
+				type: 'message.part.updated',
+				properties: {
+					part: first.part,
+				},
+			} as never,
+			{
+				type: 'message.updated',
+				properties: {
+					sessionID: SESSION_ID,
+					info: second.message,
+				},
+			} as never,
+			{
+				type: 'message.part.updated',
+				properties: {
+					part: second.part,
+				},
+			} as never,
+		]);
 
 		const state = useChatStore.getState();
 		expect(state.messages[SESSION_ID].map(message => message.id)).toEqual(['msg-1', 'msg-2']);
@@ -90,13 +113,23 @@ describe('chatStore restore', () => {
 			modelID: 'gpt-5',
 		});
 
-		useChatStore.getState().actions.restoreSession(SESSION_ID, {
-			messages: [first.message, second.message],
-			parts: {
-				[first.message.id]: [first.part],
-				[second.message.id]: [second.part],
-			},
-		});
+		restoreFromEvents([
+			{
+				type: 'message.updated',
+				properties: {
+					sessionID: SESSION_ID,
+					info: first.message,
+				},
+			} as never,
+			{
+				type: 'message.updated',
+				properties: {
+					sessionID: SESSION_ID,
+					info: second.message,
+				},
+			} as never,
+		]);
+		useChatStore.getState().actions.updateSessionModel('openai/gpt-5', SESSION_ID);
 
 		expect(useChatStore.getState().sessionModel[SESSION_ID]).toBe('openai/gpt-5');
 	});
@@ -105,7 +138,7 @@ describe('chatStore restore', () => {
 		useSettingsStore.getState().actions.setLastSelectedModel('anthropic/claude-sonnet-4');
 		useChatStore.getState().actions.updateSessionModel('openai/gpt-5', SESSION_ID);
 
-		useChatStore.getState().actions.handleSessionCreated('session-2');
+		useChatStore.getState().actions.applyTabState([SESSION_ID, 'session-2'], 'session-2');
 
 		const state = useChatStore.getState();
 		expect(state.activeSessionId).toBe('session-2');
@@ -118,7 +151,7 @@ describe('chatStore restore', () => {
 		useChatStore.getState().actions.updateSessionModel('openai/gpt-5', SESSION_ID);
 		useSettingsStore.getState().actions.setLastSelectedModel('openai/gpt-5');
 
-		useChatStore.getState().actions.handleSessionCreated('session-2');
+		useChatStore.getState().actions.applyTabState([SESSION_ID, 'session-2'], 'session-2');
 
 		const state = useChatStore.getState();
 		expect(state.sessionModel[SESSION_ID]).toBe('openai/gpt-5');
@@ -145,12 +178,21 @@ describe('chatStore restore', () => {
 		useSettingsStore.getState().actions.setLastSelectedModel('openai/gpt-5');
 		const first = createUserMessage('msg-1', 'first');
 
-		useChatStore.getState().actions.restoreSession(SESSION_ID, {
-			messages: [first.message],
-			parts: {
-				[first.message.id]: [first.part],
-			},
-		});
+		restoreFromEvents([
+			{
+				type: 'message.updated',
+				properties: {
+					sessionID: SESSION_ID,
+					info: first.message,
+				},
+			} as never,
+			{
+				type: 'message.part.updated',
+				properties: {
+					part: first.part,
+				},
+			} as never,
+		]);
 
 		expect(useChatStore.getState().sessionModel[SESSION_ID]).toBe('openai/gpt-5');
 	});
@@ -159,13 +201,34 @@ describe('chatStore restore', () => {
 		const first = createUserMessage('msg-1', 'first');
 		const second = createUserMessage('msg-2', 'second');
 
-		useChatStore.getState().actions.restoreSession(SESSION_ID, {
-			messages: [first.message, second.message],
-			parts: {
-				[first.message.id]: [first.part],
-				[second.message.id]: [second.part],
-			},
-		});
+		restoreFromEvents([
+			{
+				type: 'message.updated',
+				properties: {
+					sessionID: SESSION_ID,
+					info: first.message,
+				},
+			} as never,
+			{
+				type: 'message.part.updated',
+				properties: {
+					part: first.part,
+				},
+			} as never,
+			{
+				type: 'message.updated',
+				properties: {
+					sessionID: SESSION_ID,
+					info: second.message,
+				},
+			} as never,
+			{
+				type: 'message.part.updated',
+				properties: {
+					part: second.part,
+				},
+			} as never,
+		]);
 		useChatStore.getState().actions.applyEvent({
 			type: 'message.removed',
 			properties: {
@@ -176,6 +239,205 @@ describe('chatStore restore', () => {
 		const state = useChatStore.getState();
 		expect(state.messages[SESSION_ID].map(message => message.id)).toEqual(['msg-1']);
 		expect(state.parts['msg-2']).toBeUndefined();
+	});
+
+	it('maps server revert marker to the previous visible user turn', () => {
+		const first = createUserMessage('msg-1', 'first');
+		const second = createUserMessage('msg-2', 'second');
+		const third = createUserMessage('msg-3', 'third');
+
+		restoreFromEvents([
+			{
+				type: 'message.updated',
+				properties: { sessionID: SESSION_ID, info: first.message },
+			} as never,
+			{
+				type: 'message.part.updated',
+				properties: { part: first.part },
+			} as never,
+			{
+				type: 'message.updated',
+				properties: { sessionID: SESSION_ID, info: second.message },
+			} as never,
+			{
+				type: 'message.part.updated',
+				properties: { part: second.part },
+			} as never,
+			{
+				type: 'message.updated',
+				properties: { sessionID: SESSION_ID, info: third.message },
+			} as never,
+			{
+				type: 'message.part.updated',
+				properties: { part: third.part },
+			} as never,
+		]);
+
+		useChatStore.setState(state => ({
+			...state,
+			sessions: [
+				{
+					id: SESSION_ID,
+					revert: { messageID: 'msg-3' },
+				} as never,
+			],
+		}));
+
+		const view = deriveSessionView(useChatStore.getState(), SESSION_ID);
+		expect(view.sections).toHaveLength(3);
+		expect(view.sections[1].isRevertPoint).toBe(true);
+		expect(view.sections[1].isReverted).toBe(true);
+		expect(view.sections[2].isReverted).toBe(true);
+		expect(view.sections[2].isRevertPoint).toBe(false);
+	});
+
+	it('allows follow-up send immediately after local revert state switches session back to idle', () => {
+		useChatStore.setState(state => ({
+			...state,
+			sessionStatus: {
+				...state.sessionStatus,
+				[SESSION_ID]: { type: 'busy' },
+			},
+			sessions: [{ id: SESSION_ID, revert: { messageID: 'msg-2' } } as never],
+		}));
+
+		useChatStore.setState(state => ({
+			...state,
+			sessionStatus: {
+				...state.sessionStatus,
+				[SESSION_ID]: { type: 'idle' },
+			},
+			sessions: [{ id: SESSION_ID, revert: { messageID: 'msg-3' } } as never],
+		}));
+
+		expect(useChatStore.getState().sessionStatus[SESSION_ID]).toEqual({ type: 'idle' });
+		expect(useChatStore.getState().sessions[0]?.revert).toEqual({ messageID: 'msg-3' });
+	});
+
+	it('clears session input independently from optimistic message application', () => {
+		useChatStore.getState().actions.updateSessionInput('draft text', SESSION_ID);
+
+		const optimistic = createUserMessage('msg-optimistic', 'draft text');
+		useChatStore.getState().actions.addOptimisticMessage({
+			sessionId: SESSION_ID,
+			message: optimistic.message,
+			parts: [optimistic.part],
+		});
+		useChatStore.getState().actions.updateSessionInput('', SESSION_ID);
+
+		const state = useChatStore.getState();
+		expect(state.sessionInput[SESSION_ID]).toBe('');
+		expect(state.messages[SESSION_ID].some(message => message.id === 'msg-optimistic')).toBe(true);
+	});
+
+	it('keeps revert marker stable across repeated local edit-send preparations', () => {
+		useChatStore.setState(state => ({
+			...state,
+			sessions: [{ id: SESSION_ID, revert: { messageID: 'msg-3' } } as never],
+			sessionStatus: { ...state.sessionStatus, [SESSION_ID]: { type: 'idle' } },
+		}));
+
+		useChatStore.setState(state => ({
+			...state,
+			sessions: [{ id: SESSION_ID, revert: { messageID: 'msg-3' } } as never],
+			sessionStatus: { ...state.sessionStatus, [SESSION_ID]: { type: 'idle' } },
+		}));
+
+		expect(useChatStore.getState().sessions[0]?.revert).toEqual({ messageID: 'msg-3' });
+		expect(useChatStore.getState().sessionStatus[SESSION_ID]).toEqual({ type: 'idle' });
+	});
+
+	it('only treats the latest assistant message as processing', () => {
+		const olderAssistant = {
+			id: 'a-old',
+			sessionID: SESSION_ID,
+			role: 'assistant',
+			parentID: 'u1',
+			tokens: { input: 0, output: 0, reasoning: 0, total: 0, cache: { read: 0, write: 0 } },
+			cost: 0,
+			time: { created: Date.now() },
+		} as unknown as Message;
+		const newerAssistant = {
+			id: 'a-new',
+			sessionID: SESSION_ID,
+			role: 'assistant',
+			parentID: 'u2',
+			tokens: { input: 0, output: 0, reasoning: 0, total: 0, cache: { read: 0, write: 0 } },
+			cost: 0,
+			time: { created: Date.now(), completed: Date.now() + 1 },
+		} as unknown as Message;
+
+		restoreFromEvents([
+			{
+				type: 'message.updated',
+				properties: { sessionID: SESSION_ID, info: olderAssistant },
+			} as never,
+			{
+				type: 'message.updated',
+				properties: { sessionID: SESSION_ID, info: newerAssistant },
+			} as never,
+		]);
+
+		expect(isSessionProcessing(useChatStore.getState(), SESSION_ID)).toBe(false);
+	});
+
+	it('optimistically truncates stale tail messages during edit flow', () => {
+		const first = createUserMessage('msg-1', 'first');
+		const second = createUserMessage('msg-2', 'second');
+		const third = createUserMessage('msg-3', 'third');
+
+		restoreFromEvents([
+			{
+				type: 'message.updated',
+				properties: { sessionID: SESSION_ID, info: first.message },
+			} as never,
+			{ type: 'message.part.updated', properties: { part: first.part } } as never,
+			{
+				type: 'message.updated',
+				properties: { sessionID: SESSION_ID, info: second.message },
+			} as never,
+			{ type: 'message.part.updated', properties: { part: second.part } } as never,
+			{
+				type: 'message.updated',
+				properties: { sessionID: SESSION_ID, info: third.message },
+			} as never,
+			{ type: 'message.part.updated', properties: { part: third.part } } as never,
+		]);
+
+		useChatStore.getState().actions.truncateSessionMessages(SESSION_ID, 'msg-2', true);
+
+		const state = useChatStore.getState();
+		expect(state.messages[SESSION_ID].map(message => message.id)).toEqual(['msg-1']);
+		expect(state.parts['msg-2']).toBeUndefined();
+		expect(state.parts['msg-3']).toBeUndefined();
+	});
+
+	it('clears stale session model when truncation removes the only model-bearing user message', () => {
+		const first = createUserMessage('msg-1', 'first');
+		const second = createUserMessage('msg-2', 'second');
+		(second.message as Record<string, unknown>).model = {
+			providerID: 'openai',
+			modelID: 'gpt-5',
+		};
+
+		restoreFromEvents([
+			{
+				type: 'message.updated',
+				properties: { sessionID: SESSION_ID, info: first.message },
+			} as never,
+			{ type: 'message.part.updated', properties: { part: first.part } } as never,
+			{
+				type: 'message.updated',
+				properties: { sessionID: SESSION_ID, info: second.message },
+			} as never,
+			{ type: 'message.part.updated', properties: { part: second.part } } as never,
+		]);
+
+		expect(useChatStore.getState().sessionModel[SESSION_ID]).toBe('openai/gpt-5');
+
+		useChatStore.getState().actions.truncateSessionMessages(SESSION_ID, 'msg-1', false);
+
+		expect(useChatStore.getState().sessionModel[SESSION_ID]).toBeUndefined();
 	});
 
 	it('keeps accumulated streaming text when stale part updates arrive in the same batch', () => {
@@ -197,13 +459,34 @@ describe('chatStore restore', () => {
 			text: 'Hello',
 		} as Part;
 
-		useChatStore.getState().actions.restoreSession(SESSION_ID, {
-			messages: [userMessage.message, assistantMessage],
-			parts: {
-				[userMessage.message.id]: [userMessage.part],
-				[assistantMessage.id]: [assistantPart],
-			},
-		});
+		restoreFromEvents([
+			{
+				type: 'message.updated',
+				properties: {
+					sessionID: SESSION_ID,
+					info: userMessage.message,
+				},
+			} as never,
+			{
+				type: 'message.part.updated',
+				properties: {
+					part: userMessage.part,
+				},
+			} as never,
+			{
+				type: 'message.updated',
+				properties: {
+					sessionID: SESSION_ID,
+					info: assistantMessage,
+				},
+			} as never,
+			{
+				type: 'message.part.updated',
+				properties: {
+					part: assistantPart,
+				},
+			} as never,
+		]);
 
 		useChatStore.getState().actions.applyBatch([
 			{
@@ -240,15 +523,15 @@ describe('chatStore restore', () => {
 
 		const state = useChatStore.getState();
 		expect(state.parts[assistantMessage.id][0]).toMatchObject({ text: 'Hello world!' });
-		const node = state.materializedViews[SESSION_ID].nodesById['msg-msg-live-text'];
+		const node = deriveSessionView(state, SESSION_ID).nodesById['msg-msg-live-text'];
 		expect(node).toMatchObject({ kind: 'assistant', content: 'Hello world!' });
 	});
 });
 
-describe('chatStore materialized view streaming', () => {
+describe('chatStore derived view streaming', () => {
 	beforeEach(() => {
 		resetStore();
-		useChatStore.getState().actions.handleSessionCreated(SESSION_ID);
+		useChatStore.getState().actions.applyTabState([SESSION_ID], SESSION_ID);
 	});
 
 	function setupAssistantStreaming() {
@@ -276,16 +559,34 @@ describe('chatStore materialized view streaming', () => {
 			text: 'Hello',
 		} as unknown as Part;
 
-		useChatStore.getState().actions.restoreSession(SESSION_ID, {
-			messages: [userMsg, asstMsg],
-			parts: { a1: [textPart] },
-		});
+		restoreFromEvents([
+			{
+				type: 'message.updated',
+				properties: {
+					sessionID: SESSION_ID,
+					info: userMsg,
+				},
+			} as never,
+			{
+				type: 'message.updated',
+				properties: {
+					sessionID: SESSION_ID,
+					info: asstMsg,
+				},
+			} as never,
+			{
+				type: 'message.part.updated',
+				properties: {
+					part: textPart,
+				},
+			} as never,
+		]);
 		return useChatStore.getState();
 	}
 
-	it('creates materialized view on restoreSession', () => {
+	it('creates derived view from restore event batches', () => {
 		const state = setupAssistantStreaming();
-		const view = state.materializedViews[SESSION_ID];
+		const view = deriveSessionView(state, SESSION_ID);
 		expect(view).toBeDefined();
 		expect(view.nodeIds.length).toBe(2); // user + assistant
 		const asstNode = view.nodesById['msg-p1'];
@@ -296,7 +597,7 @@ describe('chatStore materialized view streaming', () => {
 		}
 	});
 
-	it('updates materialized view content on applyEvent delta', () => {
+	it('updates derived view content on applyEvent delta', () => {
 		setupAssistantStreaming();
 
 		useChatStore.getState().actions.applyEvent({
@@ -311,7 +612,7 @@ describe('chatStore materialized view streaming', () => {
 		} as never);
 
 		const state = useChatStore.getState();
-		const view = state.materializedViews[SESSION_ID];
+		const view = deriveSessionView(state, SESSION_ID);
 		expect(view).toBeDefined();
 		const asstNode = view.nodesById['msg-p1'];
 		expect(asstNode.kind).toBe('assistant');
@@ -320,7 +621,7 @@ describe('chatStore materialized view streaming', () => {
 		}
 	});
 
-	it('updates materialized view content on applyBatch delta', () => {
+	it('updates derived view content on applyBatch delta', () => {
 		setupAssistantStreaming();
 
 		useChatStore.getState().actions.applyBatch([
@@ -347,20 +648,18 @@ describe('chatStore materialized view streaming', () => {
 		]);
 
 		const state = useChatStore.getState();
-		const view = state.materializedViews[SESSION_ID];
+		const view = deriveSessionView(state, SESSION_ID);
 		expect(view).toBeDefined();
 		const asstNode = view.nodesById['msg-p1'];
 		expect(asstNode.kind).toBe('assistant');
 		if (asstNode.kind === 'assistant') {
 			expect(asstNode.content).toBe('Hello world!');
 		}
-		// Should be incremental (not structural)
-		expect(view.lastUpdateWasStructural).toBe(false);
 	});
 
-	it('materialized view version increments on each delta', () => {
+	it('recomputes derived view after each delta', () => {
 		setupAssistantStreaming();
-		const v1 = useChatStore.getState().materializedViews[SESSION_ID].version;
+		const before = deriveSessionView(useChatStore.getState(), SESSION_ID);
 
 		useChatStore.getState().actions.applyEvent({
 			type: 'message.part.delta',
@@ -373,11 +672,12 @@ describe('chatStore materialized view streaming', () => {
 			},
 		} as never);
 
-		const v2 = useChatStore.getState().materializedViews[SESSION_ID].version;
-		expect(v2).toBeGreaterThan(v1);
+		const after = deriveSessionView(useChatStore.getState(), SESSION_ID);
+		expect(after.nodesById['msg-p1']).toMatchObject({ kind: 'assistant', content: 'Hello!' });
+		expect(after).not.toBe(before);
 	});
 
-	it('rebuilds cached materialized sections when MCP server names change', () => {
+	it('re-groups sections when MCP server names change', () => {
 		const userMsg: Message = {
 			id: 'u1',
 			sessionID: SESSION_ID,
@@ -403,17 +703,35 @@ describe('chatStore materialized view streaming', () => {
 			state: { status: 'completed', input: {}, output: 'done' },
 		} as unknown as Part;
 
-		useChatStore.getState().actions.restoreSession(SESSION_ID, {
-			messages: [userMsg, asstMsg],
-			parts: { a1: [toolPart] },
-		});
-		const before = useChatStore.getState().materializedViews[SESSION_ID];
+		restoreFromEvents([
+			{
+				type: 'message.updated',
+				properties: {
+					sessionID: SESSION_ID,
+					info: userMsg,
+				},
+			} as never,
+			{
+				type: 'message.updated',
+				properties: {
+					sessionID: SESSION_ID,
+					info: asstMsg,
+				},
+			} as never,
+			{
+				type: 'message.part.updated',
+				properties: {
+					part: toolPart,
+				},
+			} as never,
+		]);
+		const before = deriveSessionView(useChatStore.getState(), SESSION_ID, []);
 
 		useSettingsStore.getState().actions.setMcpServers({ mcp: { type: 'local', command: 'node' } });
 
-		const after = useChatStore.getState().materializedViews[SESSION_ID];
+		const after = deriveSessionView(useChatStore.getState(), SESSION_ID, ['mcp']);
 		expect(after).toBeDefined();
-		expect(after.version).toBeGreaterThan(before.version);
-		expect(after.lastUpdateWasStructural).toBe(true);
+		expect(after.sections.length).toBeGreaterThan(0);
+		expect(after).not.toBe(before);
 	});
 });

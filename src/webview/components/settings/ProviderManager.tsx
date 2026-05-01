@@ -172,19 +172,13 @@ export const ProviderManager: React.FC = () => {
 	const isOpenCodeCLI = cliProvider === 'opencode';
 
 	useEffect(() => {
-		if (isOpenCodeCLI) {
-			postMessage({ type: 'syncAll' });
-		}
-	}, [postMessage, isOpenCodeCLI]);
-
-	useEffect(() => {
 		if (providerAuthState?.success && !providerAuthState.isLoading) {
 			const timer = setTimeout(() => {
 				setExpandedProvider(null);
 				setEditingApiKey(null);
 				setEditApiKeyInput('');
 				setProviderAuthState(null);
-				postMessage({ type: 'syncAll' });
+				postMessage({ type: 'reloadAllProviders' });
 			}, 1000);
 			return () => clearTimeout(timer);
 		}
@@ -268,7 +262,7 @@ export const ProviderManager: React.FC = () => {
 	};
 
 	const handleRefresh = () => {
-		postMessage({ type: 'syncAll' });
+		postMessage({ type: 'reloadAllProviders' });
 	};
 
 	const persistProxyEndpoints = (

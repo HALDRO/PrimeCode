@@ -1,11 +1,3 @@
-/**
- * @file ResourceWatcherService
- * @description Watches `.opencode/`, `.claude/skills/`, and `.agents/skills/` resource directories
- *              for file changes and emits events so the UI auto-refreshes.
- *              Analogous to McpConfigWatcherService but for resource files.
- *              Debounces rapid changes to avoid excessive reloads.
- */
-
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { PATHS } from '../common/constants';
@@ -15,11 +7,7 @@ import {
 	getGlobalClaudeDir,
 	getGlobalOpenCodeDir,
 } from './opencode/OpenCodeConfigService';
-import type { ResourceService, ResourceType } from './ResourceService';
-
-// =============================================================================
-// Constants
-// =============================================================================
+import type { ResourceType } from './ResourceService';
 
 const DEBOUNCE_MS = 300;
 
@@ -39,38 +27,16 @@ const OPENCODE_RESOURCE_SPECS = [
 
 const COMPATIBLE_SKILL_DIRS = ['.claude/skills', '.agents/skills'] as const;
 
-// =============================================================================
-// Types
-// =============================================================================
-
-export interface ResourceChangeEvent {
-	resourceType: ResourceType | 'plugins' | 'rules';
-	timestamp: number;
-}
-
-// =============================================================================
-// ResourceWatcherService
-// =============================================================================
+type WatchedResourceType = ResourceType | 'plugins' | 'rules';
 
 export class ResourceWatcherService implements vscode.Disposable {
-	private _disposables: vscode.Disposable[] = [];
-	private _debounceTimers = new Map<
-		ResourceType | 'plugins' | 'rules',
-		ReturnType<typeof setTimeout>
-	>();
-	private _started = false;
+	private disposables: vscode.Disposable[] = [];
+	private debounceTimers = new Map<WatchedResourceType, ReturnType<typeof setTimeout>>();
 
-	private readonly _onResourceChanged = new vscode.EventEmitter<ResourceChangeEvent>();
-	public readonly onResourceChanged = this._onResourceChanged.event;
-
-	constructor(readonly _resourceService: ResourceService) {}
-
-	// =========================================================================
-	// Lifecycle
-	// =========================================================================
-
-	public start(): void {
-		if (this._started) return;
+	public start(
+		onResourceChanged: (resourceType: WatchedResourceType) => Promise<void> | void,
+	): void {
+		if (this.disposables.length > 0) return;
 
 		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 		if (!workspaceRoot) {
@@ -78,104 +44,111 @@ export class ResourceWatcherService implements vscode.Disposable {
 			return;
 		}
 
-		this._registerProjectWatchers(workspaceRoot);
-		this._registerGlobalWatchers();
-
-		this._started = true;
-		logger.info(
-			'[ResourceWatcherService] Started watching project and global resource directories',
-		);
+		this.registerProjectWatchers(workspaceRoot, onResourceChanged);
+		this.registerGlobalWatchers(onResourceChanged);
 	}
 
 	public dispose(): void {
-		for (const timer of this._debounceTimers.values()) {
+		for (const timer of this.debounceTimers.values()) {
 			clearTimeout(timer);
 		}
-		this._debounceTimers.clear();
+		this.debounceTimers.clear();
 
-		for (const d of this._disposables) {
+		for (const d of this.disposables) {
 			d.dispose();
 		}
-		this._disposables = [];
-		this._started = false;
-
-		this._onResourceChanged.dispose();
+		this.disposables = [];
 		logger.info('[ResourceWatcherService] Disposed');
 	}
 
-	// =========================================================================
-	// Private
-	// =========================================================================
-
-	private _registerProjectWatchers(workspaceRoot: string): void {
-		this._registerOpenCodeResourceWatchers(path.join(workspaceRoot, PATHS.OPENCODE_DIR));
-		this._registerInstructionWatchers(workspaceRoot, PROJECT_INSTRUCTION_FILES);
+	private registerProjectWatchers(
+		workspaceRoot: string,
+		onResourceChanged: (resourceType: WatchedResourceType) => Promise<void> | void,
+	): void {
+		this.registerOpenCodeResourceWatchers(
+			path.join(workspaceRoot, PATHS.OPENCODE_DIR),
+			onResourceChanged,
+		);
+		this.registerInstructionWatchers(workspaceRoot, PROJECT_INSTRUCTION_FILES, onResourceChanged);
 
 		for (const compatibleDir of COMPATIBLE_SKILL_DIRS) {
-			this._watchPattern(workspaceRoot, `${compatibleDir}/**/SKILL.md`, 'skills');
+			this.watchPattern(workspaceRoot, `${compatibleDir}/**/SKILL.md`, 'skills', onResourceChanged);
 		}
 	}
 
-	private _registerGlobalWatchers(): void {
+	private registerGlobalWatchers(
+		onResourceChanged: (resourceType: WatchedResourceType) => Promise<void> | void,
+	): void {
 		const globalOpenCodeDir = getGlobalOpenCodeDir();
 		if (globalOpenCodeDir) {
-			this._registerOpenCodeResourceWatchers(globalOpenCodeDir);
-			this._registerInstructionWatchers(globalOpenCodeDir, ['AGENTS.md']);
+			this.registerOpenCodeResourceWatchers(globalOpenCodeDir, onResourceChanged);
+			this.registerInstructionWatchers(globalOpenCodeDir, ['AGENTS.md'], onResourceChanged);
 		}
 
 		const globalClaudeDir = getGlobalClaudeDir();
 		if (globalClaudeDir) {
-			this._watchPattern(globalClaudeDir, 'skills/**/SKILL.md', 'skills');
-			this._registerInstructionWatchers(globalClaudeDir, GLOBAL_CLAUDE_INSTRUCTION_FILES);
+			this.watchPattern(globalClaudeDir, 'skills/**/SKILL.md', 'skills', onResourceChanged);
+			this.registerInstructionWatchers(
+				globalClaudeDir,
+				GLOBAL_CLAUDE_INSTRUCTION_FILES,
+				onResourceChanged,
+			);
 		}
 
 		const globalAgentsDir = getGlobalAgentsDir();
 		if (globalAgentsDir) {
-			this._watchPattern(globalAgentsDir, 'skills/**/SKILL.md', 'skills');
+			this.watchPattern(globalAgentsDir, 'skills/**/SKILL.md', 'skills', onResourceChanged);
 		}
 	}
 
-	private _registerOpenCodeResourceWatchers(configDir: string): void {
+	private registerOpenCodeResourceWatchers(
+		configDir: string,
+		onResourceChanged: (resourceType: WatchedResourceType) => Promise<void> | void,
+	): void {
 		for (const spec of OPENCODE_RESOURCE_SPECS) {
 			for (const dir of spec.dirs) {
-				this._watchPattern(configDir, `${dir}/${spec.pattern}`, spec.type);
+				this.watchPattern(configDir, `${dir}/${spec.pattern}`, spec.type, onResourceChanged);
 			}
 		}
 	}
 
-	private _registerInstructionWatchers(
+	private registerInstructionWatchers(
 		basePath: string,
 		files: readonly (typeof PROJECT_INSTRUCTION_FILES)[number][],
+		onResourceChanged: (resourceType: WatchedResourceType) => Promise<void> | void,
 	): void {
 		for (const file of files) {
-			this._watchPattern(basePath, file, 'rules');
+			this.watchPattern(basePath, file, 'rules', onResourceChanged);
 		}
 	}
 
-	private _watchPattern(
+	private watchPattern(
 		basePath: string,
 		pattern: string,
-		type: ResourceType | 'plugins' | 'rules',
+		type: WatchedResourceType,
+		onResourceChanged: (resourceType: WatchedResourceType) => Promise<void> | void,
 	): void {
 		const watcher = vscode.workspace.createFileSystemWatcher(
 			new vscode.RelativePattern(basePath, pattern),
 		);
-		watcher.onDidCreate(() => this._scheduleReload(type));
-		watcher.onDidChange(() => this._scheduleReload(type));
-		watcher.onDidDelete(() => this._scheduleReload(type));
-		this._disposables.push(watcher);
+		watcher.onDidCreate(() => this.scheduleReload(type, onResourceChanged));
+		watcher.onDidChange(() => this.scheduleReload(type, onResourceChanged));
+		watcher.onDidDelete(() => this.scheduleReload(type, onResourceChanged));
+		this.disposables.push(watcher);
 	}
 
-	private _scheduleReload(type: ResourceType | 'plugins' | 'rules'): void {
-		const existing = this._debounceTimers.get(type);
+	private scheduleReload(
+		type: WatchedResourceType,
+		onResourceChanged: (resourceType: WatchedResourceType) => Promise<void> | void,
+	): void {
+		const existing = this.debounceTimers.get(type);
 		if (existing) clearTimeout(existing);
 
-		this._debounceTimers.set(
+		this.debounceTimers.set(
 			type,
 			setTimeout(() => {
-				this._debounceTimers.delete(type);
-				logger.info(`[ResourceWatcherService] Resource changed: ${type}`);
-				this._onResourceChanged.fire({ resourceType: type, timestamp: Date.now() });
+				this.debounceTimers.delete(type);
+				void onResourceChanged(type);
 			}, DEBOUNCE_MS),
 		);
 	}

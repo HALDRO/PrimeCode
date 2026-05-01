@@ -2,20 +2,18 @@
  * @file OutboundBridge
  * @description Typed facade for all Extension → Webview messages.
  *              Replaces raw `view.postMessage({...})` calls scattered across handlers
- *              with a single, type-safe API surface. Handlers call `bridge.emit()`
- *              instead of manually assembling SessionEventMessage objects.
+ *              with a single, type-safe API surface.
  *
  *              This is the ONLY place that touches `view.postMessage()`.
  */
 
 import type {
-	PermissionPolicies,
-	SessionEventMessage,
-	SessionEventPayload,
-	SessionEventType,
-	SessionLifecycleMessage,
+	QueuedMessageData,
+	QueueEventMessage,
+	SendMessageAttachments,
+	ShowNotificationMessage,
+	TabStateMessage,
 } from '../common';
-import type { NormalizedEntry } from '../common/normalizedTypes';
 import type { IView } from '../core/contracts';
 import { logger } from '../utils/logger';
 
@@ -28,11 +26,6 @@ export class OutboundBridge {
 
 	private _view: IView | null = null;
 	private _queue: unknown[] = [];
-	/**
-	 * When non-null, send() collects session_event messages here instead of posting them.
-	 * Used to batch large session event bursts into a single postMessage.
-	 */
-	private _collectBuffer: unknown[] | null = null;
 
 	/** Wire up the actual webview. Called once from ChatProvider.resolveWebviewView(). */
 	public setView(view: IView): void {
@@ -55,11 +48,6 @@ export class OutboundBridge {
 	// =========================================================================
 
 	public send(msg: unknown): void {
-		const msgType = (msg as { type?: string })?.type;
-		if (this._collectBuffer !== null && msgType === 'session_event') {
-			this._collectBuffer.push(msg);
-			return;
-		}
 		if (!this._view) {
 			if (this._queue.length >= OutboundBridge.MAX_QUEUE_SIZE) {
 				logger.warn('[OutboundBridge] Queue full, dropping oldest message', {
@@ -67,70 +55,15 @@ export class OutboundBridge {
 				});
 				this._queue.shift();
 			}
-			logger.debug('[OutboundBridge] view not ready, queuing message', {
-				type: msgType,
-				queueSize: this._queue.length,
-			});
 			this._queue.push(msg);
 			return;
 		}
-		if (msgType !== 'session_event') {
-			logger.trace('[OutboundBridge] send', { type: msgType });
-		}
 		this._view.postMessage(msg);
-	}
-
-	/**
-	 * Start collecting session_event messages instead of sending them immediately.
-	 * Call flushCollected() to send all collected messages as a single batch.
-	 * Used to reduce postMessage overhead during large session updates.
-	 */
-	public startCollect(): void {
-		this._collectBuffer = [];
-	}
-
-	/**
-	 * Flush all collected session_event messages as a single batch.
-	 * Falls back to individual sends if no messages were collected.
-	 */
-	public flushCollected(): void {
-		const buffer = this._collectBuffer;
-		this._collectBuffer = null;
-		if (!buffer || buffer.length === 0) return;
-		this.sendBatch(buffer);
-	}
-
-	/**
-	 * Send multiple messages as a single batch to reduce postMessage overhead.
-	 * Used to avoid hundreds of individual postMessage calls.
-	 * The webview unpacks the batch and processes each message individually.
-	 */
-	public sendBatch(messages: unknown[]): void {
-		if (messages.length === 0) return;
-		if (messages.length === 1) {
-			this.send(messages[0]);
-			return;
-		}
-		const batchMsg = { type: 'session_event_batch', messages };
-		if (!this._view) {
-			logger.debug('[OutboundBridge] view not ready, queuing batch', {
-				count: messages.length,
-				queueSize: this._queue.length,
-			});
-			// Route through send() to enforce MAX_QUEUE_SIZE limit
-			for (const msg of messages) {
-				this.send(msg);
-			}
-			return;
-		}
-		logger.info(`[OutboundBridge] sendBatch: ${messages.length} messages`);
-		this._view.postMessage(batchMsg);
 	}
 
 	/** Flush queued messages after webview connects. */
 	private flush(): void {
 		if (!this._view || this._queue.length === 0) return;
-		logger.info(`[OutboundBridge] Flushing ${this._queue.length} queued messages`);
 		const pending = this._queue;
 		this._queue = [];
 		for (const msg of pending) {
@@ -138,106 +71,16 @@ export class OutboundBridge {
 		}
 	}
 
-	// =========================================================================
-	// SDK Events — pass-through to webview (new architecture)
-	// =========================================================================
-
-	/**
-	 * Send an SDK event directly to the webview.
-	 * The webview's coalescing layer handles batching and stale delta tracking.
-	 */
-	public sendSdkEvent(event: unknown): void {
-		this.send({ type: 'sdk_event', event });
-	}
-
-	/**
-	 * Send multiple SDK events as a single batch to avoid per-event re-renders.
-	 * Used by session restore to send hundreds of events atomically.
-	 */
-	public sendSdkEventBatch(events: unknown[]): void {
-		if (events.length === 0) return;
-		this.send({ type: 'sdk_event_batch', events });
-	}
-
-	public emit<T extends SessionEventType>(
-		targetId: string,
-		eventType: T,
-		payloadData: Omit<Extract<SessionEventPayload, { eventType: T }>, 'eventType'>,
-		options?: { sessionId?: string; normalizedEntry?: NormalizedEntry },
+	public tabState(
+		openTabs: string[],
+		activeTab?: string,
+		autoAcceptBySession?: Record<string, boolean>,
 	): void {
 		this.send({
-			type: 'session_event',
-			targetId,
-			eventType,
-			payload: { eventType, ...payloadData } as unknown as SessionEventPayload,
-			timestamp: Date.now(),
-			sessionId: options?.sessionId ?? targetId,
-			...(options?.normalizedEntry ? { normalizedEntry: options.normalizedEntry } : {}),
-		} satisfies SessionEventMessage);
+			type: 'tabState',
+			data: { openTabs, activeTab, autoAcceptBySession },
+		} satisfies TabStateMessage);
 	}
-
-	// =========================================================================
-	// Session Lifecycle
-	// =========================================================================
-
-	public readonly lifecycle = {
-		created: (sessionId: string): void => {
-			this.send({
-				type: 'session_lifecycle',
-				action: 'created',
-				sessionId,
-			} satisfies SessionLifecycleMessage);
-		},
-
-		switched: (sessionId: string, isProcessing = false): void => {
-			this.send({
-				type: 'session_lifecycle',
-				action: 'switched',
-				sessionId,
-				data: { isProcessing },
-			} satisfies SessionLifecycleMessage);
-		},
-
-		closed: (sessionId: string): void => {
-			this.send({
-				type: 'session_lifecycle',
-				action: 'closed',
-				sessionId,
-			} satisfies SessionLifecycleMessage);
-		},
-
-		cleared: (sessionId?: string): void => {
-			this.send({
-				type: 'session_lifecycle',
-				action: 'cleared',
-				sessionId,
-			} satisfies SessionLifecycleMessage);
-		},
-	};
-
-	// =========================================================================
-	// Message Queue
-	// =========================================================================
-
-	public readonly queue = {
-		/** Notify webview of a queue state change (enqueued, dequeued, cancelled, cleared). */
-		update: (
-			action: 'enqueued' | 'dequeued' | 'cancelled' | 'cleared',
-			sessionId: string,
-			queue: import('../common/protocol').QueuedMessageData[],
-			cancelledText?: string,
-			cancelledAttachments?: Pick<
-				NonNullable<import('../common/protocol').SendMessageCommand['attachments']>,
-				'images'
-			>,
-			cancelledAgent?: string,
-		): void => {
-			this.send({
-				type: 'messageQueue',
-				data: { action, sessionId, queue, cancelledText, cancelledAttachments, cancelledAgent },
-			});
-		},
-	};
 
 	// =========================================================================
 	// Generic data messages (settings, providers, MCP, etc.)
@@ -248,8 +91,21 @@ export class OutboundBridge {
 		this.send({ type, data });
 	}
 
-	/** Shorthand for permission policies update. */
-	public permissionsUpdated(policies: PermissionPolicies): void {
-		this.send({ type: 'permissionsUpdated', data: { policies } });
+	public showNotification(data: ShowNotificationMessage['data']): void {
+		this.send({ type: 'showNotification', data } satisfies ShowNotificationMessage);
+	}
+
+	public queueUpdate(
+		action: 'enqueued' | 'dequeued' | 'cancelled' | 'cleared',
+		sessionId: string,
+		queue: QueuedMessageData[],
+		cancelledText?: string,
+		cancelledAttachments?: Pick<NonNullable<SendMessageAttachments>, 'images'>,
+		cancelledAgent?: string,
+	): void {
+		this.send({
+			type: 'messageQueue',
+			data: { action, sessionId, queue, cancelledText, cancelledAttachments, cancelledAgent },
+		} satisfies QueueEventMessage);
 	}
 }

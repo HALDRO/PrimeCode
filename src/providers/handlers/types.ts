@@ -5,10 +5,9 @@ import type {
 	PermissionPolicyValue,
 } from '../../common/permissions';
 import type { WebviewCommand } from '../../common/protocol';
-import type { ISessionState, ISettings } from '../../core/contracts';
+import type { ISettings } from '../../core/contracts';
 import type { OpenCodeExecutor } from '../../core/executor/OpenCode';
 import type { ServiceRegistry } from '../../core/ServiceRegistry';
-import type { SessionGraph, SessionManager } from '../../core/SessionManager';
 import type { OutboundBridge } from '../../transport/OutboundBridge';
 
 export interface HandlerContext {
@@ -17,12 +16,8 @@ export interface HandlerContext {
 	cli: OpenCodeExecutor;
 	/** Typed outbound bridge for sending messages to webview. */
 	bridge: OutboundBridge;
-	sessionState: ISessionState;
-	sessionManager: SessionManager;
 	services: ServiceRegistry;
-	/** Unified parent↔child session graph. Shared between ChatProvider and all handlers. */
-	sessionGraph: SessionGraph;
-	/** Returns current permission policies from ToolHandler. Used by SessionHandler for reconnect. */
+	/** Returns current permission policies from ToolHandler. */
 	getPermissionPolicies?: () => PermissionPolicies;
 	/** Applies a permission policy through ToolHandler so in-memory, storage, and project config stay in sync. */
 	setPermissionPolicy?: (
@@ -30,12 +25,14 @@ export interface HandlerContext {
 		policy: PermissionPolicyValue,
 	) => Promise<void>;
 	/** Returns whether runtime auto-accept is enabled for a session. */
-	getSessionAutoAccept?: (sessionId: string) => boolean;
+	getSessionAutoAccept?: (sessionId: string) => Promise<boolean>;
 	/** Returns effective + explicit permission auto-accept state for a session. */
 	getSessionAutoAcceptState?: (sessionId: string) => {
 		mode: 'default' | 'on' | 'off';
 		effective: boolean;
 	};
+	/** Returns the direct parent session id when known. */
+	getParentSessionId?: (sessionId: string) => Promise<string | undefined>;
 	/** Clears runtime auto-accept state for a session. */
 	clearSessionAutoAccept?: (sessionId: string) => void;
 	/** Refresh webview bootstrap after a successful manual server restart. */

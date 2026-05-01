@@ -34,6 +34,7 @@ export const AutoAcceptButton: React.FC = React.memo(() => {
 	const { postMessage } = useVSCode();
 
 	const handleCycle = useCallback(() => {
+		if (!activeSessionId) return;
 		const nextMode = mode === 'default' ? 'on' : mode === 'on' ? 'off' : 'default';
 		postMessage({ type: 'setAutoAccept', mode: nextMode, sessionId: activeSessionId });
 	}, [activeSessionId, mode, postMessage]);

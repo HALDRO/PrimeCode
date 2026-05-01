@@ -1,19 +1,18 @@
 /**
  * @file projector.test.ts
- * @description Tests for the pure projection layer — projectSession, applyDelta, applyToolDelta,
+ * @description Tests for the pure derive layer — deriveSessionView,
  * collectDescendantSessionIds, computeDerivedSessionStats.
  */
 
-import type { Message, Part, ToolPart } from '@opencode-ai/sdk/v2/client';
+import type { Message, Part } from '@opencode-ai/sdk/v2/client';
 import { describe, expect, it } from 'vitest';
 import type { SessionStore } from '../chatStore';
 import {
-	applyDelta,
-	applyToolDelta,
+	clearSessionViewCache,
 	collectDescendantSessionIds,
 	computeDerivedSessionStats,
-	projectSession,
-} from '../projector';
+	deriveSessionView,
+} from '../derived';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -102,34 +101,61 @@ function makeMinimalStore(overrides: Partial<SessionStore> = {}): SessionStore {
 		promptVersions: null,
 		childSessionIdsByParentId: {},
 		originatingToolCallBySessionId: {},
-		queuedMessages: {},
 		sessionInput: {},
+		queuedMessagesBySession: {},
 		sessionAgent: {},
 		sessionModel: {},
 		sessionAutoAccept: {},
 		draftAttachments: {},
 		draftAgent: {},
 		lastError: null,
-		materializedViews: {},
 		actions: {} as SessionStore['actions'],
 		...overrides,
 	};
 }
 
 // ---------------------------------------------------------------------------
-// projectSession
+// deriveSessionView
 // ---------------------------------------------------------------------------
 
-describe('projectSession', () => {
+describe('deriveSessionView', () => {
+	it('uses distinct cache entries for different MCP server lists', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const asst = makeAssistantMessage('a1', 'ses1', 'u1', { completed: true });
+		const store = makeMinimalStore({
+			messages: { ses1: [user, asst] },
+			parts: { a1: [makeToolPart('p1', 'a1', 'mcp', 'call-1')] },
+		});
+
+		const withoutMcp = deriveSessionView(store, 'ses1', []);
+		const withMcp = deriveSessionView(store, 'ses1', ['server-a']);
+
+		expect(withMcp).not.toBe(withoutMcp);
+	});
+
+	it('clears all cached variants for a session', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const asst = makeAssistantMessage('a1', 'ses1', 'u1', { completed: true });
+		const store = makeMinimalStore({
+			messages: { ses1: [user, asst] },
+			parts: { a1: [makeTextPart('p1', 'a1', 'Hello')] },
+		});
+
+		const before = deriveSessionView(store, 'ses1', ['server-a']);
+		clearSessionViewCache('ses1');
+		const after = deriveSessionView(store, 'ses1', ['server-a']);
+
+		expect(after).not.toBe(before);
+	});
+
 	it('returns empty view for undefined sessionId', () => {
-		const view = projectSession(makeMinimalStore(), undefined);
+		const view = deriveSessionView(makeMinimalStore(), undefined);
 		expect(view.nodeIds).toHaveLength(0);
-		expect(view.version).toBe(0);
 	});
 
 	it('returns empty view for session with no messages', () => {
 		const store = makeMinimalStore({ messages: { ses1: [] } });
-		const view = projectSession(store, 'ses1');
+		const view = deriveSessionView(store, 'ses1');
 		expect(view.nodeIds).toHaveLength(0);
 	});
 
@@ -139,7 +165,7 @@ describe('projectSession', () => {
 			messages: { ses1: [msg] },
 			parts: {},
 		});
-		const view = projectSession(store, 'ses1');
+		const view = deriveSessionView(store, 'ses1');
 		expect(view.nodeIds).toHaveLength(1);
 		expect(view.nodesById[view.nodeIds[0]].kind).toBe('user');
 	});
@@ -152,7 +178,7 @@ describe('projectSession', () => {
 			messages: { ses1: [user, asst] },
 			parts: { a1: [part] },
 		});
-		const view = projectSession(store, 'ses1');
+		const view = deriveSessionView(store, 'ses1');
 		// user + assistant text
 		expect(view.nodeIds).toHaveLength(2);
 		const asstNode = view.nodesById[view.nodeIds[1]];
@@ -171,7 +197,7 @@ describe('projectSession', () => {
 			messages: { ses1: [user, asst] },
 			parts: { a1: [part] },
 		});
-		const view = projectSession(store, 'ses1');
+		const view = deriveSessionView(store, 'ses1');
 		expect(view.nodeIds).toHaveLength(2);
 		const toolNode = view.nodesById[view.nodeIds[1]];
 		expect(toolNode.kind).toBe('tool_use');
@@ -189,7 +215,7 @@ describe('projectSession', () => {
 			messages: { ses1: [user, asst] },
 			parts: { a1: [part] },
 		});
-		const view = projectSession(store, 'ses1');
+		const view = deriveSessionView(store, 'ses1');
 		expect(view.nodeIds).toHaveLength(2);
 		const thinkNode = view.nodesById[view.nodeIds[1]];
 		expect(thinkNode.kind).toBe('thinking');
@@ -215,7 +241,7 @@ describe('projectSession', () => {
 			messages: { ses1: [user, asst] },
 			parts: { a1: [taskPart] },
 		});
-		const view = projectSession(store, 'ses1');
+		const view = deriveSessionView(store, 'ses1');
 		const taskNode = view.nodesById[view.nodeIds[1]];
 		expect(taskNode.kind).toBe('task_card');
 	});
@@ -229,145 +255,11 @@ describe('projectSession', () => {
 			messages: { ses1: [user, asst] },
 			parts: { a1: [p1, p2] },
 		});
-		const view = projectSession(store, 'ses1');
+		const view = deriveSessionView(store, 'ses1');
 		expect(view.nodeIds).toHaveLength(3); // user + 2 text parts
 		for (const id of view.nodeIds) {
 			expect(view.nodesById[id]).toBeDefined();
 		}
-	});
-});
-
-// ---------------------------------------------------------------------------
-// applyDelta
-// ---------------------------------------------------------------------------
-
-describe('applyDelta', () => {
-	it('appends text delta to assistant node', () => {
-		const user = makeUserMessage('u1', 'ses1');
-		const asst = makeAssistantMessage('a1', 'ses1', 'u1');
-		const part = makeTextPart('p1', 'a1', 'Hello');
-		const store = makeMinimalStore({
-			messages: { ses1: [user, asst] },
-			parts: { a1: [part] },
-		});
-		const view = projectSession(store, 'ses1');
-		const updated = applyDelta(view, 'p1', 'text', ' world');
-		expect(updated).not.toBeNull();
-		if (!updated) return;
-		const node = updated.nodesById['msg-p1'];
-		expect(node.kind).toBe('assistant');
-		if (node.kind === 'assistant') {
-			expect(node.content).toBe('Hello world');
-		}
-		// nodeIds should be the same reference (no structural change)
-		expect(updated.nodeIds).toBe(view.nodeIds);
-		expect(updated.lastUpdateWasStructural).toBe(false);
-		expect(updated.version).toBe(view.version + 1);
-		expect(updated.sections).not.toBe(view.sections);
-		expect(updated.sections[0]?.responses[0]).toMatchObject({ content: 'Hello world' });
-	});
-
-	it('appends text delta to thinking node', () => {
-		const user = makeUserMessage('u1', 'ses1');
-		const asst = makeAssistantMessage('a1', 'ses1', 'u1');
-		const part = makeReasoningPart('p1', 'a1', 'think');
-		const store = makeMinimalStore({
-			messages: { ses1: [user, asst] },
-			parts: { a1: [part] },
-		});
-		const view = projectSession(store, 'ses1');
-		const updated = applyDelta(view, 'p1', 'text', 'ing...');
-		expect(updated).not.toBeNull();
-		if (!updated) return;
-		const node = updated.nodesById['thinking-p1'];
-		expect(node.kind).toBe('thinking');
-		if (node.kind === 'thinking') {
-			expect(node.content).toBe('thinking...');
-		}
-	});
-
-	it('returns null for unknown partId', () => {
-		const user = makeUserMessage('u1', 'ses1');
-		const store = makeMinimalStore({
-			messages: { ses1: [user] },
-			parts: {},
-		});
-		const view = projectSession(store, 'ses1');
-		const result = applyDelta(view, 'nonexistent', 'text', 'data');
-		expect(result).toBeNull();
-	});
-
-	it('returns null for unsupported field', () => {
-		const user = makeUserMessage('u1', 'ses1');
-		const asst = makeAssistantMessage('a1', 'ses1', 'u1');
-		const part = makeTextPart('p1', 'a1', 'Hello');
-		const store = makeMinimalStore({
-			messages: { ses1: [user, asst] },
-			parts: { a1: [part] },
-		});
-		const view = projectSession(store, 'ses1');
-		const result = applyDelta(view, 'p1', 'unknownField', 'data');
-		expect(result).toBeNull();
-	});
-});
-
-// ---------------------------------------------------------------------------
-// applyToolDelta
-// ---------------------------------------------------------------------------
-
-describe('applyToolDelta', () => {
-	it('appends output delta to tool node', () => {
-		const user = makeUserMessage('u1', 'ses1');
-		const asst = makeAssistantMessage('a1', 'ses1', 'u1');
-		const part = makeToolPart('p1', 'a1', 'Bash', 'call-1');
-		// Override state to running with empty output
-		(part as unknown as ToolPart).state = { status: 'running', input: {} } as ToolPart['state'];
-		const store = makeMinimalStore({
-			messages: { ses1: [user, asst] },
-			parts: { a1: [part] },
-		});
-		const view = projectSession(store, 'ses1');
-		const updated = applyToolDelta(view, 'call-1', 'output', 'line1\n');
-		expect(updated).not.toBeNull();
-		if (!updated) return;
-		const node = updated.nodesById['call-1'];
-		expect(node.kind).toBe('tool_use');
-		if (node.kind === 'tool_use') {
-			expect(node.streamingOutput).toBe('line1\n');
-		}
-	});
-
-	it('appends output delta to tool node via partId lookup', () => {
-		const user = makeUserMessage('u1', 'ses1');
-		const asst = makeAssistantMessage('a1', 'ses1', 'u1');
-		const part = makeToolPart('p1', 'a1', 'Bash', 'call-1');
-		(part as unknown as ToolPart).state = { status: 'running', input: {} } as ToolPart['state'];
-		const store = makeMinimalStore({
-			messages: { ses1: [user, asst] },
-			parts: { a1: [part] },
-		});
-		const view = projectSession(store, 'ses1');
-		// Use partId 'p1' instead of callID 'call-1' — simulates real delta event
-		const updated = applyToolDelta(view, 'p1', 'output', 'line1\n');
-		expect(updated).not.toBeNull();
-		if (!updated) return;
-		const node = updated.nodesById['call-1'];
-		expect(node.kind).toBe('tool_use');
-		if (node.kind === 'tool_use') {
-			expect(node.streamingOutput).toBe('line1\n');
-		}
-	});
-
-	it('returns null for non-tool node', () => {
-		const user = makeUserMessage('u1', 'ses1');
-		const store = makeMinimalStore({
-			messages: { ses1: [user] },
-			parts: {},
-		});
-		const view = projectSession(store, 'ses1');
-		const result = applyToolDelta(view, 'u1', 'output', 'data');
-		// u1 is a user node, not a tool node
-		expect(result).toBeNull();
 	});
 });
 

@@ -13,51 +13,53 @@ import type {
 	SessionStatus,
 	SnapshotFileDiff,
 	Todo,
-	ToolPart,
 } from '@opencode-ai/sdk/v2/client';
 import { produce } from 'immer';
 import { create } from 'zustand';
 import type { NormalizedEntry } from '../../common/normalizedTypes';
-import type { QueuedMessageData } from '../../common/protocol';
+import type { SessionMessageEntry } from '../services/opencodeRuntime';
 import { eventReducer, type WebviewSdkEvent } from './eventReducer';
-import { applyDelta, applyToolDelta, type MaterializedView, projectSession } from './projector';
 import { useSettingsStore } from './settingsStore';
-import {
-	createDraftDomainState,
-	createMessageDomainState,
-	createSessionMetaDomainState,
-} from './storeState';
 import { useUIStore } from './uiStore';
 
-function extractCompositeModelId(message: Message): string | undefined {
-	const record = message as Record<string, unknown>;
-	const directModelId = typeof record.modelID === 'string' ? record.modelID.trim() : '';
-	const directProviderId = typeof record.providerID === 'string' ? record.providerID.trim() : '';
-	if (directModelId) {
-		return directProviderId ? `${directProviderId}/${directModelId}` : directModelId;
-	}
-
-	const model =
-		typeof record.model === 'object' && record.model !== null
-			? (record.model as Record<string, unknown>)
-			: undefined;
-	const nestedModelId = typeof model?.modelID === 'string' ? model.modelID.trim() : '';
-	const nestedProviderId = typeof model?.providerID === 'string' ? model.providerID.trim() : '';
-	if (!nestedModelId) return undefined;
-	return nestedProviderId ? `${nestedProviderId}/${nestedModelId}` : nestedModelId;
+function createMessageDomainState() {
+	return {
+		messages: {},
+		parts: {},
+		sessionStatus: {},
+		sessionDiff: {},
+		todos: {},
+		permissions: {},
+		questions: {},
+		lastError: null,
+	};
 }
 
-function syncSessionModelFromMessages(state: SessionStore, sessionId: string): void {
-	const messages = state.messages[sessionId] ?? [];
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const message = messages[i];
-		if (message.role !== 'user') continue;
-		const model = extractCompositeModelId(message);
-		if (model) {
-			state.sessionModel[sessionId] = model;
-			return;
-		}
-	}
+function createDraftDomainState() {
+	return {
+		editingMessageId: null,
+		editDrafts: {},
+		sessionInput: {},
+		queuedMessagesBySession: {},
+		draftAttachments: {},
+		draftAgent: {},
+		isImprovingPrompt: false,
+		improvingPromptRequestId: null,
+		promptVersions: null,
+	};
+}
+
+function createSessionMetaDomainState() {
+	return {
+		sessions: [],
+		activeSessionId: undefined,
+		sessionOrder: [],
+		childSessionIdsByParentId: {},
+		originatingToolCallBySessionId: {},
+		sessionAgent: {},
+		sessionModel: {},
+		sessionAutoAccept: {},
+	};
 }
 
 function getNewSessionSeedModel(state?: SessionStore): string | undefined {
@@ -69,10 +71,6 @@ function getNewSessionSeedModel(state?: SessionStore): string | undefined {
 	return model && model !== 'default' ? model : undefined;
 }
 
-function getMcpServerNames(): string[] {
-	return Object.keys(useSettingsStore.getState().mcpServers || {});
-}
-
 function getSessionErrorMessage(error: unknown): string | null {
 	if (!error || typeof error !== 'object') return 'Unknown error';
 	const record = error as Record<string, unknown>;
@@ -80,9 +78,51 @@ function getSessionErrorMessage(error: unknown): string | null {
 	return 'message' in record ? String(record.message) : 'Unknown error';
 }
 
+function syncSessionModelFromMessages(state: SessionStore, sessionId: string): void {
+	const messages = state.messages[sessionId] ?? [];
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i] as Record<string, unknown> & { role?: string };
+		if (message.role !== 'user') continue;
+		const directModelId = typeof message.modelID === 'string' ? message.modelID.trim() : '';
+		const directProviderId =
+			typeof message.providerID === 'string' ? message.providerID.trim() : '';
+		if (directModelId) {
+			state.sessionModel[sessionId] = directProviderId
+				? `${directProviderId}/${directModelId}`
+				: directModelId;
+			return;
+		}
+		const nestedModel =
+			typeof message.model === 'object' && message.model !== null
+				? (message.model as Record<string, unknown>)
+				: undefined;
+		const nestedModelId =
+			typeof nestedModel?.modelID === 'string' ? nestedModel.modelID.trim() : '';
+		const nestedProviderId =
+			typeof nestedModel?.providerID === 'string' ? nestedModel.providerID.trim() : '';
+		if (nestedModelId) {
+			state.sessionModel[sessionId] = nestedProviderId
+				? `${nestedProviderId}/${nestedModelId}`
+				: nestedModelId;
+			return;
+		}
+	}
+	delete state.sessionModel[sessionId];
+}
+
+function pushSessionErrorNotification(error: unknown): void {
+	const errorMsg = getSessionErrorMessage(error);
+	if (!errorMsg) return;
+	useUIStore.getState().actions.pushNotification({
+		type: 'error',
+		content: errorMsg,
+		timestamp: new Date().toISOString(),
+		autoDismissMs: 8000,
+	});
+}
+
 export type {
 	AssistantMessage,
-	MaterializedView,
 	Message,
 	Part,
 	PermissionRequest,
@@ -91,7 +131,6 @@ export type {
 	SessionStatus,
 	SnapshotFileDiff,
 	Todo,
-	ToolPart,
 };
 
 export interface TokenUsage {
@@ -159,6 +198,7 @@ export interface RenderAssistantMessage {
 	kind: 'assistant';
 	id: string;
 	type: 'assistant';
+	parentMessageId?: string;
 	content: string;
 	partId: string;
 	isStreaming?: boolean;
@@ -171,6 +211,7 @@ export interface RenderThinkingMessage {
 	kind: 'thinking';
 	id: string;
 	type: 'thinking';
+	parentMessageId?: string;
 	content: string;
 	partId: string;
 	isStreaming?: boolean;
@@ -183,10 +224,9 @@ export interface RenderToolUseMessage {
 	kind: 'tool_use';
 	id: string;
 	type: 'tool_use';
+	parentMessageId?: string;
 	toolName: string;
 	toolUseId: string;
-	rawInput: Record<string, unknown>;
-	streamingOutput?: string;
 	isRunning?: boolean;
 	status?: 'pending' | 'running' | 'completed' | 'error' | 'cancelled';
 	title?: string;
@@ -232,8 +272,30 @@ export interface SessionStore {
 	promptVersions: { original: string; improved: string; showingImproved: boolean } | null;
 	childSessionIdsByParentId: Record<string, string[]>;
 	originatingToolCallBySessionId: Record<string, string>;
-	queuedMessages: Record<string, QueuedMessageData[]>;
 	sessionInput: Record<string, string>;
+	queuedMessagesBySession: Record<
+		string,
+		Array<{
+			queueId: string;
+			messageId?: string;
+			sessionId: string;
+			text: string;
+			attachments?: {
+				files?: string[];
+				codeSnippets?: Array<{
+					filePath: string;
+					content: string;
+					startLine?: number;
+					endLine?: number;
+				}>;
+				images?: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
+			};
+			agent?: string;
+			model?: string;
+			variant?: string;
+			createdAt: number;
+		}>
+	>;
 	sessionAgent: Record<string, string | undefined>;
 	sessionModel: Record<string, string | undefined>;
 	sessionAutoAccept: Record<string, boolean>;
@@ -243,8 +305,6 @@ export interface SessionStore {
 	>;
 	draftAgent: Record<string, string | undefined>;
 	lastError: { sessionID: string; error: unknown } | null;
-	/** Cached projection output per session — maintained by applyEvent/applyBatch */
-	materializedViews: Record<string, MaterializedView>;
 	actions: SessionActions;
 }
 
@@ -252,14 +312,19 @@ export interface SessionActions {
 	applyEvent: (event: WebviewSdkEvent) => void;
 	applyBatch: (events: WebviewSdkEvent[]) => void;
 	handleExtensionMessage: (message: unknown) => void;
-	handleSessionCreated: (sessionId: string) => void;
-	switchSession: (sessionId: string) => void;
-	closeSession: (sessionId: string) => void;
+	applyTabState: (
+		openTabs: string[],
+		activeTab?: string,
+		autoAcceptBySession?: Record<string, boolean>,
+	) => void;
 	updateSessionInput: (input: string, sessionId?: string) => void;
 	appendInput: (text: string, sessionId?: string) => void;
 	updateSessionAgent: (agent: string | undefined, sessionId?: string) => void;
 	updateSessionModel: (model: string | undefined, sessionId?: string) => void;
 	initializeUnassignedSessionModels: (model: string | undefined) => void;
+	addOptimisticMessage: (input: { sessionId: string; message: Message; parts: Part[] }) => void;
+	removeOptimisticMessage: (input: { sessionId: string; messageId: string }) => void;
+	truncateSessionMessages: (sessionId: string, messageId: string, includeTarget?: boolean) => void;
 	setEditingMessageId: (id: string | null) => void;
 	setEditDraft: (messageId: string, text: string) => void;
 	clearEditDraft: (messageId: string) => void;
@@ -272,30 +337,26 @@ export interface SessionActions {
 	getSessionModel: (sessionId?: string) => string | undefined;
 	getSessionAutoAccept: (sessionId?: string) => boolean;
 	removePendingQuestion: (requestId: string, sessionId: string) => void;
-	rebuildMaterializedViews: () => void;
-	restoreSession: (
-		sessionId: string,
-		data: { messages: Message[]; parts: Record<string, Part[]> },
-	) => void;
+	removePendingPermission: (requestId: string, sessionId: string) => void;
+	hydrateSessionSnapshot: (params: {
+		session: Session;
+		messageEntries: SessionMessageEntry[];
+		todos: Todo[];
+		diff: SnapshotFileDiff[];
+		activate: boolean;
+	}) => void;
 }
 
 function resolveSessionId(state: SessionStore, sessionId?: string): string | undefined {
 	return sessionId || state.activeSessionId;
 }
 
-/** Extract the session ID from an SDK event, if applicable. */
-function getEventSessionId(event: WebviewSdkEvent): string | undefined {
-	const props = event.properties as Record<string, unknown>;
-	if ('sessionID' in props && typeof props.sessionID === 'string') return props.sessionID;
-	if ('part' in props && typeof props.part === 'object' && props.part !== null) {
-		const part = props.part as { sessionID?: string };
-		if (typeof part.sessionID === 'string') return part.sessionID;
-	}
-	if ('info' in props && typeof props.info === 'object' && props.info !== null) {
-		const info = props.info as { id?: string };
-		if (typeof info.id === 'string' && event.type.startsWith('session.')) return info.id;
-	}
-	return undefined;
+export function isSessionProcessing(
+	state: Pick<SessionStore, 'sessionStatus'>,
+	sessionId: string,
+): boolean {
+	const status = state.sessionStatus[sessionId];
+	return status?.type === 'busy' || status?.type === 'retry';
 }
 
 export const useChatStore = create<SessionStore>()((set, get) => ({
@@ -306,39 +367,11 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 	actions: {
 		applyEvent: event => {
 			if (event.type === 'session.error') {
-				const { error } = event.properties;
-				if (error) {
-					const errorMsg = getSessionErrorMessage(error);
-					if (!errorMsg) return;
-					useUIStore.getState().actions.pushNotification({
-						type: 'error',
-						content: errorMsg,
-						timestamp: new Date().toISOString(),
-						autoDismissMs: 8000,
-					});
-				}
+				pushSessionErrorNotification(event.properties.error);
 			}
 			set(
 				produce((state: SessionStore) => {
 					eventReducer(state, event);
-					// Update materialized view for affected session
-					const sid = getEventSessionId(event);
-					if (sid) {
-						// For delta events, try incremental path first
-						if (event.type === 'message.part.delta') {
-							const prev = state.materializedViews[sid];
-							if (prev && prev.version > 0) {
-								const { partID, field, delta } = event.properties;
-								const textResult = applyDelta(prev, partID, field, delta);
-								const result = textResult ?? applyToolDelta(prev, partID, field, delta);
-								if (result) {
-									state.materializedViews[sid] = result;
-									return;
-								}
-							}
-						}
-						state.materializedViews[sid] = projectSession(state, sid, getMcpServerNames());
-					}
 				}),
 			);
 		},
@@ -346,45 +379,7 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 		applyBatch: events => {
 			for (const event of events) {
 				if (event.type === 'session.error') {
-					const { error } = event.properties;
-					if (error) {
-						const errorMsg = getSessionErrorMessage(error);
-						if (!errorMsg) continue;
-						useUIStore.getState().actions.pushNotification({
-							type: 'error',
-							content: errorMsg,
-							timestamp: new Date().toISOString(),
-							autoDismissMs: 8000,
-						});
-					}
-				}
-			}
-
-			// Classify events: which sessions need full rebuild vs incremental delta
-			const deltaOnlySessions = new Map<
-				string,
-				Array<{ partId: string; field: string; delta: string; messageId: string }>
-			>();
-			const structuralSessions = new Set<string>();
-
-			for (const event of events) {
-				const sid = getEventSessionId(event);
-				if (!sid) continue;
-
-				if (event.type === 'message.part.delta') {
-					if (!structuralSessions.has(sid)) {
-						const deltas = deltaOnlySessions.get(sid) ?? [];
-						deltas.push({
-							partId: event.properties.partID,
-							field: event.properties.field,
-							delta: event.properties.delta,
-							messageId: event.properties.messageID,
-						});
-						deltaOnlySessions.set(sid, deltas);
-					}
-				} else {
-					structuralSessions.add(sid);
-					deltaOnlySessions.delete(sid);
+					pushSessionErrorNotification(event.properties.error);
 				}
 			}
 
@@ -394,39 +389,6 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 						const event = events[index];
 						eventReducer(state, event);
 					}
-
-					// Update materialized views:
-					// 1. Full rebuild for sessions with structural changes
-					for (const sid of structuralSessions) {
-						state.materializedViews[sid] = projectSession(state, sid, getMcpServerNames());
-					}
-
-					// 2. Incremental delta for sessions with only delta events
-					for (const [sid, deltas] of deltaOnlySessions) {
-						const prev = state.materializedViews[sid];
-						if (!prev || prev.version === 0) {
-							// No existing view — full rebuild
-							state.materializedViews[sid] = projectSession(state, sid, getMcpServerNames());
-							continue;
-						}
-
-						let current: MaterializedView | null = prev;
-						for (const d of deltas) {
-							if (!current) break;
-							// Try text/reasoning delta first, then tool delta
-							const textResult = applyDelta(current, d.partId, d.field, d.delta);
-							const result: MaterializedView | null =
-								textResult ?? applyToolDelta(current, d.partId, d.field, d.delta);
-							current = result;
-						}
-
-						if (current) {
-							state.materializedViews[sid] = current;
-						} else {
-							// Incremental path failed — fall back to full rebuild
-							state.materializedViews[sid] = projectSession(state, sid, getMcpServerNames());
-						}
-					}
 				}),
 			);
 		},
@@ -435,24 +397,6 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 			const msg = message as Record<string, unknown>;
 			const msgType = msg.type as string | undefined;
 			const msgData = msg.data as Record<string, unknown> | undefined;
-
-			if (msgType === 'restore_session' && msgData) {
-				const sessionId = msgData.sessionId as string;
-				const messages = msgData.messages as Message[];
-				const parts = msgData.parts as Record<string, Part[]>;
-				get().actions.restoreSession(sessionId, { messages, parts });
-				return;
-			}
-
-			if (msgType === 'syncSessionState' && msgData) {
-				const sessionId = msgData.sessionId as string;
-				set(
-					produce((state: SessionStore) => {
-						state.sessionAutoAccept[sessionId] = Boolean(msgData.autoAccept);
-					}),
-				);
-				return;
-			}
 
 			if (msgType === 'showNotification' && msgData) {
 				const notification = msgData.notification as {
@@ -471,169 +415,108 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 				return;
 			}
 
-			if (msgType === 'session_lifecycle') {
-				const lifecycle = msg as {
-					action: string;
-					sessionId?: string;
-				};
-				const actions = get().actions;
-				switch (lifecycle.action) {
-					case 'created':
-						if (lifecycle.sessionId) actions.handleSessionCreated(lifecycle.sessionId);
-						break;
-					case 'closed':
-						if (lifecycle.sessionId) actions.closeSession(lifecycle.sessionId);
-						break;
-					case 'switched':
-						if (lifecycle.sessionId) actions.switchSession(lifecycle.sessionId);
-						break;
-					case 'cleared':
-						if (lifecycle.sessionId) {
-							const sid = lifecycle.sessionId;
-							set(
-								produce((state: SessionStore) => {
-									const msgs = state.messages[sid];
-									if (msgs) {
-										for (const m of msgs) delete state.parts[m.id];
-									}
-									state.messages[sid] = [];
-									// Rebuild materialized view after clear
-									state.materializedViews[sid] = projectSession(state, sid, getMcpServerNames());
-								}),
-							);
-						}
-						break;
-				}
+			if (msgType === 'tabState' && msgData) {
+				get().actions.applyTabState(
+					Array.isArray(msgData.openTabs) ? (msgData.openTabs as string[]) : [],
+					typeof msgData.activeTab === 'string' ? msgData.activeTab : undefined,
+					typeof msgData.autoAcceptBySession === 'object' && msgData.autoAcceptBySession
+						? (msgData.autoAcceptBySession as Record<string, boolean>)
+						: undefined,
+				);
 				return;
 			}
 
-			if (msgType === 'improvePromptResult' && msgData) {
-				const requestId = msgData.requestId as string;
-				const improvedText = msgData.improvedText as string;
-				const state = get();
-				if (state.improvingPromptRequestId === requestId) {
-					const activeId = state.activeSessionId;
-					const currentInput = activeId ? state.sessionInput[activeId] || '' : '';
-					set({
-						promptVersions: {
-							original: currentInput,
-							improved: improvedText,
-							showingImproved: true,
-						},
-						isImprovingPrompt: false,
-						improvingPromptRequestId: null,
-					});
-					if (activeId) {
-						set(
-							produce((s: SessionStore) => {
-								s.sessionInput[activeId] = improvedText;
-							}),
-						);
-					}
-				}
-				return;
-			}
-
-			if (msgType === 'improvePromptError' && msgData) {
-				const requestId = msgData.requestId as string;
-				const error = msgData.error as string;
-				const state = get();
-				if (state.improvingPromptRequestId === requestId) {
-					set({ isImprovingPrompt: false, improvingPromptRequestId: null });
-					useUIStore.getState().actions.pushNotification({
-						type: 'error',
-						content: `Prompt Improve failed\n${error || 'Unknown error'}`,
-						timestamp: new Date().toISOString(),
-						autoDismissMs: 8000,
-					});
-				}
-				return;
-			}
-
-			if (msgType === 'improvePromptCancelled' && msgData) {
-				const requestId = msgData.requestId as string;
-				if (get().improvingPromptRequestId === requestId) {
-					set({ isImprovingPrompt: false, improvingPromptRequestId: null });
-				}
-				return;
-			}
-
-			if (msgType === 'messageQueue' && msgData) {
-				const action = msgData.action as string;
-				const sessionId = msgData.sessionId as string;
-				const queueData = msgData.queue as QueuedMessageData[];
-				const cancelledText = msgData.cancelledText as string | undefined;
-				const cancelledAttachments = msgData.cancelledAttachments as
-					| { images?: Array<{ id: string; name: string; dataUrl: string; path?: string }> }
-					| undefined;
-				const cancelledAgent = msgData.cancelledAgent as string | undefined;
+			if (msgType === 'sessionAutoAccept' && msgData) {
 				set(
 					produce((state: SessionStore) => {
-						state.queuedMessages[sessionId] = queueData;
-						if (action === 'cancelled' && cancelledText) {
-							const current = state.sessionInput[sessionId] || '';
-							state.sessionInput[sessionId] = current.trim()
-								? `${current}\n\n${cancelledText}`
-								: cancelledText;
-							if (cancelledAttachments) {
-								state.draftAttachments[sessionId] = cancelledAttachments;
+						if (msgData.states && typeof msgData.states === 'object') {
+							for (const [sessionId, autoAccept] of Object.entries(msgData.states)) {
+								state.sessionAutoAccept[sessionId] = Boolean(autoAccept);
 							}
-							if (cancelledAgent !== undefined) {
-								state.draftAgent[sessionId] = cancelledAgent;
-							}
+						}
+						if (typeof msgData.sessionId === 'string') {
+							state.sessionAutoAccept[msgData.sessionId] = Boolean(msgData.autoAccept);
 						}
 					}),
 				);
+				return;
+			}
+
+			if (msgType === 'backendRuntimeStatus' && msgData) return;
+
+			if (msgType === 'messageQueue' && msgData) {
+				const sessionId = typeof msgData.sessionId === 'string' ? msgData.sessionId : null;
+				const queue = Array.isArray(msgData.queue) ? msgData.queue : [];
+				if (!sessionId) return;
+				set(
+					produce((state: SessionStore) => {
+						if (queue.length > 0) {
+							state.queuedMessagesBySession[sessionId] = queue.map(entry => {
+								const item = entry as {
+									queueId: string;
+									messageId?: string;
+									sessionId: string;
+									text: string;
+									attachments?: SessionStore['queuedMessagesBySession'][string][number]['attachments'];
+									agent?: string;
+									model?: string;
+									variant?: string;
+									queuedAt?: number;
+								};
+								return { ...item, createdAt: item.queuedAt ?? Date.now() };
+							});
+						} else {
+							delete state.queuedMessagesBySession[sessionId];
+						}
+
+						if (typeof msgData.cancelledText === 'string') {
+							state.sessionInput[sessionId] = msgData.cancelledText;
+							state.draftAttachments[sessionId] =
+								typeof msgData.cancelledAttachments === 'object' && msgData.cancelledAttachments
+									? (msgData.cancelledAttachments as {
+											images?: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
+										})
+									: {};
+							state.draftAgent[sessionId] =
+								typeof msgData.cancelledAgent === 'string' ? msgData.cancelledAgent : undefined;
+						}
+					}),
+				);
+				return;
 			}
 		},
 
-		handleSessionCreated: sessionId => {
+		applyTabState: (
+			openTabs: string[],
+			activeTab?: string,
+			autoAcceptBySession?: Record<string, boolean>,
+		) => {
 			set(
 				produce((state: SessionStore) => {
-					if (!state.sessionOrder.includes(sessionId)) {
-						state.sessionOrder.push(sessionId);
+					state.sessionOrder = openTabs;
+					for (const sessionId of openTabs) {
+						if (!state.messages[sessionId]) state.messages[sessionId] = [];
+						state.sessionModel[sessionId] ??= getNewSessionSeedModel(state);
 					}
-					if (!state.messages[sessionId]) state.messages[sessionId] = [];
-					state.sessionModel[sessionId] ??= getNewSessionSeedModel(state);
-					state.activeSessionId = sessionId;
-				}),
-			);
-		},
-
-		switchSession: sessionId => {
-			set(
-				produce((state: SessionStore) => {
-					if (!state.sessionOrder.includes(sessionId)) {
-						state.sessionOrder.push(sessionId);
-					}
-					if (!state.messages[sessionId]) state.messages[sessionId] = [];
-					state.sessionModel[sessionId] ??= getNewSessionSeedModel(state);
-					state.activeSessionId = sessionId;
+					state.activeSessionId = activeTab;
 					state.editingMessageId = null;
 					state.editDrafts = {};
-				}),
-			);
-		},
-
-		closeSession: sessionId => {
-			set(
-				produce((state: SessionStore) => {
-					if (state.sessionOrder.length <= 1) return;
-					state.sessionOrder = state.sessionOrder.filter(id => id !== sessionId);
-					delete state.queuedMessages[sessionId];
-					delete state.sessionInput[sessionId];
-					delete state.sessionAgent[sessionId];
-					delete state.sessionModel[sessionId];
-					delete state.sessionAutoAccept[sessionId];
-					delete state.draftAttachments[sessionId];
-					delete state.draftAgent[sessionId];
-					delete state.childSessionIdsByParentId[sessionId];
-					delete state.originatingToolCallBySessionId[sessionId];
-					delete state.materializedViews[sessionId];
-					if (state.activeSessionId === sessionId) {
-						state.activeSessionId = state.sessionOrder[state.sessionOrder.length - 1];
-						state.editingMessageId = null;
-						state.editDrafts = {};
+					for (const sessionId of Object.keys(state.messages)) {
+						if (!openTabs.includes(sessionId)) {
+							delete state.sessionInput[sessionId];
+							delete state.sessionAgent[sessionId];
+							delete state.sessionModel[sessionId];
+							delete state.sessionAutoAccept[sessionId];
+							delete state.draftAttachments[sessionId];
+							delete state.draftAgent[sessionId];
+							delete state.childSessionIdsByParentId[sessionId];
+							delete state.originatingToolCallBySessionId[sessionId];
+						}
+					}
+					if (autoAcceptBySession) {
+						for (const [sessionId, autoAccept] of Object.entries(autoAcceptBySession)) {
+							state.sessionAutoAccept[sessionId] = Boolean(autoAccept);
+						}
 					}
 				}),
 			);
@@ -695,6 +578,50 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 							s.sessionModel[sessionId] = initialModel;
 						}
 					}
+				}),
+			);
+		},
+
+		addOptimisticMessage: ({ sessionId, message, parts }) => {
+			set(
+				produce((state: SessionStore) => {
+					if (!state.messages[sessionId]) state.messages[sessionId] = [];
+					const existingIndex = state.messages[sessionId].findIndex(item => item.id === message.id);
+					if (existingIndex >= 0) {
+						state.messages[sessionId][existingIndex] = message;
+					} else {
+						state.messages[sessionId].push(message);
+					}
+					state.parts[message.id] = parts;
+				}),
+			);
+		},
+
+		removeOptimisticMessage: ({ sessionId, messageId }) => {
+			set(
+				produce((state: SessionStore) => {
+					const messages = state.messages[sessionId];
+					if (messages) {
+						state.messages[sessionId] = messages.filter(message => message.id !== messageId);
+					}
+					delete state.parts[messageId];
+				}),
+			);
+		},
+
+		truncateSessionMessages: (sessionId, messageId, includeTarget = false) => {
+			set(
+				produce((state: SessionStore) => {
+					const messages = state.messages[sessionId] ?? [];
+					const targetIndex = messages.findIndex(message => message.id === messageId);
+					if (targetIndex === -1) return;
+					const nextLength = includeTarget ? targetIndex : targetIndex + 1;
+					const removedMessages = messages.slice(nextLength);
+					state.messages[sessionId] = messages.slice(0, nextLength);
+					for (const removed of removedMessages) {
+						delete state.parts[removed.id];
+					}
+					syncSessionModelFromMessages(state, sessionId);
 				}),
 			);
 		},
@@ -769,42 +696,57 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 			);
 		},
 
-		rebuildMaterializedViews: () => {
+		removePendingPermission: (requestId, sessionId) => {
 			set(
 				produce((s: SessionStore) => {
-					const mcpServerNames = getMcpServerNames();
-					for (const sessionId of Object.keys(s.materializedViews)) {
-						const previousVersion = s.materializedViews[sessionId]?.version ?? 0;
-						s.materializedViews[sessionId] = {
-							...projectSession(s, sessionId, mcpServerNames),
-							version: previousVersion + 1,
-						};
+					const perms = s.permissions[sessionId];
+					if (perms) {
+						s.permissions[sessionId] = perms.filter(permission => permission.id !== requestId);
 					}
 				}),
 			);
 		},
 
-		restoreSession: (sessionId, data) => {
+		hydrateSessionSnapshot: ({ session, messageEntries, todos, diff, activate }) => {
 			set(
-				produce((s: SessionStore) => {
-					s.sessionModel[sessionId] ??= getNewSessionSeedModel();
-					s.messages[sessionId] = data.messages;
-					for (const [messageId, messageParts] of Object.entries(data.parts)) {
-						s.parts[messageId] = messageParts;
+				produce((state: SessionStore) => {
+					const sessionIndex = state.sessions.findIndex(item => item.id === session.id);
+					if (sessionIndex >= 0) state.sessions[sessionIndex] = session;
+					else state.sessions.push(session);
+
+					if (!state.sessionOrder.includes(session.id)) {
+						state.sessionOrder.push(session.id);
 					}
-					for (const messageParts of Object.values(data.parts)) {
-						for (const part of messageParts) {
-							if (part.type === 'tool' && (part as ToolPart).tool.toLowerCase() === 'task') {
-								const metadata = (part as ToolPart).metadata as { sessionId?: string } | undefined;
-								if (metadata?.sessionId) {
-									s.originatingToolCallBySessionId[metadata.sessionId] = (part as ToolPart).callID;
-								}
-							}
+					if (activate) {
+						state.activeSessionId = session.id;
+					}
+
+					state.todos[session.id] = todos;
+					state.sessionDiff[session.id] = diff;
+					state.sessionModel[session.id] ??= getNewSessionSeedModel(state);
+
+					const previousMessages = state.messages[session.id] ?? [];
+					for (const message of previousMessages) {
+						delete state.parts[message.id];
+					}
+					state.messages[session.id] = [];
+
+					for (const entry of messageEntries) {
+						eventReducer(state, {
+							type: 'message.updated',
+							properties: {
+								sessionID: session.id,
+								info: entry.info,
+							},
+						} as WebviewSdkEvent);
+
+						for (const part of entry.parts) {
+							eventReducer(state, {
+								type: 'message.part.updated',
+								properties: { part },
+							} as WebviewSdkEvent);
 						}
 					}
-					syncSessionModelFromMessages(s, sessionId);
-					// Rebuild materialized view after restore
-					s.materializedViews[sessionId] = projectSession(s, sessionId, getMcpServerNames());
 				}),
 			);
 		},

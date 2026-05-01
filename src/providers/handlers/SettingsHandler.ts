@@ -1,3 +1,4 @@
+import * as vscode from 'vscode';
 import {
 	getCustomEndpointDedupeKey,
 	getProxyEndpointProtocol,
@@ -5,10 +6,12 @@ import {
 	OPENAI_COMPATIBLE_PROVIDER_ID,
 } from '../../common';
 import type {
+	AgentResource,
 	CommandListItem,
 	CommandOf,
 	ManagedResource,
 	PluginListItem,
+	ResourceActionResult,
 	ResourceKind,
 	SkillListItem,
 	WebviewCommand,
@@ -16,6 +19,7 @@ import type {
 import type { ParsedCommand, ParsedSkill } from '../../common/schemas';
 import type { PrimeCodeSettings } from '../../core/Settings';
 import type { RulesService } from '../../services/RulesService';
+import { parseFrontmatter, stringifyFrontmatter } from '../../utils/frontmatter';
 import { logger } from '../../utils/logger';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
@@ -391,7 +395,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 			const resource = resources.find(item => item.id === msg.resourceId);
 			if (!resource) throw new Error('Resource not found');
 
-			const result = await this.context.services.openCodeApply.setAgentDisabled(
+			const result = await this.setAgentDisabled(
 				this.context.cli,
 				resource,
 				msg.value,
@@ -422,6 +426,89 @@ export class SettingsHandler implements WebviewMessageHandler {
 			});
 			this.sendResources('agent', resources, revision, undefined, msg.operationId);
 		}
+	}
+
+	private async setAgentDisabled(
+		cli: HandlerContext['cli'],
+		resource: AgentResource,
+		disabled: boolean,
+		reloadRuntime?: (source: string) => Promise<void>,
+	): Promise<{
+		result: ResourceActionResult;
+		message?: string;
+		resources: AgentResource[];
+		revision: number;
+	}> {
+		const target = resource.action?.type === 'setDisabled' ? resource.action.target : undefined;
+		if (!target) {
+			return this.resourceActionResult(
+				cli,
+				'error',
+				'No project-safe action target is available for this agent.',
+			);
+		}
+
+		try {
+			if (target.type === 'project-config') {
+				const result = await this.context.services.openCodeConfig.setAgentDisabled(
+					resource.name,
+					disabled,
+				);
+				this.context.services.mcpConfigWatcher.notifyUiSave(result.contentHash);
+			} else if (target.type === 'project-file') {
+				await setAgentFileDisabled(target.path, disabled);
+			}
+
+			cli.clearAgentsCache();
+			const connection = cli.getConnectionDetails();
+			if (!connection.serverUrl) {
+				return this.resourceActionResult(
+					cli,
+					'config-written-unverified',
+					'Project override was written, but OpenCode is not running to verify it.',
+				);
+			}
+
+			await reloadRuntime?.('settings:agent:setDisabled');
+			cli.clearAgentsCache();
+
+			const refreshed = await this.context.services.agentResources.buildAgentResources(cli);
+			const updated = refreshed.find(item => item.name === resource.name);
+			const result: ResourceActionResult = updated?.disabled === disabled ? 'verified' : 'stale';
+			return {
+				result,
+				message:
+					result === 'verified'
+						? undefined
+						: 'Project override was written, but refreshed OpenCode agent state did not match it.',
+				resources: refreshed,
+				revision: this.nextResourceRevision('agent'),
+			};
+		} catch (error) {
+			return this.resourceActionResult(
+				cli,
+				'error',
+				error instanceof Error ? error.message : String(error),
+			);
+		}
+	}
+
+	private async resourceActionResult(
+		cli: HandlerContext['cli'],
+		result: ResourceActionResult,
+		message: string,
+	): Promise<{
+		result: ResourceActionResult;
+		message?: string;
+		resources: AgentResource[];
+		revision: number;
+	}> {
+		return {
+			result,
+			message,
+			resources: await this.context.services.agentResources.buildAgentResources(cli),
+			revision: this.nextResourceRevision('agent'),
+		};
 	}
 
 	private sendResources(
@@ -639,6 +726,18 @@ export class SettingsHandler implements WebviewMessageHandler {
 			});
 		}
 	}
+}
+
+async function setAgentFileDisabled(filePath: string, disabled: boolean): Promise<void> {
+	const uri = vscode.Uri.file(filePath);
+	const raw = await vscode.workspace.fs.readFile(uri);
+	const text = new TextDecoder().decode(raw);
+	const parsed = parseFrontmatter(text);
+	const attributes = { ...parsed.attributes, disable: disabled };
+	await vscode.workspace.fs.writeFile(
+		uri,
+		new TextEncoder().encode(stringifyFrontmatter(attributes, parsed.body)),
+	);
 }
 
 function getPayloadString(payload: Record<string, unknown>, key: string): string {

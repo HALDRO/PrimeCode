@@ -29,7 +29,6 @@
 	"knip": {
 		"entry": [
 			"src/extension.ts",
-			"src/webview/dev/main.tsx",
 			"src/**/*.test.ts",
 			"tests/**/*.ts"
 		],
@@ -47,6 +46,7 @@
 		"@codemirror/state": "^6.5.4",
 		"@codemirror/view": "^6.39.14",
 		"@floating-ui/react": "^0.27.16",
+		"@microsoft/fetch-event-source": "^2.0.1",
 		"@modelcontextprotocol/sdk": "^1.29.0",
 		"@opencode-ai/sdk": "1.4.6",
 		"@sinclair/typebox": "^0.34.45",

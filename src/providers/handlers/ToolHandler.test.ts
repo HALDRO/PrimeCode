@@ -1,13 +1,12 @@
 /**
  * @file ToolHandler permission policy tests
  * @description Tests that ToolHandler correctly persists and returns all 16 permission
- *              categories, handles access responses with alwaysAllow, exposes policies
+ *              categories, persists always-allow tool state, exposes policies
  *              for ChatProvider auto-approval, and syncs policies to the server with retry.
  */
 
 import { describe, expect, it, vi } from 'vitest';
 import { createMockExtensionContext } from '../../__mocks__/vscode';
-import { SessionGraph, SessionManager } from '../../core/SessionManager';
 import { OutboundBridge } from '../../transport/OutboundBridge';
 import { ToolHandler } from './ToolHandler';
 import type { HandlerContext } from './types';
@@ -48,7 +47,7 @@ function createMockHandlerContext(
 		respondToPermission: vi.fn().mockResolvedValue(undefined),
 		getProvider: vi.fn().mockReturnValue('opencode'),
 		getSdkClient: vi.fn().mockReturnValue(null),
-		getOpenCodeServerInfo: vi.fn().mockReturnValue({
+		getAdminInfo: vi.fn().mockReturnValue({
 			baseUrl: 'http://127.0.0.1:4096',
 			directory: '/mock/workspace',
 		}),
@@ -73,17 +72,7 @@ function createMockHandlerContext(
 		settings: mockSettings as any,
 		cli: mockCli as any,
 		bridge,
-		sessionState: {
-			activeSessionId: 'test-session-1',
-			startedSessions: new Set(['test-session-1']),
-			stopGuardUntil: 0,
-			isStopGuarded: () => false,
-			activateStopGuard: () => {},
-			clearStopGuard: () => {},
-		},
-		sessionManager: new SessionManager(),
 		services: {} as any,
-		sessionGraph: new SessionGraph(),
 		...overrides,
 	};
 
@@ -177,27 +166,16 @@ describe('ToolHandler', () => {
 		});
 	});
 
-	describe('accessResponse with alwaysAllow', () => {
+	describe('setAlwaysAllowTool', () => {
 		it('should persist alwaysAllow per tool', async () => {
 			const ctx = createMockHandlerContext();
 			const handler = new ToolHandler(ctx);
 
 			await handler.handleMessage({
-				type: 'accessResponse',
-				id: 'req-1',
+				type: 'setAlwaysAllowTool',
 				toolName: 'Write',
-				approved: true,
-				alwaysAllow: true,
-				response: 'always',
+				allow: true,
 			});
-
-			expect(ctx.cli.respondToPermission).toHaveBeenCalledWith(
-				expect.objectContaining({
-					requestId: 'req-1',
-					approved: true,
-					alwaysAllow: true,
-				}),
-			);
 
 			const alwaysAllow = handler.getAlwaysAllowByTool();
 			expect(alwaysAllow.write).toBe(true);
@@ -239,24 +217,6 @@ describe('ToolHandler', () => {
 			).resolves.toBeUndefined();
 
 			await Promise.resolve();
-			expect(ctx.cli.respondToPermission).not.toHaveBeenCalled();
-		});
-
-		it('should inherit auto-accept from parent sessions', async () => {
-			const ctx = createMockHandlerContext();
-			ctx.sessionGraph.registerChild('child-session', 'test-session-1', 'tool-1');
-			const handler = new ToolHandler(ctx);
-
-			await handler.handleMessage({
-				type: 'setAutoAccept',
-				mode: 'on',
-				sessionId: 'test-session-1',
-			});
-
-			expect(handler.getSessionAutoAcceptState('child-session')).toEqual({
-				mode: 'default',
-				effective: true,
-			});
 		});
 
 		it('should clear explicit mode when switched to default', async () => {
@@ -283,7 +243,7 @@ describe('ToolHandler', () => {
 			).toEqual({});
 		});
 
-		it('should auto-respond to already pending permissions when enabled', async () => {
+		it('should persist auto-accept mode even when pending permission lookup exists', async () => {
 			const ctx = createMockHandlerContext({
 				services: {
 					openCodeClient: {
@@ -309,13 +269,27 @@ describe('ToolHandler', () => {
 			});
 
 			await Promise.resolve();
-
-			expect(ctx.cli.respondToPermission).toHaveBeenCalledWith({
-				requestId: 'perm-1',
-				approved: true,
-				alwaysAllow: false,
-				response: 'once',
+			expect(handler.getSessionAutoAcceptState('test-session-1')).toEqual({
+				mode: 'on',
+				effective: true,
 			});
+		});
+
+		it('inherits auto-accept from parent sessions', async () => {
+			const ctx = createMockHandlerContext({
+				getParentSessionId: vi.fn(async (sessionId: string) =>
+					sessionId === 'child-session' ? 'parent-session' : undefined,
+				),
+			});
+			const handler = new ToolHandler(ctx);
+
+			await handler.handleMessage({
+				type: 'setAutoAccept',
+				mode: 'on',
+				sessionId: 'parent-session',
+			});
+
+			expect(await handler.isAutoAcceptAsync('child-session')).toBe(true);
 		});
 	});
 

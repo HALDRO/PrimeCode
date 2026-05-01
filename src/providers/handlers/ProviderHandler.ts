@@ -12,7 +12,6 @@ import {
 } from '../../common';
 import type { CommandOf, WebviewCommand } from '../../common/protocol';
 import type { EnrichedProxyModel } from '../../services/OpenCodeClientService';
-import { logger } from '../../utils/logger';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
 export class ProviderHandler implements WebviewMessageHandler {
@@ -101,7 +100,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 	}
 
 	private async onCheckOpenCodeStatus(): Promise<void> {
-		const info = this.context.cli.getOpenCodeServerInfo();
+		const info = this.context.cli.getAdminInfo();
 		if (!info) {
 			this.context.bridge.data('openCodeStatus', {
 				installed: false,
@@ -131,17 +130,6 @@ export class ProviderHandler implements WebviewMessageHandler {
 			const providers = (await this.context.services.openCodeClient.getUiConnectedProviders(
 				sdkClient,
 			)) as OpenCodeProviderData[];
-
-			logger.info('[ProviderHandler] Loaded OpenCode providers', {
-				providers: providers.map(provider => ({
-					id: provider.id,
-					name: provider.name,
-					npm: provider.npm,
-					baseUrl: provider.baseUrl,
-					source: provider.source,
-					modelCount: provider.models.length,
-				})),
-			});
 
 			this.context.bridge.data('openCodeProviders', { providers, config: { isLoading: false } });
 		} catch (error) {

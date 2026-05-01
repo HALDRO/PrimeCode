@@ -54,27 +54,10 @@ export class ToolHandler implements WebviewMessageHandler {
 				}
 			}
 		}
-
-		logger.info('[ToolHandler] Initialized policies', {
-			hasStored: !!stored,
-			task: this.policies.task,
-			external_directory: this.policies.external_directory,
-			bash: this.policies.bash,
-			edit: this.policies.edit,
-		});
 	}
 
 	async handleMessage(msg: WebviewCommand): Promise<void> {
 		switch (msg.type) {
-			case 'accessResponse':
-				await this.onAccessResponse(msg);
-				break;
-			case 'questionResponse':
-				await this.onQuestionResponse(msg);
-				break;
-			case 'questionReject':
-				await this.onQuestionReject(msg);
-				break;
 			case 'getPermissions':
 				await this.onGetPermissions();
 				break;
@@ -83,6 +66,9 @@ export class ToolHandler implements WebviewMessageHandler {
 				break;
 			case 'setAutoAccept':
 				this.onSetAutoAccept(msg);
+				break;
+			case 'setAlwaysAllowTool':
+				await this.onSetAlwaysAllowTool(msg.toolName, msg.allow);
 				break;
 			case 'checkDiscoveryStatus':
 				await this.onCheckDiscoveryStatus();
@@ -110,23 +96,26 @@ export class ToolHandler implements WebviewMessageHandler {
 		await this.context.extensionContext.workspaceState.update(AUTO_ACCEPT_KEY, payload);
 	}
 
+	private async resolveInheritedAutoAcceptMode(
+		sessionId: string,
+		visited = new Set<string>(),
+	): Promise<PermissionAutoAcceptMode | undefined> {
+		if (visited.has(sessionId)) return undefined;
+		visited.add(sessionId);
+
+		const own = this.autoAcceptBySession.get(sessionId);
+		if (own === 'on' || own === 'off') return own;
+
+		const parentId = await this.context.getParentSessionId?.(sessionId);
+		if (!parentId) return undefined;
+		return this.resolveInheritedAutoAcceptMode(parentId, visited);
+	}
+
 	getSessionAutoAcceptState(sessionId?: string): PermissionAutoAcceptState {
 		if (!sessionId) return { mode: 'default', effective: false };
-		const visited = new Set<string>();
-		let current: string | undefined = sessionId;
-		let isOwnSession = true;
-		while (current && !visited.has(current)) {
-			visited.add(current);
-			const own = this.autoAcceptBySession.get(current);
-			if (own === 'on') {
-				return { mode: isOwnSession ? 'on' : 'default', effective: true };
-			}
-			if (own === 'off') {
-				return { mode: isOwnSession ? 'off' : 'default', effective: false };
-			}
-			current = this.context.sessionGraph.getParent(current);
-			isOwnSession = false;
-		}
+		const own = this.autoAcceptBySession.get(sessionId);
+		if (own === 'on') return { mode: 'on', effective: true };
+		if (own === 'off') return { mode: 'off', effective: false };
 		return { mode: 'default', effective: false };
 	}
 
@@ -142,69 +131,22 @@ export class ToolHandler implements WebviewMessageHandler {
 		await this.persistPolicies();
 	}
 
-	private async onAccessResponse(msg: CommandOf<'accessResponse'>): Promise<void> {
-		const { id: requestId, approved, response } = msg;
-		const alwaysAllow = msg.alwaysAllow ?? false;
-		const targetSessionId = msg.sessionId;
-
-		if (!requestId) {
-			throw new Error('Missing accessResponse.id');
-		}
-
-		if (!targetSessionId) {
-			logger.warn('[ToolHandler] accessResponse dropped: no sessionId', { requestId });
-		}
-
-		if (alwaysAllow) {
-			const toolName = this.normalizePermissionToolName(msg.toolName);
-			if (toolName) {
-				if (approved) {
-					this.alwaysAllowByTool[toolName] = true;
-				} else {
-					delete this.alwaysAllowByTool[toolName];
-				}
-				await this.context.extensionContext.workspaceState.update(
-					ALWAYS_ALLOW_KEY,
-					this.alwaysAllowByTool,
-				);
-				this.context.bridge.data(
-					'accessData',
-					Object.entries(this.alwaysAllowByTool)
-						.filter(([, allow]) => allow)
-						.map(([t]) => ({ toolName: t, allowAll: true })),
-				);
-			}
-		}
-
-		await this.context.cli.respondToPermission({
-			requestId,
-			approved,
-			alwaysAllow,
-			response,
-		});
-
-		if (targetSessionId) {
-			this.context.bridge.emit(targetSessionId, 'permission', {
-				action: 'remove',
-				requestId,
-				response,
-			});
-			this.context.bridge.emit(targetSessionId, 'access', {
-				action: 'response',
-				requestId,
-				approved,
-				alwaysAllow,
-			});
-		}
-	}
-
 	private async onGetPermissions(): Promise<void> {
-		this.context.bridge.permissionsUpdated({ ...this.policies });
+		this.context.bridge.data('permissionsUpdated', { policies: { ...this.policies } });
+		const entries = await Promise.all(
+			[...this.autoAcceptBySession.keys()].map(async sessionId => {
+				const inherited = await this.resolveInheritedAutoAcceptMode(sessionId);
+				return [sessionId, inherited === 'on'] as const;
+			}),
+		);
+		this.context.bridge.data('sessionAutoAccept', {
+			states: Object.fromEntries(entries),
+		});
 	}
 
 	private async persistPolicies(): Promise<void> {
 		await this.context.extensionContext.workspaceState.update(POLICIES_KEY, this.policies);
-		this.context.bridge.permissionsUpdated({ ...this.policies });
+		this.context.bridge.data('permissionsUpdated', { policies: { ...this.policies } });
 
 		// Sync all categories to project opencode.json through the canonical writer.
 		void this.syncPoliciesToServer().catch(e =>
@@ -255,9 +197,35 @@ export class ToolHandler implements WebviewMessageHandler {
 		);
 	}
 
+	private async onSetAlwaysAllowTool(toolName: string, allow: boolean): Promise<void> {
+		const normalized = this.normalizePermissionToolName(toolName);
+		if (!normalized) return;
+		if (allow) {
+			this.alwaysAllowByTool[normalized] = true;
+		} else {
+			delete this.alwaysAllowByTool[normalized];
+		}
+		await this.context.extensionContext.workspaceState.update(
+			ALWAYS_ALLOW_KEY,
+			this.alwaysAllowByTool,
+		);
+		this.context.bridge.data(
+			'accessData',
+			Object.entries(this.alwaysAllowByTool)
+				.filter(([, enabled]) => enabled)
+				.map(([name]) => ({ toolName: name, allowAll: true })),
+		);
+	}
+
 	/** Check if auto-accept mode is currently active for a session. */
 	isAutoAccept(sessionId?: string): boolean {
 		return this.getSessionAutoAcceptState(sessionId).effective;
+	}
+
+	async isAutoAcceptAsync(sessionId?: string): Promise<boolean> {
+		if (!sessionId) return false;
+		const inherited = await this.resolveInheritedAutoAcceptMode(sessionId);
+		return inherited === 'on';
 	}
 
 	clearSessionAutoAccept(sessionId: string): void {
@@ -267,42 +235,8 @@ export class ToolHandler implements WebviewMessageHandler {
 		);
 	}
 
-	private async autoRespondPendingPermissions(sessionId: string): Promise<void> {
-		if (!this.isAutoAccept(sessionId)) return;
-		const serverInfo = this.context.cli.getOpenCodeServerInfo();
-		if (!serverInfo?.baseUrl || !serverInfo.directory) return;
-		const openCodeClient = this.context.services.openCodeClient;
-		if (!openCodeClient?.getSessionPermissions) return;
-		const pending = await openCodeClient.getSessionPermissions(
-			serverInfo.baseUrl,
-			serverInfo.directory,
-			sessionId,
-		);
-		for (const request of pending) {
-			try {
-				await this.context.cli.respondToPermission({
-					requestId: request.id,
-					approved: true,
-					alwaysAllow: false,
-					response: 'once',
-				});
-				this.context.bridge.emit(sessionId, 'permission', {
-					action: 'remove',
-					requestId: request.id,
-					response: 'once',
-				});
-			} catch (error) {
-				logger.warn('[ToolHandler] Failed to auto-respond pending permission', {
-					sessionId,
-					requestId: request.id,
-					error,
-				});
-			}
-		}
-	}
-
 	private onSetAutoAccept(msg: CommandOf<'setAutoAccept'>): void {
-		const sessionId = msg.sessionId || this.context.sessionState.activeSessionId;
+		const sessionId = msg.sessionId;
 		if (!sessionId) {
 			logger.warn('[ToolHandler] setAutoAccept ignored: no target session', {
 				mode: msg.mode,
@@ -319,60 +253,22 @@ export class ToolHandler implements WebviewMessageHandler {
 		void this.persistAutoAcceptModes().catch(error =>
 			logger.warn('[ToolHandler] Failed to persist auto-accept state', { sessionId, error }),
 		);
-		const autoAcceptState = this.getSessionAutoAcceptState(sessionId);
-
-		this.context.bridge.data('syncSessionState', {
-			sessionId,
-			autoAccept: autoAcceptState.effective,
-			permissionAutoAccept: autoAcceptState,
-		});
-		if (autoAcceptState.effective) {
-			void this.autoRespondPendingPermissions(sessionId);
-		}
+		void this.resolveInheritedAutoAcceptMode(sessionId)
+			.then(inherited => {
+				this.context.bridge.data('sessionAutoAccept', {
+					sessionId,
+					autoAccept: inherited === 'on',
+				});
+			})
+			.catch(error =>
+				logger.warn('[ToolHandler] Failed to resolve inherited auto-accept state', {
+					sessionId,
+					error,
+				}),
+			);
 	}
 
 	private async onCheckCliDiagnostics(): Promise<void> {
 		this.context.bridge.data('cliDiagnostics', null);
-	}
-
-	private async onQuestionResponse(msg: CommandOf<'questionResponse'>): Promise<void> {
-		const { requestId, answers, sessionId } = msg;
-		if (!requestId) {
-			throw new Error('Missing questionResponse.requestId');
-		}
-
-		const targetSessionId = sessionId;
-
-		// Remove from pending immediately so the card disappears on submit.
-		if (targetSessionId) {
-			this.context.bridge.emit(targetSessionId, 'question', {
-				action: 'remove',
-				requestId,
-				answers,
-			});
-		}
-
-		// Reply to OpenCode's question API with answers array
-		await this.context.cli.respondToQuestion({ requestId, answers });
-	}
-
-	private async onQuestionReject(msg: CommandOf<'questionReject'>): Promise<void> {
-		const { requestId, sessionId } = msg;
-		if (!requestId) {
-			throw new Error('Missing questionReject.requestId');
-		}
-
-		const targetSessionId = sessionId;
-
-		// Remove from pending immediately.
-		if (targetSessionId) {
-			this.context.bridge.emit(targetSessionId, 'question', {
-				action: 'remove',
-				requestId,
-				rejected: true,
-			});
-		}
-
-		await this.context.cli.rejectQuestion(requestId);
 	}
 }

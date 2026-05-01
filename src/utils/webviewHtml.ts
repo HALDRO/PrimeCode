@@ -12,7 +12,7 @@ export const getHtml = (
 	styleUri: string,
 	cspSource: string,
 	isTelemetryEnabled: boolean,
-	workspaceRoot = '',
+	_workspaceRoot = '',
 ) => `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -22,7 +22,7 @@ export const getHtml = (
 	<title>PrimeCode</title>
 	<link href="${styleUri}" rel="stylesheet">
 </head>
-<body class="vscode-dark" data-vscode-theme-kind="vscode-dark" data-workspace-root="${workspaceRoot}">
+<body class="vscode-dark" data-vscode-theme-kind="vscode-dark">
 	<div id="root"></div>
 	<script>
 		// Process polyfill for browser environment (required by React and other libs)
@@ -31,7 +31,6 @@ export const getHtml = (
 		}
 		// Avoid including any mock/dev-only globals in production webview.
 		window.isTelemetryEnabled = ${isTelemetryEnabled};
-		window.workspaceRoot = "${workspaceRoot}";
 	</script>
 	<script src="${scriptUri}"></script>
 	${isTelemetryEnabled ? '<script defer src="https://cloud.umami.is/script.js" data-website-id="d050ac9b-2b6d-4c67-b4c6-766432f95644"></script>' : ''}

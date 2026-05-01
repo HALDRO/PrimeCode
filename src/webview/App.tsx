@@ -21,100 +21,14 @@ import { SettingsPage } from './components/settings';
 import { ConfirmDialog } from './components/ui';
 import { ScrollThumb } from './components/ui/ScrollContainer';
 import { useElementHeight } from './hooks/useElementHeight';
-import {
-	useActiveModal,
-	useActiveSessionId,
-	useChatStore,
-	useIsProcessing,
-	useMessageSections,
-} from './store';
-import type { WebviewSdkEvent } from './store/eventReducer';
-import type { MessageSection } from './store/projector';
+import { useOpenCodeBootstrap } from './hooks/useOpenCodeBootstrap';
+import { eventRuntime } from './services/eventRuntime';
+import { openCodeRuntime } from './services/opencodeRuntime';
+import { useActiveModal, useActiveSessionId, useIsProcessing, useMessageSections } from './store';
+import type { MessageSection } from './store/derived';
 import { useSettingsStore } from './store/settingsStore';
 import { useUIStore } from './store/uiStore';
 import { vscode } from './utils/vscode';
-
-let queue: WebviewSdkEvent[] = [];
-let buffer: WebviewSdkEvent[] = [];
-const coalesced = new Map<string, number>();
-let pendingFrameId: number | null = null;
-
-function coalescingKey(event: WebviewSdkEvent): string | null {
-	switch (event.type) {
-		case 'session.status':
-			return `session.status:${event.properties.sessionID}`;
-		case 'message.part.updated':
-			return `message.part.updated:${event.properties.part.messageID}:${event.properties.part.id}`;
-		default:
-			return null;
-	}
-}
-
-function enqueue(event: WebviewSdkEvent): void {
-	const key = coalescingKey(event);
-	if (key) {
-		const existing = coalesced.get(key);
-		if (existing !== undefined) {
-			queue[existing] = event;
-			return;
-		}
-		coalesced.set(key, queue.length);
-	}
-	queue.push(event);
-	if (pendingFrameId === null) {
-		pendingFrameId = window.requestAnimationFrame(flush);
-	}
-}
-
-function flush(): void {
-	pendingFrameId = null;
-	if (queue.length === 0) return;
-	const events = queue;
-	queue = buffer;
-	buffer = events;
-	queue.length = 0;
-	coalesced.clear();
-	useChatStore.getState().actions.applyBatch(events);
-	buffer.length = 0;
-}
-
-const handleExtensionMessage = (message: unknown): void => {
-	const msg = message as { type?: string; [key: string]: unknown };
-
-	if (msg.type === 'sdk_event') {
-		const sdkEvent = (msg as { event: WebviewSdkEvent }).event;
-		enqueue(sdkEvent);
-		useUIStore
-			.getState()
-			.actions.handleExtensionMessage(message as import('../common').ExtensionMessage);
-		useSettingsStore
-			.getState()
-			.actions.handleExtensionMessage(message as import('../common').ExtensionMessage);
-		return;
-	}
-
-	if (msg.type === 'sdk_event_batch') {
-		const events = (msg as { events: WebviewSdkEvent[] }).events;
-		for (const event of events) {
-			enqueue(event);
-		}
-		useUIStore
-			.getState()
-			.actions.handleExtensionMessage(message as import('../common').ExtensionMessage);
-		useSettingsStore
-			.getState()
-			.actions.handleExtensionMessage(message as import('../common').ExtensionMessage);
-		return;
-	}
-
-	useChatStore.getState().actions.handleExtensionMessage(message);
-	useUIStore
-		.getState()
-		.actions.handleExtensionMessage(message as import('../common').ExtensionMessage);
-	useSettingsStore
-		.getState()
-		.actions.handleExtensionMessage(message as import('../common').ExtensionMessage);
-};
 
 /**
  * Static context object for MessageItem — totalSections is no longer needed
@@ -269,8 +183,8 @@ const EmptyState: React.FC = () => {
 };
 
 /**
- * ChatArea — isolated component that owns useMessages() and Virtuoso.
- * Extracted from App so that per-token message updates don't cascade
+ * ChatArea — isolated component that owns Virtuoso subscriptions.
+ * Extracted from App so that per-token session updates don't cascade
  * into ChatInput, ChangedFilesPanel, and other siblings.
  */
 const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) => {
@@ -577,11 +491,28 @@ ChatArea.displayName = 'ChatArea';
 
 export const App: React.FC = () => {
 	const didSendInitialRequests = useRef(false);
+	useOpenCodeBootstrap();
+	const serverUrl = useUIStore(state => state.serverUrl);
+	const workspaceRoot = useUIStore(state => state.workspaceRoot);
 
 	useEffect(() => {
 		const handleMessage = (event: MessageEvent) => {
-			const message = event.data;
-			handleExtensionMessage(message);
+			const message = event.data as {
+				type?: string;
+				data?: {
+					sessionId?: string;
+					status?: string;
+					reason?: string;
+					timestamp?: string;
+				};
+			};
+			eventRuntime.handleExtensionMessage(event.data);
+			if (message.type === 'backendRuntimeStatus' && message.data?.sessionId) {
+				openCodeRuntime.handleBackendRuntimeStatus(
+					message.data.sessionId,
+					message.data.status ?? 'idle',
+				);
+			}
 		};
 
 		window.addEventListener('message', handleMessage);
@@ -594,13 +525,20 @@ export const App: React.FC = () => {
 
 		return () => {
 			window.removeEventListener('message', handleMessage);
-			if (pendingFrameId !== null) {
-				cancelAnimationFrame(pendingFrameId);
-				pendingFrameId = null;
-			}
-			flush();
+			eventRuntime.stop();
 		};
 	}, []);
+
+	useEffect(() => {
+		if (!serverUrl || !workspaceRoot) {
+			useUIStore.getState().actions.setServerStatus('disconnected');
+			eventRuntime.stop();
+			return;
+		}
+
+		eventRuntime.start(serverUrl, workspaceRoot);
+		return () => eventRuntime.stop();
+	}, [serverUrl, workspaceRoot]);
 
 	const headerHeight = useElementHeight<HTMLDivElement>({ fallbackHeight: 44 });
 	const activeSessionId = useActiveSessionId();

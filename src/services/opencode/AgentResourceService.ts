@@ -38,7 +38,7 @@ export class AgentResourceService {
 	}
 
 	public async buildAgentResources(cli: OpenCodeExecutor): Promise<AgentResource[]> {
-		const serverInfo = cli.getOpenCodeServerInfo();
+		const serverInfo = cli.getAdminInfo();
 		const [runtimeAgents, projectAgents, globalAgents, disabledOverrides] = await Promise.all([
 			serverInfo?.directory ? fetchRuntimeAgents(cli, serverInfo.directory) : Promise.resolve([]),
 			this.resources.getAll('subagents') as Promise<ParsedSubagent[]>,

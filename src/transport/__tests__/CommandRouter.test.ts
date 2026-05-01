@@ -50,7 +50,7 @@ describe('CommandRouter', () => {
 
 		expect(router.has('getSettings')).toBe(true);
 		expect(router.has('updateSettings')).toBe(true);
-		expect(router.has('sendMessage')).toBe(false);
+		expect(router.has('getRules')).toBe(false);
 	});
 
 	it('throws on duplicate route registration', () => {
@@ -67,26 +67,26 @@ describe('CommandRouter', () => {
 	it('returns all registered types', () => {
 		const router = new CommandRouter();
 		router.register(mockHandler(), ['getSettings', 'updateSettings'], 'settings');
-		router.register(mockHandler(), ['sendMessage'], 'session');
+		router.register(mockHandler(), ['getRules'], 'rules');
 
 		const types = router.registeredTypes();
 		expect(types).toContain('getSettings');
 		expect(types).toContain('updateSettings');
-		expect(types).toContain('sendMessage');
+		expect(types).toContain('getRules');
 		expect(types).toHaveLength(3);
 	});
 
 	it('isolates handlers — each receives only its own commands', async () => {
 		const router = new CommandRouter();
 		const settingsHandler = mockHandler();
-		const sessionHandler = mockHandler();
+		const rulesHandler = mockHandler();
 		router.register(settingsHandler, ['getSettings'], 'settings');
-		router.register(sessionHandler, ['sendMessage'], 'session');
+		router.register(rulesHandler, ['getRules'], 'rules');
 
-		await router.dispatch({ type: 'sendMessage' } as WebviewCommand);
+		await router.dispatch({ type: 'getRules' } as WebviewCommand);
 
 		expect(settingsHandler.handleMessage).not.toHaveBeenCalled();
-		expect(sessionHandler.handleMessage).toHaveBeenCalledOnce();
+		expect(rulesHandler.handleMessage).toHaveBeenCalledOnce();
 	});
 
 	it('propagates handler errors to the caller', async () => {

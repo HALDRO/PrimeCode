@@ -15,6 +15,7 @@ import {
 	type RenderTaskCardNode,
 	type RenderThinkingMessage,
 	type RenderToolUseMessage,
+	useChatStore,
 	useChildSessionAgent,
 	useChildSessionMessages,
 	useChildSessionSlug,
@@ -568,7 +569,25 @@ const SimpleToolGroup = React.memo<{
 		for (const msg of toolUseMessages) {
 			let name = formatToolName(msg.toolName || 'Tool');
 			if ((msg.toolName || '').toLowerCase() === 'skill') {
-				const skillName = (msg.rawInput as { name?: string } | undefined)?.name;
+				const partsByMessageId = useChatStore.getState().parts;
+				let skillName: string | undefined;
+				for (const messageParts of Object.values(partsByMessageId)) {
+					if (!Array.isArray(messageParts)) continue;
+					for (const part of messageParts) {
+						if (part.type !== 'tool') continue;
+						const candidate = part as import('@opencode-ai/sdk/v2/client').ToolPart;
+						if (candidate.callID !== msg.toolUseId) continue;
+						const input =
+							'input' in candidate.state &&
+							candidate.state.input &&
+							typeof candidate.state.input === 'object'
+								? (candidate.state.input as { name?: string })
+								: undefined;
+						skillName = input?.name;
+						break;
+					}
+					if (skillName) break;
+				}
 				if (skillName) {
 					name = `Skill: ${skillName}`;
 				}

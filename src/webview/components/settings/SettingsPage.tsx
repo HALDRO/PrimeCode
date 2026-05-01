@@ -116,15 +116,11 @@ const OpenCodeCLIStatus: React.FC = () => {
 		}, TIMEOUTS.CLI_STATUS_CHECK);
 	};
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: Intentionally run only once on mount
 	useEffect(() => {
 		if (initialLoadDone.current) {
 			return;
 		}
 		initialLoadDone.current = true;
-
-		postMessage({ type: 'syncAll' });
-		startTimeout();
 
 		return () => {
 			if (timeoutRef.current) {

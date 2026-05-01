@@ -37,255 +37,6 @@ interface BaseExtensionMessage<T extends string, D = undefined> {
 	sessionId?: string;
 }
 
-// =============================================================================
-// Unified Session Event Protocol
-// =============================================================================
-
-export type SessionEventType =
-	| 'message_record'
-	| 'message_record_removed'
-	| 'message_part'
-	| 'message_part_delta'
-	| 'message_part_removed'
-	| 'status'
-	| 'stats'
-	| 'complete'
-	| 'file'
-	| 'access'
-	| 'messages_reload'
-	| 'delete_messages_after'
-	| 'message_removed'
-	| 'session_info'
-	| 'auth'
-	| 'terminal'
-	| 'turn_tokens'
-	| 'file_diff'
-	| 'todo'
-	| 'permission'
-	| 'user_message'
-	| 'notification'
-	| 'question';
-
-export type SessionStatus = 'idle' | 'busy' | 'error' | 'retrying';
-
-export interface SubtaskRetryInfo {
-	attempt: number;
-	message: string;
-	nextRetryAt?: string;
-}
-
-export interface SessionUserMessagePayload {
-	eventType: 'user_message';
-	message: {
-		id: string;
-		timestamp?: string;
-		content: string;
-		model?: string;
-		agent?: string;
-		summary?: {
-			title?: string;
-			diffs?: Array<{
-				file: string;
-				additions: number;
-				deletions: number;
-				status?: 'added' | 'deleted' | 'modified';
-			}>;
-		};
-		normalizedEntry?: import('./normalizedTypes').NormalizedEntry;
-	};
-}
-
-export type SessionLinkSource = 'metadata' | 'session_parentID' | 'deferred' | 'restored';
-
-export interface SessionNotificationPayload {
-	eventType: 'notification';
-	notification: {
-		id: string;
-		type: 'error' | 'interrupted' | 'system_notice';
-		content: string;
-		timestamp?: string;
-		reason?: string;
-		normalizedEntry?: import('./normalizedTypes').NormalizedEntry;
-	};
-}
-
-export interface SessionMessageRecordPayload {
-	eventType: 'message_record';
-	message: {
-		id: string;
-		sessionId: string;
-		role: 'user' | 'assistant';
-		parentId?: string;
-		createdAt?: number;
-		completedAt?: number;
-		modelId?: string;
-		providerId?: string;
-		agent?: string;
-		tokens?: {
-			input: number;
-			output: number;
-			reasoning?: number;
-			cacheRead?: number;
-			cacheWrite?: number;
-			total?: number;
-		};
-		cost?: number;
-	};
-}
-
-export interface SessionMessageRecordRemovedPayload {
-	eventType: 'message_record_removed';
-	messageId: string;
-	sessionId?: string;
-}
-
-export interface SessionMessagePartPayload {
-	eventType: 'message_part';
-	part: {
-		id: string;
-		messageId: string;
-		sessionId: string;
-		type: 'text' | 'reasoning' | 'tool' | 'file' | 'compaction' | 'other';
-		text?: string;
-		callId?: string;
-		toolName?: string;
-		state?: {
-			status?: 'pending' | 'running' | 'completed' | 'error' | 'cancelled';
-			input?: unknown;
-			output?: string;
-			title?: string;
-			metadata?: unknown;
-		};
-		createdAt?: number;
-		completedAt?: number;
-		mime?: string;
-		url?: string;
-		filename?: string;
-		synthetic?: boolean;
-		auto?: boolean;
-		normalizedEntry?: import('./normalizedTypes').NormalizedEntry;
-	};
-}
-
-export interface SessionMessagePartDeltaPayload {
-	eventType: 'message_part_delta';
-	messageId: string;
-	partId: string;
-	field: string;
-	delta: string;
-}
-
-export interface SessionMessagePartRemovedPayload {
-	eventType: 'message_part_removed';
-	messageId: string;
-	partId: string;
-}
-
-export interface ToolActivityInfo {
-	/** Canonical lowercase tool name (e.g. 'write', 'edit', 'bash'). */
-	toolName: string;
-	/** Human-readable label (e.g. 'Writing file...', 'Running command...'). */
-	label: string;
-	/** Optional file path associated with the tool call. */
-	filePath?: string;
-	/** Tool use ID for correlation with tool_use messages. */
-	toolUseId?: string;
-}
-
-export interface SessionStatusPayload {
-	eventType: 'status';
-	status: SessionStatus;
-	statusText?: string;
-	loadingMessage?: string;
-	retryInfo?: {
-		attempt: number;
-		message: string;
-		nextRetryAt?: string;
-	};
-	/** Current tool activity — set when a tool starts, cleared on idle/tool_result. */
-	toolActivity?: ToolActivityInfo | null;
-}
-
-export interface SessionCompletePayload {
-	eventType: 'complete';
-	partId: string;
-	toolUseId?: string;
-	removed?: boolean;
-	messageId?: string;
-	completedAt?: number;
-}
-
-export interface SessionFilePayload {
-	eventType: 'file';
-	action: 'changed' | 'undone' | 'all_undone';
-	filePath?: string;
-	fileName?: string;
-	linesAdded?: number;
-	linesRemoved?: number;
-	toolUseId?: string;
-}
-
-export interface SessionFileDiffPayload {
-	eventType: 'file_diff';
-	diffs: Array<{
-		file: string;
-		additions: number;
-		deletions: number;
-		status?: 'added' | 'deleted' | 'modified';
-	}>;
-}
-
-export interface SessionAccessPayload {
-	eventType: 'access';
-	action: 'response';
-	requestId: string;
-	approved: boolean;
-	alwaysAllow?: boolean;
-}
-
-export interface SessionMessagesReloadPayload {
-	eventType: 'messages_reload';
-	messages: SessionUserMessagePayload['message'][];
-	runtimeMessageRecords?: SessionMessageRecordPayload['message'][];
-	runtimeMessageParts?: SessionMessagePartPayload['part'][];
-	changedFiles?: Array<{
-		filePath: string;
-		fileName: string;
-		linesAdded: number;
-		linesRemoved: number;
-		toolUseId: string;
-		timestamp: number;
-	}>;
-	cumulativeDiffs?: Array<{
-		file: string;
-		additions: number;
-		deletions: number;
-		status?: 'added' | 'deleted' | 'modified';
-	}>;
-	turnTokens?: Record<
-		string,
-		{
-			input: number;
-			output: number;
-			total?: number;
-			usage?: number;
-			cacheRead?: number;
-			durationMs?: number;
-		}
-	>;
-}
-
-export interface SessionDeleteMessagesAfterPayload {
-	eventType: 'delete_messages_after';
-	messageId: string;
-}
-
-export interface SessionMessageRemovedPayload {
-	eventType: 'message_removed';
-	messageId: string;
-	partId?: string;
-}
-
 export interface SessionInfoData {
 	sessionId: string;
 	title?: string;
@@ -298,36 +49,6 @@ export interface SessionInfoData {
 export interface PermissionAutoAcceptState {
 	mode: 'default' | 'on' | 'off';
 	effective: boolean;
-}
-
-export interface SessionInfoPayload {
-	eventType: 'session_info';
-	data: SessionInfoData;
-	permissionAutoAccept?: PermissionAutoAcceptState;
-}
-
-export interface SessionAuthPayload {
-	eventType: 'auth';
-	action: 'login_required';
-}
-
-export interface SessionTerminalPayload {
-	eventType: 'terminal';
-	action: 'opened';
-	content?: string;
-}
-
-export interface SessionTurnTokensPayload {
-	eventType: 'turn_tokens';
-	// Latest token snapshot plus authoritative per-turn usage for a single
-	// parent-session user message.
-	inputTokens: number;
-	outputTokens: number;
-	totalTokens: number;
-	usageTokens?: number;
-	cacheReadTokens: number;
-	durationMs?: number;
-	userMessageId?: string;
 }
 
 // =============================================================================
@@ -372,137 +93,14 @@ export interface SessionQuestionRequest {
 	rejected?: boolean;
 }
 
-export interface SessionTodoPayload {
-	eventType: 'todo';
-	todos: SessionTodoItem[];
-}
-
-export interface SessionPermissionPayload {
-	eventType: 'permission';
-	action: 'set' | 'upsert' | 'remove';
-	requests?: SessionPermissionRequest[];
-	request?: SessionPermissionRequest;
-	requestId?: string;
-	response?: 'once' | 'always' | 'reject';
-}
-
-export interface SessionQuestionPayload {
-	eventType: 'question';
-	action: 'set' | 'upsert' | 'remove';
-	requests?: SessionQuestionRequest[];
-	request?: SessionQuestionRequest;
-	requestId?: string;
-	answers?: QuestionAnswer[];
-	rejected?: boolean;
-}
-
-export type SessionEventPayload =
-	| SessionMessageRecordPayload
-	| SessionMessageRecordRemovedPayload
-	| SessionMessagePartPayload
-	| SessionMessagePartDeltaPayload
-	| SessionMessagePartRemovedPayload
-	| SessionStatusPayload
-	| SessionCompletePayload
-	| SessionFilePayload
-	| SessionAccessPayload
-	| SessionMessagesReloadPayload
-	| SessionDeleteMessagesAfterPayload
-	| SessionMessageRemovedPayload
-	| SessionInfoPayload
-	| SessionAuthPayload
-	| SessionTerminalPayload
-	| SessionTurnTokensPayload
-	| SessionFileDiffPayload
-	| SessionTodoPayload
-	| SessionPermissionPayload
-	| SessionUserMessagePayload
-	| SessionNotificationPayload
-	| SessionQuestionPayload;
-
-export interface SessionEventMessage {
-	type: 'session_event';
-	targetId: string;
-	eventType: SessionEventType;
-	payload: SessionEventPayload;
-	timestamp: number;
-	sessionId?: string;
-	normalizedEntry?: import('./normalizedTypes').NormalizedEntry;
-}
-
-/**
- * Batched session events for transport efficiency.
- * Reduces postMessage overhead by sending multiple events in a single message.
- */
-export interface SessionEventBatchMessage {
-	type: 'session_event_batch';
-	messages: SessionEventMessage[];
-}
-
-export type SessionLifecycleAction = 'created' | 'closed' | 'switched' | 'cleared';
-
-export interface SessionLifecycleMessage {
-	type: 'session_lifecycle';
-	action: SessionLifecycleAction;
-	sessionId?: string;
-	data?: {
-		isProcessing?: boolean;
-		messages?: unknown[];
-	};
-}
-
-// =============================================================================
-// Tool Data Interfaces
-// =============================================================================
-
-export interface ToolUseData {
-	toolName: string;
-	toolUseId: string;
-	toolInput?: string;
-	rawInput?: Record<string, unknown>;
-	filePath?: string;
-	streamingOutput?: string;
-	isRunning?: boolean;
-	parentToolUseId?: string;
-}
-
-export interface ToolResultData {
-	toolName: string;
-	toolUseId: string;
-	content: string;
-	isError: boolean;
-	parentToolUseId?: string;
-	hidden?: boolean;
-	estimatedTokens?: number;
-	title?: string;
-	durationMs?: number;
-	attachments?: Array<{
-		id: string;
-		mime: string;
-		filename?: string;
-		url?: string;
-	}>;
-	metadata?: Record<string, unknown>;
-}
-
-// =============================================================================
-// Access Messages (global)
-// =============================================================================
-
-export interface AccessRequestData {
-	id: string;
-	tool: string;
-	input: Record<string, unknown>;
-	pattern?: string;
-	timestamp?: number;
-	toolUseId?: string;
-}
-
-export interface AccessResponseData {
-	id: string;
-	approved: boolean;
-	alwaysAllow?: boolean;
-}
+export type TabStateMessage = BaseExtensionMessage<
+	'tabState',
+	{
+		openTabs: string[];
+		activeTab?: string;
+		autoAcceptBySession?: Record<string, boolean>;
+	}
+>;
 
 export type AccessDataMessage = BaseExtensionMessage<'accessData', Access>;
 
@@ -708,28 +306,54 @@ export type McpConfigStatusMessage = BaseExtensionMessage<
 >;
 
 // =============================================================================
-// Diagnostics & History Messages (global)
+// Diagnostics Messages (global)
 // =============================================================================
 
 export type CliDiagnosticsMessage = BaseExtensionMessage<'cliDiagnostics', unknown>;
-export type ConversationListMessage = BaseExtensionMessage<'conversationList', unknown>;
-export type AllConversationsClearedMessage = BaseExtensionMessage<'allConversationsCleared'>;
-
-// =============================================================================
-// Prompt Improver Messages (global)
-// =============================================================================
-
-export type ImprovePromptResultMessage = BaseExtensionMessage<
-	'improvePromptResult',
-	{ requestId: string; improvedText: string }
+export type SessionAutoAcceptMessage = BaseExtensionMessage<
+	'sessionAutoAccept',
+	{
+		sessionId?: string;
+		autoAccept?: boolean;
+		states?: Record<string, boolean>;
+	}
 >;
-export type ImprovePromptErrorMessage = BaseExtensionMessage<
-	'improvePromptError',
-	{ requestId: string; error: string }
+
+export type ShowNotificationMessage = BaseExtensionMessage<
+	'showNotification',
+	{
+		notification: {
+			id?: string;
+			type: 'error' | 'system_notice';
+			content: string;
+			timestamp?: string;
+			reason?: string;
+		};
+	}
 >;
-export type ImprovePromptCancelledMessage = BaseExtensionMessage<
-	'improvePromptCancelled',
-	{ requestId: string }
+
+export interface QueuedMessageData {
+	queueId: string;
+	messageId?: string;
+	sessionId: string;
+	text: string;
+	model?: string;
+	agent?: string;
+	variant?: string;
+	attachments?: SendMessageAttachments;
+	queuedAt: number;
+}
+
+export type QueueEventMessage = BaseExtensionMessage<
+	'messageQueue',
+	{
+		action: 'enqueued' | 'dequeued' | 'cancelled' | 'cleared';
+		sessionId: string;
+		queue: QueuedMessageData[];
+		cancelledText?: string;
+		cancelledAttachments?: Pick<NonNullable<SendMessageAttachments>, 'images'>;
+		cancelledAgent?: string;
+	}
 >;
 
 export type ResourceKind = 'agent' | 'command' | 'skill' | 'plugin';
@@ -823,10 +447,6 @@ export type DiscoveryStatusMessage = BaseExtensionMessage<
 	'discoveryStatus',
 	import('./schemas').DiscoveryStatus
 >;
-export type McpConfigReloadedMessage = BaseExtensionMessage<
-	'mcpConfigReloaded',
-	{ source: 'file-watcher' | 'manual'; timestamp: number }
->;
 export type ProjectUpdatedMessage = BaseExtensionMessage<
 	'projectUpdated',
 	import('./schemas').ProjectUpdated
@@ -837,13 +457,8 @@ export type EditorSelectionMessage = BaseExtensionMessage<
 >;
 export type ServerInfoMessage = BaseExtensionMessage<
 	'serverInfo',
-	{ url: string; revision: number }
+	{ url: string; revision: number; workspaceRoot: string }
 >;
-
-export type SseEventMessage = BaseExtensionMessage<'sseEvent', { id: string; data: string }>;
-export type SseOpenMessage = BaseExtensionMessage<'sseOpen', { id: string }>;
-export type SseErrorMessage = BaseExtensionMessage<'sseError', { id: string; error: string }>;
-export type SseClosedMessage = BaseExtensionMessage<'sseClosed', { id: string }>;
 
 // =============================================================================
 // Extension Version Check
@@ -879,6 +494,8 @@ export type ConnectionDetailsMessage = BaseExtensionMessage<
 
 export type OpenHistoryMessage = BaseExtensionMessage<'openHistory'>;
 
+export type RequestNewSessionMessage = BaseExtensionMessage<'requestNewSession'>;
+
 export type OpenSettingsMessage = BaseExtensionMessage<'openSettings'>;
 
 // =============================================================================
@@ -886,9 +503,7 @@ export type OpenSettingsMessage = BaseExtensionMessage<'openSettings'>;
 // =============================================================================
 
 export type ExtensionMessage =
-	| SessionEventMessage
-	| SessionEventBatchMessage
-	| SessionLifecycleMessage
+	| TabStateMessage
 	| AccessDataMessage
 	| RuleListMessage
 	| RuleUpdatedMessage
@@ -911,7 +526,6 @@ export type ExtensionMessage =
 	| OpenCodeCustomProviderResultMessage
 	| OpenCodeDisconnectResultMessage
 	| RemoveOpenCodeProviderMessage
-	| SseOpenMessage
 	| AvailableProvidersMessage
 	| ProxyProviderSavingMessage
 	| ProxyProviderSavedMessage
@@ -929,23 +543,17 @@ export type ExtensionMessage =
 	| ResourcesListMessage
 	| ResourceOperationMessage
 	| CliDiagnosticsMessage
-	| ConversationListMessage
-	| AllConversationsClearedMessage
+	| SessionAutoAcceptMessage
 	| DiscoveryStatusMessage
-	| McpConfigReloadedMessage
 	| ProjectUpdatedMessage
-	| ImprovePromptResultMessage
-	| ImprovePromptErrorMessage
-	| ImprovePromptCancelledMessage
 	| EditorSelectionMessage
 	| ServerInfoMessage
-	| SseEventMessage
-	| SseErrorMessage
-	| SseClosedMessage
 	| ExtensionVersionMessage
 	| ConnectionDetailsMessage
 	| OpenHistoryMessage
+	| RequestNewSessionMessage
 	| OpenSettingsMessage
+	| ShowNotificationMessage
 	| QueueEventMessage;
 
 // #############################################################################
@@ -961,80 +569,50 @@ export type ExtensionMessage =
 export interface WebviewDidLaunchCommand {
 	type: 'webviewDidLaunch';
 }
-export interface CreateSessionCommand {
-	type: 'createSession';
-}
 
-export interface SwitchSessionCommand {
-	type: 'switchSession';
-	sessionId: string;
-}
-
-export interface CloseSessionCommand {
-	type: 'closeSession';
-	sessionId: string;
+export interface SendMessageAttachments {
+	files?: string[];
+	codeSnippets?: Array<{
+		filePath: string;
+		content: string;
+		startLine?: number;
+		endLine?: number;
+	}>;
+	images?: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
 }
 
 export interface SendMessageCommand {
 	type: 'sendMessage';
+	sessionId: string;
 	text: string;
-	model?: string;
-	sessionId?: string;
 	messageID?: string;
-	/** Client-generated message ID for optimistic UI — the extension reuses this
-	 *  instead of generating a new one so the upsert in chatStore deduplicates. */
-	clientMessageID?: string;
-	editMode?: 'revert' | 'history_only';
-	/** Agent override for this message (e.g. 'plan', 'build'). */
+	model?: string;
 	agent?: string;
-	/** Thinking effort variant (e.g. 'high', 'max', 'low'). Sent to CLI as-is. */
 	variant?: string;
-	attachments?: {
-		files?: string[];
-		codeSnippets?: Array<{
-			filePath: string;
-			content: string;
-			startLine?: number;
-			endLine?: number;
-		}>;
-		images?: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
-	};
+	attachments?: SendMessageAttachments;
 }
 
 export interface StopRequestCommand {
 	type: 'stopRequest';
-	sessionId?: string;
+	sessionId: string;
 }
 
-export interface ImprovePromptRequestCommand {
-	type: 'improvePromptRequest';
-	text: string;
-	requestId: string;
+export interface CancelQueuedMessageCommand {
+	type: 'cancelQueuedMessage';
+	sessionId: string;
+	queueId: string;
 }
 
-export interface CancelImprovePromptCommand {
-	type: 'cancelImprovePrompt';
-	requestId: string;
+export interface ForceQueuedMessageCommand {
+	type: 'forceQueuedMessage';
+	sessionId: string;
+	queueId: string;
 }
 
-export interface GetConversationListCommand {
-	type: 'getConversationList';
-}
-
-export interface LoadConversationCommand {
-	type: 'loadConversation';
-	filename: string;
-}
-
-export interface DeleteConversationCommand {
-	type: 'deleteConversation';
-	filename: string;
-}
-
-export interface RenameConversationCommand {
-	type: 'renameConversation';
-	filename: string;
-	newTitle: string;
+export interface ReorderQueueCommand {
+	type: 'reorderQueue';
+	sessionId: string;
+	queueIds: string[];
 }
 
 // =============================================================================
@@ -1162,29 +740,6 @@ export interface RemoveProxyEndpointCommand {
 // Tool / Access Commands
 // =============================================================================
 
-export interface AccessResponseCommand {
-	type: 'accessResponse';
-	id: string;
-	approved: boolean;
-	alwaysAllow?: boolean;
-	response?: 'once' | 'always' | 'reject';
-	sessionId?: string;
-	toolName?: string;
-}
-
-export interface QuestionResponseCommand {
-	type: 'questionResponse';
-	requestId: string;
-	answers: QuestionAnswer[];
-	sessionId?: string;
-}
-
-export interface QuestionRejectCommand {
-	type: 'questionReject';
-	requestId: string;
-	sessionId?: string;
-}
-
 export interface GetPermissionsCommand {
 	type: 'getPermissions';
 }
@@ -1196,7 +751,12 @@ export interface SetPermissionPolicyCommand {
 export interface SetAutoAcceptCommand {
 	type: 'setAutoAccept';
 	mode: 'default' | 'on' | 'off';
-	sessionId?: string;
+	sessionId: string;
+}
+export interface SetAlwaysAllowToolCommand {
+	type: 'setAlwaysAllowTool';
+	toolName: string;
+	allow: boolean;
 }
 export interface CheckDiscoveryStatusCommand {
 	type: 'checkDiscoveryStatus';
@@ -1264,34 +824,6 @@ export interface BrowseFoldersCommand {
 export interface GetWorkspaceFilesCommand {
 	type: 'getWorkspaceFiles';
 	searchTerm: string;
-}
-
-// =============================================================================
-// SSE Commands
-// =============================================================================
-
-export interface SseSubscribeCommand {
-	type: 'sseSubscribe';
-	id: string;
-	url: string;
-}
-export interface SseCloseCommand {
-	type: 'sseClose';
-	id: string;
-}
-
-// =============================================================================
-// Restore Commands
-// =============================================================================
-
-export interface RestoreMessageCommand {
-	type: 'restoreMessage';
-	sessionId: string;
-	messageId: string;
-}
-export interface UnrevertCommand {
-	type: 'unrevert';
-	sessionId: string;
 }
 
 // =============================================================================
@@ -1367,71 +899,9 @@ export interface UndoAllChangesCommand {
 	type: 'undoAllChanges';
 }
 // =============================================================================
-// Message Queue Commands
-// =============================================================================
-
-/** Queued message data stored per-session on the extension side. */
-export interface QueuedMessageData {
-	/** Unique queue entry ID */
-	queueId: string;
-	/** Original message text */
-	text: string;
-	/** Model override */
-	model?: string;
-	/** Target session */
-	sessionId: string;
-	/** Agent override (e.g. 'plan', 'build') */
-	agent?: string;
-	/** Thinking effort variant (e.g. 'high', 'max', 'low'). */
-	variant?: string;
-	/** Attachments */
-	attachments?: SendMessageCommand['attachments'];
-	/** Timestamp when queued */
-	queuedAt: number;
-}
-
-export interface CancelQueuedMessageCommand {
-	type: 'cancelQueuedMessage';
-	queueId: string;
-	sessionId: string;
-}
-
-export interface ForceQueuedMessageCommand {
-	type: 'forceQueuedMessage';
-	queueId: string;
-	sessionId: string;
-}
-
-export interface ReorderQueueCommand {
-	type: 'reorderQueue';
-	sessionId: string;
-	/** Ordered list of queueIds — new order for the queue */
-	queueIds: string[];
-}
-
-// Extension → Webview queue events
-export type QueueEventMessage = BaseExtensionMessage<
-	'messageQueue',
-	{
-		action: 'enqueued' | 'dequeued' | 'cancelled' | 'cleared';
-		sessionId: string;
-		queue: QueuedMessageData[];
-		/** The cancelled message text, returned to input on cancel */
-		cancelledText?: string;
-		/** Cancelled image attachments. Files/snippets are restored as inline refs in cancelledText. */
-		cancelledAttachments?: Pick<NonNullable<SendMessageCommand['attachments']>, 'images'>;
-		/** The cancelled message agent, restored on cancel */
-		cancelledAgent?: string;
-	}
->;
-
-// =============================================================================
 // Conversation & Orchestration Commands
 // =============================================================================
 
-export interface ClearAllConversationsCommand {
-	type: 'clearAllConversations';
-}
 export interface SyncAllCommand {
 	type: 'syncAll';
 }
@@ -1442,17 +912,11 @@ export interface SyncAllCommand {
 
 export type WebviewCommand =
 	| WebviewDidLaunchCommand
-	| CreateSessionCommand
-	| SwitchSessionCommand
-	| CloseSessionCommand
 	| SendMessageCommand
 	| StopRequestCommand
-	| ImprovePromptRequestCommand
-	| CancelImprovePromptCommand
-	| GetConversationListCommand
-	| LoadConversationCommand
-	| DeleteConversationCommand
-	| RenameConversationCommand
+	| CancelQueuedMessageCommand
+	| ForceQueuedMessageCommand
+	| ReorderQueueCommand
 	| GetSettingsCommand
 	| UpdateSettingsCommand
 	| GetRulesCommand
@@ -1475,12 +939,10 @@ export type WebviewCommand =
 	| LoadProxyModelsCommand
 	| SyncProxyModelsCommand
 	| RemoveProxyEndpointCommand
-	| AccessResponseCommand
-	| QuestionResponseCommand
-	| QuestionRejectCommand
 	| GetPermissionsCommand
 	| SetPermissionPolicyCommand
 	| SetAutoAcceptCommand
+	| SetAlwaysAllowToolCommand
 	| CheckDiscoveryStatusCommand
 	| GetAccessCommand
 	| CheckCLIDiagnosticsCommand
@@ -1491,10 +953,6 @@ export type WebviewCommand =
 	| BrowseFilesCommand
 	| BrowseFoldersCommand
 	| GetWorkspaceFilesCommand
-	| SseSubscribeCommand
-	| SseCloseCommand
-	| RestoreMessageCommand
-	| UnrevertCommand
 	| ProxyFetchCommand
 	| ProxyFetchAbortCommand
 	| OpenSkillFileCommand
@@ -1508,11 +966,7 @@ export type WebviewCommand =
 	| AcceptAllFilesCommand
 	| UndoFileChangesCommand
 	| UndoAllChangesCommand
-	| ClearAllConversationsCommand
 	| SyncAllCommand
-	| CancelQueuedMessageCommand
-	| ForceQueuedMessageCommand
-	| ReorderQueueCommand
 	| CheckExtensionVersionCommand
 	| RestartOpenCodeCommand
 	| ReloadExtensionCommand

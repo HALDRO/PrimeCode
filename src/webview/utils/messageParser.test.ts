@@ -45,7 +45,7 @@ describe('messageParser', () => {
 		);
 		expect(highlights).toEqual([
 			{ start: 4, end: 18, content: '/skill careful', type: 'skill' },
-			{ start: 23, end: 43, content: '/skill python-testing', type: 'skill' },
+			{ start: 23, end: 44, content: '/skill python-testing', type: 'skill' },
 		]);
 	});
 

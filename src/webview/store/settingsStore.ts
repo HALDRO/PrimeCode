@@ -786,10 +786,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 					},
 				};
 			}),
-		setMcpServers: mcpServers => {
-			set({ mcpServers });
-			useChatStore.getState().actions.rebuildMaterializedViews();
-		},
+		setMcpServers: mcpServers => set({ mcpServers }),
 		setMcpStatus: mcpStatus => set(state => ({ mcpStatus: { ...state.mcpStatus, ...mcpStatus } })),
 		setMcpInstalledMetadata: mcpInstalledMetadata => set({ mcpInstalledMetadata }),
 		setLspStatus: lspStatus => set({ lspStatus }),
@@ -1037,11 +1034,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 							projectPath: data.projectPath,
 						});
 					}
-					break;
-
-				case 'mcpConfigReloaded':
-					// External change to opencode.json detected — re-fetch MCP servers
-					vscode.postMessage({ type: 'loadMCPServers' });
 					break;
 
 				case 'mcpStatus':

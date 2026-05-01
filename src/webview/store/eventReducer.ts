@@ -4,7 +4,8 @@
  * Replaces 17 DISPATCH_HANDLERS with one pure function.
  * All mutations are Immer-safe (direct property assignment on draft).
  *
- * SDK events flow: Extension → bridge → coalescing → eventReducer → Zustand store.
+ * SDK events flow: server SSE (webview-owned) or extension synthetic reconcile events
+ * → coalescing → eventReducer → Zustand store.
  */
 
 import type {
@@ -43,6 +44,38 @@ function upsertMessage(messages: Message[], nextMessage: Message): void {
 function ensureSessionMessages(state: SessionStore, sessionId: string): Message[] {
 	if (!state.messages[sessionId]) state.messages[sessionId] = [];
 	return state.messages[sessionId];
+}
+
+function extractCompositeModelId(message: Message): string | undefined {
+	const record = message as Record<string, unknown>;
+	const directModelId = typeof record.modelID === 'string' ? record.modelID.trim() : '';
+	const directProviderId = typeof record.providerID === 'string' ? record.providerID.trim() : '';
+	if (directModelId) {
+		return directProviderId ? `${directProviderId}/${directModelId}` : directModelId;
+	}
+
+	const model =
+		typeof record.model === 'object' && record.model !== null
+			? (record.model as Record<string, unknown>)
+			: undefined;
+	const nestedModelId = typeof model?.modelID === 'string' ? model.modelID.trim() : '';
+	const nestedProviderId = typeof model?.providerID === 'string' ? model.providerID.trim() : '';
+	if (!nestedModelId) return undefined;
+	return nestedProviderId ? `${nestedProviderId}/${nestedModelId}` : nestedModelId;
+}
+
+function syncSessionModelFromMessages(state: SessionStore, sessionId: string): void {
+	const messages = state.messages[sessionId] ?? [];
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i];
+		if (message.role !== 'user') continue;
+		const model = extractCompositeModelId(message);
+		if (model) {
+			state.sessionModel[sessionId] = model;
+			return;
+		}
+	}
+	delete state.sessionModel[sessionId];
 }
 
 function ensureCompactionParentMessage(
@@ -196,6 +229,12 @@ export function eventReducer(state: SessionStore, event: WebviewSdkEvent): void 
 			const { sessionID, info } = event.properties;
 			const msgs = ensureSessionMessages(state, sessionID);
 			upsertMessage(msgs, info);
+			if (info.role === 'user') {
+				const model = extractCompositeModelId(info);
+				if (model) {
+					state.sessionModel[sessionID] = model;
+				}
+			}
 			if (info.role === 'assistant') {
 				syncCompactionParentFromAssistant(state, sessionID, info as AssistantMessage);
 			}
@@ -208,6 +247,7 @@ export function eventReducer(state: SessionStore, event: WebviewSdkEvent): void 
 			if (msgs) state.messages[sessionID] = msgs.filter(message => message.id !== messageID);
 			// Clean up parts for this message
 			if (state.parts[messageID]) delete state.parts[messageID];
+			syncSessionModelFromMessages(state, sessionID);
 			break;
 		}
 
@@ -230,6 +270,10 @@ export function eventReducer(state: SessionStore, event: WebviewSdkEvent): void 
 				const metadata = part.metadata as { sessionId?: string } | undefined;
 				if (metadata?.sessionId) {
 					state.originatingToolCallBySessionId[metadata.sessionId] = part.callID;
+					const siblings = state.childSessionIdsByParentId[part.sessionID] || [];
+					if (!siblings.includes(metadata.sessionId)) {
+						state.childSessionIdsByParentId[part.sessionID] = [...siblings, metadata.sessionId];
+					}
 				}
 			}
 

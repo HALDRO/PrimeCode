@@ -1,0 +1,833 @@
+import {
+	createOpencodeClient,
+	type Message,
+	type OpencodeClient,
+	type Part,
+	type PermissionRequest,
+	type QuestionRequest,
+	type Session,
+	type SnapshotFileDiff,
+	type Todo,
+} from '@opencode-ai/sdk/v2/client';
+import { produce } from 'immer';
+import { type ConversationIndexEntry, generateId, parseModelId } from '../../common';
+import { IMPROVE_PROMPT_DEFAULT_TEMPLATE } from '../../common/promptImprover';
+import { type SessionStore, useChatStore } from '../store/chatStore';
+import { clearSessionViewCache } from '../store/derived';
+import { useSettingsStore } from '../store/settingsStore';
+import { useUIStore } from '../store/uiStore';
+import { proxyFetch } from '../utils/proxyFetch';
+import { vscode } from '../utils/vscode';
+
+type RestorableSession = Session & {
+	lastModified?: number;
+	created?: number;
+};
+
+export type SessionMessageEntry = {
+	info: Message;
+	parts: Part[];
+};
+
+const SKIP_PARTS = new Set(['patch', 'step-start', 'step-finish', 'snapshot']);
+
+let cachedUrl: string | null = null;
+let cachedRoot = '';
+let cachedClient: OpencodeClient | null = null;
+let improvePromptController: AbortController | null = null;
+let improvePromptRequestId: string | null = null;
+
+function normalizeDriveLetter(dir: string): string {
+	return dir.length >= 2 && dir[1] === ':' ? dir[0].toUpperCase() + dir.slice(1) : dir;
+}
+
+function getWorkspaceRoot(): string {
+	const workspaceRoot = useUIStore.getState().workspaceRoot ?? '';
+	if (!workspaceRoot) {
+		throw new Error('Workspace root is unavailable');
+	}
+	return normalizeDriveLetter(workspaceRoot);
+}
+
+function getServerUrl(): string {
+	const serverUrl = useUIStore.getState().serverUrl;
+	if (!serverUrl) {
+		throw new Error('OpenCode server is unavailable');
+	}
+	return serverUrl;
+}
+
+function getClient(): OpencodeClient {
+	const serverUrl = getServerUrl();
+	const workspaceRoot = getWorkspaceRoot();
+	if (!cachedClient || cachedUrl !== serverUrl || cachedRoot !== workspaceRoot) {
+		cachedUrl = serverUrl;
+		cachedRoot = workspaceRoot;
+		cachedClient = createOpencodeClient({
+			baseUrl: serverUrl,
+			directory: workspaceRoot,
+			fetch: proxyFetch,
+		});
+	}
+	return cachedClient;
+}
+
+function getPermissionListsClient() {
+	return getClient() as OpencodeClient & {
+		permission?: {
+			list?: (params: { sessionID: string; directory: string }) => Promise<{
+				data?: PermissionRequest[];
+				error?: unknown;
+			}>;
+		};
+		question?: {
+			list?: (params: { sessionID: string; directory: string }) => Promise<{
+				data?: QuestionRequest[];
+				error?: unknown;
+			}>;
+		};
+		session: OpencodeClient['session'] & {
+			status?: (params: { directory: string }) => Promise<{
+				data?: Record<string, { type?: string }>;
+				error?: unknown;
+			}>;
+		};
+	};
+}
+
+function writeSessionStatus(sessionId: string, status: { type: 'idle' } | { type: 'busy' }): void {
+	useChatStore.setState(
+		produce((state: SessionStore) => {
+			state.sessionStatus[sessionId] = status;
+		}),
+	);
+}
+function getNextUserMessageId(sessionId: string, messageId: string): string | null {
+	const messages = useChatStore.getState().messages[sessionId] ?? [];
+	const nextUserMessage = messages.find(
+		message => message.role === 'user' && message.id > messageId,
+	);
+	return nextUserMessage?.id ?? null;
+}
+
+async function haltSessionIfBusy(sessionId: string): Promise<void> {
+	const status = useChatStore.getState().sessionStatus[sessionId];
+	if (status?.type !== 'busy' && status?.type !== 'retry') return;
+	try {
+		await getClient().session.abort({ sessionID: sessionId, directory: getWorkspaceRoot() });
+	} catch {
+		// Best effort only. Revert/restore should still continue even if abort fails.
+	}
+}
+
+function applyLocalRevertState(
+	sessionId: string,
+	revert: { messageID: string } | undefined,
+	status: { type: 'idle' } | { type: 'busy' } = { type: 'idle' },
+): void {
+	useChatStore.setState(
+		produce((state: SessionStore) => {
+			const sessionIndex = state.sessions.findIndex(session => session.id === sessionId);
+			if (sessionIndex >= 0) {
+				state.sessions[sessionIndex] = {
+					...state.sessions[sessionIndex],
+					revert,
+				};
+			}
+			state.sessionStatus[sessionId] = status;
+		}),
+	);
+}
+
+type RuntimeAttachments = {
+	files?: string[];
+	codeSnippets?: Array<{
+		filePath: string;
+		content: string;
+		startLine?: number;
+		endLine?: number;
+	}>;
+	images?: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
+};
+
+type RuntimeSendParams = {
+	sessionId: string;
+	text: string;
+	messageID?: string;
+	model?: string;
+	agent?: string;
+	variant?: string;
+	attachments?: RuntimeAttachments;
+};
+
+async function deleteMessagesFrom(sessionId: string, messageId: string): Promise<void> {
+	const messages = useChatStore.getState().messages[sessionId] ?? [];
+	const startIndex = messages.findIndex(message => message.id === messageId);
+	const messageIds =
+		startIndex >= 0
+			? messages
+					.slice(startIndex)
+					.map(message => message.id)
+					.reverse()
+			: [messageId];
+
+	for (let index = 0; index < messageIds.length; index += 5) {
+		const chunk = messageIds.slice(index, index + 5);
+		await Promise.all(
+			chunk.map(async id => {
+				const url = new URL(`${getServerUrl()}/session/${sessionId}/message/${id}`);
+				url.searchParams.set('directory', getWorkspaceRoot());
+				const response = await proxyFetch(url.toString(), { method: 'DELETE' });
+				if (!response.ok && response.status !== 404) {
+					const bodyText = await response.text().catch(() => '');
+					throw new Error(
+						`Message delete failed: ${response.status} ${response.statusText}${bodyText ? `\n${bodyText}` : ''}`,
+					);
+				}
+			}),
+		);
+	}
+}
+
+function showRuntimeError(error: unknown): void {
+	useUIStore.getState().actions.pushNotification({
+		type: 'error',
+		content: error instanceof Error ? error.message : 'OpenCode request failed',
+		timestamp: new Date().toISOString(),
+		autoDismissMs: 8000,
+	});
+}
+
+function getResolvedPromptImproveTemplate(): string {
+	const template = useSettingsStore.getState().promptImproveTemplate;
+	return typeof template === 'string' && template.trim()
+		? template
+		: IMPROVE_PROMPT_DEFAULT_TEMPLATE;
+}
+
+function getResolvedPromptImproveModel(): string | undefined {
+	const improveModel = useSettingsStore.getState().promptImproveModel;
+	if (typeof improveModel === 'string' && improveModel.trim()) {
+		return improveModel;
+	}
+	const activeSessionId = useChatStore.getState().activeSessionId;
+	return activeSessionId ? useChatStore.getState().sessionModel[activeSessionId] : undefined;
+}
+
+async function runPromptImprove(text: string, signal: AbortSignal): Promise<string> {
+	const template = getResolvedPromptImproveTemplate();
+	if (!template.trim()) {
+		throw new Error(
+			'Prompt Improver template is empty. Configure it in Settings -> Prompt Improver.',
+		);
+	}
+
+	const fullText = template.includes('{{TEXT}}')
+		? template.replace('{{TEXT}}', text)
+		: `${template.trim()}\n\n---\n\n${text}`;
+	const client = getClient();
+	const directory = getWorkspaceRoot();
+	const parsedModel = parseModelId(getResolvedPromptImproveModel() ?? '');
+	const created = await client.session.create({ directory });
+	if (created.error || !created.data?.id) {
+		throw new Error(`Failed to create temp session: ${created.error ?? 'no session id'}`);
+	}
+
+	const tempSessionId = created.data.id;
+	try {
+		const result = await client.session.prompt(
+			{
+				sessionID: tempSessionId,
+				directory,
+				parts: [{ type: 'text', text: fullText }],
+				...(parsedModel
+					? { model: { providerID: parsedModel.providerId, modelID: parsedModel.modelId } }
+					: {}),
+			},
+			{ signal },
+		);
+		if (result.error) {
+			throw new Error(`Prompt failed: ${JSON.stringify(result.error)}`);
+		}
+		const response = result.data as { parts?: Array<{ type: string; text?: string }> } | undefined;
+		const improvedText = (response?.parts ?? [])
+			.filter(part => part.type === 'text' && typeof part.text === 'string')
+			.map(part => part.text ?? '')
+			.join('')
+			.trim();
+		if (!improvedText) {
+			throw new Error('Empty response from model');
+		}
+		return improvedText;
+	} finally {
+		void client.session.delete({ sessionID: tempSessionId, directory }).catch(() => {});
+	}
+}
+
+function toConversationEntry(session: RestorableSession): ConversationIndexEntry {
+	const createdAt = Number(session.time?.created ?? session.created ?? Date.now());
+	const updatedAt = Number(session.time?.updated ?? session.lastModified ?? createdAt);
+	const title = typeof session.title === 'string' ? session.title : '';
+	return {
+		filename: session.id,
+		sessionId: session.id,
+		startTime: new Date(createdAt).toISOString(),
+		endTime: new Date(updatedAt).toISOString(),
+		messageCount: 0,
+		totalCost: 0,
+		firstUserMessage: title || 'Untitled',
+		lastUserMessage: title || '',
+		customTitle: title || undefined,
+	};
+}
+
+function persistTabs(): void {
+	const { sessionOrder, activeSessionId } = useChatStore.getState();
+	const previous = (window.vscode?.getState() as Record<string, unknown> | undefined) ?? {};
+	window.vscode?.setState({
+		...previous,
+		openTabs: sessionOrder,
+		activeTab: activeSessionId,
+	});
+}
+
+function closeTabState(state: SessionStore, sessionId: string): void {
+	delete state.sessionInput[sessionId];
+	delete state.sessionAgent[sessionId];
+	delete state.sessionModel[sessionId];
+	delete state.sessionAutoAccept[sessionId];
+	delete state.draftAttachments[sessionId];
+	delete state.draftAgent[sessionId];
+	delete state.childSessionIdsByParentId[sessionId];
+	delete state.originatingToolCallBySessionId[sessionId];
+	delete state.messages[sessionId];
+	delete state.sessionStatus[sessionId];
+	delete state.sessionDiff[sessionId];
+	delete state.todos[sessionId];
+	delete state.permissions[sessionId];
+	delete state.questions[sessionId];
+	state.sessions = state.sessions.filter(session => session.id !== sessionId);
+	for (const [messageId, parts] of Object.entries(state.parts)) {
+		if (parts.some(part => part.sessionID === sessionId)) {
+			delete state.parts[messageId];
+		}
+	}
+	clearSessionViewCache(sessionId);
+}
+
+async function hydrateSession(sessionId: string, activate = true): Promise<void> {
+	const client = getClient();
+	const workspaceRoot = getWorkspaceRoot();
+	const [sessionResult, messagesResult, todoResult, diffResult] = await Promise.all([
+		client.session.get({ sessionID: sessionId, directory: workspaceRoot }),
+		client.session.messages({ sessionID: sessionId, directory: workspaceRoot }),
+		client.session
+			.todo({ sessionID: sessionId, directory: workspaceRoot })
+			.catch(() => ({ data: [] })),
+		client.session
+			.diff({ sessionID: sessionId, directory: workspaceRoot })
+			.catch(() => ({ data: [] })),
+	]);
+
+	if (sessionResult.error || !sessionResult.data) {
+		throw new Error(`Failed to load session ${sessionId}`);
+	}
+
+	const session = sessionResult.data as RestorableSession;
+	const messageEntries = (messagesResult.data ?? []) as SessionMessageEntry[];
+	const todos = ((todoResult.data ?? []) as Todo[]) || [];
+	const diff = ((diffResult.data ?? []) as SnapshotFileDiff[]) || [];
+	useChatStore.getState().actions.hydrateSessionSnapshot({
+		session,
+		messageEntries: messageEntries.map(entry => ({
+			info: entry.info,
+			parts: entry.parts.filter(part => !SKIP_PARTS.has(part.type)),
+		})),
+		todos,
+		diff,
+		activate,
+	});
+}
+
+async function refreshConversationList(): Promise<void> {
+	const client = getClient();
+	const workspaceRoot = getWorkspaceRoot();
+	const result = await client.experimental.session.list({
+		directory: workspaceRoot,
+		archived: false,
+		limit: 200,
+	});
+	const sessions = ((result.data ?? []) as RestorableSession[]).filter(
+		session => session.id && !session.parentID,
+	);
+	const hydrated = await Promise.all(
+		sessions.map(async session => {
+			try {
+				const messagesResult = await client.session.messages({
+					sessionID: session.id,
+					directory: workspaceRoot,
+					limit: 1,
+				});
+				const hasMessages = Array.isArray(messagesResult.data) && messagesResult.data.length > 0;
+				return hasMessages ? toConversationEntry(session) : null;
+			} catch {
+				return null;
+			}
+		}),
+	);
+	useUIStore
+		.getState()
+		.actions.setConversationList(
+			hydrated.filter((entry): entry is ConversationIndexEntry => entry !== null),
+		);
+}
+
+async function reconcileOpenSessions(): Promise<void> {
+	const state = useChatStore.getState();
+	const sessionIds = [...new Set(state.sessionOrder)];
+	if (state.activeSessionId && !sessionIds.includes(state.activeSessionId)) {
+		sessionIds.push(state.activeSessionId);
+	}
+
+	await refreshConversationList();
+	await Promise.all(
+		sessionIds.map(async sessionId => {
+			if (!sessionId) return;
+			try {
+				await hydrateSession(sessionId, sessionId === state.activeSessionId);
+			} catch {
+				// Best-effort reconcile for sessions that may have been deleted or temporarily unavailable.
+			}
+		}),
+	);
+}
+
+export const openCodeRuntime = {
+	showRuntimeError,
+	persistTabs,
+	refreshConversationList,
+	reconcileOpenSessions,
+
+	handleBackendRuntimeStatus(sessionId: string, status: string): void {
+		if (!sessionId) return;
+
+		if (status === 'busy') {
+			useChatStore.setState(
+				produce((state: SessionStore) => {
+					state.sessionStatus[sessionId] = { type: 'busy' };
+				}),
+			);
+			return;
+		}
+
+		if (status === 'retry') {
+			useChatStore.setState(
+				produce((state: SessionStore) => {
+					state.sessionStatus[sessionId] = {
+						type: 'retry',
+						attempt: 1,
+						message: 'Retrying...',
+						next: Date.now() + 1000,
+					};
+				}),
+			);
+			return;
+		}
+
+		if (status !== 'idle') return;
+		writeSessionStatus(sessionId, { type: 'idle' });
+	},
+
+	async bootstrap(): Promise<void> {
+		try {
+			await refreshConversationList();
+			const persisted =
+				(window.vscode?.getState() as { openTabs?: string[]; activeTab?: string } | undefined) ??
+				{};
+			if (persisted.openTabs?.length) {
+				for (const sessionId of persisted.openTabs) {
+					await hydrateSession(sessionId, sessionId === persisted.activeTab);
+				}
+				persistTabs();
+				return;
+			}
+			const firstConversation = useUIStore.getState().conversationList[0];
+			if (firstConversation?.sessionId) {
+				await hydrateSession(firstConversation.sessionId, true);
+				persistTabs();
+				return;
+			}
+			await this.createSession();
+		} catch (error) {
+			showRuntimeError(error);
+		}
+	},
+
+	async refreshRuntimeState(sessionId: string): Promise<void> {
+		const client = getPermissionListsClient();
+		const directory = getWorkspaceRoot();
+		const [_statusResult, permissionResult, questionResult] = await Promise.all([
+			client.session.status?.({ directory }).catch(() => null),
+			client.permission?.list?.({ sessionID: sessionId, directory }).catch(() => null),
+			client.question?.list?.({ sessionID: sessionId, directory }).catch(() => null),
+		]);
+
+		useChatStore.setState(
+			produce((state: SessionStore) => {
+				state.permissions[sessionId] = [...(permissionResult?.data ?? [])];
+				state.questions[sessionId] = [...(questionResult?.data ?? [])];
+			}),
+		);
+	},
+
+	async autoRespondPendingPermissions(sessionId: string): Promise<void> {
+		if (!sessionId) return;
+		const state = useChatStore.getState();
+		const autoAccept = state.sessionAutoAccept[sessionId] ?? false;
+		const accessAutoApprove = useSettingsStore.getState().accessAutoApprove;
+		if (!autoAccept && !accessAutoApprove) return;
+
+		await this.refreshRuntimeState(sessionId);
+		const pending = useChatStore.getState().permissions[sessionId] ?? [];
+		if (pending.length === 0) return;
+
+		const { policies, access } = useSettingsStore.getState();
+		const alwaysAllowByTool = new Set(
+			(access ?? []).filter(entry => entry.allowAll).map(entry => entry.toolName.toLowerCase()),
+		);
+
+		for (const request of pending) {
+			const permissionName = request.permission?.toLowerCase?.() ?? '';
+			const shouldApprove =
+				accessAutoApprove ||
+				autoAccept ||
+				alwaysAllowByTool.has(permissionName) ||
+				policies[permissionName as keyof typeof policies] === 'allow';
+			const shouldDeny = policies[permissionName as keyof typeof policies] === 'deny';
+			if (!shouldApprove && !shouldDeny) continue;
+
+			await this.respondToPermission({
+				requestId: request.id,
+				toolName: request.permission,
+				approved: shouldApprove,
+				alwaysAllow: false,
+				response: shouldApprove ? 'once' : 'reject',
+			});
+		}
+	},
+
+	async respondToPermission(params: {
+		requestId: string;
+		toolName?: string;
+		approved: boolean;
+		alwaysAllow?: boolean;
+		response?: 'once' | 'always' | 'reject';
+	}): Promise<void> {
+		const client = getClient();
+		const response =
+			params.response ?? (params.approved ? (params.alwaysAllow ? 'always' : 'once') : 'reject');
+		const permissionClient = client as OpencodeClient & {
+			permission?: {
+				respond?: (input: {
+					requestID: string;
+					response: 'once' | 'always' | 'reject';
+				}) => Promise<{ error?: unknown }>;
+			};
+		};
+		if (permissionClient.permission?.respond) {
+			const result = await permissionClient.permission.respond({
+				requestID: params.requestId,
+				response,
+			});
+			if (result?.error) {
+				throw new Error(`Permission response failed: ${JSON.stringify(result.error)}`);
+			}
+			return;
+		}
+		throw new Error('Permission respond API unavailable in webview runtime');
+	},
+
+	async respondToQuestion(params: { requestId: string; answers: string[][] }): Promise<void> {
+		const client = getClient() as OpencodeClient & {
+			question?: {
+				reply?: (input: { requestID: string; answers: string[][] }) => Promise<{ error?: unknown }>;
+			};
+		};
+		if (!client.question?.reply) {
+			throw new Error('Question reply API unavailable in webview runtime');
+		}
+		const result = await client.question.reply({
+			requestID: params.requestId,
+			answers: params.answers,
+		});
+		if (result?.error) {
+			throw new Error(`Question reply failed: ${JSON.stringify(result.error)}`);
+		}
+	},
+
+	async rejectQuestion(requestId: string): Promise<void> {
+		const client = getClient() as OpencodeClient & {
+			question?: {
+				reject?: (input: { requestID: string }) => Promise<{ error?: unknown }>;
+			};
+		};
+		if (!client.question?.reject) {
+			throw new Error('Question reject API unavailable in webview runtime');
+		}
+		const result = await client.question.reject({ requestID: requestId });
+		if (result?.error) {
+			throw new Error(`Question reject failed: ${JSON.stringify(result.error)}`);
+		}
+	},
+
+	async createSession(): Promise<string> {
+		const client = getClient();
+		const result = await client.session.create({ directory: getWorkspaceRoot() });
+		if (result.error || !result.data) {
+			throw new Error('Failed to create session');
+		}
+		const session = result.data as Session;
+		useChatStore.setState(
+			produce((state: SessionStore) => {
+				const index = state.sessions.findIndex(item => item.id === session.id);
+				if (index >= 0) state.sessions[index] = session;
+				else state.sessions.push(session);
+				if (!state.sessionOrder.includes(session.id)) {
+					state.sessionOrder.push(session.id);
+				}
+				state.activeSessionId = session.id;
+			}),
+		);
+		persistTabs();
+		await hydrateSession(session.id, true);
+		await refreshConversationList();
+		return session.id;
+	},
+
+	switchSession(sessionId: string): void {
+		useChatStore.setState({ activeSessionId: sessionId });
+		persistTabs();
+		const state = useChatStore.getState();
+		if (!state.messages[sessionId]) {
+			void hydrateSession(sessionId, true).catch(showRuntimeError);
+		}
+	},
+
+	closeSession(sessionId: string): void {
+		useChatStore.setState(
+			produce((state: SessionStore) => {
+				state.sessionOrder = state.sessionOrder.filter(id => id !== sessionId);
+				closeTabState(state, sessionId);
+				if (state.activeSessionId === sessionId) {
+					state.activeSessionId = state.sessionOrder[state.sessionOrder.length - 1];
+				}
+			}),
+		);
+		persistTabs();
+	},
+
+	async loadConversation(sessionId: string): Promise<void> {
+		await hydrateSession(sessionId, true);
+		persistTabs();
+	},
+
+	async renameConversation(sessionId: string, newTitle: string): Promise<void> {
+		const client = getClient();
+		await client.session.update({
+			sessionID: sessionId,
+			directory: getWorkspaceRoot(),
+			title: newTitle,
+		});
+		await refreshConversationList();
+		if (useChatStore.getState().activeSessionId === sessionId) {
+			await hydrateSession(sessionId, true);
+		}
+	},
+
+	async deleteConversation(sessionId: string): Promise<void> {
+		const client = getClient();
+		await client.session.delete({ sessionID: sessionId, directory: getWorkspaceRoot() });
+		this.closeSession(sessionId);
+		await refreshConversationList();
+	},
+
+	async clearAllConversations(): Promise<void> {
+		const client = getClient();
+		const workspaceRoot = getWorkspaceRoot();
+		const result = await client.experimental.session.list({
+			directory: workspaceRoot,
+			archived: false,
+			limit: 500,
+		});
+		const sessions = (result.data ?? []) as RestorableSession[];
+		await Promise.all(
+			sessions.map(session =>
+				client.session.delete({ sessionID: session.id, directory: workspaceRoot }),
+			),
+		);
+		useChatStore.setState(
+			produce((state: SessionStore) => {
+				for (const sessionId of [...state.sessionOrder]) {
+					closeTabState(state, sessionId);
+				}
+				state.sessionOrder = [];
+				state.activeSessionId = undefined;
+			}),
+		);
+		persistTabs();
+		await refreshConversationList();
+	},
+
+	async abortSession(sessionId: string): Promise<void> {
+		vscode.postMessage({ type: 'stopRequest', sessionId });
+	},
+
+	async restoreMessage(sessionId: string, messageId: string): Promise<void> {
+		const client = getClient();
+		await haltSessionIfBusy(sessionId);
+		const nextUserMessageId = getNextUserMessageId(sessionId, messageId);
+		if (nextUserMessageId) {
+			await client.session.revert({
+				sessionID: sessionId,
+				messageID: nextUserMessageId,
+				directory: getWorkspaceRoot(),
+			});
+			applyLocalRevertState(sessionId, { messageID: nextUserMessageId });
+		} else {
+			await client.session.unrevert({
+				sessionID: sessionId,
+				directory: getWorkspaceRoot(),
+			});
+			applyLocalRevertState(sessionId, undefined);
+		}
+	},
+
+	async unrevert(sessionId: string): Promise<void> {
+		const client = getClient();
+		await client.session.unrevert({ sessionID: sessionId, directory: getWorkspaceRoot() });
+		applyLocalRevertState(sessionId, undefined);
+	},
+
+	async editMessage(params: {
+		sessionId: string;
+		messageId: string;
+		text: string;
+		mode: 'restore_and_send' | 'replace_history';
+		isAlreadyReverted: boolean;
+		model?: string;
+		attachments?: {
+			files?: string[];
+			codeSnippets?: Array<{
+				filePath: string;
+				content: string;
+				startLine?: number;
+				endLine?: number;
+			}>;
+			images?: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
+		};
+		agent?: string;
+		variant?: string;
+	}): Promise<void> {
+		await haltSessionIfBusy(params.sessionId);
+
+		if (!params.isAlreadyReverted && params.mode === 'restore_and_send') {
+			await getClient().session.revert({
+				sessionID: params.sessionId,
+				messageID: params.messageId,
+				directory: getWorkspaceRoot(),
+			});
+		}
+
+		await deleteMessagesFrom(params.sessionId, params.messageId);
+		useChatStore
+			.getState()
+			.actions.truncateSessionMessages(params.sessionId, params.messageId, true);
+		applyLocalRevertState(params.sessionId, undefined);
+
+		await this.sendMessage({
+			sessionId: params.sessionId,
+			text: params.text,
+			messageID: generateId('msg'),
+			model: params.model,
+			agent: params.agent,
+			variant: params.variant,
+			attachments: params.attachments,
+		});
+	},
+
+	async improvePrompt(text: string, requestId: string): Promise<void> {
+		if (!text.trim() || !requestId) {
+			throw new Error('Missing text or requestId');
+		}
+
+		improvePromptController?.abort();
+		improvePromptController = new AbortController();
+		improvePromptRequestId = requestId;
+		const timeout = window.setTimeout(() => improvePromptController?.abort(), 30_000);
+
+		try {
+			const improvedText = await runPromptImprove(text, improvePromptController.signal);
+			if (improvePromptRequestId !== requestId) return;
+			const activeSessionId = useChatStore.getState().activeSessionId;
+			const currentInput = activeSessionId
+				? useChatStore.getState().sessionInput[activeSessionId] || ''
+				: '';
+			useChatStore.setState(
+				produce((state: SessionStore) => {
+					state.promptVersions = {
+						original: currentInput,
+						improved: improvedText,
+						showingImproved: true,
+					};
+					state.isImprovingPrompt = false;
+					state.improvingPromptRequestId = null;
+					if (activeSessionId) {
+						state.sessionInput[activeSessionId] = improvedText;
+					}
+				}),
+			);
+		} catch (error) {
+			if (improvePromptRequestId !== requestId) return;
+			const message = error instanceof Error ? error.message : String(error);
+			const aborted = message.toLowerCase().includes('abort');
+			useChatStore.setState({ isImprovingPrompt: false, improvingPromptRequestId: null });
+			if (!aborted) {
+				useUIStore.getState().actions.pushNotification({
+					type: 'error',
+					content: `Prompt Improve failed\n${message || 'Unknown error'}`,
+					timestamp: new Date().toISOString(),
+					autoDismissMs: 8000,
+				});
+			}
+		} finally {
+			window.clearTimeout(timeout);
+			if (improvePromptRequestId === requestId) {
+				improvePromptRequestId = null;
+				improvePromptController = null;
+			}
+		}
+	},
+
+	cancelImprovePrompt(requestId?: string): void {
+		if (requestId && improvePromptRequestId !== requestId) {
+			return;
+		}
+		improvePromptController?.abort();
+		improvePromptController = null;
+		improvePromptRequestId = null;
+		useChatStore.setState({ isImprovingPrompt: false, improvingPromptRequestId: null });
+	},
+
+	async sendMessage(params: RuntimeSendParams): Promise<void> {
+		vscode.postMessage({
+			type: 'sendMessage',
+			sessionId: params.sessionId,
+			text: params.text,
+			messageID: params.messageID,
+			model: params.model,
+			agent: params.agent,
+			variant: params.variant,
+			attachments: params.attachments,
+		});
+	},
+};

@@ -6,12 +6,7 @@
  */
 
 import { create } from 'zustand';
-import type {
-	ConversationIndexEntry,
-	ExtensionMessage,
-	SessionEventMessage,
-	WorkspaceFile,
-} from '../../common';
+import type { ConversationIndexEntry, ExtensionMessage, WorkspaceFile } from '../../common';
 import { generateId } from '../../common';
 
 // Re-export types from chatStore for backward compatibility
@@ -36,6 +31,7 @@ export interface UIActions {
 	setWorkspaceFiles: (files: WorkspaceFile[]) => void;
 	setConversationList: (list: ConversationIndexEntry[]) => void;
 	setServerUrl: (url: string | null, revision?: number) => void;
+	setWorkspaceRoot: (workspaceRoot: string | null) => void;
 	setServerStatus: (status: 'connected' | 'disconnected' | 'error') => void;
 	setShowSlashCommands: (show: boolean) => void;
 	setSlashFilter: (filter: string) => void;
@@ -119,40 +115,13 @@ function inferSeverity(type: TransientNotification['type'], content: string): No
 	return 'error';
 }
 
-function processNotificationEvent(evt: unknown, actions: UIActions): void {
-	const event = evt as SessionEventMessage;
-	if (event.eventType !== 'notification') return;
-	const msg = (event.payload as { notification?: unknown }).notification as
-		| {
-				type?: unknown;
-				content?: unknown;
-				reason?: unknown;
-				timestamp?: unknown;
-				id?: unknown;
-		  }
-		| undefined;
-	if (!msg) return;
-	const t = msg.type;
-	if (t === 'error' || t === 'system_notice') {
-		const content = typeof msg.content === 'string' ? msg.content : '';
-		if (!content.trim()) return;
-		actions.pushNotification({
-			id: typeof msg.id === 'string' ? msg.id : undefined,
-			type: t,
-			content,
-			reason: typeof msg.reason === 'string' ? msg.reason : undefined,
-			timestamp: typeof msg.timestamp === 'string' ? msg.timestamp : new Date().toISOString(),
-			autoDismissMs: t === 'system_notice' ? 6000 : undefined,
-		});
-	}
-}
-
 export interface UIState {
 	activeModal: ModalType;
 	workspaceFiles: WorkspaceFile[];
 	conversationList: ConversationIndexEntry[];
 
 	serverUrl: string | null;
+	workspaceRoot: string | null;
 	serverStatus: 'connected' | 'disconnected' | 'error';
 	/** Incremented each time serverUrl is set — forces SSE reconnect even if URL is the same. */
 	serverUrlVersion: number;
@@ -187,6 +156,7 @@ export const useUIStore = create<UIState>((set, get) => ({
 	conversationList: [],
 
 	serverUrl: null,
+	workspaceRoot: null,
 	serverStatus: 'disconnected',
 	serverUrlVersion: 0,
 
@@ -220,6 +190,7 @@ export const useUIStore = create<UIState>((set, get) => ({
 					connectionDetails: nextUrl === null ? null : state.connectionDetails,
 				};
 			}),
+		setWorkspaceRoot: workspaceRoot => set({ workspaceRoot }),
 		setServerStatus: serverStatus => set({ serverStatus }),
 		setShowSlashCommands: showSlashCommands => set({ showSlashCommands }),
 		setSlashFilter: slashFilter => set({ slashFilter }),
@@ -283,6 +254,10 @@ export const useUIStore = create<UIState>((set, get) => ({
 			const { actions, activeModal, showHistoryDropdown } = get();
 
 			switch (message.type) {
+				case 'requestNewSession':
+					window.dispatchEvent(new CustomEvent('primecode:new-session'));
+					break;
+
 				case 'openHistory':
 					set({ showHistoryDropdown: !showHistoryDropdown });
 					break;
@@ -304,41 +279,23 @@ export const useUIStore = create<UIState>((set, get) => ({
 					}
 					break;
 
-				case 'conversationList':
-					if (Array.isArray(message.data)) {
-						actions.setConversationList(message.data);
-					}
-					break;
-
-				case 'allConversationsCleared':
-					actions.setConversationList([]);
-					break;
-
 				case 'serverInfo':
 					if (message.data) {
-						const { url, revision } = message.data as { url: string; revision: number };
+						const { url, revision, workspaceRoot } = message.data as {
+							url: string;
+							revision: number;
+							workspaceRoot?: string;
+						};
 						actions.setServerUrl(url, revision);
+						if (typeof workspaceRoot === 'string') {
+							actions.setWorkspaceRoot(workspaceRoot || null);
+						}
 					}
 					break;
 
 				case 'connectionDetails':
 					set({ connectionDetails: message.data as UIState['connectionDetails'] });
 					break;
-
-				case 'session_event': {
-					processNotificationEvent(message, actions);
-					break;
-				}
-
-				// Handle batched session events from the transport layer
-				case 'session_event_batch' as ExtensionMessage['type']: {
-					const batch = message as unknown as { messages: unknown[] };
-					if (!Array.isArray(batch.messages)) break;
-					for (const evt of batch.messages) {
-						processNotificationEvent(evt, actions);
-					}
-					break;
-				}
 
 				default:
 					break;

@@ -1,29 +1,14 @@
 /**
  * @file OpenCodeExecutor
- * @description Executor implementation for OpenCode CLI (SSE-based) using @opencode-ai/sdk.
- * Parses token stats from `message.updated` SSE events (properties.info.tokens: {input, output, cache.read})
- * and emits `session_updated` with delta-based tokenStats compatible with SessionHandler aggregation.
+ * @description Executor implementation for OpenCode CLI using @opencode-ai/sdk.
  */
 
-import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-
-import type { Message, Part, TextPart } from '@opencode-ai/sdk/v2/client';
 import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk/v2/client';
 
-import { parseModelId } from '../../common';
 import { PERMISSION_CATEGORIES } from '../../common/permissions';
 import { logger } from '../../utils/logger';
-import { sanitizePartForHistory } from '../../utils/toolPartSanitizer';
-import { buildPromptParts } from '../promptParts';
 import type { CLIConfig, CLIExecutor } from './types';
-
-// =============================================================================
-// Types & Interfaces
-// =============================================================================
-
-/** Single entry from `client.session.messages()` response. */
-type SessionMessageEntry = { info: Message; parts: Part[] };
 
 // =============================================================================
 // TTL Cache Helper
@@ -57,30 +42,11 @@ class TtlCache<T> {
 
 export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	private serverUrl: string | null = null;
-	private sessionId: string | null = null;
 	private directory: string | null = null;
 	/** SDK client for typed API calls. Initialized after server is ready. */
 	private sdkClient: OpencodeClient | null = null;
 
-	private eventAbort: AbortController | null = null;
-	private eventStreamRunning = false;
 	private eventRestartTimer: ReturnType<typeof setTimeout> | null = null;
-
-	/**
-	 * Bridge reference for sending SDK events directly to the webview.
-	 * Set by ChatProvider after construction via `setBridge()`.
-	 */
-	private bridge: import('../../transport/OutboundBridge').OutboundBridge | null = null;
-
-	/** Set the bridge reference for direct SDK event forwarding. */
-	public setBridge(bridge: import('../../transport/OutboundBridge').OutboundBridge): void {
-		this.bridge = bridge;
-	}
-
-	/** All session IDs that are currently active (main + subagent children). */
-	private readonly activeSessions = new Set<string>();
-	/** Sessions explicitly deleted/closed — SSE events for these are skipped to save CPU. */
-	private readonly deletedSessions = new Set<string>();
 
 	/** Guards against concurrent ensureServer calls. */
 	private ensureServerPromise: Promise<void> | null = null;
@@ -100,7 +66,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	/** True if THIS process spawned the server (vs. connecting to one started by another window). */
 	private isServerOwner = false;
 
-	private static readonly DELETE_MESSAGE_BATCH_SIZE = 5;
 	/** Give a just-starting server a brief chance to become healthy before killing processes. */
 	private static readonly EXISTING_SERVER_GRACE_MS = 1500;
 	/** Stashed config from the last successful ensureServer — needed for reconnect. */
@@ -109,10 +74,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	private serverStartedAt: number | null = null;
 	private static readonly LOCAL_SERVER_HOST = '127.0.0.1';
 	private static readonly LOCAL_SERVER_PORT = OpenCodeExecutor.resolveLocalServerPort();
-
-	getCapabilities(): ReadonlyArray<'SessionFork' | 'SetupHelper'> {
-		return ['SessionFork'];
-	}
 
 	// =========================================================================
 	// Server Management
@@ -528,15 +489,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 	}
 
-	private isServerDownError(error: unknown): boolean {
-		if (error instanceof Error) {
-			const cause = (error as { cause?: { code?: string } }).cause;
-			if (cause?.code === 'ECONNREFUSED' || cause?.code === 'ECONNRESET') return true;
-			if (error.message.includes('fetch failed')) return true;
-		}
-		return false;
-	}
-
 	private resetServerState(): void {
 		logger.info('[OpenCode] Resetting server state for reconnection...');
 		this.clearScheduledEventRestart();
@@ -559,10 +511,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		this._mcpCache.clear();
 	}
 
-	// =========================================================================
-	// Health Monitor & Auto-Reconnect
-	// =========================================================================
-
 	private clearScheduledEventRestart(): void {
 		if (this.eventRestartTimer) {
 			clearTimeout(this.eventRestartTimer);
@@ -570,372 +518,10 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 	}
 
-	private scheduleEventStreamRestart(directory: string, delayMs = 2000): void {
-		if (this.eventRestartTimer) return;
-		this.eventRestartTimer = setTimeout(() => {
-			this.eventRestartTimer = null;
-			if (this.serverUrl && !this.eventStreamRunning) {
-				this.startEventStream(this.serverUrl, directory);
-			}
-		}, delayMs);
-	}
-
 	/** Returns the SDK client or throws if not initialized. */
 	private requireSdk(): OpencodeClient {
 		if (!this.sdkClient) throw new Error('OpenCode SDK client not initialized');
 		return this.sdkClient;
-	}
-
-	// =========================================================================
-	// Session Management
-	// =========================================================================
-
-	async spawn(prompt: string, config: CLIConfig): Promise<ChildProcess> {
-		await this.ensureServer(config);
-		try {
-			await this.createNewSession(prompt, config);
-		} catch (error) {
-			if (this.isServerDownError(error)) {
-				logger.warn('[OpenCode] Server connection lost during spawn');
-				throw new Error(
-					'OpenCode server connection lost. Use the restart button in the header to reconnect.',
-				);
-			} else {
-				throw error;
-			}
-		}
-		return null as unknown as ChildProcess;
-	}
-
-	async spawnFollowUp(
-		prompt: string,
-		sessionId: string,
-		config: CLIConfig,
-		attachments?: Parameters<CLIExecutor['spawnFollowUp']>[3],
-	): Promise<ChildProcess> {
-		if (!this.serverUrl) throw new Error('OpenCode server not running');
-
-		try {
-			// Continue the existing session (no fork) - just send a message
-			this.sessionId = sessionId;
-			this.startEventStream(this.serverUrl, config.workspaceRoot);
-			await this.sendPrompt(config.workspaceRoot, sessionId, prompt, config, attachments);
-		} catch (error) {
-			if (this.isServerDownError(error)) {
-				logger.warn('[OpenCode] Server connection lost during followUp');
-				throw new Error(
-					'OpenCode server connection lost. Use the restart button in the header to reconnect.',
-				);
-			} else {
-				throw error;
-			}
-		}
-		return null as unknown as ChildProcess;
-	}
-
-	async truncateSession(sessionId: string, messageId: string, config: CLIConfig): Promise<void> {
-		if (!this.serverUrl) throw new Error('OpenCode server not running');
-
-		logger.info('[OpenCode] Reverting session history to message', { sessionId, messageId });
-
-		const client = this.requireSdk();
-		await client.session.revert({
-			sessionID: sessionId,
-			messageID: messageId,
-			directory: config.workspaceRoot,
-		});
-	}
-
-	async deleteSessionMessagesFrom(
-		sessionId: string,
-		messageId: string,
-		config: CLIConfig,
-	): Promise<string[]> {
-		if (!this.serverUrl) throw new Error('OpenCode server not running');
-
-		logger.info('[OpenCode] Deleting session messages from point without revert', {
-			sessionId,
-			messageId,
-		});
-
-		const client = this.requireSdk();
-		const { data: messages, error: listError } = await client.session.messages({
-			sessionID: sessionId,
-			directory: config.workspaceRoot,
-		});
-		if (listError || !messages) {
-			throw new Error(`Failed to list session messages: ${JSON.stringify(listError ?? null)}`);
-		}
-
-		const startIndex = messages.findIndex(entry => entry.info.id === messageId);
-		if (startIndex === -1) {
-			throw new Error(`Failed to find message ${messageId} in session ${sessionId}`);
-		}
-
-		const toDelete = messages
-			.slice(startIndex)
-			.map(entry => entry.info.id)
-			.reverse();
-
-		for (const _id of toDelete) {
-		}
-
-		for (
-			let index = 0;
-			index < toDelete.length;
-			index += OpenCodeExecutor.DELETE_MESSAGE_BATCH_SIZE
-		) {
-			const chunk = toDelete.slice(index, index + OpenCodeExecutor.DELETE_MESSAGE_BATCH_SIZE);
-			const results = await Promise.allSettled(
-				chunk.map(async id => {
-					const response = await fetch(`${this.serverUrl}/session/${sessionId}/message/${id}`, {
-						method: 'DELETE',
-						headers: {
-							'x-opencode-directory': config.workspaceRoot,
-						},
-					});
-					if (!response.ok) {
-						throw new Error(
-							`Failed to delete session message ${id}: ${response.status} ${response.statusText}`,
-						);
-					}
-				}),
-			);
-
-			const firstError = results.find(
-				(result): result is PromiseRejectedResult => result.status === 'rejected',
-			);
-			if (firstError) {
-				throw firstError.reason instanceof Error
-					? firstError.reason
-					: new Error(String(firstError.reason));
-			}
-		}
-
-		return [...toDelete].reverse();
-	}
-
-	async unrevertSession(sessionId: string, config: CLIConfig): Promise<void> {
-		if (!this.serverUrl) throw new Error('OpenCode server not running');
-
-		logger.info('[OpenCode] Unreverting session', { sessionId });
-
-		const client = this.requireSdk();
-		await client.session.unrevert({
-			sessionID: sessionId,
-			directory: config.workspaceRoot,
-		});
-	}
-
-	async createNewSession(prompt: string, config: CLIConfig): Promise<ChildProcess> {
-		if (!this.serverUrl) throw new Error('OpenCode server not running');
-
-		logger.info('[OpenCodeExecutor] Creating new session on existing server...');
-		try {
-			this.sessionId = await this.createSession(config.workspaceRoot);
-			logger.info(`[OpenCodeExecutor] New session created: ${this.sessionId}`);
-
-			this.startEventStream(this.serverUrl, config.workspaceRoot);
-			await this.sendPrompt(config.workspaceRoot, this.sessionId, prompt, config);
-		} catch (error) {
-			if (this.isServerDownError(error)) {
-				logger.warn('[OpenCode] Server connection lost while creating session');
-				throw new Error(
-					'OpenCode server connection lost. Use the restart button in the header to reconnect.',
-				);
-			} else {
-				throw error;
-			}
-		}
-		return null as unknown as ChildProcess;
-	}
-
-	/**
-	 * Checks if a session title is the auto-generated default ("New session - <ISO>" or "Child session - <ISO>").
-	 * Matches the official OpenCode `isDefaultTitle()` logic.
-	 */
-	private static isDefaultTitle(title: string): boolean {
-		return /^(New session - |Child session - )\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(
-			title,
-		);
-	}
-
-	/**
-	 * Fetches the first user message's summary title for a session.
-	 * OpenCode stores LLM-generated titles on the session directly via ensureTitle(),
-	 * but if that hasn't run yet, we fall back to the first user message text.
-	 */
-	/**
-	 * Fetches the first user message's summary title for a session and reports
-	 * whether the session contains any messages at all.
-	 *
-	 * Returns `{ title, hasMessages }`:
-	 * - `hasMessages = false` only when the API returned an empty message list.
-	 * - `title` may be `undefined` even when messages exist (e.g. no text part).
-	 * - On API errors we assume messages exist (`hasMessages = true`) to avoid
-	 *   accidentally hiding sessions.
-	 */
-	private async getSessionDisplayTitle(
-		sessionId: string,
-		directory: string,
-	): Promise<{ title: string | undefined; hasMessages: boolean }> {
-		try {
-			const client = this.requireSdk();
-			const { data: messages } = await client.session.messages({
-				sessionID: sessionId,
-				directory,
-				limit: 3,
-			});
-
-			if (!Array.isArray(messages) || messages.length === 0) {
-				return { title: undefined, hasMessages: false };
-			}
-
-			const userMsg = messages.find((m: SessionMessageEntry) => m.info?.role === 'user');
-			if (!userMsg) {
-				// Messages exist but none are from the user — still not empty.
-				return { title: undefined, hasMessages: true };
-			}
-
-			const { info } = userMsg;
-			if (info.role === 'user' && info.summary?.title) {
-				return { title: info.summary.title, hasMessages: true };
-			}
-
-			const textPart = userMsg.parts.find(
-				(p): p is TextPart => p.type === 'text' && !p.synthetic && !!p.text,
-			);
-			if (textPart?.text) {
-				const cleaned = textPart.text.trim().split('\n')[0];
-				const title = cleaned.length > 80 ? `${cleaned.substring(0, 77)}...` : cleaned;
-				return { title, hasMessages: true };
-			}
-
-			// User message exists but has no extractable text (e.g. only attachments).
-			return { title: undefined, hasMessages: true };
-		} catch {
-			// On error, assume messages exist to avoid hiding valid sessions.
-			return { title: undefined, hasMessages: true };
-		}
-	}
-
-	async listSessions(config: CLIConfig): Promise<
-		Array<{
-			id: string;
-			title?: string;
-			lastModified?: number;
-			created?: number;
-			parentID?: string;
-			/** true when the session has at least one user message. */
-			hasMessages?: boolean;
-			/** Server-side revert state — source of truth for whether the session is reverted. */
-			revert?: { messageID: string; partID?: string };
-		}>
-	> {
-		if (!this.serverUrl) {
-			if (!config.workspaceRoot) return [];
-			try {
-				await this.ensureServer(config);
-			} catch (error) {
-				logger.warn('[OpenCode] listSessions: ensureServer failed', error);
-				return [];
-			}
-			if (!this.serverUrl) return [];
-		}
-
-		try {
-			const client = this.requireSdk();
-			// Return the full session graph here, including child sessions.
-			// Restore/runtime flows need access to subtasks so nested task cards can
-			// hydrate their own transcripts. Call sites that only care about top-level
-			// chats must filter `!parentID` explicitly.
-			//
-			// On Windows, VS Code returns uri.fsPath with a lowercase drive letter
-			// (e.g. "c:\..."), while the OpenCode server stores sessions with an
-			// uppercase drive letter (e.g. "C:\...") via realpathSync.native.
-			// The SDK interceptor injects the client's directory into every GET
-			// request, and the server filters by exact string match — so sessions
-			// created with a different drive letter case become invisible.
-			//
-			// To work around this, we issue a second request with the alternate
-			// drive letter case and merge the results, deduplicating by session ID.
-			const { data: raw } = await client.session.list({});
-			const sessions = Array.isArray(raw) ? raw : [];
-
-			// Fetch sessions stored under the alternate drive letter case (Windows)
-			if (this.directory && this.directory.length >= 2 && this.directory[1] === ':') {
-				const curDrive = this.directory[0];
-				const altDrive =
-					curDrive === curDrive.toUpperCase() ? curDrive.toLowerCase() : curDrive.toUpperCase();
-				const altDirectory = altDrive + this.directory.slice(1);
-
-				try {
-					const { data: altRaw } = await client.session.list({
-						directory: altDirectory,
-					});
-					const altSessions = Array.isArray(altRaw) ? altRaw : [];
-					if (altSessions.length > 0) {
-						// Merge and deduplicate by session ID
-						const seen = new Set(sessions.map(s => s.id));
-						for (const s of altSessions) {
-							if (!seen.has(s.id)) {
-								sessions.push(s);
-								seen.add(s.id);
-							}
-						}
-						// Re-sort by time_updated descending
-						sessions.sort((a, b) => (b.time?.updated || 0) - (a.time?.updated || 0));
-					}
-				} catch {
-					// Alternate drive letter fetch failed — not critical, continue
-				}
-			}
-
-			logger.info('[OpenCode] listSessions: API returned', {
-				rawCount: sessions.length,
-			});
-
-			const resolved = await Promise.all(
-				sessions.map(async s => {
-					const isChild = Boolean(s.parentID);
-					let displayTitle: string | undefined;
-
-					// Only resolve display titles for top-level sessions (expensive operation)
-					let hasMessages = true;
-					if (!isChild) {
-						const rawTitle = s.title || '';
-
-						if (!rawTitle || OpenCodeExecutor.isDefaultTitle(rawTitle)) {
-							// Try to get a meaningful title from the first user message.
-							const result = await this.getSessionDisplayTitle(s.id, config.workspaceRoot);
-							displayTitle = result.title || rawTitle || undefined;
-							hasMessages = result.hasMessages;
-						} else {
-							displayTitle = rawTitle;
-						}
-					} else {
-						displayTitle = s.title || undefined;
-					}
-
-					return {
-						id: s.id,
-						title: displayTitle,
-						lastModified: s.time?.updated || s.time?.created || Date.now(),
-						created: s.time?.created,
-						parentID: s.parentID,
-						hasMessages,
-						revert: s.revert
-							? { messageID: s.revert.messageID, partID: s.revert.partID }
-							: undefined,
-					};
-				}),
-			);
-
-			return resolved;
-		} catch (error) {
-			logger.warn('[OpenCode] listSessions: API call failed', error);
-			return [];
-		}
 	}
 
 	// =========================================================================
@@ -946,8 +532,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (!this.directory) return;
 		logger.info('[OpenCode] Preloading metadata cache...');
 		await Promise.allSettled([
-			this.listCommands(this.directory),
-			this.listConfigProviders(this.directory),
 			this.listAgents(this.directory),
 			this.listSkills(this.directory),
 			this.getMcpStatus(this.directory),
@@ -955,109 +539,9 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		logger.info('[OpenCode] Metadata cache preloaded');
 	}
 
-	async executeCommand(
-		command: string,
-		_args: string[],
-		config: CLIConfig,
-		sessionId?: string,
-	): Promise<void> {
-		if (!this.serverUrl) await this.ensureServer(config);
-		if (!this.directory) throw new Error('OpenCode server not ready');
-
-		const directory = this.directory;
-		const cmd = command.replace(/^\//, '');
-
-		switch (cmd) {
-			case 'compact':
-			case 'summarize':
-				await this.handleCompactCommand(config, sessionId);
-				break;
-			case 'commands':
-				await this.handleListCommand('commands', () => this.listCommands(directory));
-				break;
-			case 'models':
-				await this.handleListCommand('models', () => this.listConfigProviders(directory));
-				break;
-			case 'agents':
-				await this.handleListCommand('agents', () => this.listAgents(directory));
-				break;
-			case 'status': {
-				const mcp = await this.getMcpStatus(this.directory);
-				logger.info('[OpenCode] Status:', { mcp });
-				break;
-			}
-			default:
-				await this.handleDynamicCommand(cmd);
-				break;
-		}
-	}
-
-	private async handleCompactCommand(config: CLIConfig, targetSessionId?: string): Promise<void> {
-		const sid = targetSessionId || this.sessionId;
-		if (!sid || !this.directory) throw new Error('No active session to compact');
-
-		const parsed = parseModelId(config.model ?? '');
-		if (!parsed) {
-			logger.warn('[OpenCode] No model configured for compaction', { sessionId: sid });
-			return;
-		}
-
-		// Ensure SSE stream is running — summarize triggers async server-side
-		// processing that emits message.part.updated, session.compacted, etc.
-		if (this.serverUrl) {
-			this.startEventStream(this.serverUrl, config.workspaceRoot);
-		}
-
-		try {
-			await this.sessionSummarize(this.directory, sid, {
-				providerID: parsed.providerId,
-				modelID: parsed.modelId,
-			});
-		} catch (error) {
-			logger.error(`[OpenCode] Error compacting session: ${String(error)}`);
-		}
-	}
-
-	private async handleListCommand(_name: string, fetcher: () => Promise<unknown>): Promise<void> {
-		await fetcher();
-		// Results are delivered to webview via SDK events, not CLI event emit.
-	}
-
-	private async handleDynamicCommand(cmd: string): Promise<void> {
-		if (!this.directory) return;
-		logger.warn(`Unknown OpenCode command: ${cmd}`);
-	}
-
 	// =========================================================================
 	// API Helpers (Fetch Only)
 	// =========================================================================
-
-	private async listCommands(
-		directory: string,
-	): Promise<Array<{ name: string; description?: string }>> {
-		const cached = this._commandsCache.get();
-		if (cached) return cached;
-		try {
-			const client = this.requireSdk();
-			const { data } = await client.command.list({ directory });
-			const commands = (data ?? []) as Array<{ name: string; description?: string }>;
-			return this._commandsCache.set(commands);
-		} catch {
-			return [];
-		}
-	}
-
-	private async listConfigProviders(directory: string): Promise<unknown> {
-		const cached = this._providersCache.get();
-		if (cached) return cached;
-		try {
-			const client = this.requireSdk();
-			const { data } = await client.config.providers({ directory });
-			return this._providersCache.set(data);
-		} catch {
-			return {};
-		}
-	}
 
 	public async listAgents(directory: string): Promise<unknown> {
 		const cached = this._agentsCache.get();
@@ -1106,278 +590,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 	}
 
-	private async sessionSummarize(
-		directory: string,
-		sessionId: string,
-		model: { providerID: string; modelID: string },
-	): Promise<void> {
-		const client = this.requireSdk();
-		await client.session.summarize({
-			sessionID: sessionId,
-			providerID: model.providerID,
-			modelID: model.modelID,
-			directory,
-		});
-	}
-
-	private async createSession(directory: string): Promise<string> {
-		const client = this.requireSdk();
-		const { data, error } = await client.session.create({ directory });
-		if (error || !data?.id) throw new Error(`OpenCode create session: ${error ?? 'missing id'}`);
-		return data.id;
-	}
-
-	/**
-	 * Creates an empty session without sending a message.
-	 * Used when user clicks "+" to create a new chat.
-	 */
-	async createEmptySession(config: CLIConfig): Promise<string> {
-		await this.ensureServer(config);
-		const sessionId = await this.createSession(config.workspaceRoot);
-		this.sessionId = sessionId;
-		logger.info(`[OpenCodeExecutor] Empty session created: ${sessionId}`);
-		return sessionId;
-	}
-
-	async deleteSession(sessionId: string, config: CLIConfig): Promise<boolean> {
-		try {
-			const client = this.requireSdk();
-			await client.session.delete({
-				sessionID: sessionId,
-				directory: config.workspaceRoot,
-			});
-			// Clean up per-session metadata to prevent unbounded Map growth
-			this.cleanupSessionMessages(sessionId);
-			logger.info(`[OpenCodeExecutor] Session deleted: ${sessionId}`);
-			return true;
-		} catch (error) {
-			logger.error('[OpenCodeExecutor] Failed to delete session:', error);
-			return false;
-		}
-	}
-
-	async renameSession(sessionId: string, title: string, config: CLIConfig): Promise<boolean> {
-		try {
-			const client = this.requireSdk();
-			await client.session.update({
-				sessionID: sessionId,
-				title,
-				directory: config.workspaceRoot,
-			});
-			logger.info(`[OpenCodeExecutor] Session renamed: ${sessionId} -> "${title}"`);
-			return true;
-		} catch (error) {
-			logger.error('[OpenCodeExecutor] Failed to rename session:', error);
-			return false;
-		}
-	}
-
-	private async sendAbort(directory: string, sessionId: string): Promise<void> {
-		const client = this.requireSdk();
-		await client.session.abort({ sessionID: sessionId, directory });
-	}
-
-	private async sendPermissionReply(
-		_directory: string,
-		requestId: string,
-		payload: { reply: 'once' | 'always' | 'reject'; message?: string },
-	): Promise<void> {
-		const client = this.requireSdk();
-		const { error } = await client.permission.reply({
-			requestID: requestId,
-			reply: payload.reply,
-			...(payload.message ? { message: payload.message } : {}),
-		});
-		if (error) throw new Error(`Permission reply failed: ${JSON.stringify(error)}`);
-	}
-
-	private async sendPrompt(
-		directory: string,
-		sessionId: string,
-		prompt: string,
-		config: CLIConfig,
-		attachments?: Parameters<CLIExecutor['spawnFollowUp']>[3],
-	): Promise<void> {
-		const parsed = parseModelId(config.model ?? '');
-		const modelProviderId = parsed?.providerId || '';
-
-		const modelOverride = modelProviderId
-			? { model: { providerID: modelProviderId, modelID: parsed?.modelId || '' } }
-			: {};
-
-		const parts = buildPromptParts({ text: prompt, attachments });
-
-		const client = this.requireSdk();
-		await client.session.promptAsync({
-			sessionID: sessionId,
-			directory,
-			parts,
-			...(config.messageID ? { messageID: config.messageID } : {}),
-			...modelOverride,
-			...(config.agent ? { agent: config.agent } : {}),
-			...(config.variant ? { variant: config.variant } : {}),
-		});
-	}
-
-	// =========================================================================
-	// Event Streaming
-	// =========================================================================
-
-	private startEventStream(_baseUrl: string, directory: string): void {
-		if (this.eventStreamRunning) return;
-		this.clearScheduledEventRestart();
-		this.eventStreamRunning = true;
-		this.eventAbort = new AbortController();
-		const signal = this.eventAbort.signal;
-		const client = this.requireSdk();
-
-		void (async () => {
-			try {
-				const { stream } = await client.event.subscribe(
-					{
-						directory,
-					},
-					{
-						signal,
-						sseDefaultRetryDelay: 250,
-						sseMaxRetryAttempts: 6,
-						sseMaxRetryDelay: 1500,
-						onSseError: (error: unknown) => {
-							if (!signal.aborted) {
-								logger.warn('[OpenCode] SSE stream error (SDK will retry):', error);
-							}
-						},
-					},
-				);
-
-				for await (const event of stream) {
-					if (signal.aborted) break;
-					this.handleSdkEvent(event);
-				}
-			} catch (error) {
-				if (!signal.aborted) {
-					logger.error('[OpenCode] Event stream error:', error);
-				}
-			} finally {
-				this.eventStreamRunning = false;
-				this.eventAbort = null;
-
-				// Auto-restart SSE if the stream died but the server is still supposed to be up.
-				// This only restores the event stream; server restarts stay manual.
-				if (!signal.aborted && this.serverUrl && this.directory) {
-					logger.info('[OpenCode] SSE stream ended unexpectedly, scheduling restart...');
-					this.scheduleEventStreamRestart(this.directory);
-				}
-			}
-		})();
-	}
-
-	/**
-	 * Permission auto-approve callback. Set by ChatProvider via `setPermissionInterceptor()`.
-	 * Returns true if the permission was auto-approved (don't forward to webview).
-	 */
-	private permissionInterceptor:
-		| ((sessionId: string, props: Record<string, unknown>) => boolean)
-		| null = null;
-
-	/** Set the permission interceptor for auto-approve logic. */
-	public setPermissionInterceptor(
-		interceptor: (sessionId: string, props: Record<string, unknown>) => boolean,
-	): void {
-		this.permissionInterceptor = interceptor;
-	}
-
-	private handleSdkEvent(raw: unknown): void {
-		const envelope = raw as { type: string; properties?: unknown };
-		if (!envelope || typeof envelope.type !== 'string') return;
-
-		const props = (envelope.properties ?? {}) as Record<string, unknown>;
-		if (envelope.type === 'message.part.updated') {
-			const part = props.part as Part | undefined;
-			if (part) {
-				envelope.properties = { ...props, part: sanitizePartForHistory(part) };
-			}
-		}
-		const sessionId = typeof props.sessionID === 'string' ? props.sessionID : undefined;
-
-		// Skip deleted sessions
-		if (sessionId && this.deletedSessions.has(sessionId)) return;
-
-		// Track active sessions for abort
-		if (envelope.type === 'session.status') {
-			const status = props.status as { type?: string } | undefined;
-			if (sessionId && status?.type === 'busy') {
-				this.activeSessions.add(sessionId);
-			} else if (sessionId && status?.type === 'idle') {
-				this.activeSessions.delete(sessionId);
-			}
-		}
-		if (envelope.type === 'session.idle' && sessionId) {
-			this.activeSessions.delete(sessionId);
-		}
-
-		// Permission interceptor: auto-approve before forwarding to webview
-		if (this.bridge) {
-			if (envelope.type === 'permission.asked' && this.permissionInterceptor && sessionId) {
-				if (!this.permissionInterceptor(sessionId, props)) {
-					this.bridge.sendSdkEvent(envelope);
-				}
-				// If auto-approved, don't forward to webview
-			} else {
-				this.bridge.sendSdkEvent(envelope);
-			}
-		}
-
-		this.emit('sdk_event', envelope);
-	}
-
-	async abortSession(sessionId: string): Promise<void> {
-		if (!this.directory) return;
-		await this.sendAbort(this.directory, sessionId).catch(e =>
-			logger.warn(`[OpenCode] Failed to abort session ${sessionId}:`, e),
-		);
-		this.activeSessions.delete(sessionId);
-	}
-
-	async abort(): Promise<void> {
-		if (this.directory) {
-			// Abort ALL tracked sessions (main + subagent children) in parallel
-			const sessionsToAbort = new Set<string>(this.activeSessions);
-			if (this.sessionId) sessionsToAbort.add(this.sessionId);
-
-			const dir = this.directory;
-			await Promise.allSettled(
-				[...sessionsToAbort].map(sid =>
-					this.sendAbort(dir, sid).catch(e =>
-						logger.warn(`[OpenCode] Failed to abort session ${sid}:`, e),
-					),
-				),
-			);
-			this.activeSessions.clear();
-		}
-		try {
-			this.eventAbort?.abort();
-		} catch {}
-	}
-
-	async kill(): Promise<void> {
-		await this.abort();
-		this.clearScheduledEventRestart();
-		this.sessionId = null;
-		this.eventStreamRunning = false;
-		this.eventAbort = null;
-		this.activeSessions.clear();
-		this.deletedSessions.clear();
-	}
-
-	/** Remove per-session metadata to prevent unbounded growth. */
-	private cleanupSessionMessages(sessionId: string): void {
-		this.activeSessions.delete(sessionId);
-		this.deletedSessions.add(sessionId);
-	}
-
 	async dispose(): Promise<void> {
-		await this.kill();
+		this.clearScheduledEventRestart();
 		if (this.serverInstance) {
 			try {
 				this.serverInstance.close();
@@ -1391,48 +605,10 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		this.sdkClient = null;
 	}
 
-	async respondToPermission(decision: {
-		requestId: string;
-		approved: boolean;
-		alwaysAllow?: boolean;
-		response?: 'once' | 'always' | 'reject';
-	}): Promise<void> {
-		if (!this.directory) throw new Error('OpenCode server not running');
-		const reply =
-			decision.response ??
-			(decision.approved ? (decision.alwaysAllow ? 'always' : 'once') : 'reject');
-		await this.sendPermissionReply(this.directory, decision.requestId, {
-			reply,
-			message: reply === 'reject' ? 'User denied this request' : undefined,
-		});
-	}
-
-	async respondToQuestion(decision: { requestId: string; answers: string[][] }): Promise<void> {
-		const client = this.requireSdk();
-		const { error } = await client.question.reply({
-			requestID: decision.requestId,
-			answers: decision.answers,
-		});
-		if (error) throw new Error(`Question reply failed: ${JSON.stringify(error)}`);
-	}
-
-	async rejectQuestion(requestId: string): Promise<void> {
-		const client = this.requireSdk();
-		const { error } = await client.question.reject({ requestID: requestId });
-		if (error) throw new Error(`Question reject failed: ${JSON.stringify(error)}`);
-	}
-
-	getSessionId(): string | null {
-		return this.sessionId;
-	}
 	getAdminInfo(): { baseUrl: string; directory: string } | null {
 		return this.serverUrl && this.directory
 			? { baseUrl: this.serverUrl, directory: this.directory }
 			: null;
-	}
-
-	isSessionActive(sessionId: string): boolean {
-		return this.activeSessions.has(sessionId);
 	}
 
 	getSdkClient(): OpencodeClient | null {
@@ -1457,17 +633,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	/** Invalidate the MCP status cache so the next getMcpStatus() call fetches fresh data. */
 	clearMcpCache(): void {
 		this._mcpCache.clear();
-	}
-
-	// Aliases previously provided by CLIRunner facade
-	/** Alias for ensureServer — used by ChatProvider. */
-	async start(config: CLIConfig): Promise<void> {
-		return this.ensureServer(config);
-	}
-
-	/** Alias for getAdminInfo — used by handlers. */
-	getOpenCodeServerInfo(): { baseUrl: string; directory: string } | null {
-		return this.getAdminInfo();
 	}
 
 	/** Returns the provider type. Always 'opencode'. */
@@ -1523,14 +688,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 
 		logger.info('[OpenCode] Restarting server...');
-
-		// Stop SSE before resetting state
-		try {
-			this.eventAbort?.abort();
-		} catch {}
 		this.clearScheduledEventRestart();
-		this.eventStreamRunning = false;
-		this.eventAbort = null;
 
 		// Reset server state (kills process if owner)
 		this.resetServerState();
@@ -1541,7 +699,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			await this.ensureServer(config);
 
 			if (this.serverUrl) {
-				this.startEventStream(this.serverUrl, config.workspaceRoot);
 				logger.info('[OpenCode] Server restarted successfully');
 				return true;
 			}

@@ -10,7 +10,7 @@ import React from 'react';
 import { getDisplayDurationMs } from '../../../common/tokenStats';
 import { useElapsedTimer } from '../../hooks/useElapsedTimer';
 import { useMessageTurnTokens } from '../../store';
-import type { SectionStats } from '../../store/projector';
+import type { SectionStats } from '../../store/derived';
 import { formatDuration, formatTime, formatTokens } from '../../utils/format';
 import { ClockIcon, TimerIcon, TokensIcon } from '../icons';
 import type { StatItem } from '../ui';

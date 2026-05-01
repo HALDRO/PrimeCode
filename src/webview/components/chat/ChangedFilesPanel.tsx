@@ -11,19 +11,22 @@
 import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { extractCanonicalTaskResult } from '../../../common';
-import { buildToolActionType } from '../../../common/normalizedTypes';
 import { isMcpTool } from '../../constants';
 import { cn } from '../../lib/cn';
 import {
+	deriveSessionView,
+	mapSessionDiffEntries,
 	type RenderNode,
-	useChangedFilesState,
 	useHasTodos,
 	useIsActiveChildSession,
 	useMcpServers,
+	useSessionDiffFiles,
+	useSessionDiffSummary,
 	useTodoState,
 } from '../../store';
-import type { ChangedFile } from '../../store/chatStore';
 import { useChatStore } from '../../store/chatStore';
+import type { SessionDiffEntry } from '../../store/selectors';
+import { useSettingsStore } from '../../store/settingsStore';
 import { useUIActions } from '../../store/uiStore';
 import { copyTextToClipboard } from '../../utils/clipboard';
 import { useVSCode } from '../../utils/vscode';
@@ -39,7 +42,6 @@ import {
 	TodoProgressIcon,
 } from '../icons';
 import { DropdownMenu, IconButton, PathChip, ScrollContainer, Tooltip } from '../ui';
-import { normalizeDiffForCopy, resolveFileChanges } from './SimpleDiff';
 
 interface TodoItem {
 	content: string;
@@ -58,7 +60,8 @@ function getActiveMessages(): RenderNode[] | undefined {
 	const state = useChatStore.getState();
 	const sid = state.activeSessionId;
 	if (!sid) return undefined;
-	const view = state.materializedViews[sid];
+	const mcpServerNames = Object.keys(useSettingsStore.getState().mcpServers || {});
+	const view = deriveSessionView(state, sid, mcpServerNames);
 	if (!view || view.nodeIds.length === 0) return undefined;
 	const items: RenderNode[] = [];
 	for (const id of view.nodeIds) {
@@ -122,10 +125,10 @@ function formatMessage(
 					const toolPart = part as import('@opencode-ai/sdk/v2/client').ToolPart;
 					if (toolPart.callID !== m.toolUseId) continue;
 					if ('output' in toolPart.state) return toolPart.state.output ?? '';
-					return m.streamingOutput ?? '';
+					return '';
 				}
 			}
-			return m.streamingOutput ?? '';
+			return '';
 		})();
 		if (!content.trim()) return undefined;
 		const prefix = mode === 'all' ? `## ${toolName}\n` : '';
@@ -147,59 +150,20 @@ function formatMessages(
 	return parts.join('\n\n');
 }
 
-/**
- * Build copyable diffs from tool_result metadata.
- * Uses the same unified diff source as SimpleDiff component (metadata.diff).
- * Falls back to tool_use filePath header when no diff content available.
- */
-function buildPatches(msgs: RenderNode[]): string {
-	const patches: string[] = [];
-	for (const m of msgs) {
-		if (m.kind !== 'tool_use') continue;
+function getActiveSessionDiffFiles(): SessionDiffEntry[] {
+	const state = useChatStore.getState();
+	const sid = state.activeSessionId;
+	if (!sid) return [];
+	return mapSessionDiffEntries(state.sessionDiff[sid]);
+}
 
-		const actionType =
-			m.normalizedEntry?.entryType &&
-			typeof m.normalizedEntry.entryType === 'object' &&
-			'actionType' in m.normalizedEntry.entryType
-				? m.normalizedEntry.entryType.actionType
-				: buildToolActionType(m.toolName, m.rawInput ?? {});
-
-		const metadata = (() => {
-			const state = useChatStore.getState();
-			for (const messageParts of Object.values(state.parts)) {
-				for (const part of messageParts) {
-					if (part.type !== 'tool') continue;
-					const toolPart = part as import('@opencode-ai/sdk/v2/client').ToolPart;
-					if (toolPart.callID !== m.toolUseId) continue;
-					return (toolPart.metadata ??
-						('metadata' in toolPart.state
-							? ((toolPart.state as { metadata?: Record<string, unknown> }).metadata ?? undefined)
-							: undefined)) as Record<string, unknown> | undefined;
-				}
-			}
-			return undefined;
-		})();
-
-		const changes = resolveFileChanges({
-			actionType,
-			toolResultMetadata: metadata,
-			fallbackFilePath: m.filePath,
-		});
-
-		if (changes.length > 0) {
-			for (const change of changes) {
-				if (change.diffText.trim()) patches.push(change.diffText.trim());
-			}
-			continue;
-		}
-
-		const diff = metadata?.diff;
-		if (typeof diff === 'string' && diff.trim()) {
-			patches.push(normalizeDiffForCopy(diff, m.filePath || ''));
-		}
-	}
-
-	return patches.filter(Boolean).join('\n\n');
+function formatSessionDiffSummary(files: SessionDiffEntry[]): string {
+	return files
+		.map(file => {
+			const status = file.status ? ` ${file.status}` : '';
+			return `${file.filePath} +${file.linesAdded} -${file.linesRemoved}${status}`;
+		})
+		.join('\n');
 }
 
 const CopyDropdown = React.memo<{
@@ -246,18 +210,8 @@ function useCopyMenuItems(): CopyMenuItem[] {
 		if (text) void copyTextToClipboard(text);
 	}, [mcpServerNames]);
 
-	const handleCopyLastDiffs = useCallback(() => {
-		const msgs = getActiveMessages();
-		if (!msgs) return;
-		const lastUserIdx = findLastUserIndex(msgs);
-		const text = buildPatches(msgs.slice(Math.max(0, lastUserIdx)));
-		if (text) void copyTextToClipboard(text);
-	}, []);
-
-	const handleCopyAllDiffs = useCallback(() => {
-		const msgs = getActiveMessages();
-		if (!msgs) return;
-		const text = buildPatches(msgs);
+	const handleCopySessionDiffSummary = useCallback(() => {
+		const text = formatSessionDiffSummary(getActiveSessionDiffFiles());
 		if (text) void copyTextToClipboard(text);
 	}, []);
 
@@ -265,10 +219,9 @@ function useCopyMenuItems(): CopyMenuItem[] {
 		() => [
 			{ label: 'Copy Last Response', action: handleCopyLastResponse },
 			{ label: 'Copy All Messages', action: handleCopyAllMessages },
-			{ label: 'Copy Diffs (Last Response)', action: handleCopyLastDiffs },
-			{ label: 'Copy Diffs (All Session)', action: handleCopyAllDiffs },
+			{ label: 'Copy Changed Files', action: handleCopySessionDiffSummary },
 		],
-		[handleCopyLastResponse, handleCopyAllMessages, handleCopyLastDiffs, handleCopyAllDiffs],
+		[handleCopyLastResponse, handleCopyAllMessages, handleCopySessionDiffSummary],
 	);
 }
 
@@ -456,7 +409,7 @@ function formatDiffCount(value: number, kind: 'added' | 'removed'): string {
 }
 
 const FileRow = React.memo<{
-	file: ChangedFile;
+	file: SessionDiffEntry;
 	onOpenDiff: () => void;
 	onAccept: () => void;
 	onReject: () => void;
@@ -508,16 +461,14 @@ const FileRow = React.memo<{
 FileRow.displayName = 'FileRow';
 
 export const ChangedFilesPanel: React.FC = React.memo(() => {
-	const { changedFiles, cumulativeDiffs } = useChangedFilesState();
+	const files = useSessionDiffFiles();
 	const hasTodos = useHasTodos();
 	const isChild = useIsActiveChildSession();
 
 	// Child sessions don't own file changes — diffs belong to the parent session.
 	if (isChild) return null;
 
-	// Official OpenCode treats session.diff as the authoritative review/files source.
-	// Keep changedFiles for live metadata, but do not require it for restored visibility.
-	const hasFiles = cumulativeDiffs.length > 0 || changedFiles.length > 0;
+	const hasFiles = files.length > 0;
 
 	if (!hasFiles && !hasTodos) {
 		return null;
@@ -533,106 +484,13 @@ ChangedFilesPanel.displayName = 'ChangedFilesPanel';
 
 const ChangedFilesPanelContent: React.FC = React.memo(() => {
 	const { postMessage } = useVSCode();
-	const { changedFiles, cumulativeDiffs } = useChangedFilesState();
+	const files = useSessionDiffFiles();
+	const { added: totalAdded, removed: totalRemoved } = useSessionDiffSummary();
 	const { showConfirmDialog } = useUIActions();
 	const [expanded, setExpanded] = useState(false);
 
-	// Build a lookup map from cumulative diffs (original→current) when available
-	const cumulativeMap = useMemo(() => {
-		const map = new Map<
-			string,
-			{ additions: number; deletions: number; status?: 'added' | 'deleted' | 'modified' }
-		>();
-		for (const d of cumulativeDiffs) {
-			map.set(d.file, {
-				additions: d.additions,
-				deletions: d.deletions,
-				status: d.status as 'added' | 'deleted' | 'modified' | undefined,
-			});
-		}
-		return map;
-	}, [cumulativeDiffs]);
-
-	const hasCumulative = cumulativeMap.size > 0;
-
-	// Build the file list for display.
-	// session.diff is authoritative for restored membership and stats; changedFiles only
-	// enriches rows with live metadata like toolUseId/timestamp when available.
-	const groupedFiles = useMemo(() => {
-		const fileMap = new Map<string, ChangedFile>();
-
-		for (const diff of cumulativeDiffs) {
-			fileMap.set(diff.file, {
-				filePath: diff.file,
-				fileName: diff.file.split(/[/\\]/).pop() || diff.file,
-				linesAdded: diff.additions,
-				linesRemoved: diff.deletions,
-				toolUseId: '',
-				timestamp: 0,
-			});
-		}
-
-		// Merge in changedFiles grouped by path for extra metadata and live-only rows.
-		for (const file of changedFiles) {
-			const existing = fileMap.get(file.filePath);
-			if (existing) {
-				fileMap.set(file.filePath, {
-					...existing,
-					linesAdded: hasCumulative ? existing.linesAdded : existing.linesAdded + file.linesAdded,
-					linesRemoved: hasCumulative
-						? existing.linesRemoved
-						: existing.linesRemoved + file.linesRemoved,
-					timestamp: Math.max(existing.timestamp, file.timestamp),
-					toolUseId: file.toolUseId || existing.toolUseId,
-				});
-			} else {
-				fileMap.set(file.filePath, { ...file });
-			}
-		}
-
-		if (hasCumulative) {
-			// Override row stats from the authoritative diff snapshot.
-			for (const [filePath, entry] of fileMap) {
-				const cumulative = cumulativeMap.get(filePath);
-				if (cumulative) {
-					entry.linesAdded = cumulative.additions;
-					entry.linesRemoved = cumulative.deletions;
-				} else {
-					// File is in changedFiles but not in cumulativeDiffs — it was
-					// reverted or the diff is zero. Reset to 0 to avoid stale per-edit sums.
-					entry.linesAdded = 0;
-					entry.linesRemoved = 0;
-				}
-			}
-		}
-
-		// Keep diff-owned files even when line stats are 0/0. Binary/image edits can
-		// legitimately restore this way while still being part of session.diff.
-		return Array.from(fileMap.values()).filter(f => {
-			if (f.linesAdded > 0 || f.linesRemoved > 0) {
-				return true;
-			}
-
-			const cumulative = cumulativeMap.get(f.filePath);
-			return Boolean(cumulative?.status);
-		});
-	}, [changedFiles, cumulativeMap, hasCumulative, cumulativeDiffs]);
-
-	// Header totals: always derived from groupedFiles so they match the per-file rows exactly.
-	// Previously this was computed separately from cumulativeDiffs, which could include files
-	// not present in changedFiles — causing header vs per-file row discrepancies.
-	const { totalAdded, totalRemoved } = useMemo(() => {
-		let added = 0;
-		let removed = 0;
-		for (const f of groupedFiles) {
-			added += f.linesAdded;
-			removed += f.linesRemoved;
-		}
-		return { totalAdded: added, totalRemoved: removed };
-	}, [groupedFiles]);
-
 	// Count unique files for display
-	const uniqueFileCount = groupedFiles.length;
+	const uniqueFileCount = files.length;
 
 	const handleOpenDiff = useCallback(
 		(filePath: string) => {
@@ -660,11 +518,11 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 	}, [postMessage]);
 
 	const handleKeepAll = useCallback(() => {
-		const filePaths = groupedFiles.map(f => f.filePath);
+		const filePaths = files.map(f => f.filePath);
 		postMessage({ type: 'acceptAllFiles', filePaths });
-	}, [groupedFiles, postMessage]);
+	}, [files, postMessage]);
 
-	if (groupedFiles.length === 0) {
+	if (files.length === 0) {
 		return null;
 	}
 
@@ -767,7 +625,7 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 				{expanded && (
 					<div>
 						<ScrollContainer className="px-(--tool-header-padding) max-h-[40vh]">
-							{groupedFiles.map(file => (
+							{files.map(file => (
 								<FileRow
 									key={file.filePath}
 									file={file}
@@ -783,4 +641,4 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 		</div>
 	);
 });
-ChangedFilesPanel.displayName = 'ChangedFilesPanel';
+ChangedFilesPanelContent.displayName = 'ChangedFilesPanelContent';

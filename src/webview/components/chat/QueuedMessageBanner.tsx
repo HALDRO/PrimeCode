@@ -9,7 +9,7 @@ import type React from 'react';
 import { useCallback, useRef, useState } from 'react';
 import { cn } from '../../lib/cn';
 import { useQueuedMessages } from '../../store';
-import { useSessionMessage } from '../../utils/vscode';
+import { vscode } from '../../utils/vscode';
 
 // ---------------------------------------------------------------------------
 // Icons
@@ -110,24 +110,27 @@ const ChevronIcon: React.FC<{ expanded: boolean; size?: number }> = ({ expanded,
 
 export const QueuedMessageBanner: React.FC = () => {
 	const queuedMessages = useQueuedMessages();
-	const { postSessionMessage } = useSessionMessage();
 	const [expanded, setExpanded] = useState(true);
 	const [dragIdx, setDragIdx] = useState<number | null>(null);
 	const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
 	const dragItemRef = useRef<number | null>(null);
 
-	const handleCancel = useCallback(
-		(queueId: string, sessionId: string) => {
-			postSessionMessage({ type: 'cancelQueuedMessage', queueId, sessionId });
-		},
-		[postSessionMessage],
-	);
+	const handleCancel = useCallback((queueId: string, sessionId: string) => {
+		vscode.postMessage({ type: 'cancelQueuedMessage', sessionId, queueId });
+	}, []);
 
 	const handleForceSend = useCallback(
 		(queueId: string, sessionId: string) => {
-			postSessionMessage({ type: 'forceQueuedMessage', queueId, sessionId });
+			const queueIndex = queuedMessages.findIndex(entry => entry.queueId === queueId);
+			if (queueIndex > 0) {
+				const ids = queuedMessages.map(m => m.queueId);
+				const [moved] = ids.splice(queueIndex, 1);
+				ids.unshift(moved);
+				vscode.postMessage({ type: 'reorderQueue', sessionId, queueIds: ids });
+			}
+			vscode.postMessage({ type: 'forceQueuedMessage', sessionId, queueId });
 		},
-		[postSessionMessage],
+		[queuedMessages],
 	);
 
 	const handleDragStart = useCallback((e: React.DragEvent, idx: number) => {
@@ -163,11 +166,11 @@ export const QueuedMessageBanner: React.FC = () => {
 			ids.splice(dropIdx, 0, moved);
 			const sessionId = queuedMessages[0]?.sessionId;
 			if (sessionId) {
-				postSessionMessage({ type: 'reorderQueue', sessionId, queueIds: ids });
+				vscode.postMessage({ type: 'reorderQueue', sessionId, queueIds: ids });
 			}
 			handleDragEnd();
 		},
-		[queuedMessages, postSessionMessage, handleDragEnd],
+		[queuedMessages, handleDragEnd],
 	);
 
 	if (queuedMessages.length === 0) return null;

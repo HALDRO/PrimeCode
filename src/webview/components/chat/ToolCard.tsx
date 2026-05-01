@@ -508,13 +508,18 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		const mcpServers = useMcpServers();
 		const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
 
-		const { toolUseId, filePath, rawInput } = toolUse;
+		const { toolUseId, filePath } = toolUse;
 		const toolName = toolUse.toolName ?? '';
 		const toolPart = useToolPartByToolUseId(toolUseId, sessionId);
+		const rawInput =
+			toolPart &&
+			'input' in toolPart.state &&
+			toolPart.state.input &&
+			typeof toolPart.state.input === 'object'
+				? (toolPart.state.input as Record<string, unknown>)
+				: {};
 		const liveToolOutput =
-			toolPart && 'output' in toolPart.state
-				? (toolPart.state.output ?? '')
-				: toolUse.streamingOutput;
+			toolPart && 'output' in toolPart.state ? (toolPart.state.output ?? '') : '';
 		const liveToolMetadata = (toolPart?.metadata ??
 			('metadata' in (toolPart?.state ?? {})
 				? ((toolPart?.state as { metadata?: Record<string, unknown> } | undefined)?.metadata ??
@@ -556,45 +561,26 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		const isApplyPatch = actionType?.type === 'ApplyPatch' || isToolMatch(toolName, 'apply_patch');
 		const isDiffTool = isFileEdit || isApplyPatch;
 		const isQuestionTool = toolName.toLowerCase() === 'question';
-		// Use metadata from toolResult (final) or from the tool_use message itself
-		// (streaming). tool_streaming events merge metadata into the tool_use message
-		// via mergeOrAddMessage, so we can pick up incremental file data as it arrives.
+		// Per-tool diff cards render from the current tool metadata payload.
+		// Session-level changed-file ownership is tracked separately in `session.diff`.
 		const streamingMetadata = liveToolMetadata;
 		const effectiveMetadata = toolResult?.metadata ?? streamingMetadata;
+		// Diagnostics may arrive on live tool state before a final tool_result is materialized.
+		const diagnostics = useMemo(
+			() => extractLspDiagnostics(effectiveMetadata as Record<string, unknown> | undefined),
+			[effectiveMetadata],
+		);
 		const fileChanges = useMemo(
 			() =>
 				resolveFileChanges({
 					actionType,
 					toolResultMetadata: effectiveMetadata,
-					accessRequestRaw: accessRequest,
 					fallbackFilePath: filePath,
 				}),
-			[actionType, effectiveMetadata, accessRequest, filePath],
+			[actionType, effectiveMetadata, filePath],
 		);
-		const fallbackFileChanges = useMemo(() => {
-			if (!isDiffTool || fileChanges.length > 0) return [];
-			const fallbackPaths = new Set<string>();
-			if (filePath) fallbackPaths.add(filePath);
-			if (actionType?.type === 'FileEdit' && actionType.path) fallbackPaths.add(actionType.path);
-			if (actionType?.type === 'ApplyPatch') {
-				for (const file of actionType.files) {
-					if (file.path) fallbackPaths.add(file.path);
-				}
-			}
-			return Array.from(fallbackPaths).map(path => ({
-				filePath: path,
-				name: path.split(/[/\\]/).pop() || path,
-				lines: [],
-				diffText: '',
-				hasDeleteChange: false,
-				stats: { added: 0, removed: 0 },
-				firstChangedLine: undefined,
-				status: 'update' as const,
-			}));
-		}, [actionType, fileChanges, filePath, isDiffTool]);
-		const displayFileChanges = fileChanges.length > 0 ? fileChanges : fallbackFileChanges;
 		const canRenderDiffCard = isDiffTool && fileChanges.length > 0;
-		const canRenderPendingDiffCard = isDiffTool && displayFileChanges.length > 0;
+		const canRenderDiffPreview = canRenderDiffCard;
 		const hasAccessRequest = Boolean(accessRequest);
 		const category = getToolCardCategory(
 			toolName,
@@ -663,13 +649,6 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		const [expanded, setExpanded] = useState(defaultExpanded ?? false);
 		const [expandedDiffKeys, setExpandedDiffKeys] = useState<Set<string>>(() => new Set());
 
-		// Extract LSP diagnostics from the same merged metadata source used by diff rendering.
-		// Diagnostics may arrive on the live tool state before/without a separate final toolResult.
-		const diagnostics = useMemo(
-			() => extractLspDiagnostics(effectiveMetadata as Record<string, unknown> | undefined),
-			[effectiveMetadata],
-		);
-
 		// --- All hooks must be called unconditionally, before any early returns ---
 		const meta = useMemo(() => {
 			if (actionType?.type === 'CommandRun') return actionType.command;
@@ -682,7 +661,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 			return '';
 		}, [actionType, isBash, isWebSearch, isWebFetch, isMcp, rawInput]);
 
-		const fullText = content || liveToolOutput || toolUse.streamingOutput || '';
+		const fullText = content || liveToolOutput || '';
 		const hasBody = fullText.trim().length > 0;
 		const lineCount = useMemo(
 			() => (hasBody ? fullText.split('\n').length : 0),
@@ -725,10 +704,10 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		}
 
 		// 1) Diff Card (File Edits / Apply Patch)
-		if (canRenderPendingDiffCard) {
+		if (canRenderDiffPreview) {
 			return (
 				<div className="flex flex-col gap-1">
-					{displayFileChanges.map((change, i) => {
+					{fileChanges.map((change, i) => {
 						const cardKey = getFileChangeCardKey(change, i);
 						const diffExpanded = defaultExpanded ?? expandedDiffKeys.has(cardKey);
 						return (
@@ -753,17 +732,20 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 								diagnostics={getApplyPatchDiagnosticsForCard({
 									change,
 									changeIndex: i,
-									totalChanges: displayFileChanges.length,
+									totalChanges: fileChanges.length,
 									isApplyPatch,
 									diagnostics,
 								})}
 								postMessage={postMessage}
-								isRunning={isRunning && !canRenderDiffCard}
 							/>
 						);
 					})}
 				</div>
 			);
+		}
+
+		if (isDiffTool && diagnostics) {
+			return <DiagnosticsDisplay diagnostics={diagnostics} postMessage={postMessage} />;
 		}
 
 		// 2) MCP / Bash / WebSearch / WebFetch / Generic Card

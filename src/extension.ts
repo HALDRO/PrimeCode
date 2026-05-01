@@ -14,11 +14,6 @@ export function activate(context: vscode.ExtensionContext) {
 		context.subscriptions.push(logger.channel);
 	}
 
-	logger.info('Extension is being activated...');
-	logger.info('Extension path:', context.extensionPath);
-	logger.info('Extension mode:', context.extensionMode);
-	logger.info('Architecture: NEW (simplified)');
-
 	// Initialize Service Registry
 	serviceRegistry = new ServiceRegistry(context);
 	context.subscriptions.push(serviceRegistry);
@@ -32,7 +27,6 @@ export function activate(context: vscode.ExtensionContext) {
 	const disposable = vscode.commands.registerCommand(
 		'primecode.openChat',
 		async (_column?: vscode.ViewColumn) => {
-			logger.info('openChat command executed');
 			try {
 				if (!provider && !providerError) {
 					// Reuse in-flight promise to prevent concurrent initialization
@@ -58,7 +52,6 @@ export function activate(context: vscode.ExtensionContext) {
 		},
 	);
 	context.subscriptions.push(disposable);
-	logger.info('Command primecode.openChat registered');
 
 	const ensureProviderReady = async (): Promise<ChatProvider | undefined> => {
 		if (!provider && !providerError) {
@@ -106,16 +99,12 @@ export function activate(context: vscode.ExtensionContext) {
 		ctx: vscode.ExtensionContext,
 	): Promise<ChatProvider | undefined> {
 		try {
-			// Create main chat provider (unified session_event architecture)
-			logger.info('Creating ChatProvider (unified session_event)...');
-			logger.info('Using unified session_event architecture');
-
+			// Create main chat provider
 			// Command to open file diff from chat participant
 			const openFileDiffDisposable = vscode.commands.registerCommand(
 				'primecode.openFileDiff',
 				async (filePath: string, line?: number) => {
 					try {
-						logger.info('openFileDiff command executed:', filePath);
 						const fileUri = vscode.Uri.file(filePath);
 						const fileName = filePath.split(/[\\/]/).pop() ?? 'file';
 
@@ -210,8 +199,6 @@ export function activate(context: vscode.ExtensionContext) {
 			);
 
 			// Register webview view provider for sidebar chat
-			logger.info('Registering WebviewViewProvider...');
-
 			if (!serviceRegistry) {
 				throw new Error('ServiceRegistry not initialized');
 			}
@@ -222,8 +209,6 @@ export function activate(context: vscode.ExtensionContext) {
 				webviewProvider,
 				{ webviewOptions: { retainContextWhenHidden: true } },
 			);
-			logger.info('WebviewViewProvider registered');
-
 			ctx.subscriptions.push(
 				openFileDiffDisposable,
 				addSelectionDisposable,
@@ -231,7 +216,6 @@ export function activate(context: vscode.ExtensionContext) {
 				webviewProvider,
 			);
 
-			logger.info('Provider initialization completed successfully!');
 			return webviewProvider;
 		} catch (error) {
 			logger.error('Provider initialization failed:', error);
@@ -257,7 +241,6 @@ export function activate(context: vscode.ExtensionContext) {
 				statusBarItem.command = 'primecode.openChat';
 				statusBarItem.show();
 				context.subscriptions.push(statusBarItem);
-				logger.info('Extension activation completed successfully!');
 			}
 		})
 		.catch(error => {
@@ -266,6 +249,4 @@ export function activate(context: vscode.ExtensionContext) {
 		});
 }
 
-export async function deactivate(): Promise<void> {
-	logger.info('Extension is being deactivated');
-}
+export async function deactivate(): Promise<void> {}

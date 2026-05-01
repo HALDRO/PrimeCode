@@ -2,11 +2,15 @@
  * @file Zustand selectors for the SDK-native chat store.
  */
 
-import type { AssistantMessage, Message, ToolPart } from '@opencode-ai/sdk/v2/client';
+import type {
+	AssistantMessage,
+	Message,
+	SnapshotFileDiff,
+	ToolPart,
+} from '@opencode-ai/sdk/v2/client';
 import { useCallback, useMemo, useRef } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { parseModelId } from '../../common';
-import type { QueuedMessageData } from '../../common/protocol';
 import { computeTurnUsage, sumUsageValues } from '../../common/tokenStats';
 import {
 	getAvailableModelVariants,
@@ -14,7 +18,7 @@ import {
 	resolveEffectiveVariant,
 } from '../lib/modelVariants';
 import {
-	type ChangedFile,
+	isSessionProcessing,
 	type RenderCompactionMessage,
 	type RenderNode,
 	type SessionStore,
@@ -25,27 +29,48 @@ import {
 import {
 	collectDescendantSessionIds,
 	computeDerivedSessionStats,
+	deriveSessionView,
 	type MessageSection,
-} from './projector';
+} from './derived';
 import { type SettingsState, useSettingsStore } from './settingsStore';
 import type { TransientNotification } from './uiStore';
 import { type UIState, useUIStore } from './uiStore';
 
 const EMPTY_MESSAGES: RenderNode[] = [];
-const EMPTY_CHANGED_FILES: ChangedFile[] = [];
-const EMPTY_CUMULATIVE_DIFFS: Array<{
-	file: string;
-	additions: number;
-	deletions: number;
-	status?: string;
-}> = [];
+export interface SessionDiffEntry {
+	filePath: string;
+	linesAdded: number;
+	linesRemoved: number;
+	status?: 'added' | 'deleted' | 'modified';
+}
+
+const EMPTY_SESSION_DIFF_FILES: SessionDiffEntry[] = [];
+const EMPTY_SESSION_DIFF_SUMMARY = { added: 0, removed: 0, files: 0 };
 const EMPTY_NOTIFICATIONS: TransientNotification[] = [];
 const EMPTY_PERMISSIONS: import('@opencode-ai/sdk/v2/client').PermissionRequest[] = [];
 const EMPTY_QUESTIONS: import('@opencode-ai/sdk/v2/client').QuestionRequest[] = [];
 const EMPTY_TURN_TOKENS: Record<string, TokenUsage> = {};
-const EMPTY_QUEUE: QueuedMessageData[] = [];
 const EMPTY_CHILDREN: string[] = [];
 const EMPTY_SDK_MESSAGES: Message[] = [];
+const EMPTY_QUEUED_MESSAGES: Array<{
+	queueId: string;
+	sessionId: string;
+	text: string;
+	attachments?: {
+		files?: string[];
+		codeSnippets?: Array<{
+			filePath: string;
+			content: string;
+			startLine?: number;
+			endLine?: number;
+		}>;
+		images?: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
+	};
+	agent?: string;
+	model?: string;
+	variant?: string;
+	createdAt: number;
+}> = [];
 const DEFAULT_CONTEXT_WINDOW = 200000;
 
 function isAssistantMessage(msg: Message): msg is AssistantMessage {
@@ -107,10 +132,52 @@ function computeAssistantUsage(messages: Message[] | undefined): TokenUsage | un
 	};
 }
 
-export const projectRuntimeMessages = (_session: unknown): RenderNode[] => EMPTY_MESSAGES;
+// Re-export pure functions from derive layer for local consumers
+export { collectDescendantSessionIds, computeDerivedSessionStats } from './derived';
 
-// Re-export pure functions from projector for backward compatibility
-export { collectDescendantSessionIds, computeDerivedSessionStats } from './projector';
+export function mapSessionDiffEntries(
+	rawDiffs: SnapshotFileDiff[] | undefined,
+): SessionDiffEntry[] {
+	if (!rawDiffs || rawDiffs.length === 0) return EMPTY_SESSION_DIFF_FILES;
+	return rawDiffs.map(d => ({
+		filePath: d.file,
+		linesAdded: d.additions,
+		linesRemoved: d.deletions,
+		status: d.status,
+	}));
+}
+
+function summarizeSessionDiff(rawDiffs: SnapshotFileDiff[] | undefined) {
+	if (!rawDiffs || rawDiffs.length === 0) return EMPTY_SESSION_DIFF_SUMMARY;
+
+	let added = 0;
+	let removed = 0;
+	for (const diff of rawDiffs) {
+		added += diff.additions;
+		removed += diff.deletions;
+	}
+
+	return { added, removed, files: rawDiffs.length };
+}
+
+function summarizeSessionTreeDiff(state: SessionStore, sessionId: string | undefined) {
+	if (!sessionId) return EMPTY_SESSION_DIFF_SUMMARY;
+
+	const sessionIds = [sessionId, ...collectDescendantSessionIds(state, sessionId)];
+	let added = 0;
+	let removed = 0;
+	let files = 0;
+
+	for (const currentSessionId of sessionIds) {
+		const summary = summarizeSessionDiff(state.sessionDiff[currentSessionId]);
+		added += summary.added;
+		removed += summary.removed;
+		files += summary.files;
+	}
+
+	if (added === 0 && removed === 0 && files === 0) return EMPTY_SESSION_DIFF_SUMMARY;
+	return { added, removed, files };
+}
 
 // ---------------------------------------------------------------------------
 // Component-level subscription hooks (Phase 1.4)
@@ -126,7 +193,7 @@ export const useNodeIds = () =>
 	useChatStore((state: SessionStore) => {
 		const sid = state.activeSessionId;
 		if (!sid) return EMPTY_NODE_IDS;
-		return state.materializedViews[sid]?.nodeIds ?? EMPTY_NODE_IDS;
+		return deriveSessionView(state, sid).nodeIds ?? EMPTY_NODE_IDS;
 	});
 
 /** Subscribe to a single RenderNode by ID from the active session's materialized view. */
@@ -134,21 +201,23 @@ export const useRenderNode = (nodeId: string) =>
 	useChatStore((state: SessionStore) => {
 		const sid = state.activeSessionId;
 		if (!sid) return undefined;
-		return state.materializedViews[sid]?.nodesById[nodeId];
+		return deriveSessionView(state, sid).nodesById[nodeId];
 	});
 
 /** Subscribe to a single RenderNode by ID from a specific session's materialized view. */
 export const useSessionRenderNode = (sessionId: string | undefined, nodeId: string) =>
 	useChatStore((state: SessionStore) => {
 		if (!sessionId) return undefined;
-		return state.materializedViews[sessionId]?.nodesById[nodeId];
+		return deriveSessionView(state, sessionId).nodesById[nodeId];
 	});
 
-/** Subscribe to the materialized view version — useful for knowing when any update happened. */
+/** Subscribe to a lightweight derived version surrogate. */
 export const useMaterializedVersion = (sessionId: string | undefined) =>
 	useChatStore((state: SessionStore) => {
 		if (!sessionId) return 0;
-		return state.materializedViews[sessionId]?.version ?? 0;
+		const messages = state.messages[sessionId]?.length ?? 0;
+		const status = state.sessionStatus[sessionId]?.type ?? 'idle';
+		return `${messages}:${status}:${Object.keys(state.parts).length}`.length;
 	});
 
 // ---------------------------------------------------------------------------
@@ -178,61 +247,26 @@ function messagesStructurallyEqual(prev: RenderNode[], next: RenderNode[]): bool
 			if (p.isStreaming !== n.isStreaming || p.content !== n.content) return false;
 		}
 		if (p.kind === 'tool_use' && n.kind === 'tool_use') {
-			if (
-				p.isRunning !== n.isRunning ||
-				p.status !== n.status ||
-				p.streamingOutput !== n.streamingOutput
-			)
-				return false;
+			if (p.isRunning !== n.isRunning || p.status !== n.status) return false;
 		}
 	}
 	return true;
 }
-
-export const useMessages = () => {
-	const activeSessionId = useChatStore((state: SessionStore) => state.activeSessionId);
-	const view = useChatStore((state: SessionStore) => {
-		if (!activeSessionId) return undefined;
-		return state.materializedViews[activeSessionId];
-	});
-	const prevRef = useRef<RenderNode[]>(EMPTY_MESSAGES);
-	return useMemo(() => {
-		if (!view || view.nodeIds.length === 0) return EMPTY_MESSAGES;
-		// Reconstruct ordered array from nodesById using nodeIds
-		const next: RenderNode[] = [];
-		for (const id of view.nodeIds) {
-			const node = view.nodesById[id];
-			if (node) next.push(node);
-		}
-		if (next.length === 0) return EMPTY_MESSAGES;
-		// For delta-only updates, check if the array is structurally the same
-		if (!view.lastUpdateWasStructural && messagesStructurallyEqual(prevRef.current, next)) {
-			return prevRef.current;
-		}
-		prevRef.current = next;
-		return next;
-	}, [view]);
-};
 
 export const useMessageSections = (): MessageSection[] => {
 	const activeSessionId = useChatStore((state: SessionStore) => state.activeSessionId);
 	return (
 		useChatStore((state: SessionStore) => {
 			if (!activeSessionId) return undefined;
-			return state.materializedViews[activeSessionId]?.sections ?? EMPTY_SECTIONS;
+			return deriveSessionView(state, activeSessionId).sections ?? EMPTY_SECTIONS;
 		}) ?? EMPTY_SECTIONS
 	);
-};
-
-export const useHasMessages = () => {
-	const messages = useMessages();
-	return messages.length > 0;
 };
 
 export const useChildSessionMessages = (childSessionId: string | undefined) => {
 	const view = useChatStore((state: SessionStore) => {
 		if (!childSessionId) return undefined;
-		return state.materializedViews[childSessionId];
+		return deriveSessionView(state, childSessionId);
 	});
 	const prevRef = useRef<RenderNode[]>(EMPTY_MESSAGES);
 	return useMemo(() => {
@@ -243,7 +277,7 @@ export const useChildSessionMessages = (childSessionId: string | undefined) => {
 			if (node) next.push(node);
 		}
 		if (next.length === 0) return EMPTY_MESSAGES;
-		if (!view.lastUpdateWasStructural && messagesStructurallyEqual(prevRef.current, next)) {
+		if (messagesStructurallyEqual(prevRef.current, next)) {
 			return prevRef.current;
 		}
 		prevRef.current = next;
@@ -285,15 +319,8 @@ export const useChildSessionSummary = (childSessionId: string | undefined) => {
 	);
 	const childDiffStats = useChatStore(
 		useShallow((state: SessionStore) => {
-			if (!childSessionId) return { added: 0, removed: 0 };
-			const sections = state.materializedViews[childSessionId]?.sections ?? [];
-			let added = 0;
-			let removed = 0;
-			for (const section of sections) {
-				added += section.stats.fileChanges?.added ?? 0;
-				removed += section.stats.fileChanges?.removed ?? 0;
-			}
-			return { added, removed };
+			const summary = summarizeSessionTreeDiff(state, childSessionId);
+			return { added: summary.added, removed: summary.removed };
 		}),
 	);
 
@@ -314,8 +341,14 @@ export const useIsProcessing = () =>
 	useChatStore((state: SessionStore) => {
 		const sid = state.activeSessionId;
 		if (!sid) return false;
-		const status = state.sessionStatus[sid];
-		return status?.type === 'busy' || status?.type === 'retry';
+		return isSessionProcessing(state, sid);
+	});
+
+export const useQueuedMessages = () =>
+	useChatStore((state: SessionStore) => {
+		const sid = state.activeSessionId;
+		if (!sid) return EMPTY_QUEUED_MESSAGES;
+		return state.queuedMessagesBySession[sid] ?? EMPTY_QUEUED_MESSAGES;
 	});
 
 export const useIsAutoRetrying = () =>
@@ -354,7 +387,7 @@ export const useStreamingToolId = () =>
 	useChatStore((state: SessionStore) => {
 		const sid = state.activeSessionId;
 		if (!sid) return null;
-		return state.materializedViews[sid]?.streamingToolId ?? null;
+		return deriveSessionView(state, sid).streamingToolId ?? null;
 	});
 
 export const useToolActivity = () =>
@@ -362,7 +395,7 @@ export const useToolActivity = () =>
 		useShallow((state: SessionStore) => {
 			const sid = state.activeSessionId;
 			if (!sid) return null;
-			return state.materializedViews[sid]?.toolActivity ?? null;
+			return deriveSessionView(state, sid).toolActivity ?? null;
 		}),
 	);
 
@@ -424,14 +457,14 @@ export const useActiveModelID = () =>
 	useChatStore((state: SessionStore) => {
 		const sid = state.activeSessionId;
 		if (!sid) return undefined;
-		return state.materializedViews[sid]?.activeModelId;
+		return deriveSessionView(state, sid).activeModelId;
 	});
 
 export const useTurnTokens = () => {
 	const activeSessionId = useChatStore((state: SessionStore) => state.activeSessionId);
 	return useChatStore((state: SessionStore) => {
 		if (!activeSessionId) return EMPTY_TURN_TOKENS;
-		return state.materializedViews[activeSessionId]?.turnTokensByParentId ?? EMPTY_TURN_TOKENS;
+		return deriveSessionView(state, activeSessionId).turnTokensByParentId ?? EMPTY_TURN_TOKENS;
 	});
 };
 
@@ -441,7 +474,7 @@ export const useMessageTurnTokens = (messageId: string | undefined) =>
 			if (!messageId) return undefined;
 			const sid = state.activeSessionId;
 			if (!sid) return undefined;
-			return state.materializedViews[sid]?.turnTokensByParentId[messageId];
+			return deriveSessionView(state, sid).turnTokensByParentId[messageId];
 		}),
 	);
 
@@ -496,7 +529,7 @@ export const useIsLastMessageStreaming = () => {
 		if (!sid) return false;
 		const status = state.sessionStatus[sid];
 		if (!status || status.type !== 'busy') return false;
-		return state.materializedViews[sid]?.isLastAssistantStreaming ?? false;
+		return deriveSessionView(state, sid).isLastAssistantStreaming ?? false;
 	});
 };
 
@@ -519,23 +552,20 @@ export const useImprovingPromptRequestId = () =>
 	useChatStore((state: SessionStore) => state.improvingPromptRequestId);
 export const usePromptVersions = () => useChatStore((state: SessionStore) => state.promptVersions);
 
-export const useChangedFilesState = () => {
-	const rawDiffs = useChatStore((state: SessionStore) => {
-		const sid = state.activeSessionId;
-		return sid ? state.sessionDiff[sid] : undefined;
-	});
+export const useSessionDiffFiles = () => {
+	const activeSessionId = useChatStore((state: SessionStore) => state.activeSessionId);
+	const rawDiffs = useChatStore((state: SessionStore) =>
+		activeSessionId ? state.sessionDiff[activeSessionId] : undefined,
+	);
+	return useMemo(() => mapSessionDiffEntries(rawDiffs), [rawDiffs]);
+};
 
-	const cumulativeDiffs = useMemo(() => {
-		if (!rawDiffs || rawDiffs.length === 0) return EMPTY_CUMULATIVE_DIFFS;
-		return rawDiffs.map(d => ({
-			file: d.file,
-			additions: d.additions,
-			deletions: d.deletions,
-			status: d.status,
-		}));
-	}, [rawDiffs]);
-
-	return useMemo(() => ({ changedFiles: EMPTY_CHANGED_FILES, cumulativeDiffs }), [cumulativeDiffs]);
+export const useSessionDiffSummary = () => {
+	const activeSessionId = useChatStore((state: SessionStore) => state.activeSessionId);
+	const rawDiffs = useChatStore((state: SessionStore) =>
+		activeSessionId ? state.sessionDiff[activeSessionId] : undefined,
+	);
+	return useMemo(() => summarizeSessionDiff(rawDiffs), [rawDiffs]);
 };
 
 export const useIsActiveChildSession = () =>
@@ -627,7 +657,8 @@ export const useToolResultByToolId = (toolUseId: string | undefined, sessionId?:
 					prev.toolUseId === next.toolUseId &&
 					prev.content === next.content &&
 					prev.isError === next.isError &&
-					prev.title === next.title
+					prev.title === next.title &&
+					prev.metadata === next.metadata
 				) {
 					return prev;
 				}
@@ -678,6 +709,7 @@ export const useAccessRequestByToolUseId = (toolUseId: string | undefined) => {
 			id: `access-${pending.id}`,
 			type: 'access_request' as const,
 			requestId: pending.id,
+			sessionId: pending.sessionID,
 			tool: pending.permission,
 			input: pending.metadata,
 			pattern: pending.patterns[0],
@@ -832,18 +864,6 @@ export const useModelContextWindow = () =>
 export const useTransientNotifications = () =>
 	useUIStore((state: UIState) => state.notifications ?? EMPTY_NOTIFICATIONS);
 
-export const useQueuedMessages = () =>
-	useChatStore((state: SessionStore) => {
-		const sid = state.activeSessionId;
-		return sid ? (state.queuedMessages[sid] ?? EMPTY_QUEUE) : EMPTY_QUEUE;
-	});
-
-export const useHasQueuedMessages = () =>
-	useChatStore((state: SessionStore) => {
-		const sid = state.activeSessionId;
-		return sid ? (state.queuedMessages[sid]?.length ?? 0) > 0 : false;
-	});
-
 export const useDraftAttachments = () =>
 	useChatStore((state: SessionStore) => {
 		const sid = state.activeSessionId;
@@ -934,39 +954,36 @@ export const useDescendantCount = (sessionId: string | undefined) =>
 	);
 
 export function useSessionDescendants(sessionId: string | undefined): string[] {
-	return useChatStore(
-		useCallback(
-			(state: SessionStore) => {
-				if (!sessionId) return EMPTY_CHILDREN;
-				const result = collectDescendantSessionIds(state, sessionId);
-				return result.length > 0 ? result : EMPTY_CHILDREN;
-			},
-			[sessionId],
-		),
+	const childSessionIdsByParentId = useChatStore(
+		(state: SessionStore) => state.childSessionIdsByParentId,
 	);
+	return useMemo(() => {
+		if (!sessionId) return EMPTY_CHILDREN;
+		const result = collectDescendantSessionIds(
+			{ childSessionIdsByParentId } as SessionStore,
+			sessionId,
+		);
+		return result.length > 0 ? result : EMPTY_CHILDREN;
+	}, [childSessionIdsByParentId, sessionId]);
 }
 
 export function useSessionLineage(sessionId: string | undefined): string[] {
-	return useChatStore(
-		useCallback(
-			(state: SessionStore) => {
-				if (!sessionId) return EMPTY_CHILDREN;
-				const lineage: string[] = [];
-				let current = sessionId;
-				let depth = 0;
-				while (depth < 50) {
-					const session = state.sessions.find(s => s.id === current);
-					const parentId = session?.parentID;
-					if (!parentId) break;
-					lineage.push(parentId);
-					current = parentId;
-					depth++;
-				}
-				return lineage.length > 0 ? lineage : EMPTY_CHILDREN;
-			},
-			[sessionId],
-		),
-	);
+	const sessions = useChatStore((state: SessionStore) => state.sessions);
+	return useMemo(() => {
+		if (!sessionId) return EMPTY_CHILDREN;
+		const lineage: string[] = [];
+		let current = sessionId;
+		let depth = 0;
+		while (depth < 50) {
+			const session = sessions.find(s => s.id === current);
+			const parentId = session?.parentID;
+			if (!parentId) break;
+			lineage.push(parentId);
+			current = parentId;
+			depth++;
+		}
+		return lineage.length > 0 ? lineage : EMPTY_CHILDREN;
+	}, [sessionId, sessions]);
 }
 
 const EMPTY_CONTEXT_METRICS: ContextMetricsResult = { context: undefined, totalCost: 0 };

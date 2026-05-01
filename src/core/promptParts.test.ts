@@ -120,4 +120,19 @@ describe('buildPromptParts', () => {
 			parts.filter(part => part.type === 'file' && part.url === 'data:image/png;base64,AAA'),
 		).toHaveLength(1);
 	});
+
+	it('preserves real image mime types from data urls', () => {
+		const parts = buildPromptParts({
+			text: 'inspect image',
+			attachments: {
+				images: [{ id: 'img-1', name: 'shot.webp', dataUrl: 'data:image/webp;base64,AAA' }],
+			},
+		});
+
+		expect(parts[1]).toMatchObject({
+			type: 'file',
+			mime: 'image/webp',
+			url: 'data:image/webp;base64,AAA',
+		});
+	});
 });

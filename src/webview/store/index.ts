@@ -7,7 +7,7 @@
 // Base stores (use sparingly - prefer selectors)
 export {
 	type ChangedFile,
-	type MaterializedView,
+	isSessionProcessing,
 	type Message,
 	type Part,
 	type RenderAssistantMessage,
@@ -22,8 +22,9 @@ export {
 	type ToolResultView,
 	useChatStore,
 } from './chatStore';
+export type { MessageSection, SectionStats, SessionDerivedView } from './derived';
 // Projection layer types
-export type { MessageSection, SectionStats } from './projector';
+export { clearSessionViewCache, deriveSessionView } from './derived';
 // Optimized selectors (preferred)
 export * from './selectors';
 export { useSettingsStore } from './settingsStore';

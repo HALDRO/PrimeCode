@@ -5,6 +5,7 @@ import { extractInlineAttachmentMatches } from '../../../common/inlineAttachment
 import { getDisplayDurationMs } from '../../../common/tokenStats';
 import { useElapsedTimer } from '../../hooks/useElapsedTimer';
 import { cn } from '../../lib/cn';
+import { openCodeRuntime } from '../../services/opencodeRuntime';
 import {
 	type RenderUserMessage,
 	useActiveModelID,
@@ -16,7 +17,7 @@ import {
 	useMessageTurnTokens,
 	useSessionModel,
 } from '../../store';
-import type { SectionStats } from '../../store/projector';
+import type { SectionStats } from '../../store/derived';
 import { useSettingsStore } from '../../store/settingsStore';
 import { useUIActions } from '../../store/uiStore';
 import { copyTextToClipboard } from '../../utils/clipboard';
@@ -24,7 +25,7 @@ import { formatDuration, formatTime, formatTokens } from '../../utils/format';
 import { Markdown } from '../../utils/markdown';
 import { parseMessageSegments } from '../../utils/messageParser';
 import { extractPromptFromParts } from '../../utils/promptParts';
-import { useSessionMessage, useVSCode } from '../../utils/vscode';
+import { useVSCode } from '../../utils/vscode';
 import { ToolCard } from '../chat/ToolCard';
 import { ClockIcon, CopyIcon, TimerIcon, TokensIcon, Undo2Icon, WandIcon } from '../icons';
 import { IconButton, InlineAttachmentChip, type StatItem, StatsDisplay, Tooltip } from '../ui';
@@ -191,21 +192,21 @@ const UnrevertButton = React.memo<{
 UnrevertButton.displayName = 'UnrevertButton';
 
 const MessageStats = React.memo<{
-	fileChanges: { added: number; removed: number; files: number } | null;
 	messageId: string;
 	timestamp: string;
 	processingTimeFallbackMs: number | null;
 	isProcessing: boolean;
 	staticTokenCount: number | null;
+	fileChanges: SectionStats['fileChanges'];
 	modelName: string;
 }>(
 	({
-		fileChanges,
 		messageId,
 		timestamp,
 		processingTimeFallbackMs,
 		isProcessing,
 		staticTokenCount,
+		fileChanges,
 		modelName,
 	}) => {
 		const liveTurnTokens = useMessageTurnTokens(messageId);
@@ -227,7 +228,7 @@ const MessageStats = React.memo<{
 		});
 		const processingTime = durationMs ? formatDuration(durationMs) : null;
 
-		// Left side items: model name, then file changes
+		// Left side items: stable message metadata only.
 		const leftItems: StatItem[] = [];
 
 		leftItems.push({
@@ -406,7 +407,6 @@ const useStickyMessageSettings = () =>
 export const UserMessage: React.FC<UserMessageProps> = React.memo(
 	({ message, isRevertPoint = false, stats }) => {
 		const { postMessage } = useVSCode();
-		const { postSessionMessage } = useSessionMessage();
 
 		// Use optimized selectors to prevent unnecessary re-renders
 		const editingMessageId = useEditingMessageId();
@@ -434,6 +434,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 		const fileChangesStats = stats.fileChanges;
 		const tokenStats = stats.tokenCount;
 		const isProcessingLastMessage = isProcessing && isLastUserMessage;
+		const userMessageModel = message.message.role === 'user' ? message.message.model : undefined;
 
 		const reconstructedPrompt = useMemo(
 			() => extractPromptFromParts(message.parts),
@@ -538,31 +539,37 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 				const hasAttachments =
 					editAttachments.files || editAttachments.codeSnippets || editAttachments.images;
 
-				postSessionMessage({
-					type: 'sendMessage',
-					text,
-					model: sessionModel,
-					attachments: hasAttachments ? editAttachments : undefined,
-					...(message.id
-						? {
-								messageID: message.id,
-								editMode: shouldRestore ? 'revert' : 'history_only',
-							}
-						: {}),
-				});
-				// Clear the draft — edit was successfully sent
-				if (message.id) {
-					chatActions.clearEditDraft(message.id);
-				}
-				setEditingMessageId(null);
+				const sessionId = message.message.sessionID;
+				if (!sessionId) return;
+				const run = async () => {
+					await openCodeRuntime.editMessage({
+						sessionId,
+						messageId: message.id,
+						text,
+						mode: shouldRestore ? 'restore_and_send' : 'replace_history',
+						isAlreadyReverted: isRevertPoint,
+						model: sessionModel,
+						agent: message.message.agent,
+						variant: userMessageModel?.variant,
+						attachments: hasAttachments ? editAttachments : undefined,
+					});
+					if (message.id) {
+						chatActions.clearEditDraft(message.id);
+					}
+					setEditingMessageId(null);
+				};
+				void run().catch(openCodeRuntime.showRuntimeError);
 			},
 			[
 				message.id,
+				isRevertPoint,
 				chatActions,
-				postSessionMessage,
 				setEditingMessageId,
 				attachedImages,
 				sessionModel,
+				message.message.sessionID,
+				message.message.agent,
+				userMessageModel?.variant,
 			],
 		);
 
@@ -608,18 +615,18 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 
 		const handleRestore = useCallback(() => {
 			if (message.id && message.message.sessionID) {
-				postSessionMessage({
-					type: 'restoreMessage',
-					sessionId: message.message.sessionID,
-					messageId: message.id,
-				});
+				void openCodeRuntime
+					.restoreMessage(message.message.sessionID, message.id)
+					.catch(openCodeRuntime.showRuntimeError);
 			}
-		}, [message.id, message.message.sessionID, postSessionMessage]);
+		}, [message.id, message.message.sessionID]);
 
 		const handleUnrevert = useCallback(() => {
 			if (!message.message.sessionID) return;
-			postSessionMessage({ type: 'unrevert', sessionId: message.message.sessionID });
-		}, [message.message.sessionID, postSessionMessage]);
+			void openCodeRuntime
+				.unrevert(message.message.sessionID)
+				.catch(openCodeRuntime.showRuntimeError);
+		}, [message.message.sessionID]);
 
 		const showUnrevert = isRevertPoint;
 		const showRestore = Boolean(message.id) && !isRevertPoint;
@@ -717,12 +724,12 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 						</button>
 						<div className="flex items-end text-sm px-(--gap-4) pt-0 pb-(--gap-1-5) bg-(--input-bg)">
 							<MessageStats
-								fileChanges={fileChangesStats}
 								messageId={message.id}
 								timestamp={new Date(message.message.time.created).toISOString()}
 								processingTimeFallbackMs={stats.durationMs}
 								isProcessing={isProcessingLastMessage}
 								staticTokenCount={tokenStats}
+								fileChanges={fileChangesStats}
 								modelName={getModelDisplayName(
 									(message.message.role === 'user' ? message.message.model?.modelID : undefined) ||
 										activeModelID ||

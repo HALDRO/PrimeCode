@@ -8,9 +8,9 @@
 
 import type React from 'react';
 import { isToolMatch } from '../../constants';
-import { useAccessResponse } from '../../hooks/useAccessResponse';
 import { useAccessRequestByToolUseId } from '../../store';
 import { Button, GlowDot } from '../ui';
+import { useAccessResponse } from './AccessGate';
 
 interface AccessRequestMessageProps {
 	toolUseId: string;
@@ -19,9 +19,10 @@ interface AccessRequestMessageProps {
 export const AccessRequestMessage: React.FC<AccessRequestMessageProps> = ({ toolUseId }) => {
 	const message = useAccessRequestByToolUseId(toolUseId);
 	const requestId = message?.requestId ?? '';
+	const sessionId = message?.sessionId;
 	const tool = message?.tool ?? '';
 	const id = message?.id;
-	const handleResponse = useAccessResponse({ requestId, tool, messageId: id });
+	const handleResponse = useAccessResponse({ requestId, tool, messageId: id, sessionId });
 	if (!message) return null;
 	const { pattern, input } = message;
 

@@ -6,7 +6,7 @@
 
 /**
  * Default system prompt template for Prompt Improver.
- * Used by both SessionHandler (backend) and PromptImproverSettings (frontend).
+ * Used by the webview runtime and PromptImproverSettings.
  * The {{TEXT}} placeholder is replaced with the user's original prompt.
  */
 export const IMPROVE_PROMPT_DEFAULT_TEMPLATE = `You are an expert prompt engineer. Your task is to rewrite the user's prompt to be more clear, specific, and effective for an LLM coding assistant.
