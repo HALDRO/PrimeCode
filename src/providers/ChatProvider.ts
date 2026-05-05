@@ -40,6 +40,16 @@ type BackendSendParams = {
 	attachments?: SendMessageAttachments;
 };
 
+function getSlashCommand(text: string): string | undefined {
+	const match = text.trim().match(/^\/(\S+)(?:\s+.*)?$/);
+	return match?.[1]?.toLowerCase();
+}
+
+function isCompactionCommand(text: string): boolean {
+	const slashCommand = getSlashCommand(text);
+	return slashCommand === 'compact' || slashCommand === 'summarize';
+}
+
 export class ChatProvider implements vscode.WebviewViewProvider {
 	private view?: vscode.WebviewView;
 	private webviewDidLaunch = false;
@@ -682,6 +692,18 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			});
 			return;
 		}
+		if (isCompactionCommand(msg.text)) {
+			await this.sendCompactionAsync({
+				sessionId: msg.sessionId,
+				text: msg.text,
+				messageID: msg.messageID,
+				model: msg.model,
+				agent: msg.agent,
+				variant: msg.variant,
+				attachments: msg.attachments,
+			});
+			return;
+		}
 
 		await this.sendPromptAsync({
 			sessionId: msg.sessionId,
@@ -692,6 +714,60 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			variant: msg.variant,
 			attachments: msg.attachments,
 		});
+	}
+
+	private async sendCompactionAsync(params: BackendSendParams): Promise<void> {
+		const client = this.cli.getSdkClient();
+		const admin = this.cli.getAdminInfo();
+		if (!client || !admin?.directory) {
+			throw new Error('OpenCode server is unavailable');
+		}
+
+		const parsedModel = params.model ? parseModelId(params.model) : undefined;
+		if (!parsedModel) {
+			throw new Error('Compaction requires an explicit OpenCode model');
+		}
+
+		const compactionClient = client as typeof client & {
+			session: typeof client.session & {
+				summarize?: (input: {
+					sessionID: string;
+					directory: string;
+					providerID: string;
+					modelID: string;
+					auto?: boolean;
+				}) => Promise<{ error?: unknown }>;
+			};
+		};
+		if (!compactionClient.session.summarize) {
+			throw new Error('Session summarize API unavailable');
+		}
+
+		this.sendingLock.add(params.sessionId);
+		this.suppressNextIdleDrain.delete(params.sessionId);
+		this.awaitingBackendBusy.add(params.sessionId);
+		this.sendBackendRuntimeStatus(params.sessionId, 'busy', 'local.compact');
+		try {
+			const result = await compactionClient.session.summarize({
+				sessionID: params.sessionId,
+				directory: admin.directory,
+				providerID: parsedModel.providerId,
+				modelID: parsedModel.modelId,
+				auto: false,
+			});
+			if (result?.error) {
+				throw new Error(`Compaction failed: ${JSON.stringify(result.error)}`);
+			}
+		} catch (error) {
+			this.awaitingBackendBusy.delete(params.sessionId);
+			this.sendBackendRuntimeStatus(params.sessionId, 'idle', 'local.error');
+			throw error;
+		} finally {
+			this.sendingLock.delete(params.sessionId);
+			if (this.pendingIdleDrain.delete(params.sessionId)) {
+				void this.processQueueOnIdle(params.sessionId);
+			}
+		}
 	}
 
 	private async sendPromptAsync(params: BackendSendParams): Promise<void> {

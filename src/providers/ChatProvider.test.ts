@@ -6,8 +6,9 @@ import { OutboundBridge } from '../transport/OutboundBridge';
 import { ChatProvider } from './ChatProvider';
 
 type PromptAsyncMock = ReturnType<typeof vi.fn>;
+type SummarizeMock = ReturnType<typeof vi.fn>;
 
-function createProvider(promptAsyncImpl?: PromptAsyncMock) {
+function createProvider(promptAsyncImpl?: PromptAsyncMock, summarizeImpl?: SummarizeMock) {
 	const postedMessages: unknown[] = [];
 	const bridge = new OutboundBridge();
 	vi.spyOn(bridge, 'send').mockImplementation((msg: unknown) => {
@@ -19,6 +20,11 @@ function createProvider(promptAsyncImpl?: PromptAsyncMock) {
 		vi.fn(async () => {
 			return {};
 		});
+	const summarize =
+		summarizeImpl ??
+		vi.fn(async () => {
+			return {};
+		});
 	const abort = vi.fn(async () => {
 		return {};
 	});
@@ -26,7 +32,7 @@ function createProvider(promptAsyncImpl?: PromptAsyncMock) {
 	const provider: any = Object.assign(Object.create(ChatProvider.prototype), {
 		bridge,
 		cli: {
-			getSdkClient: vi.fn(() => ({ session: { promptAsync, abort } })),
+			getSdkClient: vi.fn(() => ({ session: { promptAsync, summarize, abort } })),
 			getAdminInfo: vi.fn(() => ({
 				baseUrl: 'http://127.0.0.1:4096',
 				directory: 'C:\\repo',
@@ -41,7 +47,7 @@ function createProvider(promptAsyncImpl?: PromptAsyncMock) {
 		queueIdCounter: 0,
 	});
 
-	return { provider, postedMessages, promptAsync, abort };
+	return { provider, postedMessages, promptAsync, summarize, abort };
 }
 
 describe('ChatProvider queue pipeline', () => {
@@ -68,6 +74,29 @@ describe('ChatProvider queue pipeline', () => {
 					action: 'enqueued',
 					sessionId: 'ses-1',
 				}),
+			}),
+		);
+	});
+
+	it('routes /compact through summarize instead of promptAsync', async () => {
+		const { provider, promptAsync, summarize } = createProvider();
+
+		await (provider as any).handleSendMessageCommand({
+			type: 'sendMessage',
+			sessionId: 'ses-1',
+			text: '/compact',
+			model: 'openai/gpt-5',
+		});
+
+		expect(promptAsync).not.toHaveBeenCalled();
+		expect(summarize).toHaveBeenCalledTimes(1);
+		expect((summarize as any).mock.calls[0][0]).toEqual(
+			expect.objectContaining({
+				sessionID: 'ses-1',
+				directory: 'C:\\repo',
+				providerID: 'openai',
+				modelID: 'gpt-5',
+				auto: false,
 			}),
 		);
 	});

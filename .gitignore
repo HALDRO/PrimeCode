@@ -25,7 +25,9 @@ AGENTS.md
 # Internal docs & scripts (not for repo)
 docs/.*
 docs/docs.*
+docs/opencode_offrepo
 docs/docs_opencode_ai/
+docs/docs_oh-my-openagent-dev/
 docs/debug/
 scripts/.*
 

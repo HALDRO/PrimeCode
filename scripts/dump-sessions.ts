@@ -1,6 +1,9 @@
 /**
- * Дамп сессий OpenCode в docs/debug/
- * Запуск: bun run scripts/dump-sessions.ts
+ * @file Dumps OpenCode sessions to docs/debug.
+ * @description Discovers a running OpenCode server, collects sessions, and exports
+ * session payloads/messages/children as JSON snapshots for debugging workflows.
+ * "Download from last 10 sessions" aggregates sessions across all known workspaces
+ * using the `/project` worktree list, then sorts globally by recency.
  */
 
 import { execFile } from 'node:child_process';
@@ -11,11 +14,64 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 
-const WORKSPACE =
-	process.platform === 'win32' && /^[A-Z]:/.test(process.cwd())
-		? process.cwd()[0].toLowerCase() + process.cwd().slice(1)
-		: process.cwd();
+const WORKSPACE = process.cwd();
 const DEBUG_DIR = path.join(WORKSPACE, 'docs', 'debug');
+const GLOBAL_WORKSPACE_SAMPLE_LIMIT = 50;
+const DEFAULT_DUMP_SESSIONS_LIMIT = 30;
+
+type OpenCodeSession = {
+	id: string;
+	title?: string;
+	directory?: string;
+	time?: { created?: number; updated?: number };
+};
+
+type OpenCodeProject = {
+	worktree?: string;
+};
+
+type OpenCodeMessageContentPart = {
+	type?: string;
+	text?: string;
+};
+
+type OpenCodeMessage = {
+	role?: string;
+	content?: string | OpenCodeMessageContentPart[];
+};
+
+type ChildSession = {
+	id: string;
+	title?: string;
+};
+
+function toComparableTime(session: OpenCodeSession): number {
+	return Number(session.time?.updated ?? session.time?.created ?? 0);
+}
+
+function normalizeDirectoryPath(dir: string): string {
+	return dir.trim().replace(/[\\/]+$/, '');
+}
+
+function getDirectoryVariants(dir: string): string[] {
+	const normalized = normalizeDirectoryPath(dir);
+	if (!normalized) return [];
+	const variants = new Set<string>([normalized]);
+
+	if (process.platform === 'win32' && /^[A-Za-z]:/.test(normalized)) {
+		variants.add(normalized[0].toLowerCase() + normalized.slice(1));
+		variants.add(normalized[0].toUpperCase() + normalized.slice(1));
+	}
+
+	return [...variants];
+}
+
+function getWorkspaceLabel(dir?: string): string {
+	if (!dir) return '(unknown workspace)';
+	const cleaned = dir.replace(/[\\/]+$/, '');
+	const parts = cleaned.split(/[\\/]/).filter(Boolean);
+	return parts[parts.length - 1] ?? dir;
+}
 
 function ask(q: string): Promise<string> {
 	const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -185,20 +241,64 @@ async function api<T>(base: string, ep: string, directory?: string): Promise<T> 
 	return res.json() as Promise<T>;
 }
 
+async function getSessionsAcrossWorkspaces(base: string, perWorkspaceLimit: number): Promise<OpenCodeSession[]> {
+	const projects = await api<OpenCodeProject[]>(base, '/project');
+	const directories = new Set<string>(getDirectoryVariants(WORKSPACE));
+	for (const project of projects) {
+		const worktree = project.worktree?.trim();
+		if (!worktree) continue;
+		for (const candidate of getDirectoryVariants(worktree)) {
+			directories.add(candidate);
+		}
+	}
+
+	const sessionsByWorkspace = await Promise.all(
+		[...directories].map(async directory => {
+			try {
+				const rows = await api<OpenCodeSession[]>(
+					base,
+					`/session?limit=${perWorkspaceLimit}`,
+					directory,
+				);
+				return rows.map(row => ({ ...row, directory: row.directory ?? directory }));
+			} catch {
+				return [] as OpenCodeSession[];
+			}
+		}),
+	);
+
+	const deduped = new Map<string, OpenCodeSession>();
+	for (const rows of sessionsByWorkspace) {
+		for (const session of rows) {
+			const previous = deduped.get(session.id);
+			if (!previous || toComparableTime(session) > toComparableTime(previous)) {
+				deduped.set(session.id, session);
+			}
+		}
+	}
+
+	const merged = [...deduped.values()].sort((a, b) => toComparableTime(b) - toComparableTime(a));
+	if (merged.length === 0) {
+		const fallback = await api<OpenCodeSession[]>(base, `/session?limit=${perWorkspaceLimit}`);
+		return fallback.sort((a, b) => toComparableTime(b) - toComparableTime(a));
+	}
+	return merged;
+}
+
 async function dumpSession(base: string, id: string, directory?: string) {
 	console.log(`\nDumping ${id}...`);
 	const [session, messages, children] = await Promise.all([
-		api<any>(base, `/session/${id}`, directory),
-		api<any[]>(base, `/session/${id}/message`, directory),
-		api<any[]>(base, `/session/${id}/children`, directory),
+		api<Record<string, unknown>>(base, `/session/${id}`, directory),
+		api<OpenCodeMessage[]>(base, `/session/${id}/message`, directory),
+		api<ChildSession[]>(base, `/session/${id}/children`, directory),
 	]);
 	console.log(
 		`  ${messages.length} msgs, ${children.length} children — ${session.title ?? '(no title)'}`,
 	);
 
-	const childData: Array<{ session: any; messages: any[] }> = [];
+	const childData: Array<{ session: ChildSession; messages: OpenCodeMessage[] }> = [];
 	for (const c of children) {
-		const msgs = await api<any[]>(base, `/session/${c.id}/message`, directory);
+		const msgs = await api<OpenCodeMessage[]>(base, `/session/${c.id}/message`, directory);
 		console.log(`  child ${c.id}: ${msgs.length} msgs — ${c.title}`);
 		childData.push({ session: c, messages: msgs });
 	}
@@ -211,7 +311,7 @@ async function dumpSession(base: string, id: string, directory?: string) {
 			dumpedAt: new Date().toISOString(),
 			serverUrl: base,
 			sessionId: id,
-			directory: WORKSPACE,
+			directory: directory ?? '(none)',
 			childCount: children.length,
 			totalMessages: messages.length,
 		},
@@ -238,12 +338,12 @@ async function main() {
 	const choice = await ask('> ');
 
 	let ids: string[] = [];
-	let directory: string | undefined = WORKSPACE;
+	let directories: (string | undefined)[] = [];
 
 	if (choice === '1') {
-		const sessions = await api<any[]>(base, '/session?roots=true&limit=10', WORKSPACE);
-		sessions.sort(
-			(a: any, b: any) => (b.time.updated ?? b.time.created) - (a.time.updated ?? a.time.created),
+		const sessions = (await getSessionsAcrossWorkspaces(base, GLOBAL_WORKSPACE_SAMPLE_LIMIT)).slice(
+			0,
+			DEFAULT_DUMP_SESSIONS_LIMIT,
 		);
 		if (!sessions.length) {
 			console.log('No sessions.');
@@ -252,20 +352,24 @@ async function main() {
 
 		// Подтягиваем первое сообщение пользователя для превью, если тайтл бесполезный
 		const previews = await Promise.all(
-			sessions.map(async (s: any) => {
+			sessions.map(async s => {
 				const title = s.title ?? '';
 				if (title && !title.startsWith('New session')) return title;
 				try {
-					const msgs = await api<any[]>(base, `/session/${s.id}/message`, WORKSPACE);
-					const first = msgs.find((m: any) => m.role === 'user');
+					const msgs = await api<OpenCodeMessage[]>(
+						base,
+						`/session/${s.id}/message`,
+						s.directory ?? WORKSPACE,
+					);
+					const first = msgs.find(m => m.role === 'user');
 					if (first?.content) {
 						const text =
 							typeof first.content === 'string'
 								? first.content
 								: Array.isArray(first.content)
 									? first.content
-											.filter((p: any) => p.type === 'text')
-											.map((p: any) => p.text)
+											.filter(p => p.type === 'text')
+											.map(p => p.text)
 											.join(' ')
 									: '';
 						if (text)
@@ -279,25 +383,28 @@ async function main() {
 		console.log('');
 		for (let i = 0; i < sessions.length; i++) {
 			const s = sessions[i];
-			const d = new Date(s.time.updated ?? s.time.created).toLocaleString('ru-RU', {
+			const d = new Date(toComparableTime(s)).toLocaleString('ru-RU', {
 				day: '2-digit',
 				month: '2-digit',
 				hour: '2-digit',
 				minute: '2-digit',
 			});
-			console.log(`  [${i + 1}] ${d}  ${previews[i]}`);
+			const ws = ` [${getWorkspaceLabel(s.directory)}]`;
+			console.log(`  [${i + 1}] ${d}${ws}  ${previews[i]}`);
 		}
 		console.log(`\nPick numbers (comma-separated) or "all":`);
 		const pick = await ask('> ');
 
 		if (pick.toLowerCase() === 'all') {
-			ids = sessions.map((s: any) => s.id);
+			ids = sessions.map(s => s.id);
+			directories = sessions.map(s => s.directory);
 		} else {
-			ids = pick
+			const indices = pick
 				.split(',')
 				.map(n => Number.parseInt(n.trim(), 10) - 1)
-				.filter(i => i >= 0 && i < sessions.length)
-				.map(i => sessions[i].id);
+				.filter(i => i >= 0 && i < sessions.length);
+			ids = indices.map(i => sessions[i].id);
+			directories = indices.map(i => sessions[i].directory);
 		}
 	} else if (choice === '2') {
 		console.log('Enter session ID (ses_...):');
@@ -305,29 +412,32 @@ async function main() {
 		if (id.startsWith('ses_')) {
 			// Сначала пробуем текущий workspace
 			if (await checkSessionExists(base, id, WORKSPACE)) {
-				directory = WORKSPACE;
 				ids = [id];
+				directories = [WORKSPACE];
 			} else {
 				// Спрашиваем путь к проекту
 				console.log(`Session not found in current workspace.`);
 				console.log(`Enter project directory (or press Enter to skip):`);
 				const dir = await ask('> ');
 				if (dir) {
-					const normalizedDir =
-						process.platform === 'win32' && /^[A-Z]:/.test(dir)
-							? dir[0].toLowerCase() + dir.slice(1)
-							: dir;
-					if (await checkSessionExists(base, id, normalizedDir)) {
-						directory = normalizedDir;
+					let matchedDir: string | undefined;
+					for (const candidate of getDirectoryVariants(dir)) {
+						if (await checkSessionExists(base, id, candidate)) {
+							matchedDir = candidate;
+							break;
+						}
+					}
+					if (matchedDir) {
 						ids = [id];
+						directories = [matchedDir];
 					} else {
 						console.log(`  Session ${id} not found for directory ${dir}.`);
 					}
 				} else {
 					// Пробуем без directory
-					directory = undefined;
 					if (await checkSessionExists(base, id)) {
 						ids = [id];
+						directories = [undefined];
 					} else {
 						console.log(`  Session ${id} not found.`);
 					}
@@ -342,11 +452,11 @@ async function main() {
 	}
 
 	const targetServer = base;
-	for (const id of ids) {
+	for (let i = 0; i < ids.length; i++) {
 		try {
-			await dumpSession(targetServer, id, directory);
+			await dumpSession(targetServer, ids[i], directories[i]);
 		} catch (e) {
-			console.error(`  Failed ${id}:`, e);
+			console.error(`  Failed ${ids[i]}:`, e);
 		}
 	}
 	console.log(`\nDone. ${ids.length} session(s) dumped.`);
