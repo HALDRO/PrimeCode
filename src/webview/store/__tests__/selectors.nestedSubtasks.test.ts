@@ -94,9 +94,23 @@ describe('selectors nested subtasks', () => {
 		});
 
 		expect(computeDerivedSessionStats(state, 'root')).toEqual({
-			requestCount: 3,
+			requestCount: 4,
 			totalDuration: 80,
 			subagentCount: 3,
+		});
+	});
+
+	it('counts child sessions with assistant activity even when token totals are zero', () => {
+		const state = createState({
+			messages: {
+				child: [assistantMessage('a-child', { total: 0, created: 100, completed: 160 })],
+			},
+		});
+
+		expect(computeDerivedSessionStats(state, 'child')).toEqual({
+			requestCount: 1,
+			totalDuration: 60,
+			subagentCount: 0,
 		});
 	});
 

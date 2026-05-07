@@ -486,19 +486,49 @@ describe('groupMessagesIntoSections', () => {
 			expect(result[0].stats.fileChanges).toBeNull();
 		});
 
-		it('should ignore session diffs when raw tool diff is unavailable', () => {
+		it('should compute fileChanges from user message summary diffs', () => {
 			const msg = {
 				kind: 'user',
 				id: 'u1',
 				message: {
 					time: { created: Date.now() },
-					summary: { diffs: [{ file: '/a.ts', additions: 1, deletions: 1 }] },
+					summary: {
+						diffs: [
+							{ file: '/a.ts', additions: 1, deletions: 1 },
+							{ file: '/b.ts', additions: 3, deletions: 0 },
+							{ file: '/a.ts', additions: 2, deletions: 4 },
+						],
+					},
 				},
 				parts: [],
 			} as unknown as Message;
 			const result = groupMessagesIntoSections([msg, assistantMsg('a1')], [], null, {}, false);
 
-			expect(result[0].stats.fileChanges).toBeNull();
+			expect(result[0].stats.fileChanges).toEqual({ added: 6, removed: 5, files: 2 });
+		});
+
+		it('should update fileChanges when streaming user summary diffs arrive', () => {
+			const baseMessage = {
+				kind: 'user',
+				id: 'u1',
+				message: { time: { created: Date.now() } },
+				parts: [],
+			} as unknown as Message;
+			const initial = groupMessagesIntoSections([baseMessage, assistantMsg('a1')], [], null);
+			expect(initial[0].stats.fileChanges).toBeNull();
+
+			const updatedMessage = {
+				kind: 'user',
+				id: 'u1',
+				message: {
+					time: { created: Date.now() },
+					summary: { diffs: [{ file: '/stream.ts', additions: 7, deletions: 2 }] },
+				},
+				parts: [],
+			} as unknown as Message;
+			const updated = groupMessagesIntoSections([updatedMessage, assistantMsg('a1')], [], null);
+
+			expect(updated[0].stats.fileChanges).toEqual({ added: 7, removed: 2, files: 1 });
 		});
 
 		it('should not infer fileChanges from tool metadata on later messages', () => {
@@ -528,7 +558,7 @@ describe('groupMessagesIntoSections', () => {
 			expect(result[1].stats.fileChanges).toBeNull();
 		});
 
-		it('should keep footer fileChanges empty even when tool metadata has a diff', () => {
+		it('should use summary diffs without inferring from tool metadata', () => {
 			const msg = {
 				kind: 'user',
 				id: 'u1',
@@ -571,7 +601,7 @@ describe('groupMessagesIntoSections', () => {
 			} as unknown as Message;
 			const result = groupMessagesIntoSections([msg, tool, assistantMsg('a1')], [], null);
 
-			expect(result[0].stats.fileChanges).toBeNull();
+			expect(result[0].stats.fileChanges).toEqual({ added: 395, removed: 259, files: 1 });
 		});
 
 		it('should use real turnTokens for tokenCount', () => {

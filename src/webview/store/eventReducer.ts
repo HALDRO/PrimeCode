@@ -29,11 +29,86 @@ import type {
 	EventSessionUpdated,
 	EventTodoUpdated,
 	Message,
+	ToolPart,
 } from '@opencode-ai/sdk/v2/client';
 import type { SessionStore } from './chatStore';
 
 // Part types we skip — they're internal to the CLI and not useful for UI rendering.
 const SKIP_PARTS = new Set(['patch', 'step-start', 'step-finish', 'snapshot']);
+
+function collectUnlinkedTaskCallIds(
+	state: SessionStore,
+	parentSessionId: string,
+	linkedCallIds: Set<string> = new Set(Object.values(state.originatingToolCallBySessionId)),
+): string[] {
+	const parentMessages = state.messages[parentSessionId] ?? [];
+	const callIds: string[] = [];
+	for (let i = parentMessages.length - 1; i >= 0; i--) {
+		const messageParts = state.parts[parentMessages[i].id] ?? [];
+		for (let j = messageParts.length - 1; j >= 0; j--) {
+			const part = messageParts[j];
+			if (part.type !== 'tool') continue;
+			const toolPart = part as ToolPart;
+			if (toolPart.tool.toLowerCase() !== 'task') continue;
+			if (linkedCallIds.has(toolPart.callID)) continue;
+			if (!callIds.includes(toolPart.callID)) callIds.push(toolPart.callID);
+		}
+	}
+	return callIds;
+}
+
+function findOnlyUnlinkedTaskCallId(
+	state: SessionStore,
+	parentSessionId: string,
+	linkedCallIds?: Set<string>,
+): string | undefined {
+	const callIds = collectUnlinkedTaskCallIds(state, parentSessionId, linkedCallIds);
+	return callIds.length === 1 ? callIds[0] : undefined;
+}
+
+function rebuildChildSessionLinks(state: SessionStore): void {
+	const nextChildSessionIdsByParentId: Record<string, string[]> = {};
+	const nextOriginatingToolCallBySessionId: Record<string, string> = {};
+
+	for (const session of state.sessions) {
+		if (!session.parentID) continue;
+		const siblings = nextChildSessionIdsByParentId[session.parentID] ?? [];
+		if (!siblings.includes(session.id)) siblings.push(session.id);
+		nextChildSessionIdsByParentId[session.parentID] = siblings;
+	}
+
+	for (const messageParts of Object.values(state.parts)) {
+		for (const part of messageParts) {
+			if (part.type !== 'tool') continue;
+			const toolPart = part as ToolPart & { metadata?: { sessionId?: unknown } };
+			if (toolPart.tool.toLowerCase() !== 'task') continue;
+			const childSessionId =
+				typeof toolPart.metadata?.sessionId === 'string' ? toolPart.metadata.sessionId : undefined;
+			if (!childSessionId) continue;
+			nextOriginatingToolCallBySessionId[childSessionId] = toolPart.callID;
+			const siblings = nextChildSessionIdsByParentId[toolPart.sessionID] ?? [];
+			if (!siblings.includes(childSessionId)) siblings.push(childSessionId);
+			nextChildSessionIdsByParentId[toolPart.sessionID] = siblings;
+		}
+	}
+
+	for (const session of state.sessions) {
+		if (!session.parentID || nextOriginatingToolCallBySessionId[session.id]) continue;
+		const unlinkedSiblings = (nextChildSessionIdsByParentId[session.parentID] ?? []).filter(
+			childSessionId => !nextOriginatingToolCallBySessionId[childSessionId],
+		);
+		if (unlinkedSiblings.length !== 1) continue;
+		const fallbackToolCallId = findOnlyUnlinkedTaskCallId(
+			state,
+			session.parentID,
+			new Set(Object.values(nextOriginatingToolCallBySessionId)),
+		);
+		if (fallbackToolCallId) nextOriginatingToolCallBySessionId[session.id] = fallbackToolCallId;
+	}
+
+	state.childSessionIdsByParentId = nextChildSessionIdsByParentId;
+	state.originatingToolCallBySessionId = nextOriginatingToolCallBySessionId;
+}
 
 function upsertMessage(messages: Message[], nextMessage: Message): void {
 	const idx = messages.findIndex(message => message.id === nextMessage.id);
@@ -163,6 +238,8 @@ export function eventReducer(state: SessionStore, event: WebviewSdkEvent): void 
 				if (!siblings.includes(info.id)) {
 					state.childSessionIdsByParentId[info.parentID] = [...siblings, info.id];
 				}
+				const toolCallId = findOnlyUnlinkedTaskCallId(state, info.parentID);
+				if (toolCallId) state.originatingToolCallBySessionId[info.id] = toolCallId;
 			}
 			break;
 		}
@@ -360,4 +437,8 @@ export function eventReducer(state: SessionStore, event: WebviewSdkEvent): void 
 			break;
 		}
 	}
+}
+
+export function reconcileSessionGraph(state: SessionStore): void {
+	rebuildChildSessionLinks(state);
 }

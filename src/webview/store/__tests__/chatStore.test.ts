@@ -129,8 +129,6 @@ describe('chatStore restore', () => {
 				},
 			} as never,
 		]);
-		useChatStore.getState().actions.updateSessionModel('openai/gpt-5', SESSION_ID);
-
 		expect(useChatStore.getState().sessionModel[SESSION_ID]).toBe('openai/gpt-5');
 	});
 
@@ -733,5 +731,293 @@ describe('chatStore derived view streaming', () => {
 		expect(after).toBeDefined();
 		expect(after.sections.length).toBeGreaterThan(0);
 		expect(after).not.toBe(before);
+	});
+
+	it('links child session to latest task tool call on session.created', () => {
+		const userMsg: Message = {
+			id: 'u-task',
+			sessionID: SESSION_ID,
+			role: 'user',
+			time: { created: Date.now() },
+		} as Message;
+		const asstMsg: Message = {
+			id: 'a-task',
+			sessionID: SESSION_ID,
+			role: 'assistant',
+			parentID: 'u-task',
+			agent: 'build',
+			tokens: { input: 0, output: 0, reasoning: 0, total: 0, cache: { read: 0, write: 0 } },
+			cost: 0,
+			time: { created: Date.now() },
+		} as unknown as Message;
+		const taskPart: Part = {
+			id: 'tool-task-1',
+			messageID: 'a-task',
+			sessionID: SESSION_ID,
+			type: 'tool',
+			tool: 'task',
+			callID: 'call-task-1',
+			state: { status: 'running', input: { description: 'delegate work' } },
+			metadata: {},
+		} as unknown as Part;
+
+		restoreFromEvents([
+			{ type: 'message.updated', properties: { sessionID: SESSION_ID, info: userMsg } } as never,
+			{ type: 'message.updated', properties: { sessionID: SESSION_ID, info: asstMsg } } as never,
+			{ type: 'message.part.updated', properties: { part: taskPart } } as never,
+			{
+				type: 'session.created',
+				properties: { info: { id: 'child-task-1', parentID: SESSION_ID } },
+			} as never,
+		]);
+
+		const state = useChatStore.getState();
+		expect(state.originatingToolCallBySessionId['child-task-1']).toBe('call-task-1');
+		expect(state.childSessionIdsByParentId[SESSION_ID]).toContain('child-task-1');
+	});
+
+	it('does not guess child task link when multiple task calls are unlinked', () => {
+		const userMsg: Message = {
+			id: 'u-task-ambiguous',
+			sessionID: SESSION_ID,
+			role: 'user',
+			time: { created: Date.now() },
+		} as Message;
+		const asstMsg: Message = {
+			id: 'a-task-ambiguous',
+			sessionID: SESSION_ID,
+			role: 'assistant',
+			parentID: 'u-task-ambiguous',
+			agent: 'build',
+			tokens: { input: 0, output: 0, reasoning: 0, total: 0, cache: { read: 0, write: 0 } },
+			cost: 0,
+			time: { created: Date.now() },
+		} as unknown as Message;
+		const firstTaskPart: Part = {
+			id: 'tool-task-a',
+			messageID: 'a-task-ambiguous',
+			sessionID: SESSION_ID,
+			type: 'tool',
+			tool: 'task',
+			callID: 'call-task-a',
+			state: { status: 'running', input: { description: 'first' } },
+			metadata: {},
+		} as unknown as Part;
+		const secondTaskPart: Part = {
+			id: 'tool-task-b',
+			messageID: 'a-task-ambiguous',
+			sessionID: SESSION_ID,
+			type: 'tool',
+			tool: 'task',
+			callID: 'call-task-b',
+			state: { status: 'running', input: { description: 'second' } },
+			metadata: {},
+		} as unknown as Part;
+
+		restoreFromEvents([
+			{ type: 'message.updated', properties: { sessionID: SESSION_ID, info: userMsg } } as never,
+			{ type: 'message.updated', properties: { sessionID: SESSION_ID, info: asstMsg } } as never,
+			{ type: 'message.part.updated', properties: { part: firstTaskPart } } as never,
+			{ type: 'message.part.updated', properties: { part: secondTaskPart } } as never,
+			{
+				type: 'session.created',
+				properties: { info: { id: 'child-task-ambiguous', parentID: SESSION_ID } },
+			} as never,
+		]);
+
+		const state = useChatStore.getState();
+		expect(state.originatingToolCallBySessionId['child-task-ambiguous']).toBeUndefined();
+		expect(state.childSessionIdsByParentId[SESSION_ID]).toContain('child-task-ambiguous');
+	});
+
+	it('prefers official task metadata sessionId over fallback task order', () => {
+		const userMsg: Message = {
+			id: 'u-task-metadata',
+			sessionID: SESSION_ID,
+			role: 'user',
+			time: { created: Date.now() },
+		} as Message;
+		const asstMsg: Message = {
+			id: 'a-task-metadata',
+			sessionID: SESSION_ID,
+			role: 'assistant',
+			parentID: 'u-task-metadata',
+			agent: 'build',
+			tokens: { input: 0, output: 0, reasoning: 0, total: 0, cache: { read: 0, write: 0 } },
+			cost: 0,
+			time: { created: Date.now() },
+		} as unknown as Message;
+		const taskPart: Part = {
+			id: 'tool-task-metadata',
+			messageID: 'a-task-metadata',
+			sessionID: SESSION_ID,
+			type: 'tool',
+			tool: 'task',
+			callID: 'call-task-metadata',
+			state: { status: 'completed', input: { description: 'official' }, output: 'done' },
+			metadata: { sessionId: 'child-task-metadata' },
+		} as unknown as Part;
+
+		restoreFromEvents([
+			{ type: 'message.updated', properties: { sessionID: SESSION_ID, info: userMsg } } as never,
+			{ type: 'message.updated', properties: { sessionID: SESSION_ID, info: asstMsg } } as never,
+			{
+				type: 'session.created',
+				properties: { info: { id: 'other-child', parentID: SESSION_ID } },
+			} as never,
+			{ type: 'message.part.updated', properties: { part: taskPart } } as never,
+		]);
+
+		const state = useChatStore.getState();
+		expect(state.originatingToolCallBySessionId['child-task-metadata']).toBe('call-task-metadata');
+		expect(state.childSessionIdsByParentId[SESSION_ID]).toContain('child-task-metadata');
+	});
+
+	it('replays restored parent and child session snapshots together', () => {
+		const rootUser: Message = {
+			id: 'root-u1',
+			sessionID: SESSION_ID,
+			role: 'user',
+			time: { created: Date.now() },
+		} as Message;
+		const rootAsst: Message = {
+			id: 'root-a1',
+			sessionID: SESSION_ID,
+			role: 'assistant',
+			parentID: 'root-u1',
+			agent: 'build',
+			tokens: { input: 0, output: 0, reasoning: 0, total: 0, cache: { read: 0, write: 0 } },
+			cost: 0,
+			time: { created: Date.now() },
+		} as unknown as Message;
+		const taskPart: Part = {
+			id: 'root-task-part',
+			messageID: 'root-a1',
+			sessionID: SESSION_ID,
+			type: 'tool',
+			tool: 'task',
+			callID: 'root-task-call',
+			state: { status: 'completed', input: { description: 'restore work' }, output: 'done' },
+			metadata: {},
+		} as unknown as Part;
+		const childUser: Message = {
+			id: 'child-u1',
+			sessionID: 'child-hydrated-1',
+			role: 'user',
+			time: { created: Date.now() },
+		} as Message;
+		const childAsst: Message = {
+			id: 'child-a1',
+			sessionID: 'child-hydrated-1',
+			role: 'assistant',
+			parentID: 'child-u1',
+			agent: 'build',
+			tokens: { input: 2, output: 7, reasoning: 0, total: 9, cache: { read: 0, write: 0 } },
+			cost: 0,
+			time: { created: Date.now(), completed: Date.now() + 15 },
+		} as unknown as Message;
+		const childToolPart: Part = {
+			id: 'child-read-part',
+			messageID: 'child-a1',
+			sessionID: 'child-hydrated-1',
+			type: 'tool',
+			tool: 'read',
+			callID: 'child-read-call',
+			state: { status: 'completed', input: { filePath: '/tmp/file.txt' }, output: 'hello' },
+		} as unknown as Part;
+
+		useChatStore.getState().actions.replaySessionSnapshots([
+			{
+				session: { id: SESSION_ID } as never,
+				messageEntries: [
+					{ info: rootUser, parts: [] },
+					{ info: rootAsst, parts: [taskPart] },
+				],
+				todos: [],
+				diff: [],
+				activate: true,
+			},
+			{
+				session: { id: 'child-hydrated-1', parentID: SESSION_ID } as never,
+				messageEntries: [
+					{ info: childUser, parts: [] },
+					{ info: childAsst, parts: [childToolPart] },
+				],
+				todos: [],
+				diff: [],
+				activate: false,
+			},
+		]);
+
+		const state = useChatStore.getState();
+		expect(state.originatingToolCallBySessionId['child-hydrated-1']).toBe('root-task-call');
+		expect(state.childSessionIdsByParentId[SESSION_ID]).toContain('child-hydrated-1');
+		expect(state.sessionOrder).toEqual([SESSION_ID]);
+		expect(state.activeSessionId).toBe(SESSION_ID);
+		expect(state.sessions.map(session => session.id)).toContain('child-hydrated-1');
+		expect(state.messages['child-hydrated-1']).toHaveLength(2);
+		expect(state.parts['child-a1']).toEqual([childToolPart]);
+
+		const parentView = deriveSessionView(state, SESSION_ID);
+		const taskCardId = parentView.nodeIds.find(
+			id => parentView.nodesById[id]?.kind === 'task_card',
+		);
+		const taskCard = taskCardId ? parentView.nodesById[taskCardId] : undefined;
+		expect(taskCard?.kind).toBe('task_card');
+		if (taskCard?.kind === 'task_card') {
+			expect(taskCard.childSessionId).toBe('child-hydrated-1');
+			expect(taskCard.childSummary.tokens?.total).toBe(9);
+			expect(taskCard.childSummary.durationMs).toBeGreaterThan(0);
+		}
+	});
+
+	it('removes restored child sessions from corrupted persisted tab state without dropping hydration data', () => {
+		useChatStore
+			.getState()
+			.actions.applyTabState([SESSION_ID, 'child-hydrated-1'], 'child-hydrated-1');
+
+		const rootUser: Message = {
+			id: 'root-u1',
+			sessionID: SESSION_ID,
+			role: 'user',
+			time: { created: Date.now() },
+		} as Message;
+		const childUser: Message = {
+			id: 'child-u1',
+			sessionID: 'child-hydrated-1',
+			role: 'user',
+			time: { created: Date.now() },
+		} as Message;
+		const childTextPart: Part = {
+			id: 'child-text-part',
+			messageID: 'child-u1',
+			sessionID: 'child-hydrated-1',
+			type: 'text',
+			text: 'child prompt',
+		} as Part;
+
+		useChatStore.getState().actions.replaySessionSnapshots([
+			{
+				session: { id: SESSION_ID } as never,
+				messageEntries: [{ info: rootUser, parts: [] }],
+				todos: [],
+				diff: [],
+				activate: false,
+			},
+			{
+				session: { id: 'child-hydrated-1', parentID: SESSION_ID } as never,
+				messageEntries: [{ info: childUser, parts: [childTextPart] }],
+				todos: [],
+				diff: [],
+				activate: true,
+			},
+		]);
+
+		const state = useChatStore.getState();
+		expect(state.sessionOrder).toEqual([SESSION_ID]);
+		expect(state.activeSessionId).toBe(SESSION_ID);
+		expect(state.childSessionIdsByParentId[SESSION_ID]).toContain('child-hydrated-1');
+		expect(state.messages['child-hydrated-1']).toEqual([childUser]);
+		expect(state.parts['child-u1']).toEqual([childTextPart]);
 	});
 });

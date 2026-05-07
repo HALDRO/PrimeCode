@@ -11,7 +11,7 @@ import type {
 import { useCallback, useMemo, useRef } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { parseModelId } from '../../common';
-import { computeTurnUsage, sumUsageValues } from '../../common/tokenStats';
+import { sumUsageValues } from '../../common/tokenStats';
 import {
 	getAvailableModelVariants,
 	getConfiguredAgentVariant,
@@ -32,6 +32,7 @@ import {
 	deriveSessionView,
 	type MessageSection,
 } from './derived';
+import { computeAssistantUsage } from './sessionUsage';
 import { type SettingsState, useSettingsStore } from './settingsStore';
 import type { TransientNotification } from './uiStore';
 import { type UIState, useUIStore } from './uiStore';
@@ -75,61 +76,6 @@ const DEFAULT_CONTEXT_WINDOW = 200000;
 
 function isAssistantMessage(msg: Message): msg is AssistantMessage {
 	return msg.role === 'assistant';
-}
-
-function getAssistantTokenTotal(msg: AssistantMessage): number {
-	const t = msg.tokens;
-	return (
-		(t.input ?? 0) +
-		(t.output ?? 0) +
-		(t.reasoning ?? 0) +
-		(t.cache?.read ?? 0) +
-		(t.cache?.write ?? 0)
-	);
-}
-
-function getAssistantSnapshotTotal(msg: AssistantMessage): number {
-	return getAssistantTokenTotal(msg);
-}
-
-function computeAssistantUsage(messages: Message[] | undefined): TokenUsage | undefined {
-	if (!messages || messages.length === 0) return undefined;
-
-	let previousSessionSnapshotTotal = 0;
-	let usageTotal = 0;
-	let latestInput = 0;
-	let latestOutput = 0;
-	let latestCacheRead = 0;
-	let durationMs = 0;
-
-	for (const msg of messages) {
-		if (!isAssistantMessage(msg)) continue;
-
-		const snapshotTotal = getAssistantSnapshotTotal(msg);
-		if (snapshotTotal > 0) {
-			const usage = computeTurnUsage(msg.tokens, { previousSessionSnapshotTotal });
-			usageTotal += usage.usageTokens;
-			previousSessionSnapshotTotal = usage.nextSessionSnapshotTotal;
-			latestInput = msg.tokens.input ?? 0;
-			latestOutput = msg.tokens.output ?? 0;
-			latestCacheRead = msg.tokens.cache?.read ?? 0;
-		}
-
-		if (typeof msg.time.completed === 'number') {
-			durationMs += msg.time.completed - msg.time.created;
-		}
-	}
-
-	if (usageTotal <= 0) return undefined;
-
-	return {
-		input: latestInput,
-		output: latestOutput,
-		total: usageTotal,
-		usage: usageTotal,
-		cacheRead: latestCacheRead,
-		durationMs,
-	};
 }
 
 // Re-export pure functions from derive layer for local consumers
@@ -245,6 +191,9 @@ function messagesStructurallyEqual(prev: RenderNode[], next: RenderNode[]): bool
 		}
 		if (p.kind === 'assistant' && n.kind === 'assistant') {
 			if (p.isStreaming !== n.isStreaming || p.content !== n.content) return false;
+		}
+		if (p.kind === 'task_result' && n.kind === 'task_result') {
+			if (p.content !== n.content || p.taskIdLine !== n.taskIdLine) return false;
 		}
 		if (p.kind === 'tool_use' && n.kind === 'tool_use') {
 			if (p.isRunning !== n.isRunning || p.status !== n.status) return false;

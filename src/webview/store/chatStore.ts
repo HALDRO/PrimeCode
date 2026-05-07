@@ -18,7 +18,7 @@ import { produce } from 'immer';
 import { create } from 'zustand';
 import type { NormalizedEntry } from '../../common/normalizedTypes';
 import type { SessionMessageEntry } from '../services/opencodeRuntime';
-import { eventReducer, type WebviewSdkEvent } from './eventReducer';
+import { eventReducer, reconcileSessionGraph, type WebviewSdkEvent } from './eventReducer';
 import { useSettingsStore } from './settingsStore';
 import { useUIStore } from './uiStore';
 
@@ -110,6 +110,23 @@ function syncSessionModelFromMessages(state: SessionStore, sessionId: string): v
 	delete state.sessionModel[sessionId];
 }
 
+function normalizeTopLevelTabs(state: SessionStore): void {
+	const childSessionIds = new Set(
+		state.sessions.filter(session => Boolean(session.parentID)).map(session => session.id),
+	);
+	state.sessionOrder = state.sessionOrder.filter(
+		(sessionId, index, order) =>
+			!childSessionIds.has(sessionId) && order.indexOf(sessionId) === index,
+	);
+	if (
+		state.activeSessionId &&
+		(childSessionIds.has(state.activeSessionId) ||
+			!state.sessionOrder.includes(state.activeSessionId))
+	) {
+		state.activeSessionId = state.sessionOrder.at(-1);
+	}
+}
+
 function pushSessionErrorNotification(error: unknown): void {
 	const errorMsg = getSessionErrorMessage(error);
 	if (!errorMsg) return;
@@ -194,6 +211,24 @@ export interface RenderTaskCardNode {
 	};
 }
 
+export interface RenderTaskResultNode {
+	kind: 'task_result';
+	id: string;
+	type: 'task_result';
+	parentSessionId: string;
+	parentMessageId?: string;
+	toolCallId: string;
+	childSessionId?: string;
+	timestamp: string;
+	content: string;
+	taskIdLine?: string;
+	source: {
+		parentToolPartId?: string;
+		childAssistantMessageId?: string;
+		childAssistantPartId?: string;
+	};
+}
+
 export interface RenderAssistantMessage {
 	kind: 'assistant';
 	id: string;
@@ -250,6 +285,7 @@ export interface ToolResultView {
 export type RenderNode =
 	| RenderUserMessage
 	| RenderTaskCardNode
+	| RenderTaskResultNode
 	| RenderAssistantMessage
 	| RenderThinkingMessage
 	| RenderToolUseMessage;
@@ -338,13 +374,50 @@ export interface SessionActions {
 	getSessionAutoAccept: (sessionId?: string) => boolean;
 	removePendingQuestion: (requestId: string, sessionId: string) => void;
 	removePendingPermission: (requestId: string, sessionId: string) => void;
-	hydrateSessionSnapshot: (params: {
-		session: Session;
-		messageEntries: SessionMessageEntry[];
-		todos: Todo[];
-		diff: SnapshotFileDiff[];
-		activate: boolean;
-	}) => void;
+	hydrateSessionSnapshot: (params: SessionSnapshotInput | SessionSnapshotInput[]) => void;
+	replaySessionSnapshots: (params: SessionSnapshotInput | SessionSnapshotInput[]) => void;
+}
+
+export interface SessionSnapshotInput {
+	session: Session;
+	messageEntries: SessionMessageEntry[];
+	todos: Todo[];
+	diff: SnapshotFileDiff[];
+	activate: boolean;
+}
+
+function sessionSnapshotsToEvents(
+	params: SessionSnapshotInput | SessionSnapshotInput[],
+): WebviewSdkEvent[] {
+	const snapshots = Array.isArray(params) ? params : [params];
+	const events: WebviewSdkEvent[] = [];
+
+	for (const { session } of snapshots) {
+		events.push({ type: 'session.updated', properties: { info: session } } as WebviewSdkEvent);
+	}
+
+	for (const { session, activate } of snapshots) {
+		if (activate) {
+			events.push({
+				type: 'session.idle',
+				properties: { sessionID: session.id },
+			} as WebviewSdkEvent);
+		}
+	}
+
+	for (const { session, messageEntries } of snapshots) {
+		for (const entry of messageEntries) {
+			events.push({
+				type: 'message.updated',
+				properties: { sessionID: session.id, info: entry.info },
+			} as WebviewSdkEvent);
+			for (const part of entry.parts) {
+				events.push({ type: 'message.part.updated', properties: { part } } as WebviewSdkEvent);
+			}
+		}
+	}
+
+	return events;
 }
 
 function resolveSessionId(state: SessionStore, sessionId?: string): string | undefined {
@@ -372,6 +445,7 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 			set(
 				produce((state: SessionStore) => {
 					eventReducer(state, event);
+					reconcileSessionGraph(state);
 				}),
 			);
 		},
@@ -389,6 +463,7 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 						const event = events[index];
 						eventReducer(state, event);
 					}
+					reconcileSessionGraph(state);
 				}),
 			);
 		},
@@ -501,8 +576,13 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 					state.activeSessionId = activeTab;
 					state.editingMessageId = null;
 					state.editDrafts = {};
+					normalizeTopLevelTabs(state);
+					const retainedSessionIds = new Set(state.sessionOrder);
+					for (const session of state.sessions) {
+						if (session.parentID) retainedSessionIds.add(session.id);
+					}
 					for (const sessionId of Object.keys(state.messages)) {
-						if (!openTabs.includes(sessionId)) {
+						if (!retainedSessionIds.has(sessionId)) {
 							delete state.sessionInput[sessionId];
 							delete state.sessionAgent[sessionId];
 							delete state.sessionModel[sessionId];
@@ -707,48 +787,41 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 			);
 		},
 
-		hydrateSessionSnapshot: ({ session, messageEntries, todos, diff, activate }) => {
+		replaySessionSnapshots: params => {
+			const snapshots = Array.isArray(params) ? params : [params];
 			set(
 				produce((state: SessionStore) => {
-					const sessionIndex = state.sessions.findIndex(item => item.id === session.id);
-					if (sessionIndex >= 0) state.sessions[sessionIndex] = session;
-					else state.sessions.push(session);
+					for (const { session, todos, diff, activate } of snapshots) {
+						const sessionIndex = state.sessions.findIndex(item => item.id === session.id);
+						if (sessionIndex >= 0) state.sessions[sessionIndex] = session;
+						else state.sessions.push(session);
 
-					if (!state.sessionOrder.includes(session.id)) {
-						state.sessionOrder.push(session.id);
-					}
-					if (activate) {
-						state.activeSessionId = session.id;
-					}
-
-					state.todos[session.id] = todos;
-					state.sessionDiff[session.id] = diff;
-					state.sessionModel[session.id] ??= getNewSessionSeedModel(state);
-
-					const previousMessages = state.messages[session.id] ?? [];
-					for (const message of previousMessages) {
-						delete state.parts[message.id];
-					}
-					state.messages[session.id] = [];
-
-					for (const entry of messageEntries) {
-						eventReducer(state, {
-							type: 'message.updated',
-							properties: {
-								sessionID: session.id,
-								info: entry.info,
-							},
-						} as WebviewSdkEvent);
-
-						for (const part of entry.parts) {
-							eventReducer(state, {
-								type: 'message.part.updated',
-								properties: { part },
-							} as WebviewSdkEvent);
+						if (!session.parentID && !state.sessionOrder.includes(session.id)) {
+							state.sessionOrder.push(session.id);
 						}
+						if (activate && !session.parentID) {
+							state.activeSessionId = session.id;
+						}
+
+						state.todos[session.id] = todos;
+						state.sessionDiff[session.id] = diff;
+						state.sessionModel[session.id] ??= getNewSessionSeedModel(state);
+
+						const previousMessages = state.messages[session.id] ?? [];
+						for (const message of previousMessages) {
+							delete state.parts[message.id];
+						}
+						state.messages[session.id] = [];
 					}
+					normalizeTopLevelTabs(state);
 				}),
 			);
+
+			get().actions.applyBatch(sessionSnapshotsToEvents(snapshots));
+		},
+
+		hydrateSessionSnapshot: params => {
+			get().actions.replaySessionSnapshots(params);
 		},
 	},
 }));

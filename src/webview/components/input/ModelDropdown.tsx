@@ -9,11 +9,8 @@
 
 import type React from 'react';
 import { useCallback, useMemo } from 'react';
-import {
-	getProxyEndpointProviderId,
-	OPENAI_COMPATIBLE_PROVIDER_ID,
-	parseModelId,
-} from '../../../common';
+import { parseModelId } from '../../../common';
+import { buildModelOptions } from '../../hooks/useModelOptions';
 import { cn } from '../../lib/cn';
 import { useModelDropdownState, useModelSelection, useSessionModel } from '../../store';
 import { useVSCode } from '../../utils/vscode';
@@ -61,24 +58,6 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 	const sessionModel = useSessionModel();
 
 	const sessionScopedModel = sessionModel;
-
-	// Filter OpenCode models to only show enabled ones from non-disabled providers
-	const filteredOpencodeProviders = useMemo(() => {
-		// Filter each provider's models to only include enabled ones from non-disabled providers
-		return (
-			opencodeProviders
-				// First filter out disabled providers and 'oai' (shown as OpenAI Compatible)
-				.filter(provider => provider.id !== OPENAI_COMPATIBLE_PROVIDER_ID)
-				.map(provider => ({
-					...provider,
-					models: provider.models.filter((model: { id: string; name: string }) => {
-						const fullId = `${provider.id}/${model.id}`;
-						return enabledOpenCodeModels.includes(fullId);
-					}),
-				}))
-				.filter(provider => provider.models.length > 0)
-		);
-	}, [opencodeProviders, enabledOpenCodeModels]);
 
 	const onClose = useCallback(() => {
 		setShowModelDropdown(false);
@@ -142,84 +121,55 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 	// Build flat list of models with provider as badge
 	const items = useMemo((): DropdownMenuItem<ModelData>[] => {
 		const result: DropdownMenuItem<ModelData>[] = [...(extraItems ?? [])];
-		// OpenCode models - flatten all providers into single list
-		for (const opProvider of filteredOpencodeProviders) {
-			for (const model of opProvider.models) {
-				const modelId = `${opProvider.id}/${model.id}`;
-				const isActive = activeModelForHighlight === modelId;
-				result.push({
-					id: modelId,
-					label: model.name,
-					icon: model.reasoning ? (
-						<BrainSideIcon
-							size={14}
-							style={{
-								color: isActive ? 'var(--color-accent)' : 'var(--vscode-descriptionForeground)',
-								opacity: isActive ? 1 : 0.7,
-							}}
-						/>
-					) : (
-						<ZapIcon
-							size={14}
-							style={{
-								color: isActive ? 'var(--color-accent)' : 'var(--vscode-descriptionForeground)',
-								opacity: isActive ? 1 : 0.7,
-							}}
-						/>
-					),
-					meta: opProvider.name,
-					data: {
-						id: modelId,
-						name: model.name,
-						isActive,
-						capabilities: { reasoning: model.reasoning === true },
-					},
-				});
-			}
-		}
+		const modelOptions = buildModelOptions({
+			opencodeProviders,
+			enabledOpenCodeModels,
+			proxyEndpoints,
+			includeDefault: false,
+		});
 
-		// Also add enabled proxy endpoint models for OpenCode
-		for (const endpoint of proxyEndpoints) {
-			if (!endpoint.enabledModels.length || !endpoint.models.length) continue;
-			const providerId = getProxyEndpointProviderId(endpoint.id);
-			for (const model of endpoint.models) {
-				if (!endpoint.enabledModels.includes(model.id)) continue;
-				const modelId = `${providerId}/${model.id}`;
-				const isActive = activeModelForHighlight === modelId;
-				const hasReasoning = model.capabilities?.reasoning === true;
-				result.push({
-					id: modelId,
-					label: model.name || model.id,
-					icon: hasReasoning ? (
-						<BrainSideIcon
-							size={14}
-							style={{
-								color: isActive ? 'var(--color-accent)' : 'var(--vscode-descriptionForeground)',
-								opacity: isActive ? 1 : 0.7,
-							}}
-						/>
-					) : (
-						<ZapIcon
-							size={14}
-							style={{
-								color: isActive ? 'var(--color-accent)' : 'var(--vscode-descriptionForeground)',
-								opacity: isActive ? 1 : 0.7,
-							}}
-						/>
-					),
-					meta: endpoint.name || 'Custom',
-					data: {
-						id: modelId,
-						name: model.name || model.id,
-						isActive,
-						capabilities: model.capabilities,
-					},
-				});
-			}
+		for (const option of modelOptions) {
+			const isActive = activeModelForHighlight === option.value;
+			const hasReasoning = option.reasoning === true;
+			const label = option.modelLabel ?? option.label;
+			result.push({
+				id: option.value,
+				label,
+				icon: hasReasoning ? (
+					<BrainSideIcon
+						size={14}
+						style={{
+							color: isActive ? 'var(--color-accent)' : 'var(--vscode-descriptionForeground)',
+							opacity: isActive ? 1 : 0.7,
+						}}
+					/>
+				) : (
+					<ZapIcon
+						size={14}
+						style={{
+							color: isActive ? 'var(--color-accent)' : 'var(--vscode-descriptionForeground)',
+							opacity: isActive ? 1 : 0.7,
+						}}
+					/>
+				),
+				meta: option.providerLabel,
+				data: {
+					id: option.value,
+					name: label,
+					isActive,
+					capabilities: { reasoning: hasReasoning },
+				},
+			});
 		}
 
 		return result;
-	}, [activeModelForHighlight, filteredOpencodeProviders, proxyEndpoints, extraItems]);
+	}, [
+		activeModelForHighlight,
+		enabledOpenCodeModels,
+		extraItems,
+		opencodeProviders,
+		proxyEndpoints,
+	]);
 
 	return (
 		<DropdownMenu

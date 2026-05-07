@@ -246,6 +246,372 @@ describe('deriveSessionView', () => {
 		expect(taskNode.kind).toBe('task_card');
 	});
 
+	it('resolves child session through session graph when task metadata lacks sessionId', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const asst = makeAssistantMessage('a1', 'ses1', 'u1', { completed: true });
+		const childUser = makeUserMessage('u2', 'child1');
+		const childAsst = makeAssistantMessage('a2', 'child1', 'u2', { completed: true });
+		const taskPart: Part = {
+			id: 'p1',
+			messageID: 'a1',
+			sessionID: 'ses1',
+			type: 'tool',
+			tool: 'task',
+			callID: 'task-call-1',
+			state: { status: 'completed', input: { description: 'do stuff' }, output: 'done' },
+			metadata: {},
+		} as unknown as Part;
+		const store = makeMinimalStore({
+			messages: {
+				ses1: [user, asst],
+				child1: [childUser, childAsst],
+			},
+			parts: { a1: [taskPart] },
+			childSessionIdsByParentId: { ses1: ['child1'] },
+			originatingToolCallBySessionId: { child1: 'task-call-1' },
+		});
+
+		const view = deriveSessionView(store, 'ses1');
+		const taskNode = view.nodesById[view.nodeIds[1]];
+		expect(taskNode.kind).toBe('task_card');
+		if (taskNode.kind === 'task_card') {
+			expect(taskNode.childSessionId).toBe('child1');
+			expect(taskNode.parentMessageId).toBe('u1');
+			expect(taskNode.result).toBeUndefined();
+			expect(taskNode.childSummary.tokens?.total).toBeGreaterThan(0);
+			expect(taskNode.childSummary.durationMs).toBeGreaterThan(0);
+		}
+	});
+
+	it('classifies terminal child assistant text as task_result even when parent output differs', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const asst = makeAssistantMessage('a1', 'ses1', 'u1', { completed: true });
+		const childUser = makeUserMessage('u2', 'child1');
+		const childAsst = makeAssistantMessage('a2', 'child1', 'u2', { completed: true });
+		const taskPart: Part = {
+			id: 'p1',
+			messageID: 'a1',
+			sessionID: 'ses1',
+			type: 'tool',
+			tool: 'task',
+			callID: 'task-call-1',
+			state: { status: 'completed', input: { description: 'do stuff' }, output: 'done' },
+			metadata: { sessionId: 'child1' },
+		} as unknown as Part;
+		const childToolPart = makeToolPart('child-tool', 'a2', 'Read', 'read-call-1');
+		childToolPart.sessionID = 'child1';
+		const childTextPart = makeTextPart('child-text', 'a2', 'Child transcript text');
+		childTextPart.sessionID = 'child1';
+		const store = makeMinimalStore({
+			messages: {
+				ses1: [user, asst],
+				child1: [childUser, childAsst],
+			},
+			parts: {
+				a1: [taskPart],
+				a2: [childToolPart, childTextPart],
+			},
+			childSessionIdsByParentId: { ses1: ['child1'] },
+		});
+
+		const view = deriveSessionView(store, 'ses1');
+		const taskNode = view.nodesById[view.nodeIds[1]];
+		expect(taskNode.kind).toBe('task_card');
+		if (taskNode.kind === 'task_card') {
+			expect(taskNode.childSessionId).toBe('child1');
+			expect(taskNode.result).toBeUndefined();
+		}
+
+		const childView = deriveSessionView(store, 'child1');
+		expect(childView.nodeIds.map(id => childView.nodesById[id]?.kind)).toEqual([
+			'user',
+			'tool_use',
+			'task_result',
+		]);
+		const taskResultNode = childView.nodesById['task-result-task-call-1'];
+		expect(taskResultNode?.kind).toBe('task_result');
+		if (taskResultNode?.kind === 'task_result') {
+			expect(taskResultNode.content).toBe('Child transcript text');
+		}
+	});
+
+	it('materializes terminal child task result wrapper as a canonical task_result node', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const asst = makeAssistantMessage('a1', 'ses1', 'u1', { completed: true });
+		const childUser = makeUserMessage('u2', 'child1');
+		const childAsst = makeAssistantMessage('a2', 'child1', 'u2', { completed: true });
+		const taskPart: Part = {
+			id: 'task-part',
+			messageID: 'a1',
+			sessionID: 'ses1',
+			type: 'tool',
+			tool: 'task',
+			callID: 'task-call-1',
+			state: {
+				status: 'completed',
+				input: { description: 'do stuff' },
+				output: '<task_result>Summary text\ntask_id: child1</task_result>',
+			},
+			metadata: {},
+		} as unknown as Part;
+		const childResultPart = makeTextPart(
+			'child-result-text',
+			'a2',
+			'<task_result>Summary text\ntask_id: child1</task_result>',
+		);
+		childResultPart.sessionID = 'child1';
+		const store = makeMinimalStore({
+			messages: {
+				ses1: [user, asst],
+				child1: [childUser, childAsst],
+			},
+			parts: {
+				a1: [taskPart],
+				a2: [childResultPart],
+			},
+			childSessionIdsByParentId: { ses1: ['child1'] },
+			originatingToolCallBySessionId: { child1: 'task-call-1' },
+		});
+
+		const parentView = deriveSessionView(store, 'ses1');
+		const taskNode = parentView.nodesById[parentView.nodeIds[1]];
+		expect(taskNode.kind).toBe('task_card');
+		if (taskNode.kind === 'task_card') {
+			expect(taskNode.result).toBeUndefined();
+			expect(taskNode.childSessionId).toBe('child1');
+		}
+
+		const childView = deriveSessionView(store, 'child1');
+		const childNode = childView.nodesById['task-result-task-call-1'];
+		expect(childView.nodeIds.map(id => childView.nodesById[id]?.kind)).toEqual([
+			'user',
+			'task_result',
+		]);
+		expect(childNode?.kind).toBe('task_result');
+		if (childNode?.kind === 'task_result') {
+			expect(childNode.content).toBe('Summary text');
+			expect(childNode.taskIdLine).toBe('task_id: child1');
+			expect(childNode.source.childAssistantPartId).toBe('child-result-text');
+		}
+	});
+
+	it('materializes child task result using official task metadata before graph mapping exists', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const asst = makeAssistantMessage('a1', 'ses1', 'u1', { completed: true });
+		const childUser = makeUserMessage('u2', 'child1');
+		const childAsst = makeAssistantMessage('a2', 'child1', 'u2', { completed: true });
+		const taskPart: Part = {
+			id: 'task-part',
+			messageID: 'a1',
+			sessionID: 'ses1',
+			type: 'tool',
+			tool: 'task',
+			callID: 'task-call-1',
+			state: {
+				status: 'completed',
+				input: { description: 'do stuff' },
+				output: '<task_result>Summary text\ntask_id: child1</task_result>',
+			},
+			metadata: { sessionId: 'child1' },
+		} as unknown as Part;
+		const childToolPart = makeToolPart('child-tool', 'a2', 'Read', 'read-call-1');
+		childToolPart.sessionID = 'child1';
+		const childResultPart = makeTextPart('child-result-text', 'a2', 'Summary text');
+		childResultPart.sessionID = 'child1';
+		const store = makeMinimalStore({
+			messages: {
+				ses1: [user, asst],
+				child1: [childUser, childAsst],
+			},
+			parts: {
+				a1: [taskPart],
+				a2: [childToolPart, childResultPart],
+			},
+			childSessionIdsByParentId: { ses1: ['child1'] },
+			originatingToolCallBySessionId: {},
+		});
+
+		const childView = deriveSessionView(store, 'child1');
+		expect(childView.nodeIds.map(id => childView.nodesById[id]?.kind)).toEqual([
+			'user',
+			'tool_use',
+			'task_result',
+		]);
+		const childNode = childView.nodesById['task-result-task-call-1'];
+		expect(childNode?.kind).toBe('task_result');
+		if (childNode?.kind === 'task_result') {
+			expect(childNode.content).toBe('Summary text');
+		}
+	});
+
+	it('replaces only the terminal child task output with task_result after preserving prior transcript activity', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const asst = makeAssistantMessage('a1', 'ses1', 'u1', { completed: true });
+		const childUser = makeUserMessage('u2', 'child1');
+		const childAsst = makeAssistantMessage('a2', 'child1', 'u2', { completed: true });
+		const taskPart: Part = {
+			id: 'task-part',
+			messageID: 'a1',
+			sessionID: 'ses1',
+			type: 'tool',
+			tool: 'task',
+			callID: 'task-call-1',
+			state: {
+				status: 'completed',
+				input: { description: 'inspect upstream' },
+				output: [
+					'task_id: child1 (for resuming to continue this task if needed)',
+					'',
+					'<task_result>',
+					'Final upstream summary',
+					'</task_result>',
+				].join('\n'),
+			},
+			metadata: { sessionId: 'child1' },
+		} as unknown as Part;
+		const childIntroPart = makeTextPart('child-intro-text', 'a2', 'I am reading files now.');
+		childIntroPart.sessionID = 'child1';
+		const childToolPart = makeToolPart('child-read', 'a2', 'Read', 'read-call-1');
+		childToolPart.sessionID = 'child1';
+		const childResultPart = makeTextPart('child-result-text', 'a2', 'Final upstream summary');
+		childResultPart.sessionID = 'child1';
+		const store = makeMinimalStore({
+			messages: {
+				ses1: [user, asst],
+				child1: [childUser, childAsst],
+			},
+			parts: {
+				a1: [taskPart],
+				a2: [childIntroPart, childToolPart, childResultPart],
+			},
+			childSessionIdsByParentId: { ses1: ['child1'] },
+		});
+
+		const childView = deriveSessionView(store, 'child1');
+		expect(childView.nodeIds.map(id => childView.nodesById[id]?.kind)).toEqual([
+			'user',
+			'assistant',
+			'tool_use',
+			'task_result',
+		]);
+		const assistantNodes = childView.nodeIds
+			.map(id => childView.nodesById[id])
+			.filter(
+				(node): node is Extract<typeof node, { kind: 'assistant' }> => node.kind === 'assistant',
+			);
+		const taskResultNode = childView.nodesById['task-result-task-call-1'];
+		expect(assistantNodes).toHaveLength(1);
+		expect(assistantNodes[0].content).toBe('I am reading files now.');
+		expect(taskResultNode?.kind).toBe('task_result');
+		if (taskResultNode?.kind === 'task_result') {
+			expect(taskResultNode.content).toBe('Final upstream summary');
+			expect(taskResultNode.taskIdLine).toBe(
+				'task_id: child1 (for resuming to continue this task if needed)',
+			);
+		}
+	});
+
+	it('combines multiple terminal child assistant text parts into one task_result', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const asst = makeAssistantMessage('a1', 'ses1', 'u1', { completed: true });
+		const childUser = makeUserMessage('u2', 'child1');
+		const childAsst1 = makeAssistantMessage('a2', 'child1', 'u2', { completed: true });
+		const childAsst2 = makeAssistantMessage('a3', 'child1', 'u2', { completed: true });
+		const taskPart: Part = {
+			id: 'task-part',
+			messageID: 'a1',
+			sessionID: 'ses1',
+			type: 'tool',
+			tool: 'task',
+			callID: 'task-call-1',
+			state: { status: 'completed', input: { description: 'do stuff' }, output: 'done' },
+			metadata: { sessionId: 'child1' },
+		} as unknown as Part;
+		const childToolPart = makeToolPart('child-tool', 'a2', 'Read', 'read-call-1');
+		childToolPart.sessionID = 'child1';
+		const terminalFirst = makeTextPart('terminal-first', 'a2', 'First terminal paragraph.');
+		terminalFirst.sessionID = 'child1';
+		const terminalSecond = makeTextPart('terminal-second', 'a3', 'Second terminal paragraph.');
+		terminalSecond.sessionID = 'child1';
+		const store = makeMinimalStore({
+			messages: {
+				ses1: [user, asst],
+				child1: [childUser, childAsst1, childAsst2],
+			},
+			parts: {
+				a1: [taskPart],
+				a2: [childToolPart, terminalFirst],
+				a3: [terminalSecond],
+			},
+			childSessionIdsByParentId: { ses1: ['child1'] },
+		});
+
+		const childView = deriveSessionView(store, 'child1');
+		expect(childView.nodeIds.map(id => childView.nodesById[id]?.kind)).toEqual([
+			'user',
+			'tool_use',
+			'task_result',
+		]);
+		const taskResultNode = childView.nodesById['task-result-task-call-1'];
+		expect(taskResultNode?.kind).toBe('task_result');
+		if (taskResultNode?.kind === 'task_result') {
+			expect(taskResultNode.source.childAssistantPartId).toBe('terminal-first');
+			expect(taskResultNode.content).toBe(
+				'First terminal paragraph.\n\nSecond terminal paragraph.',
+			);
+		}
+	});
+
+	it('keeps terminal child text as assistant while the parent task is not completed', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const asst = makeAssistantMessage('a1', 'ses1', 'u1', { completed: true });
+		const childUser = makeUserMessage('u2', 'child1');
+		const childAsst = makeAssistantMessage('a2', 'child1', 'u2', { completed: true });
+		const taskPart: Part = {
+			id: 'task-part',
+			messageID: 'a1',
+			sessionID: 'ses1',
+			type: 'tool',
+			tool: 'task',
+			callID: 'task-call-1',
+			state: {
+				status: 'running',
+				input: { description: 'do stuff' },
+			},
+			metadata: {},
+		} as unknown as Part;
+		const childToolPart = makeToolPart('child-tool', 'a2', 'Read', 'read-call-1');
+		childToolPart.sessionID = 'child1';
+		const childTextPart = makeTextPart('child-text', 'a2', 'Different child transcript text');
+		childTextPart.sessionID = 'child1';
+		const store = makeMinimalStore({
+			messages: {
+				ses1: [user, asst],
+				child1: [childUser, childAsst],
+			},
+			parts: {
+				a1: [taskPart],
+				a2: [childToolPart, childTextPart],
+			},
+			childSessionIdsByParentId: { ses1: ['child1'] },
+			originatingToolCallBySessionId: { child1: 'task-call-1' },
+		});
+
+		const childView = deriveSessionView(store, 'child1');
+		const childAssistantNodes = childView.nodeIds
+			.map(id => childView.nodesById[id])
+			.filter(
+				(node): node is Extract<typeof node, { kind: 'assistant' }> => node.kind === 'assistant',
+			);
+		expect(childAssistantNodes).toHaveLength(1);
+		expect(childAssistantNodes[0].content).toBe('Different child transcript text');
+		expect(childView.nodeIds.map(id => childView.nodesById[id]?.kind)).toEqual([
+			'user',
+			'tool_use',
+			'assistant',
+		]);
+	});
+
 	it('builds nodesById index correctly', () => {
 		const user = makeUserMessage('u1', 'ses1');
 		const asst = makeAssistantMessage('a1', 'ses1', 'u1', { completed: true });

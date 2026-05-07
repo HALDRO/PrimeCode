@@ -282,12 +282,18 @@ function toConversationEntry(session: RestorableSession): ConversationIndexEntry
 }
 
 function persistTabs(): void {
-	const { sessionOrder, activeSessionId } = useChatStore.getState();
+	const { sessions, sessionOrder, activeSessionId } = useChatStore.getState();
+	const childSessionIds = new Set(
+		sessions.filter(session => Boolean(session.parentID)).map(session => session.id),
+	);
+	const openTabs = sessionOrder.filter(sessionId => !childSessionIds.has(sessionId));
+	const activeTab =
+		activeSessionId && openTabs.includes(activeSessionId) ? activeSessionId : openTabs.at(-1);
 	const previous = (window.vscode?.getState() as Record<string, unknown> | undefined) ?? {};
 	window.vscode?.setState({
 		...previous,
-		openTabs: sessionOrder,
-		activeTab: activeSessionId,
+		openTabs,
+		activeTab,
 	});
 }
 
@@ -315,12 +321,37 @@ function closeTabState(state: SessionStore, sessionId: string): void {
 	clearSessionViewCache(sessionId);
 }
 
+async function collectSessionSubtree(
+	client: OpencodeClient,
+	workspaceRoot: string,
+	rootSession: RestorableSession,
+): Promise<RestorableSession[]> {
+	const sessions: RestorableSession[] = [rootSession];
+	const queue: RestorableSession[] = [rootSession];
+	const seen = new Set<string>([rootSession.id]);
+
+	let head = 0;
+	while (head < queue.length) {
+		const current = queue[head++];
+		const result = await client.session
+			.children({ sessionID: current.id, directory: workspaceRoot })
+			.catch(() => ({ data: [] }));
+		for (const child of (result.data ?? []) as RestorableSession[]) {
+			if (!child.id || seen.has(child.id)) continue;
+			seen.add(child.id);
+			sessions.push(child);
+			queue.push(child);
+		}
+	}
+
+	return sessions;
+}
+
 async function hydrateSession(sessionId: string, activate = true): Promise<void> {
 	const client = getClient();
 	const workspaceRoot = getWorkspaceRoot();
-	const [sessionResult, messagesResult, todoResult, diffResult] = await Promise.all([
+	const [sessionResult, todoResult, diffResult] = await Promise.all([
 		client.session.get({ sessionID: sessionId, directory: workspaceRoot }),
-		client.session.messages({ sessionID: sessionId, directory: workspaceRoot }),
 		client.session
 			.todo({ sessionID: sessionId, directory: workspaceRoot })
 			.catch(() => ({ data: [] })),
@@ -334,19 +365,33 @@ async function hydrateSession(sessionId: string, activate = true): Promise<void>
 	}
 
 	const session = sessionResult.data as RestorableSession;
-	const messageEntries = (messagesResult.data ?? []) as SessionMessageEntry[];
+	const subtreeSessions = await collectSessionSubtree(client, workspaceRoot, session);
+	const messagesBySession = await Promise.all(
+		subtreeSessions.map(async currentSession => {
+			const result = await client.session.messages({
+				sessionID: currentSession.id,
+				directory: workspaceRoot,
+			});
+			return {
+				session: currentSession,
+				messageEntries: (result.data ?? []) as SessionMessageEntry[],
+			};
+		}),
+	);
 	const todos = ((todoResult.data ?? []) as Todo[]) || [];
 	const diff = ((diffResult.data ?? []) as SnapshotFileDiff[]) || [];
-	useChatStore.getState().actions.hydrateSessionSnapshot({
-		session,
-		messageEntries: messageEntries.map(entry => ({
-			info: entry.info,
-			parts: entry.parts.filter(part => !SKIP_PARTS.has(part.type)),
+	useChatStore.getState().actions.replaySessionSnapshots(
+		messagesBySession.map(({ session: currentSession, messageEntries }) => ({
+			session: currentSession,
+			messageEntries: messageEntries.map(entry => ({
+				info: entry.info,
+				parts: entry.parts.filter(part => !SKIP_PARTS.has(part.type)),
+			})),
+			todos: currentSession.id === session.id ? todos : [],
+			diff: currentSession.id === session.id ? diff : [],
+			activate: currentSession.id === session.id ? activate : false,
 		})),
-		todos,
-		diff,
-		activate,
-	});
+	);
 }
 
 async function refreshConversationList(): Promise<void> {
@@ -448,8 +493,10 @@ export const openCodeRuntime = {
 				for (const sessionId of persisted.openTabs) {
 					await hydrateSession(sessionId, sessionId === persisted.activeTab);
 				}
-				persistTabs();
-				return;
+				if (useChatStore.getState().sessionOrder.length > 0) {
+					persistTabs();
+					return;
+				}
 			}
 			const firstConversation = useUIStore.getState().conversationList[0];
 			if (firstConversation?.sessionId) {

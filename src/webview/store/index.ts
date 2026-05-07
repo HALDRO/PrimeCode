@@ -13,6 +13,7 @@ export {
 	type RenderAssistantMessage,
 	type RenderNode,
 	type RenderTaskCardNode,
+	type RenderTaskResultNode,
 	type RenderThinkingMessage,
 	type RenderToolUseMessage,
 	type RenderUserMessage,

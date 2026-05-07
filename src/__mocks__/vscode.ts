@@ -135,6 +135,17 @@ export const env = {
 };
 
 export const Uri = mockUri;
+
+export class RelativePattern {
+	baseUri: { fsPath: string };
+	pattern: string;
+
+	constructor(baseUri: { fsPath: string }, pattern: string) {
+		this.baseUri = baseUri;
+		this.pattern = pattern;
+	}
+}
+
 export const Range = MockRange;
 export const Position = MockPosition;
 export const Selection = MockSelection;

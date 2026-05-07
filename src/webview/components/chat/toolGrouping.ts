@@ -118,7 +118,6 @@ export const groupToolMessages = (
 		if (currentToolGroup.length === 0) return;
 
 		const trailingBridges = stripTrailingBridges(currentToolGroup);
-
 		const toolUseCount = getToolUseCount(currentToolGroup);
 		const canGroup = toolUseCount >= MIN_SIMPLE_TOOL_GROUP_SIZE;
 
@@ -164,6 +163,10 @@ export const groupToolMessages = (
 
 export const shouldTriggerCollapse = (msg: RenderNode): boolean => {
 	if (msg.kind === 'assistant') {
+		return true;
+	}
+
+	if (msg.kind === 'task_result') {
 		return true;
 	}
 

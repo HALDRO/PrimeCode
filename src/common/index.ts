@@ -99,8 +99,43 @@ export function getStringField(record: unknown, key: string, fallback = ''): str
 	return typeof value === 'string' ? value : fallback;
 }
 
+function findTaskResultContentOutsideCodeFence(raw: string): string | undefined {
+	let inFence = false;
+	let lineStart = 0;
+	while (lineStart <= raw.length) {
+		const lineEnd = raw.indexOf('\n', lineStart);
+		const end = lineEnd === -1 ? raw.length : lineEnd;
+		const line = raw.slice(lineStart, end);
+		if (line.trimStart().startsWith('```')) {
+			inFence = !inFence;
+			if (lineEnd === -1) break;
+			lineStart = lineEnd + 1;
+			continue;
+		}
+		const openMatch = line.match(/^\s*<task_result>\s*/i);
+		if (!inFence && openMatch?.[0]) {
+			const contentStart = lineStart + openMatch[0].length;
+			const closeMatch = raw.slice(contentStart).match(/<\/task_result>/i);
+			if (closeMatch?.index !== undefined) {
+				return raw.slice(contentStart, contentStart + closeMatch.index).trim();
+			}
+			return undefined;
+		}
+		if (lineEnd === -1) break;
+		lineStart = lineEnd + 1;
+	}
+	return undefined;
+}
+
 export function extractCanonicalTaskResult(raw: string): string {
 	const trimmed = raw.trim();
-	const match = trimmed.match(/<task_result>\s*([\s\S]*?)\s*<\/task_result>/i);
-	return match?.[1]?.trim() ?? trimmed;
+	return findTaskResultContentOutsideCodeFence(trimmed) ?? trimmed;
+}
+
+export function stripTaskResultDisplayMetadata(raw: string): string {
+	return raw
+		.replace(/<task_metadata>[\s\S]*?<\/task_metadata>/g, '')
+		.replace(/^to continue:\s*task\([\s\S]*$/gm, '')
+		.replace(/^task_id:\s*\S+.*$/gm, '')
+		.trim();
 }

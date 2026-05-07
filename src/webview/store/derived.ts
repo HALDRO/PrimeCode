@@ -1,4 +1,5 @@
 import type { AssistantMessage, Message, Part, ToolPart } from '@opencode-ai/sdk/v2/client';
+import { extractCanonicalTaskResult, stripTaskResultDisplayMetadata } from '../../common';
 import {
 	computeTurnUsage,
 	getTurnUsageDuration,
@@ -17,12 +18,14 @@ import {
 	type RenderCompactionMessage,
 	type RenderNode,
 	type RenderTaskCardNode,
+	type RenderTaskResultNode,
 	type RenderThinkingMessage,
 	type RenderToolUseMessage,
 	type RenderUserMessage,
 	type SessionStore,
 	type TokenUsage,
 } from './chatStore';
+import { computeAssistantUsage } from './sessionUsage';
 
 export interface SectionStats {
 	isFirst: boolean;
@@ -56,9 +59,13 @@ export interface SessionDerivedView {
 
 interface SessionDerivedCacheEntry {
 	messagesRef: Message[] | undefined;
+	allMessagesRef: SessionStore['messages'];
 	partsRef: Record<string, Part[]>;
 	sessionsRef: SessionStore['sessions'];
 	sessionStatusRef: SessionStore['sessionStatus'];
+	childSessionIdsRef: SessionStore['childSessionIdsByParentId'];
+	originatingToolCallRef: SessionStore['originatingToolCallBySessionId'];
+	sessionModelRef: SessionStore['sessionModel'];
 	mcpKey: string;
 	view: SessionDerivedView;
 }
@@ -164,7 +171,183 @@ function getLastAssistantStreaming(nodes: RenderNode[]): boolean {
 	return false;
 }
 
-function projectMessages(messages: Message[], parts: Record<string, Part[]>): RenderNode[] {
+function getTaskResultOutput(part: ToolPart): string | undefined {
+	const output = 'output' in part.state ? part.state.output : undefined;
+	return typeof output === 'string' && output.trim() ? output.trim() : undefined;
+}
+
+function extractTaskResultArtifact(raw: string): {
+	content: string;
+	taskIdLine?: string;
+} | null {
+	const canonical = extractCanonicalTaskResult(raw).trim();
+	if (!canonical) return null;
+	const taskIdMatch = raw.match(/^task_id:\s*[^\r\n<]*/m);
+	const taskIdLine = taskIdMatch?.[0]?.trim();
+	const taskResultContent = stripTaskResultDisplayMetadata(canonical);
+	const separatorPayload = taskResultContent.match(/(?:^|\n)---\s*\n([\s\S]*)$/)?.[1]?.trim();
+	const content = separatorPayload || taskResultContent;
+	if (!content && !taskIdLine) return null;
+	return { content, taskIdLine };
+}
+
+function extractTaskResultDisplayContent(raw: string): string {
+	return stripTaskResultDisplayMetadata(extractCanonicalTaskResult(raw));
+}
+
+function materializeTaskResultNode(input: {
+	parentSessionId: string;
+	parentMessageId?: string;
+	toolCallId: string;
+	childSessionId?: string;
+	timestamp: string;
+	rawOutput: string | undefined;
+	displayOutput?: string;
+	parentToolPartId?: string;
+	childAssistantMessageId?: string;
+	childAssistantPartId?: string;
+}): RenderTaskResultNode | undefined {
+	if (!input.rawOutput) return undefined;
+	const artifact = extractTaskResultArtifact(input.rawOutput);
+	if (!artifact) return undefined;
+	const displayContent = input.displayOutput
+		? extractTaskResultDisplayContent(input.displayOutput)
+		: undefined;
+	return {
+		kind: 'task_result',
+		id: `task-result-${input.toolCallId}`,
+		type: 'task_result',
+		parentSessionId: input.parentSessionId,
+		parentMessageId: input.parentMessageId,
+		toolCallId: input.toolCallId,
+		childSessionId: input.childSessionId,
+		timestamp: input.timestamp,
+		content: displayContent || artifact.content,
+		...(artifact.taskIdLine ? { taskIdLine: artifact.taskIdLine } : {}),
+		source: {
+			parentToolPartId: input.parentToolPartId,
+			childAssistantMessageId: input.childAssistantMessageId,
+			childAssistantPartId: input.childAssistantPartId,
+		},
+	};
+}
+
+interface TaskResultProjection {
+	nodesByFirstPartId: Map<string, RenderTaskResultNode>;
+	consumedPartIds: Set<string>;
+}
+
+interface TaskPartIndex {
+	byCallId: Map<string, ToolPart>;
+	byChildSessionId: Map<string, ToolPart>;
+}
+
+function getToolPartMetadata(toolPart: ToolPart): Record<string, unknown> | undefined {
+	return (toolPart.metadata ??
+		('metadata' in toolPart.state
+			? ((toolPart.state as { metadata?: Record<string, unknown> }).metadata ?? undefined)
+			: undefined)) as Record<string, unknown> | undefined;
+}
+
+function buildTaskPartIndex(parts: Record<string, Part[]>): TaskPartIndex {
+	const byCallId = new Map<string, ToolPart>();
+	const byChildSessionId = new Map<string, ToolPart>();
+	for (const messageParts of Object.values(parts)) {
+		for (const part of messageParts) {
+			if (part.type !== 'tool') continue;
+			const toolPart = part as ToolPart;
+			if (toolPart.tool.toLowerCase() !== 'task') continue;
+			byCallId.set(toolPart.callID, toolPart);
+			const metadata = getToolPartMetadata(toolPart);
+			const childSessionId =
+				typeof metadata?.sessionId === 'string' ? metadata.sessionId : undefined;
+			if (childSessionId) byChildSessionId.set(childSessionId, toolPart);
+		}
+	}
+	return { byCallId, byChildSessionId };
+}
+
+function buildTerminalTaskResultProjection(
+	state: Pick<SessionStore, 'originatingToolCallBySessionId' | 'messages'>,
+	messages: Message[],
+	parts: Record<string, Part[]>,
+	sessionId: string,
+	taskPartIndex: TaskPartIndex,
+): TaskResultProjection {
+	const mappedToolCallId = state.originatingToolCallBySessionId[sessionId];
+	const projection: TaskResultProjection = {
+		nodesByFirstPartId: new Map(),
+		consumedPartIds: new Set(),
+	};
+	const parentTaskPart =
+		taskPartIndex.byChildSessionId.get(sessionId) ??
+		(mappedToolCallId ? taskPartIndex.byCallId.get(mappedToolCallId) : undefined);
+
+	if (!parentTaskPart || parentTaskPart.state.status !== 'completed') return projection;
+	const parentMessage = state.messages[parentTaskPart.sessionID]?.find(
+		message => message.id === parentTaskPart.messageID,
+	);
+	const parentTaskParentMessageId =
+		parentMessage && isAssistantMessage(parentMessage) ? parentMessage.parentID : undefined;
+
+	const orderedParts: Array<{ message: Message; part: Part; index: number }> = [];
+	for (const message of messages) {
+		for (const part of parts[message.id] ?? []) {
+			orderedParts.push({ message, part, index: orderedParts.length });
+		}
+	}
+
+	let lastToolIndex = -1;
+	for (const entry of orderedParts) {
+		if (entry.part.type === 'tool') lastToolIndex = entry.index;
+	}
+
+	const terminalTextParts = orderedParts.filter(entry => {
+		if (entry.index <= lastToolIndex) return false;
+		if (!isAssistantMessage(entry.message)) return false;
+		if (entry.part.type !== 'text' || !('text' in entry.part)) return false;
+		const text = entry.part.text;
+		if (typeof text !== 'string' || !text.trim()) return false;
+		return !(('synthetic' in entry.part && entry.part.synthetic) as boolean);
+	});
+	if (terminalTextParts.length === 0) return projection;
+
+	const content = terminalTextParts
+		.map(entry =>
+			entry.part.type === 'text' ? extractTaskResultDisplayContent(entry.part.text) : '',
+		)
+		.map(text => text.trim())
+		.filter(Boolean)
+		.join('\n\n');
+	if (!content) return projection;
+
+	const first = terminalTextParts[0];
+	for (const entry of terminalTextParts) {
+		projection.consumedPartIds.add(entry.part.id);
+	}
+	const node = materializeTaskResultNode({
+		parentSessionId: parentTaskPart.sessionID,
+		parentMessageId: parentTaskParentMessageId,
+		toolCallId: parentTaskPart.callID,
+		childSessionId: sessionId,
+		timestamp: new Date((first.message as AssistantMessage).time.created).toISOString(),
+		rawOutput: getTaskResultOutput(parentTaskPart) ?? content,
+		displayOutput: content,
+		parentToolPartId: parentTaskPart.id,
+		childAssistantMessageId: first.message.id,
+		childAssistantPartId: first.part.id,
+	});
+	if (node) projection.nodesByFirstPartId.set(first.part.id, node);
+	return projection;
+}
+function projectMessages(
+	messages: Message[],
+	parts: Record<string, Part[]>,
+	taskResultProjection: TaskResultProjection = {
+		nodesByFirstPartId: new Map(),
+		consumedPartIds: new Set(),
+	},
+): RenderNode[] {
 	if (messages.length === 0) return [];
 
 	const nodes: RenderNode[] = [];
@@ -226,6 +409,13 @@ function projectMessages(messages: Message[], parts: Record<string, Part[]>): Re
 		const timestamp = new Date(assistantMsg.time.created).toISOString();
 
 		for (const part of msgParts) {
+			const taskResultArtifact = taskResultProjection.nodesByFirstPartId.get(part.id);
+			if (taskResultArtifact) {
+				nodes.push({ ...taskResultArtifact, timestamp });
+				continue;
+			}
+			if (taskResultProjection.consumedPartIds.has(part.id)) continue;
+
 			if (
 				part.type === 'text' &&
 				'text' in part &&
@@ -291,91 +481,79 @@ function projectMessages(messages: Message[], parts: Record<string, Part[]>): Re
 function materializeTaskCards(
 	sessionId: string,
 	baseItems: RenderNode[],
-	parts: Record<string, Part[]> = {},
+	state: Pick<
+		SessionStore,
+		| 'messages'
+		| 'childSessionIdsByParentId'
+		| 'originatingToolCallBySessionId'
+		| 'sessionModel'
+		| 'sessionStatus'
+	>,
+	taskPartIndex: TaskPartIndex,
 ): RenderNode[] {
 	const items: RenderNode[] = [];
-	let afterCompletedTask = false;
 
 	for (const item of baseItems) {
 		if (item.kind === 'tool_use' && item.toolName.toLowerCase() === 'task') {
 			const toolCallId = item.toolUseId;
 			let taskInput: Record<string, unknown> = {};
 			let taskMetadata: Record<string, unknown> | undefined;
-			let taskResult: string | undefined;
-			for (const messageParts of Object.values(parts)) {
-				for (const part of messageParts) {
-					if (part.type !== 'tool') continue;
-					const toolPart = part as ToolPart;
-					if (toolPart.callID !== toolCallId) continue;
-					taskInput =
-						'input' in toolPart.state &&
-						toolPart.state.input &&
-						typeof toolPart.state.input === 'object'
-							? (toolPart.state.input as Record<string, unknown>)
-							: {};
-					taskMetadata = (toolPart.metadata ??
-						('metadata' in toolPart.state
-							? ((toolPart.state as { metadata?: Record<string, unknown> }).metadata ?? undefined)
-							: undefined)) as Record<string, unknown> | undefined;
-					taskResult =
-						'output' in toolPart.state ? (toolPart.state.output ?? undefined) : undefined;
-					break;
-				}
-				if (taskMetadata || taskResult !== undefined) break;
+			const taskToolPart = taskPartIndex.byCallId.get(toolCallId);
+			if (taskToolPart) {
+				taskInput =
+					'input' in taskToolPart.state &&
+					taskToolPart.state.input &&
+					typeof taskToolPart.state.input === 'object'
+						? (taskToolPart.state.input as Record<string, unknown>)
+						: {};
+				taskMetadata = getToolPartMetadata(taskToolPart);
 			}
-			const childSessionId =
+			const metadataSessionId =
 				typeof taskMetadata?.sessionId === 'string' ? taskMetadata.sessionId : undefined;
+			const childSessionId =
+				metadataSessionId ??
+				Object.entries(state.originatingToolCallBySessionId).find(
+					([, callId]) => callId === toolCallId,
+				)?.[0];
+			const childStats = computeDerivedSessionStats(state, childSessionId);
+			const childUsage = computeAssistantUsage(
+				childSessionId ? state.messages[childSessionId] : undefined,
+			);
 			const metadataModel =
 				taskMetadata && typeof taskMetadata.model === 'object'
 					? (taskMetadata.model as { providerID?: string; modelID?: string })
 					: undefined;
 			const childModelId =
-				metadataModel?.providerID && metadataModel?.modelID
+				(childSessionId ? state.sessionModel[childSessionId] : undefined) ??
+				(metadataModel?.providerID && metadataModel?.modelID
 					? `${metadataModel.providerID}/${metadataModel.modelID}`
-					: undefined;
-			const result =
-				item.status === 'completed' && typeof taskResult === 'string'
-					? taskResult.trim()
-					: undefined;
+					: undefined);
 
 			const node: RenderTaskCardNode = {
 				kind: 'task_card',
 				id: toolCallId,
 				toolCallId,
 				parentSessionId: sessionId,
-				parentMessageId: undefined,
+				parentMessageId: item.parentMessageId,
 				timestamp: item.timestamp,
 				status: item.status ?? 'running',
 				agent: typeof taskInput.subagent_type === 'string' ? taskInput.subagent_type : undefined,
 				description: typeof taskInput.description === 'string' ? taskInput.description : undefined,
 				prompt: typeof taskInput.prompt === 'string' ? taskInput.prompt : undefined,
-				result,
+				result: undefined,
 				startTime: item.timestamp,
 				childSessionId,
 				childSummary: {
 					title: typeof taskInput.description === 'string' ? taskInput.description : undefined,
 					modelId: childModelId,
-					durationMs: undefined,
-					tokens: undefined,
+					durationMs: childStats.totalDuration || undefined,
+					tokens: childUsage,
 					diffStats: { added: 0, removed: 0 },
-					childCount: 0,
+					childCount: childStats.subagentCount,
 				},
 			};
 			items.push(node);
-			if (node.status === 'completed') afterCompletedTask = true;
 			continue;
-		}
-
-		if (afterCompletedTask) {
-			if (item.kind === 'thinking') {
-				items.push(item);
-				continue;
-			}
-			if (item.kind === 'assistant') {
-				afterCompletedTask = false;
-				continue;
-			}
-			afterCompletedTask = false;
 		}
 
 		items.push(item);
@@ -446,6 +624,30 @@ function groupRenderResponses(
 	return grouped;
 }
 
+function getSummaryFileChanges(message: Message): SectionStats['fileChanges'] {
+	const diffs = (
+		message as Message & {
+			summary?: { diffs?: Array<{ file?: unknown; additions?: unknown; deletions?: unknown }> };
+		}
+	).summary?.diffs;
+	if (!Array.isArray(diffs) || diffs.length === 0) return null;
+
+	let added = 0;
+	let removed = 0;
+	const files = new Set<string>();
+	for (const diff of diffs) {
+		if (typeof diff.file !== 'string' || !diff.file) continue;
+		const additions = typeof diff.additions === 'number' ? diff.additions : 0;
+		const deletions = typeof diff.deletions === 'number' ? diff.deletions : 0;
+		if (additions === 0 && deletions === 0) continue;
+		added += additions;
+		removed += deletions;
+		files.add(diff.file);
+	}
+
+	return added > 0 || removed > 0 ? { added, removed, files: files.size } : null;
+}
+
 function computeSectionStats(
 	section: MessageSection,
 	rawResponses: RenderNode[],
@@ -467,28 +669,7 @@ function computeSectionStats(
 	const realTokens = userMsgId ? turnTokens[userMsgId] : undefined;
 	const tokenCount = getTurnUsageTokenCount(realTokens);
 	const durationMs = getTurnUsageDuration(realTokens);
-	const summaryDiffs = (
-		section.userMessage.message as Message & {
-			summary?: { diffs?: Array<{ file: string; additions: number; deletions: number }> };
-		}
-	).summary?.diffs;
-
-	let fileChanges: SectionStats['fileChanges'] = null;
-	if (Array.isArray(summaryDiffs) && summaryDiffs.length > 0) {
-		let added = 0;
-		let removed = 0;
-		const files = new Set<string>();
-		for (const diff of summaryDiffs) {
-			added += diff.additions || 0;
-			removed += diff.deletions || 0;
-			if ((diff.additions || 0) > 0 || (diff.deletions || 0) > 0) {
-				if (typeof diff.file === 'string' && diff.file) files.add(diff.file);
-			}
-		}
-		if (added > 0 || removed > 0) {
-			fileChanges = { added, removed, files: files.size };
-		}
-	}
+	const fileChanges = getSummaryFileChanges(section.userMessage.message);
 
 	return {
 		isFirst: false,
@@ -615,15 +796,15 @@ export function computeDerivedSessionStats(
 	const emptyMessages: Message[] = [];
 	for (const currentSessionId of sessionIds) {
 		const messages = state.messages[currentSessionId] ?? emptyMessages;
+		let sawAssistantActivity = false;
 		for (const msg of messages) {
 			if (!isAssistantMessage(msg)) continue;
-			const t = msg.tokens;
-			const total = t.total ?? t.input + t.output + t.reasoning + t.cache.read + t.cache.write;
-			if (total > 0) requestCount += 1;
+			sawAssistantActivity = true;
 			if (typeof msg.time.completed === 'number') {
 				totalDuration += msg.time.completed - msg.time.created;
 			}
 		}
+		if (sawAssistantActivity) requestCount += 1;
 	}
 	return {
 		requestCount,
@@ -633,7 +814,16 @@ export function computeDerivedSessionStats(
 }
 
 export function deriveSessionView(
-	state: Pick<SessionStore, 'messages' | 'parts' | 'sessions' | 'sessionStatus'>,
+	state: Pick<
+		SessionStore,
+		| 'messages'
+		| 'parts'
+		| 'sessions'
+		| 'sessionStatus'
+		| 'sessionModel'
+		| 'childSessionIdsByParentId'
+		| 'originatingToolCallBySessionId'
+	>,
 	sessionId: string | undefined,
 	mcpServerNames: string[] = [],
 ): SessionDerivedView {
@@ -646,16 +836,28 @@ export function deriveSessionView(
 	if (
 		cached &&
 		cached.messagesRef === messages &&
+		cached.allMessagesRef === state.messages &&
 		cached.partsRef === state.parts &&
 		cached.sessionsRef === state.sessions &&
 		cached.sessionStatusRef === state.sessionStatus &&
+		cached.childSessionIdsRef === state.childSessionIdsByParentId &&
+		cached.originatingToolCallRef === state.originatingToolCallBySessionId &&
+		cached.sessionModelRef === state.sessionModel &&
 		cached.mcpKey === mcpKey
 	) {
 		return cached.view;
 	}
 
-	const rawNodes = projectMessages(messages, state.parts);
-	const nodes = materializeTaskCards(sessionId, rawNodes, state.parts);
+	const taskPartIndex = buildTaskPartIndex(state.parts);
+	const taskResultProjection = buildTerminalTaskResultProjection(
+		state,
+		messages,
+		state.parts,
+		sessionId,
+		taskPartIndex,
+	);
+	const rawNodes = projectMessages(messages, state.parts, taskResultProjection);
+	const nodes = materializeTaskCards(sessionId, rawNodes, state, taskPartIndex);
 	const nodeIds = nodes.map(n => n.id);
 	const nodesById = buildNodesById(nodes);
 	const turnTokensByParentId = buildTurnTokenMap(messages);
@@ -691,9 +893,13 @@ export function deriveSessionView(
 	};
 	sessionViewCache.set(cacheKey, {
 		messagesRef: messages,
+		allMessagesRef: state.messages,
 		partsRef: state.parts,
 		sessionsRef: state.sessions,
 		sessionStatusRef: state.sessionStatus,
+		childSessionIdsRef: state.childSessionIdsByParentId,
+		originatingToolCallRef: state.originatingToolCallBySessionId,
+		sessionModelRef: state.sessionModel,
 		mcpKey,
 		view,
 	});

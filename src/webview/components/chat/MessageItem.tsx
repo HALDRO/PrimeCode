@@ -13,6 +13,7 @@ import {
 	type RenderAssistantMessage,
 	type RenderNode,
 	type RenderTaskCardNode,
+	type RenderTaskResultNode,
 	type RenderThinkingMessage,
 	type RenderToolUseMessage,
 	useChatStore,
@@ -24,14 +25,12 @@ import {
 	useMcpServers,
 	useSubtaskAccessRequest,
 } from '../../store';
-import { copyTextToClipboard } from '../../utils/clipboard';
 import { formatNumber, formatToolName } from '../../utils/format';
 import { Markdown } from '../../utils/markdown';
 import {
 	BotIcon,
 	CheckCircleIcon,
 	ChevronDownIcon,
-	CopyIcon,
 	ListIcon,
 	TodoCheckIcon,
 	TodoPendingIcon,
@@ -39,7 +38,6 @@ import {
 	TokensIcon,
 	WandIcon,
 } from '../icons';
-import { IconButton } from '../ui';
 import { ScrollThumb } from '../ui/ScrollContainer';
 import { AccessGate } from './AccessGate';
 import { SubtaskGenerationStatus } from './GenerationStatus';
@@ -171,6 +169,33 @@ const PreviewToolSummary: React.FC<{
 });
 PreviewToolSummary.displayName = 'PreviewToolSummary';
 
+function TaskResultLine({ message }: { message: RenderTaskResultNode }) {
+	const content = extractCanonicalTaskResult(message.content).trim();
+	if (!content) return null;
+	const taskIdLine = message.taskIdLine;
+
+	return (
+		<SimpleTool
+			icon={<CheckCircleIcon size={14} />}
+			label="Task Done"
+			meta={content}
+			defaultExpanded={false}
+			showCollapseOverlay
+			className="mb-0"
+		>
+			<Markdown
+				content={content}
+				className="[&_p]:!text-sm [&_p]:!text-vscode-descriptionForeground [&_li]:!text-sm [&_li]:!text-vscode-descriptionForeground [&_ul]:!text-sm [&_ol]:!text-sm !text-vscode-descriptionForeground"
+			/>
+			{taskIdLine && (
+				<div className="mt-2 pt-1.5 border-t border-vscode-widget-border text-xs text-vscode-descriptionForeground opacity-50 font-mono select-all">
+					{taskIdLine}
+				</div>
+			)}
+		</SimpleTool>
+	);
+}
+
 /** Hook to group child session items for rendering — avoids duplicating grouping logic. */
 function useGroupedTranscript(
 	items: RenderNode[] | undefined,
@@ -189,13 +214,12 @@ const TaskCardItem = React.memo<{
 }>(({ message, ctx }) => {
 	const [expandState, setExpandState] = useState<SubtaskExpandState>('preview');
 	const [promptExpanded, setPromptExpanded] = useState(false);
-	const [previewResultExpanded, setPreviewResultExpanded] = useState(false);
 	const mcpServers = useMcpServers();
 	const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
 	const pendingAccess = useSubtaskAccessRequest(message.id);
 
 	// All data from the projector's pre-computed summary — no store access needed
-	const { status, agent, description, prompt, result } = message;
+	const { status, agent, description, prompt } = message;
 	const { title, modelId: childModelId } = message.childSummary;
 	const childSessionId = message.childSessionId;
 	const liveChildSummary = useChildSessionSummary(childSessionId);
@@ -212,57 +236,15 @@ const TaskCardItem = React.memo<{
 	const childSessionAgent = useChildSessionAgent(childSessionId);
 	const childSessionSlug = useChildSessionSlug(childSessionId);
 	const childTitle = useChildSessionTitle(childSessionId);
-	// Clean task result: strip <task_result> tags and extract task_id to show separately
-	const { displayResult: taskResultContent, taskIdLine } = useMemo(() => {
-		const raw = (result || '').trim();
-		if (!raw) return { displayResult: '', taskIdLine: undefined as string | undefined };
-		const cleaned = extractCanonicalTaskResult(raw);
-		// Extract task_id line (e.g. "task_id: ses_...") and move it to the bottom
-		const taskIdMatch = cleaned.match(/^task_id:\s*\S+.*$/m);
-		const taskId = taskIdMatch?.[0]?.trim();
-		const display =
-			taskId && taskIdMatch?.[0] ? cleaned.replace(taskIdMatch[0], '').trim() : cleaned;
-		return { displayResult: display, taskIdLine: taskId };
-	}, [result]);
-
-	// Strip trailing assistant text that duplicates the task result shown in Task Done.
-	// When a child session completes, its last assistant text IS the task result
-	// (often wrapped in <task_result>). The parent shows this as "Task Done",
-	// so displaying it again as assistant text inside the card is redundant.
-	const childSessionItems = useMemo(() => {
-		if (!taskResultContent || status !== 'completed' || rawChildItems.length === 0) {
-			return rawChildItems;
-		}
-		const canonical = extractCanonicalTaskResult(taskResultContent);
-		if (!canonical) return rawChildItems;
-
-		// Walk backwards: skip trailing assistant/thinking that match the result
-		let end = rawChildItems.length;
-		for (let i = rawChildItems.length - 1; i >= 0; i--) {
-			const item = rawChildItems[i];
-			if (item.kind === 'thinking') {
-				end = i;
-				continue;
-			}
-			if (item.kind === 'assistant') {
-				const text = extractCanonicalTaskResult((item as RenderAssistantMessage).content.trim());
-				if (text === canonical) {
-					end = i;
-					break;
-				}
-			}
-			break;
-		}
-		return end < rawChildItems.length ? rawChildItems.slice(0, end) : rawChildItems;
-	}, [rawChildItems, taskResultContent, status]);
-
-	const shouldRenderTaskResult = Boolean(taskResultContent);
+	const taskResultItems = rawChildItems.filter(
+		(item): item is RenderTaskResultNode => item.kind === 'task_result',
+	);
 	const isRunning = effectiveStatus === 'running';
 	const isPreviewMode = expandState === 'preview';
 	const shouldRenderTranscript = expandState === 'expanded' || isRunning;
 
 	// Group child session items for rendering (both preview summary and expanded transcript)
-	const groupedChildren = useGroupedTranscript(childSessionItems, mcpServerNames, isRunning);
+	const groupedChildren = useGroupedTranscript(rawChildItems, mcpServerNames, isRunning);
 	const toolSummary = useMemo(() => summarizePreviewTools(groupedChildren), [groupedChildren]);
 	const retryInfo = message.retryInfo;
 
@@ -313,37 +295,8 @@ const TaskCardItem = React.memo<{
 		);
 	});
 
-	const taskResultCard = shouldRenderTaskResult && taskResultContent && (
-		<SimpleTool
-			icon={<CheckCircleIcon size={14} />}
-			label="Task Done"
-			meta={!previewResultExpanded ? taskResultContent : undefined}
-			expanded={previewResultExpanded}
-			onToggle={() => setPreviewResultExpanded(prev => !prev)}
-			showCollapseOverlay
-			className="mb-0"
-		>
-			<Markdown
-				content={taskResultContent}
-				className="[&_p]:!text-sm [&_p]:!text-vscode-descriptionForeground [&_li]:!text-sm [&_li]:!text-vscode-descriptionForeground [&_ul]:!text-sm [&_ol]:!text-sm !text-vscode-descriptionForeground"
-			/>
-			{taskIdLine && (
-				<div className="mt-2 pt-1.5 border-t border-vscode-widget-border text-xs text-vscode-descriptionForeground opacity-50 font-mono select-all">
-					{taskIdLine}
-				</div>
-			)}
-		</SimpleTool>
-	);
-
-	// Full child session transcript: isolated child history + isolated Task Result card.
-	const childTranscriptBlock = (
-		<div className="flex flex-col gap-2">
-			{renderedGroupedChildren}
-			{taskResultCard}
-		</div>
-	);
-
-	const copyText = useMemo(() => taskResultContent.trim(), [taskResultContent]);
+	// Full child session transcript: isolated child history, including projected terminal task results.
+	const childTranscriptBlock = <div className="flex flex-col gap-2">{renderedGroupedChildren}</div>;
 
 	// Meta info block (model) — reused in result & expanded
 	const metaBlock = effectiveModelId ? (
@@ -388,23 +341,6 @@ const TaskCardItem = React.memo<{
 			}
 			headerRight={
 				<span className="flex items-center gap-3 text-sm text-vscode-descriptionForeground group-hover/subtask:opacity-100">
-					{copyText.trim() && (
-						<div
-							className="relative opacity-0 pointer-events-none transition-opacity group-hover/subtask:opacity-100 group-hover/subtask:pointer-events-auto"
-							onMouseDown={e => e.stopPropagation()}
-							onClick={e => e.stopPropagation()}
-						>
-							<IconButton
-								icon={<CopyIcon size={12} />}
-								onClick={e => {
-									e.stopPropagation();
-									void copyTextToClipboard(copyText);
-								}}
-								title="Copy"
-								size={18}
-							/>
-						</div>
-					)}
 					{(diffStats.added > 0 || diffStats.removed > 0) && (
 						<>
 							{diffStats.added > 0 && (
@@ -494,7 +430,9 @@ const TaskCardItem = React.memo<{
 									toolSummary={toolSummary}
 									onOpenFullHistory={openExpandedHistory}
 								/>
-								{taskResultCard}
+								{taskResultItems.map(item => (
+									<TaskResultLine key={item.id} message={item} />
+								))}
 							</>
 						) : (
 							childTranscriptBlock
@@ -606,7 +544,11 @@ const SimpleToolGroup = React.memo<{
 	const renderItems = useMemo(
 		() =>
 			messages.filter(
-				m => m.kind === 'tool_use' || m.kind === 'assistant' || m.kind === 'thinking',
+				m =>
+					m.kind === 'tool_use' ||
+					m.kind === 'assistant' ||
+					m.kind === 'thinking' ||
+					m.kind === 'task_result',
 			),
 		[messages],
 	);
@@ -662,6 +604,9 @@ const SimpleToolGroup = React.memo<{
 					}
 				>
 					{renderItems.map(msg => {
+						if (msg.kind === 'task_result') {
+							return <TaskResultLine key={msg.id} message={msg as RenderTaskResultNode} />;
+						}
 						if (msg.kind === 'assistant') {
 							const assistantContent = (msg as RenderAssistantMessage).content || '';
 							if (!assistantContent.trim()) return null;
@@ -742,6 +687,8 @@ export const MessageItem = React.memo<{
 		}
 
 		switch (item.kind) {
+			case 'task_result':
+				return <TaskResultLine message={item} />;
 			case 'tool_use': {
 				return (
 					<div className="mb-(--tool-block-margin)">

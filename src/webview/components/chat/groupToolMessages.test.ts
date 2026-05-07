@@ -55,6 +55,18 @@ const assistant = (id: string, content = 'Let me continue...'): RenderNode =>
 		partId: id,
 	}) as RenderNode;
 
+const taskResult = (id: string, content = 'Task summary'): RenderNode =>
+	({
+		kind: 'task_result',
+		type: 'task_result',
+		id,
+		timestamp: new Date().toISOString(),
+		parentSessionId: 'root',
+		toolCallId: id,
+		content,
+		source: {},
+	}) as RenderNode;
+
 const thinking = (id: string, content = 'Thinking...'): RenderNode =>
 	({
 		kind: 'thinking',
@@ -252,6 +264,32 @@ describe('groupToolMessages', () => {
 			expect(result).toHaveLength(2);
 			expect(Array.isArray(result[0])).toBe(true);
 			expect((result[1] as Message).kind).toBe('assistant');
+		});
+
+		it('should keep trailing task result as a terminal item outside the tool group', () => {
+			const msgs = [
+				toolUse('1'),
+				toolResult('1r', 'tu-1'),
+				toolUse('2'),
+				toolResult('2r', 'tu-2'),
+				toolUse('3'),
+				toolResult('3r', 'tu-3'),
+				taskResult('task-result', 'Grouped result'),
+			];
+			const result = groupToolMessages(msgs, NO_MCP, false);
+
+			expect(result).toHaveLength(2);
+			expect(Array.isArray(result[0])).toBe(true);
+			expect((result[0] as Message[]).map(item => item.id)).toEqual([
+				'1',
+				'1r',
+				'2',
+				'2r',
+				'3',
+				'3r',
+			]);
+			expect((result[1] as Message).kind).toBe('task_result');
+			expect(getGroupedItemShouldCollapse(result[0])).toBe(true);
 		});
 	});
 
