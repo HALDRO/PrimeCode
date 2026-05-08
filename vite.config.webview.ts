@@ -3,7 +3,7 @@
  * @description Builds the React webview application as a single IIFE bundle for VS Code extension.
  *              Uses Rollup's inlineDynamicImports to create a single JS file without ES module imports.
  *              React Compiler (babel-plugin-react-compiler) enabled for automatic memoization.
- *              Process polyfill is now injected via HTML template (see src/webview/components/index.ts).
+ *              Process polyfill is injected via the extension HTML template.
  *              Outputs to dist/webview.js and dist/webview.css for VS Code webview consumption.
  */
 

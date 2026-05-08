@@ -30,7 +30,6 @@ import {
 	type ExtensionMessage,
 	getCustomEndpointDedupeKey,
 	getProxyEndpointProtocol,
-	getProxyEndpointProviderId,
 	type LspStatusData,
 	type ManagedResource,
 	type MCPServersMap,
@@ -906,28 +905,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 						const { providers, config } = message.data;
 						actions.setOpenCodeProviders(providers);
 						actions.setOpenCodeConfig({ isLoading: false, error: config?.error });
-
-						const state = get();
-						const currentModel = state.lastSelectedModel;
-						if (currentModel && currentModel !== 'default' && providers.length > 0) {
-							const allAvailable = new Set<string>();
-							for (const p of providers) {
-								for (const m of p.models) {
-									allAvailable.add(`${p.id}/${m.id}`);
-								}
-							}
-							for (const ep of state.proxyEndpoints) {
-								for (const m of ep.models) {
-									if (ep.enabledModels.includes(m.id)) {
-										allAvailable.add(`${getProxyEndpointProviderId(ep.id)}/${m.id}`);
-									}
-								}
-							}
-							if (!allAvailable.has(currentModel) && allAvailable.size > 0) {
-								const firstAvailable = allAvailable.values().next().value;
-								if (firstAvailable) actions.setLastSelectedModel(firstAvailable);
-							}
-						}
 					}
 					break;
 

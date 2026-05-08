@@ -190,9 +190,11 @@ function materializeSystemEventNode(input: {
 function isOhmySystemEventPart(part: Part): boolean {
 	const text = getTextPartContent(part);
 	if (!text) return false;
-	return parseSystemEventText(text, {
-		synthetic: Boolean('synthetic' in part && part.synthetic),
-	})?.source === 'ohmy';
+	return (
+		parseSystemEventText(text, {
+			synthetic: Boolean('synthetic' in part && part.synthetic),
+		})?.source === 'ohmy'
+	);
 }
 
 function isInternalReminderMessage(parts: Part[]): boolean {

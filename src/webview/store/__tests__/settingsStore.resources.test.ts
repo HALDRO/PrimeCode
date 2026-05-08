@@ -24,6 +24,10 @@ const resourcesList = (revision: number, resources: AgentResource[]): ExtensionM
 describe('settingsStore resource revisions', () => {
 	beforeEach(() => {
 		useSettingsStore.setState({
+			lastSelectedModel: 'default',
+			opencodeProviders: [],
+			proxyEndpoints: [],
+			enabledOpenCodeModels: [],
 			resources: {
 				...useSettingsStore.getState().resources,
 				agent: { items: [], revision: 0, isLoading: false, error: undefined },
@@ -60,5 +64,26 @@ describe('settingsStore resource revisions', () => {
 		const state = useSettingsStore.getState().resourceOps;
 		expect(state.status).toBe('error');
 		expect(state.message).toBe('OpenCode did not reflect the refreshed state.');
+	});
+
+	it('keeps the user-selected model across provider reloads', () => {
+		const actions = useSettingsStore.getState().actions;
+		actions.setLastSelectedModel('missing-provider/missing-model');
+
+		actions.handleExtensionMessage({
+			type: 'openCodeProviders',
+			data: {
+				providers: [
+					{
+						id: 'opencode-go',
+						name: 'OpenCode Go',
+						models: [{ id: 'kimi-k2.6', name: 'Kimi K2.6' }],
+					},
+				],
+				config: { isLoading: false },
+			},
+		} as ExtensionMessage);
+
+		expect(useSettingsStore.getState().lastSelectedModel).toBe('missing-provider/missing-model');
 	});
 });

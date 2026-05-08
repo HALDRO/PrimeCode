@@ -130,9 +130,10 @@ const parseReference = (rawText: string): ParsedPathReference | null => {
 	const text = rawText.trim();
 	if (!text || text.includes(' ') || text.length > 160) return null;
 	if (CODE_KEYWORDS.test(text)) return null;
-	if (!EXACT_FILE_REFERENCE.test(text)) return null;
+	const normalizedText = text.replace(/^\/([a-zA-Z]:[/\\])/, '$1');
+	if (!EXACT_FILE_REFERENCE.test(normalizedText)) return null;
 
-	const lineData = parseLineData(text);
+	const lineData = parseLineData(normalizedText);
 	if (lineData.filePath.startsWith(FILE_URI_PREFIX)) {
 		const uriExtension = lineData.filePath.match(EXTENSION_SUFFIX);
 		if (!uriExtension) return null;

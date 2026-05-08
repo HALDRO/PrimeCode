@@ -461,9 +461,14 @@ const components: Components = {
 	a: ({ href, children }) => {
 		const safeHref = typeof href === 'string' ? href.trim() : '';
 		const isExternal = /^https?:\/\//i.test(safeHref);
+		const pathReference = parsePathReferenceToken(safeHref);
 
 		if (!safeHref) {
 			return <StreamableNode node={children} renderInlineReferencesEnabled={false} />;
+		}
+
+		if (pathReference) {
+			return renderPathReferenceChip(pathReference, `link-path-ref-${safeHref}`);
 		}
 
 		return (

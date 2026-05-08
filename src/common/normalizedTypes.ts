@@ -3,8 +3,7 @@ import { pathsReferToSameFile } from '../utils/path';
 /**
  * @file Normalized Event Types
  * @description Pure type definitions for normalized log entries.
- *              Shared between extension (core/) and webview — no Node.js imports.
- *              Runtime logic lives in core/executor/LogNormalizer.ts.
+ *              Shared between extension (core/) and webview with no Node.js imports.
  */
 
 export interface NormalizedEntry {
