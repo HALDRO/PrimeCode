@@ -12,6 +12,7 @@ import { useContainerAutoScroll } from '../../hooks/useContainerAutoScroll';
 import {
 	type RenderAssistantMessage,
 	type RenderNode,
+	type RenderSystemEventNode,
 	type RenderTaskCardNode,
 	type RenderTaskResultNode,
 	type RenderThinkingMessage,
@@ -31,6 +32,7 @@ import {
 	BotIcon,
 	CheckCircleIcon,
 	ChevronDownIcon,
+	FileTextIcon,
 	ListIcon,
 	TodoCheckIcon,
 	TodoPendingIcon,
@@ -87,6 +89,13 @@ function formatAgentLabel(agent: string | undefined): string {
 	const trimmed = agent?.trim().replace(/^@+/, '');
 	if (!trimmed) return '';
 	return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+}
+
+function getSystemEventMeta(content: string): string | undefined {
+	return content
+		.split('\n')
+		.map(line => line.trim())
+		.find(Boolean);
 }
 
 function stripSubagentSuffix(title: string | undefined): string {
@@ -196,6 +205,22 @@ function TaskResultLine({ message }: { message: RenderTaskResultNode }) {
 	);
 }
 
+function SystemEventLine({ message }: { message: RenderSystemEventNode }) {
+	const meta = useMemo(() => getSystemEventMeta(message.content), [message.content]);
+	return (
+		<SimpleTool
+			icon={<FileTextIcon size={14} />}
+			label={message.title}
+			meta={meta}
+			defaultExpanded={false}
+			className="my-1 opacity-90"
+			contentClassName="text-vscode-descriptionForeground"
+		>
+			<Markdown content={message.content} />
+		</SimpleTool>
+	);
+}
+
 /** Hook to group child session items for rendering — avoids duplicating grouping logic. */
 function useGroupedTranscript(
 	items: RenderNode[] | undefined,
@@ -219,7 +244,7 @@ const TaskCardItem = React.memo<{
 	const pendingAccess = useSubtaskAccessRequest(message.id);
 
 	// All data from the projector's pre-computed summary — no store access needed
-	const { status, agent, description, prompt } = message;
+	const { status, agent, description, prompt, category } = message;
 	const { title, modelId: childModelId } = message.childSummary;
 	const childSessionId = message.childSessionId;
 	const liveChildSummary = useChildSessionSummary(childSessionId);
@@ -260,6 +285,23 @@ const TaskCardItem = React.memo<{
 	const effectiveModelId = childModelId;
 	const modelLabel = useMemo(() => getReadableModelLabel(effectiveModelId), [effectiveModelId]);
 	const shouldShowAgentMeta = agentLabel.trim().length > 0;
+	const taskMetaItems = useMemo(
+		() =>
+			[
+				shouldShowAgentMeta && agentLabel
+					? { key: 'agent', title: `Agent: ${agentLabel}`, value: agentLabel }
+					: undefined,
+				effectiveModelId
+					? {
+							key: 'model',
+							title: `Model: ${modelLabel ?? effectiveModelId}`,
+							value: modelLabel ?? effectiveModelId,
+						}
+					: undefined,
+				category ? { key: 'category', title: `Category: ${category}`, value: category } : undefined,
+			].filter((item): item is { key: string; title: string; value: string } => Boolean(item)),
+		[agentLabel, category, effectiveModelId, modelLabel, shouldShowAgentMeta],
+	);
 
 	// Unified auto-scroll with detach support (mirrors main session behavior)
 	const {
@@ -298,29 +340,27 @@ const TaskCardItem = React.memo<{
 	// Full child session transcript: isolated child history, including projected terminal task results.
 	const childTranscriptBlock = <div className="flex flex-col gap-2">{renderedGroupedChildren}</div>;
 
-	// Meta info block (model) — reused in result & expanded
-	const metaBlock = effectiveModelId ? (
-		<div className="mb-2 ml-2 animate-fade-slide-in">
-			<div className="flex items-center gap-2 w-full min-w-0 overflow-hidden text-left bg-transparent border-none p-0 py-0.5 select-none">
-				<span className="shrink-0 flex items-center justify-center text-vscode-descriptionForeground [&>svg]:w-[14px] [&>svg]:h-[14px]">
-					<BotIcon size={14} />
-				</span>
-				{shouldShowAgentMeta && agentLabel && (
-					<>
-						<span className="text-sm font-medium whitespace-nowrap text-vscode-foreground opacity-80">
-							{agentLabel}
-						</span>
-						<span className="text-sm text-vscode-descriptionForeground">·</span>
-					</>
-				)}
-				<span className="min-w-0 overflow-hidden flex items-center shrink">
-					<span className="text-sm truncate text-vscode-descriptionForeground">
-						{modelLabel ?? effectiveModelId}
+	const metaBlock =
+		taskMetaItems.length > 0 ? (
+			<div className="mb-2 ml-2 animate-fade-slide-in">
+				<div className="flex items-center gap-(--gap-1) w-full min-w-0 overflow-hidden py-0.5 text-vscode-descriptionForeground select-none">
+					<span className="shrink-0 flex items-center justify-center [&>svg]:w-[14px] [&>svg]:h-[14px]">
+						<BotIcon size={14} />
 					</span>
-				</span>
+					<div className="flex flex-wrap items-center gap-(--gap-1) min-w-0">
+						{taskMetaItems.map(item => (
+							<span
+								key={item.key}
+								title={item.title}
+								className="inline-flex items-center max-w-[180px] h-(--badge-height) px-(--gap-1-5) rounded-sm border border-(--border-subtle) bg-(--alpha-5) text-xs leading-none text-vscode-descriptionForeground truncate"
+							>
+								<span className="truncate text-vscode-foreground opacity-80">{item.value}</span>
+							</span>
+						))}
+					</div>
+				</div>
 			</div>
-		</div>
-	) : null;
+		) : null;
 
 	return (
 		<ToolCard
@@ -689,6 +729,8 @@ export const MessageItem = React.memo<{
 		switch (item.kind) {
 			case 'task_result':
 				return <TaskResultLine message={item} />;
+			case 'system_event':
+				return <SystemEventLine message={item} />;
 			case 'tool_use': {
 				return (
 					<div className="mb-(--tool-block-margin)">

@@ -15,6 +15,14 @@ interface AgentData {
 	id: string;
 }
 
+const FALLBACK_AGENT_ITEMS: Array<{
+	id: string;
+	description: string;
+}> = [
+	{ id: 'build', description: 'OpenCode default agent fallback' },
+	{ id: 'plan', description: 'Read-only analysis and planning' },
+];
+
 /** Resolve icon for a given agent id. */
 function getAgentIcon(agentId: string, size = 14) {
 	switch (agentId) {
@@ -66,43 +74,23 @@ export const AgentDropdown: React.FC<AgentDropdownProps> = ({
 	const agentResources = useSettingsStore(state => state.resources.agent.items);
 
 	const items = useMemo<DropdownMenuItem<AgentData>[]>(() => {
-		const agentItems = agentResources
-			.filter(
-				resource =>
-					!resource.disabled &&
-					!resource.hidden &&
-					(resource.mode === 'primary' || resource.mode === undefined),
-			)
-			.map(resource => ({
-				id: resource.name,
-				description: resource.description,
-			}))
-			.map(a => ({
-				id: a.id,
-				label: getAgentLabel(a.id),
-				icon: getAgentIcon(a.id, 14),
-				description: a.description,
-				data: { id: a.id },
-			}));
-
-		if (agentItems.length === 0) {
-			return [
-				{
-					id: 'build',
-					label: 'Build',
-					icon: getAgentIcon('build', 14),
-					description: 'Default agent with full tool access',
-					data: { id: 'build' },
-				},
-				{
-					id: 'plan',
-					label: 'Plan',
-					icon: getAgentIcon('plan', 14),
-					description: 'Read-only analysis and planning',
-					data: { id: 'plan' },
-				},
-			];
-		}
+		const primaryResources = agentResources.filter(
+			resource =>
+				!resource.disabled &&
+				!resource.hidden &&
+				(resource.mode === 'primary' || resource.mode === undefined),
+		);
+		const resourceItems = primaryResources.map(resource => ({
+			id: resource.name,
+			description: resource.description,
+		}));
+		const agentItems = (resourceItems.length > 0 ? resourceItems : FALLBACK_AGENT_ITEMS).map(a => ({
+			id: a.id,
+			label: getAgentLabel(a.id),
+			icon: getAgentIcon(a.id, 14),
+			description: a.description,
+			data: { id: a.id },
+		}));
 
 		return agentItems;
 	}, [agentResources]);

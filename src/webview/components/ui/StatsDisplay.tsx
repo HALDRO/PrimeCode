@@ -104,6 +104,48 @@ export const StatsDisplay: React.FC<StatsDisplayProps> = ({
 };
 StatsDisplay.displayName = 'StatsDisplay';
 
+export const useSessionContentUsageSummary = () => {
+	const contextLimit = useModelContextWindow();
+	const sessionMetrics = useSessionContextMetrics();
+
+	return useMemo(() => {
+		const context = sessionMetrics.context;
+		const windowUsed = context?.total ?? 0;
+		const inputTokens = context?.input ?? 0;
+		const cacheRead = context?.cacheRead ?? 0;
+
+		const tokenParts = [`${formatNumber(windowUsed)} / ${formatNumber(contextLimit)}`];
+		if (contextLimit > 0) {
+			const percentage = Math.min((windowUsed / contextLimit) * 100, 100);
+			tokenParts.push(`(${percentage.toFixed(1)}%)`);
+		}
+
+		if (cacheRead > 0 && inputTokens > 0 && cacheRead <= inputTokens) {
+			const cacheHitRate = Math.round((cacheRead / inputTokens) * 100);
+			tokenParts.push(`· ${cacheHitRate}% cached`);
+		}
+
+		return tokenParts.join(' ');
+	}, [contextLimit, sessionMetrics]);
+};
+
+export const SessionContentUsageSummary: React.FC<{ className?: string }> = ({ className }) => {
+	const contentUsageSummary = useSessionContentUsageSummary();
+
+	return (
+		<span
+			className={cn(
+				'flex items-center gap-(--gap-1) text-xs leading-none text-vscode-foreground opacity-90 whitespace-nowrap',
+				className,
+			)}
+		>
+			<TokensIcon size={11} />
+			{contentUsageSummary}
+		</span>
+	);
+};
+SessionContentUsageSummary.displayName = 'SessionContentUsageSummary';
+
 export const SessionStatsDisplay: React.FC<{
 	mode: 'footer' | 'tooltip';
 	style?: CSSProperties;
@@ -111,34 +153,23 @@ export const SessionStatsDisplay: React.FC<{
 	leftContent?: ReactNode;
 }> = ({ mode, style, className, leftContent }) => {
 	const derivedStats = useDerivedSessionStats();
-	const contextLimit = useModelContextWindow();
 	const subagentTokensTotal = useSubagentTokenTotals();
 	const sessionMetrics = useSessionContextMetrics();
+	const contentUsageSummary = useSessionContentUsageSummary();
 
 	const items = useMemo<StatItem[]>(() => {
-		// Session token snapshot from the latest assistant message.
 		const context = sessionMetrics.context;
-		const windowUsed = context?.total ?? 0;
 		const inputTokens = context?.input ?? 0;
 		const cacheRead = context?.cacheRead ?? 0;
-		const percentage = Math.min((windowUsed / contextLimit) * 100, 100);
-
-		const tokenParts = [`${formatNumber(windowUsed)} / ${formatNumber(contextLimit)}`];
-		tokenParts.push(`(${percentage.toFixed(1)}%)`);
-
-		// Show cache hit rate inline when cache data is consistent
-		// (cacheRead must be <= inputTokens to be from the same snapshot)
-		if (cacheRead > 0 && inputTokens > 0 && cacheRead <= inputTokens) {
-			const cacheHitRate = Math.round((cacheRead / inputTokens) * 100);
-			tokenParts.push(`· ${cacheHitRate}% cached`);
-		}
+		const windowUsed = context?.total ?? 0;
+		const contextLimit = context?.limit ?? 0;
 
 		const result: StatItem[] = [];
 
 		result.push({
 			key: 'tokens',
 			icon: <TokensIcon size={11} />,
-			value: tokenParts.join(' '),
+			value: contentUsageSummary,
 			tooltip:
 				cacheRead > 0 && inputTokens > 0 && cacheRead <= inputTokens
 					? `Latest token snapshot: ${formatNumber(windowUsed)} / ${formatNumber(contextLimit)} · Cache read: ${formatNumber(cacheRead)} of ${formatNumber(inputTokens)} input tokens`
@@ -191,7 +222,7 @@ export const SessionStatsDisplay: React.FC<{
 		}
 
 		return result;
-	}, [derivedStats, contextLimit, subagentTokensTotal, sessionMetrics]);
+	}, [contentUsageSummary, derivedStats, subagentTokensTotal, sessionMetrics]);
 
 	return (
 		<StatsDisplay

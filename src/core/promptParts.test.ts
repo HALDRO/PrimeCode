@@ -135,4 +135,11 @@ describe('buildPromptParts', () => {
 			url: 'data:image/webp;base64,AAA',
 		});
 	});
+
+	it('preserves large plain text without truncation', () => {
+		const text = 'large prompt '.repeat(20_000);
+		const parts = buildPromptParts({ text });
+
+		expect(parts).toEqual([{ type: 'text', text }]);
+	});
 });

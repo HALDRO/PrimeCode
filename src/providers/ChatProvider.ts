@@ -30,6 +30,25 @@ const SILENT_COMMANDS = new Set([
 
 const MAX_MESSAGE_QUEUE_SIZE = 4;
 
+function stringifyUnknownError(error: unknown): string {
+	if (error instanceof Error) return error.message;
+	if (typeof error === 'string' && error.trim()) return error.trim();
+	if (!error || typeof error !== 'object') return 'Unknown error';
+	const record = error as Record<string, unknown>;
+	const message = record.message;
+	if (typeof message === 'string' && message.trim()) return message.trim();
+	const data = record.data;
+	if (data && typeof data === 'object') {
+		const dataMessage = (data as Record<string, unknown>).message;
+		if (typeof dataMessage === 'string' && dataMessage.trim()) return dataMessage.trim();
+	}
+	try {
+		return JSON.stringify(error);
+	} catch {
+		return 'Unknown error';
+	}
+}
+
 type BackendSendParams = {
 	sessionId: string;
 	text: string;
@@ -604,7 +623,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				notification: {
 					id: `error-${Date.now()}`,
 					type: 'error',
-					content: error instanceof Error ? error.message : 'Unknown error',
+					content: stringifyUnknownError(error),
 					timestamp: new Date().toISOString(),
 				},
 			});
@@ -811,7 +830,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				parts: this.buildRequestParts(params),
 			});
 			if (result?.error) {
-				throw new Error(`Message send failed: ${JSON.stringify(result.error)}`);
+				throw new Error(`Message send failed: ${stringifyUnknownError(result.error)}`);
 			}
 		} catch (error) {
 			this.awaitingBackendBusy.delete(params.sessionId);

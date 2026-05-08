@@ -5,7 +5,7 @@
  */
 
 import type { Message, Part } from '@opencode-ai/sdk/v2/client';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import type { SessionStore } from '../chatStore';
 import {
 	clearSessionViewCache,
@@ -119,6 +119,10 @@ function makeMinimalStore(overrides: Partial<SessionStore> = {}): SessionStore {
 // ---------------------------------------------------------------------------
 
 describe('deriveSessionView', () => {
+	beforeEach(() => {
+		clearSessionViewCache('ses1');
+	});
+
 	it('uses distinct cache entries for different MCP server lists', () => {
 		const user = makeUserMessage('u1', 'ses1');
 		const asst = makeAssistantMessage('a1', 'ses1', 'u1', { completed: true });
@@ -224,7 +228,263 @@ describe('deriveSessionView', () => {
 		}
 	});
 
-	it('materializes task tool as task_card', () => {
+	it('projects OhMy background task reminders as system events instead of user messages', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const reminder = [
+			'<system-reminder>',
+			'[BACKGROUND TASK COMPLETED]',
+			'**ID:** `bg_123`',
+			'**Description:** OpenCode runtime baseline',
+			'</system-reminder>',
+			'<!-- OMO_INTERNAL_INITIATOR -->',
+		].join('\n');
+		const store = makeMinimalStore({
+			messages: { ses1: [user] },
+			parts: { u1: [makeTextPart('p1', 'u1', reminder)] },
+		});
+
+		const view = deriveSessionView(store, 'ses1');
+		expect(view.nodeIds).toEqual(['system-event-p1']);
+		const node = view.nodesById['system-event-p1'];
+		expect(node?.kind).toBe('system_event');
+		if (node?.kind === 'system_event') {
+			expect(node.source).toBe('ohmy');
+			expect(node.title).toBe('Background Task');
+			expect(node.content).toContain('OpenCode runtime baseline');
+			expect(node.content).not.toContain('OMO_INTERNAL_INITIATOR');
+		}
+	});
+
+	it('projects generic system-reminder envelopes as system events', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const reminderPart = makeTextPart(
+			'p1',
+			'u1',
+			'<system-reminder>Use plan mode.</system-reminder>',
+		) as Part & { synthetic?: boolean };
+		reminderPart.synthetic = true;
+		const store = makeMinimalStore({
+			messages: { ses1: [user] },
+			parts: { u1: [reminderPart] },
+		});
+
+		const view = deriveSessionView(store, 'ses1');
+		const node = view.nodesById['system-event-p1'];
+		expect(node?.kind).toBe('system_event');
+		if (node?.kind === 'system_event') {
+			expect(node.source).toBe('generic');
+			expect(node.title).toBe('System Reminder');
+			expect(node.content).toBe('Use plan mode.');
+		}
+	});
+
+	it('splits user text from synthetic system reminders on the same message', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const reminderPart = makeTextPart(
+			'p2',
+			'u1',
+			'<system-reminder>Read-only plan mode is active.</system-reminder>',
+		) as Part & { synthetic?: boolean };
+		reminderPart.synthetic = true;
+		const store = makeMinimalStore({
+			messages: { ses1: [user] },
+			parts: { u1: [makeTextPart('p1', 'u1', 'Please inspect this.'), reminderPart] },
+		});
+
+		const view = deriveSessionView(store, 'ses1');
+		expect(view.nodeIds).toEqual(['u1', 'system-event-p2']);
+		expect(view.nodesById.u1?.kind).toBe('user');
+		if (view.nodesById.u1?.kind === 'user') {
+			expect(view.nodesById.u1.parts).toHaveLength(1);
+			expect(view.nodesById.u1.parts[0].id).toBe('p1');
+		}
+		expect(view.nodesById['system-event-p2']?.kind).toBe('system_event');
+	});
+
+	it('keeps plain background task text as a normal user message without explicit markers', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const store = makeMinimalStore({
+			messages: { ses1: [user] },
+			parts: { u1: [makeTextPart('p1', 'u1', 'BACKGROUND TASK COMPLETED in my notes')] },
+		});
+
+		const view = deriveSessionView(store, 'ses1');
+		expect(view.nodesById.u1?.kind).toBe('user');
+	});
+
+	it('keeps literal system-reminder markup in normal user text visible', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const store = makeMinimalStore({
+			messages: { ses1: [user] },
+			parts: {
+				u1: [
+					makeTextPart(
+						'p1',
+						'u1',
+						'Please document literal <system-reminder>example</system-reminder> markup.',
+					),
+				],
+			},
+		});
+
+		const view = deriveSessionView(store, 'ses1');
+		expect(view.nodeIds).toEqual(['u1']);
+		expect(view.nodesById.u1?.kind).toBe('user');
+		if (view.nodesById.u1?.kind === 'user') {
+			expect(view.nodesById.u1.parts).toHaveLength(1);
+			expect(view.nodesById.u1.parts[0].id).toBe('p1');
+		}
+	});
+
+	it('projects OhMy system directives as system events', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const store = makeMinimalStore({
+			messages: { ses1: [user] },
+			parts: {
+				u1: [
+					makeTextPart(
+						'p1',
+						'u1',
+						'[SYSTEM DIRECTIVE: OH-MY-OPENCODE - TODO CONTINUATION]\nContinue pending work.',
+					),
+				],
+			},
+		});
+
+		const view = deriveSessionView(store, 'ses1');
+		const node = view.nodesById['system-event-p1'];
+		expect(node?.kind).toBe('system_event');
+		if (node?.kind === 'system_event') {
+			expect(node.source).toBe('ohmy');
+			expect(node.title).toBe('System Directive');
+			expect(node.content).toContain('TODO CONTINUATION');
+		}
+	});
+
+	it('projects partial streaming system-reminder envelopes as system events', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const reminderPart = makeTextPart('p1', 'u1', '<system-reminder>Still streaming') as Part & {
+			synthetic?: boolean;
+		};
+		reminderPart.synthetic = true;
+		const store = makeMinimalStore({
+			messages: { ses1: [user] },
+			parts: { u1: [reminderPart] },
+		});
+
+		const view = deriveSessionView(store, 'ses1');
+		const node = view.nodesById['system-event-p1'];
+		expect(node?.kind).toBe('system_event');
+		if (node?.kind === 'system_event') {
+			expect(node.content).toBe('Still streaming');
+		}
+	});
+
+	it('keeps assistant replies parented to OMO reminders in the previous real user section', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const firstAssistant = makeAssistantMessage('a1', 'ses1', 'u1', { completed: true });
+		const reminder = makeUserMessage('u-reminder', 'ses1');
+		const secondAssistant = makeAssistantMessage('a2', 'ses1', 'u-reminder', {
+			completed: true,
+		});
+		const reminderText = [
+			'<system-reminder>',
+			'[ALL BACKGROUND TASKS COMPLETE]',
+			'Use `background_output(task_id="<id>")` to retrieve each result.',
+			'</system-reminder>',
+			'<!-- OMO_INTERNAL_INITIATOR -->',
+		].join('\n');
+		const store = makeMinimalStore({
+			messages: { ses1: [user, firstAssistant, reminder, secondAssistant] },
+			parts: {
+				u1: [makeTextPart('p-user', 'u1', 'Please do the work.')],
+				a1: [makeTextPart('p-a1', 'a1', 'Starting work.')],
+				'u-reminder': [makeTextPart('p-reminder', 'u-reminder', reminderText)],
+				a2: [makeTextPart('p-a2', 'a2', 'Continuing after background output.')],
+			},
+		});
+
+		const view = deriveSessionView(store, 'ses1');
+
+		expect(view.sections).toHaveLength(1);
+		expect(view.sections[0].userMessage.id).toBe('u1');
+		expect(view.nodeIds).toEqual(['u1', 'msg-p-a1', 'system-event-p-reminder', 'msg-p-a2']);
+		const reminderNode = view.nodesById['system-event-p-reminder'];
+		expect(reminderNode?.kind).toBe('system_event');
+		if (reminderNode?.kind === 'system_event') {
+			expect(reminderNode.parentMessageId).toBe('u1');
+			expect(reminderNode.source).toBe('ohmy');
+			expect(reminderNode.content).not.toContain('OMO_INTERNAL_INITIATOR');
+		}
+		expect(view.nodesById['msg-p-a2']?.kind).toBe('assistant');
+		if (view.nodesById['msg-p-a2']?.kind === 'assistant') {
+			expect(view.nodesById['msg-p-a2'].parentMessageId).toBe('u1');
+		}
+	});
+
+	it('keeps ordinary user messages as separate visible sections', () => {
+		const firstUser = makeUserMessage('u1', 'ses1');
+		const firstAssistant = makeAssistantMessage('a1', 'ses1', 'u1', { completed: true });
+		const secondUser = makeUserMessage('u2', 'ses1');
+		const secondAssistant = makeAssistantMessage('a2', 'ses1', 'u2', { completed: true });
+		const store = makeMinimalStore({
+			messages: { ses1: [firstUser, firstAssistant, secondUser, secondAssistant] },
+			parts: {
+				u1: [makeTextPart('p-u1', 'u1', 'First prompt.')],
+				a1: [makeTextPart('p-a1', 'a1', 'First answer.')],
+				u2: [makeTextPart('p-u2', 'u2', 'Second prompt.')],
+				a2: [makeTextPart('p-a2', 'a2', 'Second answer.')],
+			},
+		});
+
+		const view = deriveSessionView(store, 'ses1');
+
+		expect(view.sections).toHaveLength(2);
+		expect(view.sections[0].userMessage.id).toBe('u1');
+		expect(view.sections[1].userMessage.id).toBe('u2');
+	});
+
+	it('materializes task tool as task_card with subagent metadata', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const asst = makeAssistantMessage('a1', 'ses1', 'u1', { completed: true });
+		const taskPart: Part = {
+			id: 'p1',
+			messageID: 'a1',
+			sessionID: 'ses1',
+			type: 'tool',
+			tool: 'task',
+			callID: 'task-call-1',
+			state: {
+				status: 'completed',
+				input: {
+					subagent_type: 'explore',
+					description: 'do stuff',
+					prompt: 'Find the relevant files',
+					category: 'quick',
+					command: 'task',
+				},
+				output: 'task_id: child-task-1\n\n<task_result>result</task_result>',
+			},
+			metadata: {},
+		} as unknown as Part;
+		const store = makeMinimalStore({
+			messages: { ses1: [user, asst] },
+			parts: { a1: [taskPart] },
+		});
+		const view = deriveSessionView(store, 'ses1');
+		const taskNode = view.nodesById[view.nodeIds[1]];
+		expect(taskNode.kind).toBe('task_card');
+		if (taskNode.kind === 'task_card') {
+			expect(taskNode.agent).toBe('explore');
+			expect(taskNode.description).toBe('do stuff');
+			expect(taskNode.prompt).toBe('Find the relevant files');
+			expect(taskNode.category).toBe('quick');
+			expect(taskNode.command).toBe('task');
+			expect(taskNode.taskId).toBe('child-task-1');
+		}
+	});
+
+	it('uses task metadata model when child session model is missing', () => {
 		const user = makeUserMessage('u1', 'ses1');
 		const asst = makeAssistantMessage('a1', 'ses1', 'u1', { completed: true });
 		const taskPart: Part = {
@@ -235,15 +495,54 @@ describe('deriveSessionView', () => {
 			tool: 'task',
 			callID: 'task-call-1',
 			state: { status: 'completed', input: { description: 'do stuff' }, output: 'result' },
-			metadata: {},
+			metadata: {
+				sessionId: 'child1',
+				model: { providerID: 'anthropic', modelID: 'claude-sonnet-4' },
+			},
 		} as unknown as Part;
 		const store = makeMinimalStore({
 			messages: { ses1: [user, asst] },
 			parts: { a1: [taskPart] },
 		});
+
 		const view = deriveSessionView(store, 'ses1');
 		const taskNode = view.nodesById[view.nodeIds[1]];
 		expect(taskNode.kind).toBe('task_card');
+		if (taskNode.kind === 'task_card') {
+			expect(taskNode.childSessionId).toBe('child1');
+			expect(taskNode.childSummary.modelId).toBe('anthropic/claude-sonnet-4');
+		}
+	});
+
+	it('prefers child session model over task metadata model', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const asst = makeAssistantMessage('a1', 'ses1', 'u1', { completed: true });
+		const taskPart: Part = {
+			id: 'p1',
+			messageID: 'a1',
+			sessionID: 'ses1',
+			type: 'tool',
+			tool: 'task',
+			callID: 'task-call-1',
+			state: { status: 'completed', input: { description: 'do stuff' }, output: 'result' },
+			metadata: {
+				sessionId: 'child1',
+				model: { providerID: 'anthropic', modelID: 'claude-sonnet-4' },
+			},
+		} as unknown as Part;
+		const store = makeMinimalStore({
+			messages: { ses1: [user, asst] },
+			parts: { a1: [taskPart] },
+			sessionModel: { child1: 'openai/gpt-5.1' },
+		});
+
+		const view = deriveSessionView(store, 'ses1');
+		const taskNode = view.nodesById[view.nodeIds[1]];
+		expect(taskNode.kind).toBe('task_card');
+		if (taskNode.kind === 'task_card') {
+			expect(taskNode.childSessionId).toBe('child1');
+			expect(taskNode.childSummary.modelId).toBe('openai/gpt-5.1');
+		}
 	});
 
 	it('resolves child session through session graph when task metadata lacks sessionId', () => {

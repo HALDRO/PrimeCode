@@ -1021,3 +1021,21 @@ describe('chatStore derived view streaming', () => {
 		expect(state.parts['child-u1']).toEqual([childTextPart]);
 	});
 });
+
+describe('chatStore agent selection', () => {
+	beforeEach(() => {
+		resetStore();
+		useChatStore.getState().actions.applyTabState([SESSION_ID], SESSION_ID);
+	});
+
+	it('stores Build as the implicit default agent', () => {
+		const actions = useChatStore.getState().actions;
+
+		actions.updateSessionAgent('sisyphus');
+		expect(useChatStore.getState().sessionAgent[SESSION_ID]).toBe('sisyphus');
+
+		actions.updateSessionAgent('build');
+		expect(useChatStore.getState().sessionAgent[SESSION_ID]).toBeUndefined();
+		expect(SESSION_ID in useChatStore.getState().sessionAgent).toBe(false);
+	});
+});

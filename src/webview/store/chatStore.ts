@@ -72,10 +72,21 @@ function getNewSessionSeedModel(state?: SessionStore): string | undefined {
 }
 
 function getSessionErrorMessage(error: unknown): string | null {
+	if (typeof error === 'string') return error.trim() || 'Unknown error';
 	if (!error || typeof error !== 'object') return 'Unknown error';
 	const record = error as Record<string, unknown>;
 	if (record.name === 'MessageAbortedError') return null;
-	return 'message' in record ? String(record.message) : 'Unknown error';
+	if (typeof record.message === 'string' && record.message.trim()) return record.message.trim();
+	const data = record.data;
+	if (data && typeof data === 'object') {
+		const dataMessage = (data as Record<string, unknown>).message;
+		if (typeof dataMessage === 'string' && dataMessage.trim()) return dataMessage.trim();
+	}
+	try {
+		return JSON.stringify(error);
+	} catch {
+		return 'Unknown error';
+	}
 }
 
 function syncSessionModelFromMessages(state: SessionStore, sessionId: string): void {
@@ -156,6 +167,7 @@ export interface TokenUsage {
 	total?: number;
 	usage?: number;
 	cacheRead?: number;
+	cacheWrite?: number;
 	durationMs?: number;
 }
 
@@ -197,6 +209,9 @@ export interface RenderTaskCardNode {
 	agent?: string;
 	description?: string;
 	prompt?: string;
+	category?: string;
+	command?: string;
+	taskId?: string;
 	result?: string;
 	startTime?: string | number;
 	retryInfo?: { attempt: number; message: string; nextRetryAt?: string };
@@ -227,6 +242,19 @@ export interface RenderTaskResultNode {
 		childAssistantMessageId?: string;
 		childAssistantPartId?: string;
 	};
+}
+
+export interface RenderSystemEventNode {
+	kind: 'system_event';
+	id: string;
+	type: 'system_event';
+	timestamp: string;
+	title: string;
+	content: string;
+	source: 'ohmy' | 'generic';
+	parentMessageId?: string;
+	messageId?: string;
+	partId?: string;
 }
 
 export interface RenderAssistantMessage {
@@ -286,6 +314,7 @@ export type RenderNode =
 	| RenderUserMessage
 	| RenderTaskCardNode
 	| RenderTaskResultNode
+	| RenderSystemEventNode
 	| RenderAssistantMessage
 	| RenderThinkingMessage
 	| RenderToolUseMessage;
@@ -629,6 +658,10 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 			if (sid) {
 				set(
 					produce((s: SessionStore) => {
+						if (!agent || agent === 'build') {
+							delete s.sessionAgent[sid];
+							return;
+						}
 						s.sessionAgent[sid] = agent;
 					}),
 				);

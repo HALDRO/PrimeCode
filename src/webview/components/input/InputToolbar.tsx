@@ -1,22 +1,18 @@
 /**
  * @file InputToolbar — Bottom toolbar with agent, model, thinking, permissions, plus (attach), improve buttons
- * @description Extracted from ChatInput. Contains all toolbar buttons and their dropdowns.
+ * @description Extracted from ChatInput. Contains toolbar buttons and their dropdowns, including the agent selector opened from the main agent button.
  */
 
 import type React from 'react';
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { cn } from '../../lib/cn';
-import { useSettingsStore } from '../../store';
 import { useVSCode } from '../../utils/vscode';
-import { ChevronIcon, ImprovePromptIcon, LoaderIcon, PlusIcon } from '../icons';
+import { ImprovePromptIcon, LoaderIcon, PlusIcon } from '../icons';
 import { Button, IconButton } from '../ui';
 import { AgentButtonIcon, AgentDropdown, getAgentLabel } from './AgentDropdown';
 import { AutoAcceptButton } from './AutoAcceptButton';
 import { ModelDropdown } from './ModelDropdown';
 import { ThinkingBudgetButton } from './ThinkingBudgetButton';
-
-/** IDs of built-in agents that are toggled via the main button click. */
-const BUILTIN_TOGGLE_IDS = new Set(['build', 'plan']);
 
 interface InputToolbarProps {
 	// Agent
@@ -53,61 +49,29 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({
 		null,
 	);
 
-	// Check if there are custom (non-builtin) agents that need a dropdown.
-	const agentResources = useSettingsStore(state => state.resources.agent.items);
-	const hasCustomAgents = useMemo(() => {
-		return agentResources.some(
-			agent =>
-				!agent.disabled &&
-				!agent.hidden &&
-				(agent.mode === 'primary' || agent.mode === undefined) &&
-				!BUILTIN_TOGGLE_IDS.has(agent.name),
-		);
-	}, [agentResources]);
-
-	/** Toggle between build and plan on click. */
-	const handleAgentToggle = () => {
-		onAgentChange(selectedAgent === 'plan' ? undefined : 'plan');
-	};
-
 	return (
 		<div className="h-(--input-toolbar-height) flex items-center justify-between pl-(--gap-2) pr-0 box-border shrink-0">
 			{/* Left Toolbar */}
 			<div className="flex items-center gap-(--gap-0-5) z-5 min-w-0 overflow-hidden leading-none [&_svg]:block [&_svg]:shrink-0">
-				{/* Agent button: click toggles build↔plan, chevron opens dropdown only if custom agents exist */}
+				{/* Agent button */}
 				<div className="relative shrink-0 flex items-center">
 					<Button
 						variant="ghost"
 						size="xs"
-						onClick={handleAgentToggle}
-						title={selectedAgent === 'plan' ? 'Switch to Build mode' : 'Switch to Plan mode'}
+						onClick={e => {
+							setAgentButtonAnchorElement(e.currentTarget as HTMLElement);
+							setShowAgentDropdown(!showAgentDropdown);
+						}}
+						title="Select agent"
 						className={cn(
-							'h-(--input-toolbar-height) rounded-md select-none text-sm font-(family-name:--vscode-font-family) shrink-0 flex items-center gap-2 px-(--gap-1-5) transition-all duration-200 border',
-							selectedAgent
-								? 'text-vscode-button-background bg-vscode-button-background/10 border-vscode-button-background/30'
-								: 'text-vscode-foreground opacity-70 hover:opacity-100 bg-transparent hover:bg-(--alpha-5) border-transparent',
+							'h-(--input-toolbar-height) rounded-md opacity-70 hover:opacity-100 hover:bg-white/10 text-vscode-foreground text-sm font-(family-name:--vscode-font-family) shrink-0 flex items-center gap-2 px-(--gap-1-5) transition-all duration-200 border-none bg-(--surface-raised)',
+							showAgentDropdown && 'opacity-100 bg-white/10',
 						)}
 					>
-						<AgentButtonIcon
-							agentId={selectedAgent}
-							size={14}
-							className={cn('transition-transform duration-200', selectedAgent && 'scale-110')}
-						/>
+						<AgentButtonIcon agentId={selectedAgent} size={14} />
 						<span>{getAgentLabel(selectedAgent)}</span>
 					</Button>
-					{hasCustomAgents && (
-						<IconButton
-							icon={<ChevronIcon expanded={showAgentDropdown} size={10} />}
-							onClick={e => {
-								setAgentButtonAnchorElement(e.currentTarget as HTMLElement);
-								setShowAgentDropdown(!showAgentDropdown);
-							}}
-							title="More agents"
-							size={18}
-							className="text-vscode-foreground opacity-50 hover:opacity-100 -ml-1"
-						/>
-					)}
-					{showAgentDropdown && hasCustomAgents && (
+					{showAgentDropdown && (
 						<AgentDropdown
 							anchorElement={agentButtonAnchorElement}
 							onSelect={agent => {

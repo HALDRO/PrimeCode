@@ -12,6 +12,7 @@ import { GenerationStatus } from './components/chat/GenerationStatus';
 import { MessageItem } from './components/chat/MessageItem';
 import { NotificationOverlay } from './components/chat/NotificationOverlay.tsx';
 import { QueuedMessageBanner } from './components/chat/QueuedMessageBanner';
+import { SessionStatisticsPanel } from './components/chat/SessionStatisticsPanel';
 import { getGroupedItemShouldCollapse } from './components/chat/SimpleTool';
 import { Header } from './components/header/Header';
 import { ChevronDownIcon } from './components/icons';
@@ -191,6 +192,7 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 	const virtuosoRef = useRef<VirtuosoHandle>(null);
 	const scrollerRef = useRef<HTMLDivElement>(null);
 	const isAtBottomRef = useRef(true);
+	const [isAtBottom, setIsAtBottom] = useState(true);
 	const [showScrollToBottom, setShowScrollToBottom] = useState(false);
 	const sessionSwitchRef = useRef(false);
 
@@ -217,6 +219,7 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 	const handleAtBottomStateChange = useCallback(
 		(atBottom: boolean) => {
 			isAtBottomRef.current = atBottom;
+			setIsAtBottom(atBottom);
 			// If user scrolls away from bottom during processing, mark as manually scrolled up.
 			// If they scroll back to bottom, clear the flag so auto-scroll re-engages.
 			if (isProcessing) {
@@ -239,6 +242,7 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 		const onScroll = () => {
 			const currentScrollTop = scrollerEl.scrollTop;
 			const distance = scrollerEl.scrollHeight - currentScrollTop - scrollerEl.clientHeight;
+			setIsAtBottom(distance <= MANUAL_UNSTICK_THRESHOLD);
 
 			// Detach immediately when the user manually scrolls upward during streaming.
 			// Relying only on Virtuoso's atBottomStateChange can feel sticky because it uses
@@ -259,6 +263,7 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 				if (!scrollerEl) return;
 				const distance = scrollerEl.scrollHeight - scrollerEl.scrollTop - scrollerEl.clientHeight;
 				setShowScrollToBottom(distance > SCROLL_BUTTON_THRESHOLD);
+				setIsAtBottom(distance <= MANUAL_UNSTICK_THRESHOLD);
 			});
 		};
 
@@ -461,6 +466,8 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 				)}
 
 				{sections.length > 0 && <ScrollThumb scrollerRef={scrollerRef} />}
+
+				{sections.length > 0 && isAtBottom && <SessionStatisticsPanel />}
 
 				{sections.length > 0 && (
 					<button

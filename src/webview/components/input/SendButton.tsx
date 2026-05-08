@@ -12,7 +12,7 @@ import { useEffect, useState } from 'react';
 import { cn } from '../../lib/cn';
 import { ContextWaterGlass } from '../chat/ContextWaterGlass';
 import { StopIcon } from '../icons';
-import { SessionStatsDisplay, Tooltip } from '../ui';
+import { SessionContentUsageSummary, Tooltip } from '../ui';
 
 /** Custom filled send icon from Iconoir */
 const SendFilledIcon: React.FC<{ size?: number }> = ({ size = 18 }) => (
@@ -104,10 +104,10 @@ export const SendButton: React.FC<SendButtonProps> = ({
 
 	const tooltipContent = (
 		<div className="flex flex-col gap-(--gap-2) py-(--gap-2)">
-			{isProcessing && (
+			{isProcessing && !disabled && (
 				<span className="text-xs text-vscode-foreground opacity-70">Click to stop generation</span>
 			)}
-			<SessionStatsDisplay mode="tooltip" />
+			<SessionContentUsageSummary />
 		</div>
 	);
 

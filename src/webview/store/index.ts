@@ -12,6 +12,7 @@ export {
 	type Part,
 	type RenderAssistantMessage,
 	type RenderNode,
+	type RenderSystemEventNode,
 	type RenderTaskCardNode,
 	type RenderTaskResultNode,
 	type RenderThinkingMessage,

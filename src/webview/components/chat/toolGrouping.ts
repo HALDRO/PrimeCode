@@ -174,6 +174,10 @@ export const shouldTriggerCollapse = (msg: RenderNode): boolean => {
 		return true;
 	}
 
+	if (msg.kind === 'system_event') {
+		return true;
+	}
+
 	if (msg.kind === 'tool_use') {
 		const toolName = msg.toolName || '';
 		if (isNonGroupableTool(toolName)) return true;

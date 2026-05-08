@@ -32,7 +32,12 @@ import {
 	deriveSessionView,
 	type MessageSection,
 } from './derived';
-import { computeAssistantUsage } from './sessionUsage';
+import {
+	computeAssistantUsage,
+	computeSessionTreeUsageStats,
+	EMPTY_SESSION_TREE_USAGE_STATS,
+	type SessionTreeUsageStats,
+} from './sessionUsage';
 import { type SettingsState, useSettingsStore } from './settingsStore';
 import type { TransientNotification } from './uiStore';
 import { type UIState, useUIStore } from './uiStore';
@@ -1005,6 +1010,59 @@ export const useSessionContextMetrics = () => {
 		prevRef.current = next;
 		return next;
 	}, [activeSessionId, messages, contextLimit]);
+};
+
+function sessionTreeUsageStatsEqual(
+	prev: SessionTreeUsageStats,
+	next: SessionTreeUsageStats,
+): boolean {
+	return (
+		prev.hasActiveSession === next.hasActiveSession &&
+		prev.hasActivity === next.hasActivity &&
+		prev.totalTokens === next.totalTokens &&
+		prev.rootTokens === next.rootTokens &&
+		prev.childTokens === next.childTokens &&
+		prev.requestCount === next.requestCount &&
+		prev.childSessionCount === next.childSessionCount &&
+		prev.cost === next.cost &&
+		prev.durationMs === next.durationMs &&
+		prev.cacheRead === next.cacheRead &&
+		prev.cacheWrite === next.cacheWrite &&
+		prev.incompleteUsageCount === next.incompleteUsageCount &&
+		prev.latestRootContext?.input === next.latestRootContext?.input &&
+		prev.latestRootContext?.output === next.latestRootContext?.output &&
+		prev.latestRootContext?.reasoning === next.latestRootContext?.reasoning &&
+		prev.latestRootContext?.total === next.latestRootContext?.total &&
+		prev.latestRootContext?.limit === next.latestRootContext?.limit &&
+		prev.latestRootContext?.usage === next.latestRootContext?.usage &&
+		prev.latestRootContext?.cacheRead === next.latestRootContext?.cacheRead &&
+		prev.latestRootContext?.cacheWrite === next.latestRootContext?.cacheWrite
+	);
+}
+
+export const useActiveSessionTreeUsageStats = () => {
+	const activeSessionId = useChatStore((state: SessionStore) => state.activeSessionId);
+	const contextLimit = useModelContextWindow();
+	const { messages, childSessionIdsByParentId } = useChatStore(
+		useShallow((state: SessionStore) => ({
+			messages: state.messages,
+			childSessionIdsByParentId: state.childSessionIdsByParentId,
+		})),
+	);
+	const prevRef = useRef<SessionTreeUsageStats>(EMPTY_SESSION_TREE_USAGE_STATS);
+	return useMemo(() => {
+		const next = computeSessionTreeUsageStats(
+			{
+				messages,
+				childSessionIdsByParentId,
+			},
+			activeSessionId,
+			contextLimit,
+		);
+		if (sessionTreeUsageStatsEqual(prevRef.current, next)) return prevRef.current;
+		prevRef.current = next;
+		return next;
+	}, [activeSessionId, childSessionIdsByParentId, contextLimit, messages]);
 };
 
 export const useDerivedSessionStats = () => {

@@ -183,6 +183,34 @@ describe('ChatProvider queue pipeline', () => {
 		);
 	});
 
+	it('sends large text to promptAsync without truncating it', async () => {
+		const { provider, promptAsync } = createProvider();
+		const text = 'large prompt '.repeat(20_000);
+
+		await (provider as any).handleSendMessageCommand({
+			type: 'sendMessage',
+			sessionId: 'ses-1',
+			text,
+		});
+
+		expect(promptAsync).toHaveBeenCalledTimes(1);
+		expect((promptAsync as any).mock.calls[0][0].parts[0]).toEqual({ type: 'text', text });
+	});
+
+	it('surfaces structured promptAsync errors instead of Unknown error', async () => {
+		const { provider } = createProvider(
+			vi.fn(async () => ({ error: { data: { message: 'Request body too large' } } })),
+		);
+
+		await expect(
+			(provider as any).handleSendMessageCommand({
+				type: 'sendMessage',
+				sessionId: 'ses-1',
+				text: 'large message',
+			}),
+		).rejects.toThrow('Message send failed: Request body too large');
+	});
+
 	it('restartOpenCode path reloads runtime state and resyncs the webview', async () => {
 		const { provider } = createProvider();
 		provider.sendServerInfo = vi.fn();

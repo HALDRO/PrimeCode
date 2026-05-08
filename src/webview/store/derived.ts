@@ -17,6 +17,7 @@ import {
 	type RenderAssistantMessage,
 	type RenderCompactionMessage,
 	type RenderNode,
+	type RenderSystemEventNode,
 	type RenderTaskCardNode,
 	type RenderTaskResultNode,
 	type RenderThinkingMessage,
@@ -25,7 +26,7 @@ import {
 	type SessionStore,
 	type TokenUsage,
 } from './chatStore';
-import { computeAssistantUsage } from './sessionUsage';
+import { computeAssistantUsage, computeAssistantUsageSummary } from './sessionUsage';
 
 export interface SectionStats {
 	isFirst: boolean;
@@ -82,6 +83,11 @@ const EMPTY_VIEW: SessionDerivedView = {
 	isLastAssistantStreaming: false,
 };
 const sessionViewCache = new Map<string, SessionDerivedCacheEntry>();
+const OMO_INTERNAL_INITIATOR_MARKER = '<!-- OMO_INTERNAL_INITIATOR -->';
+const OMO_INTERNAL_INITIATOR_PATTERN = /\n*<!--\s*OMO_INTERNAL_INITIATOR\s*-->\s*/g;
+const SYSTEM_REMINDER_OPEN_PATTERN = /<system-reminder>/i;
+const SYSTEM_REMINDER_BLOCK_PATTERN = /<system-reminder>([\s\S]*?)(?:<\/system-reminder>|$)/i;
+const OHMY_SYSTEM_DIRECTIVE_PATTERN = /\[SYSTEM DIRECTIVE:\s*OH-MY-OPENCODE[^\]\r\n]*(?:\]|$)/i;
 
 export function clearSessionViewCache(sessionId: string): void {
 	for (const key of sessionViewCache.keys()) {
@@ -93,6 +99,124 @@ export function clearSessionViewCache(sessionId: string): void {
 
 function isAssistantMessage(msg: Message): msg is AssistantMessage {
 	return msg.role === 'assistant';
+}
+
+function getTextPartContent(part: Part): string | undefined {
+	return part.type === 'text' && 'text' in part && typeof part.text === 'string'
+		? part.text
+		: undefined;
+}
+
+function firstNonEmptyLine(text: string): string | undefined {
+	return text
+		.split('\n')
+		.map(line => line.trim())
+		.find(Boolean);
+}
+
+function stripInternalReminderTransport(text: string): string {
+	return text.replace(OMO_INTERNAL_INITIATOR_PATTERN, '').trim();
+}
+
+function extractSystemReminderBody(text: string): string | undefined {
+	const match = text.match(SYSTEM_REMINDER_BLOCK_PATTERN);
+	return match?.[1]?.trim();
+}
+
+function getSystemEventTitle(source: RenderSystemEventNode['source'], content: string): string {
+	const firstLine = firstNonEmptyLine(content) ?? '';
+	if (/^\[BACKGROUND TASK\b/i.test(firstLine)) return 'Background Task';
+	if (/^\[ALL BACKGROUND TASKS\b/i.test(firstLine)) return 'Background Tasks';
+	if (/^\[SYSTEM DIRECTIVE:/i.test(firstLine)) return 'System Directive';
+	return source === 'ohmy' ? 'OhMy System Event' : 'System Reminder';
+}
+
+function parseSystemEventText(
+	text: string,
+	options: { synthetic?: boolean } = {},
+): Pick<RenderSystemEventNode, 'source' | 'title' | 'content'> | null {
+	const hasOhmyMarker = text.includes(OMO_INTERNAL_INITIATOR_MARKER);
+	const withoutTransport = stripInternalReminderTransport(text);
+	const reminderBody = extractSystemReminderBody(withoutTransport);
+	const hasSystemReminder =
+		options.synthetic && SYSTEM_REMINDER_OPEN_PATTERN.test(withoutTransport);
+	const hasOhmyDirective = OHMY_SYSTEM_DIRECTIVE_PATTERN.test(withoutTransport);
+
+	if (!hasOhmyMarker && !hasSystemReminder && !hasOhmyDirective) return null;
+
+	const source: RenderSystemEventNode['source'] =
+		hasOhmyMarker || hasOhmyDirective ? 'ohmy' : 'generic';
+	const content = (reminderBody ?? withoutTransport).trim();
+	if (!content) return null;
+
+	return {
+		source,
+		title: getSystemEventTitle(source, content),
+		content,
+	};
+}
+
+function isSystemEventPart(part: Part): boolean {
+	const text = getTextPartContent(part);
+	return text
+		? parseSystemEventText(text, { synthetic: Boolean('synthetic' in part && part.synthetic) }) !==
+				null
+		: false;
+}
+
+function materializeSystemEventNode(input: {
+	message: Message;
+	part: Part;
+	text: string;
+	partIndex: number;
+	parentMessageId?: string;
+}): RenderSystemEventNode | undefined {
+	const parsed = parseSystemEventText(input.text, {
+		synthetic: Boolean('synthetic' in input.part && input.part.synthetic),
+	});
+	if (!parsed) return undefined;
+	return {
+		kind: 'system_event',
+		id: `system-event-${input.part.id || `${input.message.id}-${input.partIndex}`}`,
+		type: 'system_event',
+		timestamp: new Date(input.message.time.created).toISOString(),
+		parentMessageId: input.parentMessageId,
+		messageId: input.message.id,
+		partId: input.part.id,
+		...parsed,
+	};
+}
+
+function isOhmySystemEventPart(part: Part): boolean {
+	const text = getTextPartContent(part);
+	if (!text) return false;
+	return parseSystemEventText(text, {
+		synthetic: Boolean('synthetic' in part && part.synthetic),
+	})?.source === 'ohmy';
+}
+
+function isInternalReminderMessage(parts: Part[]): boolean {
+	const textParts = parts.filter(part => getTextPartContent(part)?.trim());
+	return textParts.length > 0 && textParts.every(isOhmySystemEventPart);
+}
+
+function buildInternalReminderParentMap(
+	messages: Message[],
+	parts: Record<string, Part[]>,
+): Map<string, string> {
+	const parentByReminderId = new Map<string, string>();
+	let lastRealUserMessageId: string | undefined;
+
+	for (const message of messages) {
+		if (message.role !== 'user') continue;
+		if (isInternalReminderMessage(parts[message.id] ?? [])) {
+			if (lastRealUserMessageId) parentByReminderId.set(message.id, lastRealUserMessageId);
+			continue;
+		}
+		lastRealUserMessageId = message.id;
+	}
+
+	return parentByReminderId;
 }
 
 function buildTurnTokenMap(messages: Message[] | undefined): Record<string, TokenUsage> {
@@ -125,6 +249,7 @@ function buildTurnTokenMap(messages: Message[] | undefined): Record<string, Toke
 			total: usage.totalTokens > 0 ? usage.totalTokens : (existing?.total ?? 0),
 			usage: (existing?.usage ?? 0) + usage.usageTokens,
 			cacheRead: msg.tokens.cache.read,
+			cacheWrite: msg.tokens.cache.write,
 			durationMs: (existing?.durationMs ?? 0) + (durationMs ?? 0),
 		};
 	}
@@ -249,6 +374,31 @@ function getToolPartMetadata(toolPart: ToolPart): Record<string, unknown> | unde
 			: undefined)) as Record<string, unknown> | undefined;
 }
 
+function getTaskStringField(
+	input: Record<string, unknown>,
+	metadata: Record<string, unknown> | undefined,
+	...keys: string[]
+): string | undefined {
+	for (const key of keys) {
+		const inputValue = input[key];
+		if (typeof inputValue === 'string' && inputValue.trim()) return inputValue.trim();
+		const metadataValue = metadata?.[key];
+		if (typeof metadataValue === 'string' && metadataValue.trim()) return metadataValue.trim();
+	}
+	return undefined;
+}
+
+function getTaskId(
+	input: Record<string, unknown>,
+	metadata: Record<string, unknown> | undefined,
+): string | undefined {
+	const explicitTaskId = getTaskStringField(input, metadata, 'taskId', 'task_id');
+	if (explicitTaskId) return explicitTaskId;
+	const output = typeof input.output === 'string' ? input.output : undefined;
+	const outputTaskId = output?.match(/^task_id:\s*([^\r\n<]+)/m)?.[1]?.trim();
+	return outputTaskId || undefined;
+}
+
 function buildTaskPartIndex(parts: Record<string, Part[]>): TaskPartIndex {
 	const byCallId = new Map<string, ToolPart>();
 	const byChildSessionId = new Map<string, ToolPart>();
@@ -351,6 +501,7 @@ function projectMessages(
 	if (messages.length === 0) return [];
 
 	const nodes: RenderNode[] = [];
+	const internalReminderParentByMessageId = buildInternalReminderParentMap(messages, parts);
 	const assistantByParent = new Map<string, AssistantMessage>();
 	for (const message of messages) {
 		if (isAssistantMessage(message) && message.parentID) {
@@ -360,8 +511,24 @@ function projectMessages(
 
 	for (const msg of messages) {
 		const msgParts = parts[msg.id] ?? [];
+		const internalReminderParentMessageId = internalReminderParentByMessageId.get(msg.id);
 
 		if (msg.role === 'user') {
+			const userParts = msgParts.filter(part => !isSystemEventPart(part));
+			const systemEventNodes = msgParts.flatMap((part, partIndex) => {
+				const text = getTextPartContent(part);
+				const node = text
+					? materializeSystemEventNode({
+							message: msg,
+							part,
+							text,
+							partIndex,
+							parentMessageId: internalReminderParentMessageId,
+						})
+					: undefined;
+				return node ? [node] : [];
+			});
+
 			const compactionPart = msgParts.find(p => p.type === 'compaction');
 			let compaction: RenderCompactionMessage | undefined;
 			if (compactionPart && compactionPart.type === 'compaction') {
@@ -388,13 +555,17 @@ function projectMessages(
 				};
 			}
 
-			nodes.push({
-				...(msg as Message),
-				kind: 'user',
-				message: msg,
-				parts: msgParts,
-				...(compaction ? { compaction } : {}),
-			} satisfies RenderUserMessage);
+			if (userParts.length > 0 || compaction || systemEventNodes.length === 0) {
+				nodes.push({
+					...(msg as Message),
+					kind: 'user',
+					message: msg,
+					parts: userParts,
+					...(compaction ? { compaction } : {}),
+				} satisfies RenderUserMessage);
+			}
+
+			nodes.push(...systemEventNodes);
 			continue;
 		}
 
@@ -407,6 +578,9 @@ function projectMessages(
 		const assistantMsg = msg as AssistantMessage;
 		const isCompleted = typeof assistantMsg.time.completed === 'number';
 		const timestamp = new Date(assistantMsg.time.created).toISOString();
+		const parentMessageId = assistantMsg.parentID
+			? (internalReminderParentByMessageId.get(assistantMsg.parentID) ?? assistantMsg.parentID)
+			: undefined;
 
 		for (const part of msgParts) {
 			const taskResultArtifact = taskResultProjection.nodesByFirstPartId.get(part.id);
@@ -426,7 +600,7 @@ function projectMessages(
 					kind: 'assistant',
 					id: `msg-${part.id}`,
 					type: 'assistant',
-					parentMessageId: assistantMsg.parentID,
+					parentMessageId,
 					content: part.text,
 					partId: part.id,
 					isStreaming: !isCompleted,
@@ -442,7 +616,7 @@ function projectMessages(
 					kind: 'thinking',
 					id: `thinking-${part.id}`,
 					type: 'thinking',
-					parentMessageId: assistantMsg.parentID,
+					parentMessageId,
 					content: rp.text,
 					partId: part.id,
 					isStreaming: typeof rp.time.end !== 'number',
@@ -463,7 +637,7 @@ function projectMessages(
 					kind: 'tool_use',
 					id: tp.callID,
 					type: 'tool_use',
-					parentMessageId: assistantMsg.parentID,
+					parentMessageId,
 					toolName: tp.tool,
 					toolUseId: tp.callID,
 					isRunning,
@@ -497,6 +671,7 @@ function materializeTaskCards(
 		if (item.kind === 'tool_use' && item.toolName.toLowerCase() === 'task') {
 			const toolCallId = item.toolUseId;
 			let taskInput: Record<string, unknown> = {};
+			let taskOutput: string | undefined;
 			let taskMetadata: Record<string, unknown> | undefined;
 			const taskToolPart = taskPartIndex.byCallId.get(toolCallId);
 			if (taskToolPart) {
@@ -506,6 +681,7 @@ function materializeTaskCards(
 					typeof taskToolPart.state.input === 'object'
 						? (taskToolPart.state.input as Record<string, unknown>)
 						: {};
+				taskOutput = 'output' in taskToolPart.state ? getTaskResultOutput(taskToolPart) : undefined;
 				taskMetadata = getToolPartMetadata(taskToolPart);
 			}
 			const metadataSessionId =
@@ -540,6 +716,9 @@ function materializeTaskCards(
 				agent: typeof taskInput.subagent_type === 'string' ? taskInput.subagent_type : undefined,
 				description: typeof taskInput.description === 'string' ? taskInput.description : undefined,
 				prompt: typeof taskInput.prompt === 'string' ? taskInput.prompt : undefined,
+				category: getTaskStringField(taskInput, taskMetadata, 'category'),
+				command: getTaskStringField(taskInput, taskMetadata, 'command'),
+				taskId: getTaskId({ ...taskInput, output: taskOutput }, taskMetadata),
 				result: undefined,
 				startTime: item.timestamp,
 				childSessionId,
@@ -772,7 +951,7 @@ export function collectDescendantSessionIds(
 	sessionId: string,
 ): string[] {
 	const queue = [...(state.childSessionIdsByParentId[sessionId] ?? [])];
-	const visited = new Set<string>();
+	const visited = new Set<string>([sessionId]);
 	const descendants: string[] = [];
 	let head = 0;
 	while (head < queue.length) {
@@ -793,18 +972,10 @@ export function computeDerivedSessionStats(
 	const sessionIds = [sessionId, ...collectDescendantSessionIds(state, sessionId)];
 	let requestCount = 0;
 	let totalDuration = 0;
-	const emptyMessages: Message[] = [];
 	for (const currentSessionId of sessionIds) {
-		const messages = state.messages[currentSessionId] ?? emptyMessages;
-		let sawAssistantActivity = false;
-		for (const msg of messages) {
-			if (!isAssistantMessage(msg)) continue;
-			sawAssistantActivity = true;
-			if (typeof msg.time.completed === 'number') {
-				totalDuration += msg.time.completed - msg.time.created;
-			}
-		}
-		if (sawAssistantActivity) requestCount += 1;
+		const summary = computeAssistantUsageSummary(state.messages[currentSessionId]);
+		requestCount += summary.requestCount;
+		totalDuration += summary.durationMs;
 	}
 	return {
 		requestCount,
