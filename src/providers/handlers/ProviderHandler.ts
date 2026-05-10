@@ -462,6 +462,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 					},
 				);
 				this.context.services.mcpConfigWatcher.notifyUiSave(result.contentHash);
+				await this.disposeOpenCodeInstance();
 				return;
 			}
 
@@ -518,6 +519,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 				},
 			);
 			this.context.services.mcpConfigWatcher.notifyUiSave(result.contentHash);
+			await this.disposeOpenCodeInstance();
 		} catch (syncErr) {
 			logger.warn('[ProviderHandler] Failed to sync proxy models to opencode.json:', syncErr);
 		}
@@ -539,8 +541,25 @@ export class ProviderHandler implements WebviewMessageHandler {
 			if (result.contentHash) {
 				this.context.services.mcpConfigWatcher.notifyUiSave(result.contentHash);
 			}
+			await this.disposeOpenCodeInstance();
 		} catch (error) {
 			logger.warn('[ProviderHandler] Failed to remove proxy endpoint:', error);
+		}
+	}
+
+	/**
+	 * Invalidate the OpenCode server's cached provider state so it re-reads
+	 * opencode.json on the next request. Called after provider config changes
+	 * (add/remove/update endpoints), but NOT after model selection changes
+	 * to avoid interrupting active sessions.
+	 */
+	private async disposeOpenCodeInstance(): Promise<void> {
+		const sdkClient = this.context.cli.getSdkClient();
+		if (!sdkClient) return;
+		try {
+			await sdkClient.instance.dispose();
+		} catch (err) {
+			logger.warn('[ProviderHandler] instance.dispose() after provider change failed:', err);
 		}
 	}
 
