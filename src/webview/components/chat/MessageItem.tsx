@@ -67,6 +67,8 @@ const taskCardStatusIcon = (status: RenderTaskCardNode['status']) => {
 			return <TodoCheckIcon size={14} className="text-success" />;
 		case 'cancelled':
 			return <TodoPendingIcon size={14} className="text-vscode-foreground opacity-40" />;
+		case 'pending':
+			return <TodoProgressIcon size={14} className="text-warning animate-spin-smooth" />;
 		default:
 			return <TodoPendingIcon size={14} className="text-error" />;
 	}
@@ -262,6 +264,7 @@ const TaskCardItem = React.memo<{
 		(item): item is RenderTaskResultNode => item.kind === 'task_result',
 	);
 	const isRunning = effectiveStatus === 'running';
+	const isPending = effectiveStatus === 'pending';
 	const isPreviewMode = expandState === 'preview';
 	const shouldRenderTranscript = expandState === 'expanded' || isRunning;
 
@@ -404,106 +407,111 @@ const TaskCardItem = React.memo<{
 					: 'my-2 group/subtask'
 			}
 			body={
-				<div className="relative bg-(--tool-bg-header)">
-					<div
-						ref={bodyRef}
-						className="px-(--tool-content-padding) py-2 relative"
-						style={
-							expandState === 'expanded'
-								? {
-										maxHeight: SUBTASK_EXPANDED_MAX_HEIGHT,
-										overflowX: 'hidden',
-										overflowY: 'auto',
-										scrollbarWidth: 'none' as const,
-									}
-								: isRunning && expandState === 'preview'
+				isPending &&
+				!metaBlock &&
+				toolSummary.length === 0 &&
+				taskResultItems.length === 0 ? undefined : (
+					<div className="relative bg-(--tool-bg-header)">
+						<div
+							ref={bodyRef}
+							className="px-(--tool-content-padding) py-2 relative"
+							style={
+								expandState === 'expanded'
 									? {
-											maxHeight: SUBTASK_STREAMING_PREVIEW_MAX_HEIGHT,
+											maxHeight: SUBTASK_EXPANDED_MAX_HEIGHT,
 											overflowX: 'hidden',
 											overflowY: 'auto',
 											scrollbarWidth: 'none' as const,
 										}
-									: undefined
-						}
-					>
-						{metaBlock}
-						{prompt && prompt !== description && (
-							<SimpleTool
-								icon={<WandIcon size={14} />}
-								label="Prompt"
-								meta={!promptExpanded ? prompt : undefined}
-								expanded={promptExpanded}
-								onToggle={() => setPromptExpanded(prev => !prev)}
-								showCollapseOverlay
-								className="mb-2"
-							>
-								<div className="text-sm text-vscode-descriptionForeground whitespace-pre-wrap">
-									{prompt}
-								</div>
-							</SimpleTool>
-						)}
-						{!shouldRenderTranscript ? (
-							<>
-								{pendingAccess && (
-									<div className="mb-2 text-sm text-warning whitespace-pre-wrap break-words">
-										Waiting for permission to continue
+									: isRunning && expandState === 'preview'
+										? {
+												maxHeight: SUBTASK_STREAMING_PREVIEW_MAX_HEIGHT,
+												overflowX: 'hidden',
+												overflowY: 'auto',
+												scrollbarWidth: 'none' as const,
+											}
+										: undefined
+							}
+						>
+							{metaBlock}
+							{prompt && prompt !== description && (
+								<SimpleTool
+									icon={<WandIcon size={14} />}
+									label="Prompt"
+									meta={!promptExpanded ? prompt : undefined}
+									expanded={promptExpanded}
+									onToggle={() => setPromptExpanded(prev => !prev)}
+									showCollapseOverlay
+									className="mb-2"
+								>
+									<div className="text-sm text-vscode-descriptionForeground whitespace-pre-wrap">
+										{prompt}
 									</div>
-								)}
-								<PreviewToolSummary
-									toolSummary={toolSummary}
-									onOpenFullHistory={openExpandedHistory}
+								</SimpleTool>
+							)}
+							{!shouldRenderTranscript ? (
+								<>
+									{pendingAccess && (
+										<div className="mb-2 text-sm text-warning whitespace-pre-wrap break-words">
+											Waiting for permission to continue
+										</div>
+									)}
+									<PreviewToolSummary
+										toolSummary={toolSummary}
+										onOpenFullHistory={openExpandedHistory}
+									/>
+									{taskResultItems.map(item => (
+										<TaskResultLine key={item.id} message={item} />
+									))}
+								</>
+							) : (
+								childTranscriptBlock
+							)}
+							{isRunning && (
+								<SubtaskGenerationStatus
+									isRunning={isRunning}
+									status={effectiveStatus}
+									retryMessage={retryInfo?.message}
 								/>
-								{taskResultItems.map(item => (
-									<TaskResultLine key={item.id} message={item} />
-								))}
+							)}
+							{shouldRenderTranscript && pendingAccess && (
+								<AccessGate
+									requestId={pendingAccess.requestId}
+									messageId={pendingAccess.id}
+									tool={pendingAccess.tool}
+									input={pendingAccess.input}
+									pattern={pendingAccess.pattern}
+									className="my-2"
+								/>
+							)}
+						</div>
+						{isRunning && isPreviewMode && (
+							<>
+								<ScrollThumb scrollerRef={bodyRef} autoHideDelay={800} />
+								{showSubtaskScrollBtn && (
+									<button
+										type="button"
+										onClick={subtaskScrollToBottom}
+										aria-label="Scroll to bottom"
+										className="absolute bottom-1 left-1/2 z-10 flex items-center justify-center rounded-md cursor-pointer border-none transition-opacity duration-200"
+										style={{
+											transform: 'translateX(-50%)',
+											width: 22,
+											height: 22,
+											backgroundColor: 'var(--vscode-editor-background)',
+											color: 'var(--vscode-foreground)',
+											boxShadow: '0 1px 4px rgba(0,0,0,0.25)',
+											opacity: 0.9,
+										}}
+										title="Scroll to bottom"
+									>
+										<ChevronDownIcon size={12} />
+									</button>
+								)}
 							</>
-						) : (
-							childTranscriptBlock
-						)}
-						{isRunning && (
-							<SubtaskGenerationStatus
-								isRunning={isRunning}
-								status={effectiveStatus}
-								retryMessage={retryInfo?.message}
-							/>
-						)}
-						{shouldRenderTranscript && pendingAccess && (
-							<AccessGate
-								requestId={pendingAccess.requestId}
-								messageId={pendingAccess.id}
-								tool={pendingAccess.tool}
-								input={pendingAccess.input}
-								pattern={pendingAccess.pattern}
-								className="my-2"
-							/>
 						)}
 					</div>
-					{isRunning && isPreviewMode && (
-						<>
-							<ScrollThumb scrollerRef={bodyRef} autoHideDelay={800} />
-							{showSubtaskScrollBtn && (
-								<button
-									type="button"
-									onClick={subtaskScrollToBottom}
-									aria-label="Scroll to bottom"
-									className="absolute bottom-1 left-1/2 z-10 flex items-center justify-center rounded-md cursor-pointer border-none transition-opacity duration-200"
-									style={{
-										transform: 'translateX(-50%)',
-										width: 22,
-										height: 22,
-										backgroundColor: 'var(--vscode-editor-background)',
-										color: 'var(--vscode-foreground)',
-										boxShadow: '0 1px 4px rgba(0,0,0,0.25)',
-										opacity: 0.9,
-									}}
-									title="Scroll to bottom"
-								>
-									<ChevronDownIcon size={12} />
-								</button>
-							)}
-						</>
-					)}
-				</div>
+				)
 			}
 		/>
 	);

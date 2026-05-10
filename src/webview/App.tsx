@@ -471,7 +471,13 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 					/>
 				)}
 
-				{sections.length > 0 && <ScrollThumb scrollerRef={scrollerRef} />}
+				{sections.length > 0 && (
+					<ScrollThumb
+						scrollerRef={scrollerRef}
+						alwaysVisible
+						thumbColor="color-mix(in srgb, var(--input-bg) 90%, white)"
+					/>
+				)}
 
 				{sections.length > 0 && isAtBottom && <SessionStatisticsPanel />}
 

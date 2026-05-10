@@ -17,9 +17,10 @@ function useScrollThumb(
 		autoHideDelay: number;
 		minThumbHeight: number;
 		orientation: 'vertical' | 'horizontal';
+		alwaysVisible?: boolean;
 	},
 ) {
-	const { autoHide, autoHideDelay, minThumbHeight, orientation } = config;
+	const { autoHide, autoHideDelay, minThumbHeight, orientation, alwaysVisible } = config;
 	const trackRef = useRef<HTMLDivElement>(null);
 	const rafRef = useRef(0);
 	const hideTimerRef = useRef(0);
@@ -154,7 +155,13 @@ function useScrollThumb(
 		[scrollerRef, orientation],
 	);
 
-	const opacity = dragging || hovered ? 0.7 : visible || autoHide === 'never' ? 0.4 : 0;
+	const opacity = alwaysVisible
+		? 0.7
+		: dragging || hovered
+			? 0.7
+			: visible || autoHide === 'never'
+				? 0.4
+				: 0;
 
 	return {
 		trackRef,
@@ -179,14 +186,22 @@ function ThumbUI({
 	thumbWidth,
 	scrollerRef,
 	orientation,
+	alwaysVisible,
+	thumbColor,
 }: {
 	thumb: ReturnType<typeof useScrollThumb>;
 	thumbWidth: number;
 	scrollerRef: React.RefObject<HTMLDivElement | null>;
 	orientation: 'vertical' | 'horizontal';
+	alwaysVisible?: boolean;
+	thumbColor?: string;
 }) {
 	if (!thumb.thumbState.show) return null;
-	const activeWidth = thumb.hovered || thumb.dragging ? thumbWidth + 2 : thumbWidth;
+	const activeWidth = alwaysVisible
+		? thumbWidth + 2
+		: thumb.hovered || thumb.dragging
+			? thumbWidth + 2
+			: thumbWidth;
 	return (
 		<div
 			ref={thumb.trackRef}
@@ -235,7 +250,8 @@ function ThumbUI({
 					height:
 						orientation === 'horizontal' ? `${activeWidth}px` : `${thumb.thumbState.height}px`,
 					borderRadius: `${activeWidth / 2}px`,
-					backgroundColor: 'color-mix(in srgb, var(--vscode-editor-foreground) 30%, transparent)',
+					backgroundColor:
+						thumbColor || 'color-mix(in srgb, var(--vscode-editor-foreground) 30%, transparent)',
 					opacity: thumb.opacity,
 					transition: thumb.dragging ? 'none' : 'opacity 0.2s ease, width 0.15s ease',
 					cursor: thumb.dragging ? 'grabbing' : 'grab',
@@ -254,6 +270,8 @@ interface ScrollThumbProps {
 	minThumbHeight?: number;
 	autoHideDelay?: number;
 	orientation?: 'vertical' | 'horizontal';
+	alwaysVisible?: boolean;
+	thumbColor?: string;
 }
 
 export const ScrollThumb: React.FC<ScrollThumbProps> = ({
@@ -263,12 +281,15 @@ export const ScrollThumb: React.FC<ScrollThumbProps> = ({
 	minThumbHeight = 24,
 	autoHideDelay = 1200,
 	orientation = 'vertical',
+	alwaysVisible,
+	thumbColor,
 }) => {
 	const thumb = useScrollThumb(scrollerRef, {
 		autoHide,
 		autoHideDelay,
 		minThumbHeight,
 		orientation,
+		alwaysVisible,
 	});
 	return (
 		<ThumbUI
@@ -276,6 +297,8 @@ export const ScrollThumb: React.FC<ScrollThumbProps> = ({
 			thumbWidth={thumbWidth}
 			scrollerRef={scrollerRef}
 			orientation={orientation}
+			alwaysVisible={alwaysVisible}
+			thumbColor={thumbColor}
 		/>
 	);
 };

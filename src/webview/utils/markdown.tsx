@@ -585,8 +585,8 @@ const components: Components = {
 		/>
 	),
 	table: ({ children }) => (
-		<div className="my-2 overflow-x-auto scrollbar-thin-x rounded-lg border border-(--tool-border-color) bg-(--tool-bg-header)">
-			<table className="min-w-full w-max text-md border-collapse">{children}</table>
+		<div className="my-2 overflow-hidden rounded-lg border border-(--tool-border-color) bg-(--tool-bg-header)">
+			<table className="w-full text-md border-collapse">{children}</table>
 		</div>
 	),
 	thead: ({ children }) => (
@@ -603,12 +603,12 @@ const components: Components = {
 		</tr>
 	),
 	th: ({ children }) => (
-		<th className="align-top px-(--tool-content-padding) py-1.5 text-left font-medium text-sm text-vscode-editor-foreground border-r border-(--border-subtle) last:border-r-0">
+		<th className="align-top px-(--tool-content-padding) py-1.5 text-left font-semibold text-sm text-vscode-editor-foreground border-r border-(--border-subtle) last:border-r-0">
 			<StreamableNode node={children} />
 		</th>
 	),
 	td: ({ children }) => (
-		<td className="align-top px-(--tool-content-padding) py-1.5 text-md border-r border-(--border-subtle) last:border-r-0">
+		<td className="align-top px-(--tool-content-padding) py-1.5 text-md border-r border-(--border-subtle) last:border-r-0 break-words">
 			<StreamableNode node={children} />
 		</td>
 	),
