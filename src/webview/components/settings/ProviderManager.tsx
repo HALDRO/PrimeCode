@@ -598,6 +598,7 @@ export const ProviderManager: React.FC = () => {
 						const providerKey = `endpoint:${endpoint.id}`;
 						const enabledCount = endpoint.enabledModels.length;
 						const modelCount = endpoint.models.length;
+						const endpointProviderId = resolveEndpointProviderId(endpoint);
 						return (
 							<ExpandableRow
 								key={endpoint.id}
@@ -613,9 +614,14 @@ export const ProviderManager: React.FC = () => {
 								last={idx === proxyEndpoints.length - 1}
 							>
 								<CustomEndpointConfig
-									enabled={true}
+									enabled={providerModelVisibility[endpointProviderId] !== false}
 									endpoint={endpoint}
-									onToggle={() => undefined}
+									onToggle={() =>
+										setProviderModelVisibility(
+											endpointProviderId,
+											providerModelVisibility[endpointProviderId] === false,
+										)
+									}
 									onFieldChange={(field, value) =>
 										handleUpdateEndpointField(endpoint.id, field, value)
 									}

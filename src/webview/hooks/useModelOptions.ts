@@ -26,6 +26,7 @@ interface BuildModelOptionsInput {
 	opencodeProviders: OpenCodeProviderData[];
 	enabledOpenCodeModels: string[];
 	proxyEndpoints: ReturnType<typeof useSettingsStore.getState>['proxyEndpoints'];
+	providerModelVisibility?: Record<string, boolean | undefined>;
 	includeDefault?: boolean;
 }
 
@@ -33,6 +34,7 @@ export function buildModelOptions({
 	opencodeProviders,
 	enabledOpenCodeModels,
 	proxyEndpoints,
+	providerModelVisibility,
 	includeDefault = true,
 }: BuildModelOptionsInput): ModelOption[] {
 	const opts: ModelOption[] = [];
@@ -61,6 +63,7 @@ export function buildModelOptions({
 	for (const endpoint of proxyEndpoints) {
 		if (endpoint.enabledModels.length === 0 || endpoint.models.length === 0) continue;
 		const providerId = getProxyEndpointProviderIdFromName(endpoint.name, endpoint.id);
+		if (providerModelVisibility?.[providerId] === false) continue;
 		const enabled = new Set(endpoint.enabledModels);
 		for (const model of endpoint.models) {
 			if (!enabled.has(model.id)) continue;
@@ -91,6 +94,7 @@ export function useModelOptions(includeDefault = true): ModelOption[] {
 			),
 			enabledOpenCodeModels,
 			proxyEndpoints,
+			providerModelVisibility,
 			includeDefault,
 		});
 	}, [

@@ -130,6 +130,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 			opencodeProviders: visibleProviders,
 			enabledOpenCodeModels,
 			proxyEndpoints: visibleEndpoints,
+			providerModelVisibility,
 			includeDefault: false,
 		});
 
