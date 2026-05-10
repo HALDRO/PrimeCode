@@ -426,7 +426,7 @@ function buildTaskPartIndex(parts: Record<string, Part[]>): TaskPartIndex {
 }
 
 function buildTerminalTaskResultProjection(
-	state: Pick<SessionStore, 'originatingToolCallBySessionId' | 'messages'>,
+	state: Pick<SessionStore, 'originatingToolCallBySessionId' | 'messages' | 'sessionStatus'>,
 	messages: Message[],
 	parts: Record<string, Part[]>,
 	sessionId: string,
@@ -442,6 +442,13 @@ function buildTerminalTaskResultProjection(
 		(mappedToolCallId ? taskPartIndex.byCallId.get(mappedToolCallId) : undefined);
 
 	if (!parentTaskPart || parentTaskPart.state.status !== 'completed') return projection;
+
+	// Gate: do not materialize task_result while the child session is still active.
+	// A present sessionStatus with type 'busy' or 'retry' means the child is still working.
+	// An absent entry means the session either completed and was cleaned up, or was never tracked
+	// as a child — in both cases we allow the result to render (fallback to tool part status).
+	const childStatus = state.sessionStatus[sessionId];
+	if (childStatus && childStatus.type !== 'idle') return projection;
 	const parentMessage = state.messages[parentTaskPart.sessionID]?.find(
 		message => message.id === parentTaskPart.messageID,
 	);
@@ -717,11 +724,11 @@ function materializeTaskCards(
 			const childStatus = childSessionId ? state.sessionStatus[childSessionId] : undefined;
 			const isBackgroundLaunch = isBackgroundTaskLaunch(taskOutput);
 			const taskStatus =
-				isBackgroundLaunch &&
-				item.status === 'completed' &&
-				(childStatus?.type === 'busy' || childStatus?.type === 'retry')
+				childStatus?.type === 'busy' || childStatus?.type === 'retry'
 					? 'running'
-					: (item.status ?? 'running');
+					: isBackgroundLaunch && item.status === 'completed' && childStatus?.type !== 'idle'
+						? 'running'
+						: (item.status ?? 'running');
 
 			const node: RenderTaskCardNode = {
 				kind: 'task_card',

@@ -36,6 +36,13 @@ import type { SessionStore } from './chatStore';
 // Part types we skip — they're internal to the CLI and not useful for UI rendering.
 const SKIP_PARTS = new Set(['patch', 'step-start', 'step-finish', 'snapshot']);
 
+function getToolPartMetadata(toolPart: ToolPart): Record<string, unknown> | undefined {
+	return (toolPart.metadata ??
+		('metadata' in toolPart.state
+			? ((toolPart.state as { metadata?: Record<string, unknown> }).metadata ?? undefined)
+			: undefined)) as Record<string, unknown> | undefined;
+}
+
 function collectUnlinkedTaskCallIds(
 	state: SessionStore,
 	parentSessionId: string,
@@ -57,11 +64,35 @@ function collectUnlinkedTaskCallIds(
 	return callIds;
 }
 
+function collectUnlinkedRunningTaskCallIds(
+	state: SessionStore,
+	parentSessionId: string,
+	linkedCallIds: Set<string> = new Set(Object.values(state.originatingToolCallBySessionId)),
+): string[] {
+	const parentMessages = state.messages[parentSessionId] ?? [];
+	const callIds: string[] = [];
+	for (let i = parentMessages.length - 1; i >= 0; i--) {
+		const messageParts = state.parts[parentMessages[i].id] ?? [];
+		for (let j = messageParts.length - 1; j >= 0; j--) {
+			const part = messageParts[j];
+			if (part.type !== 'tool') continue;
+			const toolPart = part as ToolPart;
+			if (toolPart.tool.toLowerCase() !== 'task') continue;
+			if (linkedCallIds.has(toolPart.callID)) continue;
+			if (toolPart.state.status !== 'pending' && toolPart.state.status !== 'running') continue;
+			if (!callIds.includes(toolPart.callID)) callIds.push(toolPart.callID);
+		}
+	}
+	return callIds;
+}
+
 function findOnlyUnlinkedTaskCallId(
 	state: SessionStore,
 	parentSessionId: string,
 	linkedCallIds?: Set<string>,
 ): string | undefined {
+	const runningCallIds = collectUnlinkedRunningTaskCallIds(state, parentSessionId, linkedCallIds);
+	if (runningCallIds.length === 1) return runningCallIds[0];
 	const callIds = collectUnlinkedTaskCallIds(state, parentSessionId, linkedCallIds);
 	return callIds.length === 1 ? callIds[0] : undefined;
 }
@@ -80,10 +111,11 @@ function rebuildChildSessionLinks(state: SessionStore): void {
 	for (const messageParts of Object.values(state.parts)) {
 		for (const part of messageParts) {
 			if (part.type !== 'tool') continue;
-			const toolPart = part as ToolPart & { metadata?: { sessionId?: unknown } };
+			const toolPart = part as ToolPart;
 			if (toolPart.tool.toLowerCase() !== 'task') continue;
+			const metadata = getToolPartMetadata(toolPart);
 			const childSessionId =
-				typeof toolPart.metadata?.sessionId === 'string' ? toolPart.metadata.sessionId : undefined;
+				typeof metadata?.sessionId === 'string' ? metadata.sessionId : undefined;
 			if (!childSessionId) continue;
 			nextOriginatingToolCallBySessionId[childSessionId] = toolPart.callID;
 			const siblings = nextChildSessionIdsByParentId[toolPart.sessionID] ?? [];
@@ -94,6 +126,11 @@ function rebuildChildSessionLinks(state: SessionStore): void {
 
 	for (const session of state.sessions) {
 		if (!session.parentID || nextOriginatingToolCallBySessionId[session.id]) continue;
+		const existingToolCallId = state.originatingToolCallBySessionId[session.id];
+		if (existingToolCallId) {
+			nextOriginatingToolCallBySessionId[session.id] = existingToolCallId;
+			continue;
+		}
 		const unlinkedSiblings = (nextChildSessionIdsByParentId[session.parentID] ?? []).filter(
 			childSessionId => !nextOriginatingToolCallBySessionId[childSessionId],
 		);
@@ -119,6 +156,42 @@ function upsertMessage(messages: Message[], nextMessage: Message): void {
 function ensureSessionMessages(state: SessionStore, sessionId: string): Message[] {
 	if (!state.messages[sessionId]) state.messages[sessionId] = [];
 	return state.messages[sessionId];
+}
+
+function appendPendingPartDelta(
+	state: SessionStore,
+	messageID: string,
+	partID: string,
+	field: string,
+	delta: string,
+): void {
+	let partDeltas = state.pendingPartDeltas[messageID];
+	if (!partDeltas) {
+		partDeltas = {};
+		state.pendingPartDeltas[messageID] = partDeltas;
+	}
+	let fieldDeltas = partDeltas[partID];
+	if (!fieldDeltas) {
+		fieldDeltas = {};
+		partDeltas[partID] = fieldDeltas;
+	}
+	fieldDeltas[field] = `${fieldDeltas[field] ?? ''}${delta}`;
+}
+
+function consumePendingPartDelta(
+	state: SessionStore,
+	messageID: string,
+	partID: string,
+	field: string,
+): string | undefined {
+	const pendingByMessage = state.pendingPartDeltas[messageID];
+	const pendingByPart = pendingByMessage?.[partID];
+	const pending = pendingByPart?.[field];
+	if (pending === undefined) return undefined;
+	delete pendingByPart[field];
+	if (Object.keys(pendingByPart).length === 0) delete pendingByMessage[partID];
+	if (Object.keys(pendingByMessage).length === 0) delete state.pendingPartDeltas[messageID];
+	return pending;
 }
 
 function extractCompositeModelId(message: Message): string | undefined {
@@ -243,7 +316,9 @@ export function eventReducer(state: SessionStore, event: WebviewSdkEvent): void 
 					state.childSessionIdsByParentId[info.parentID] = [...siblings, info.id];
 				}
 				const toolCallId = findOnlyUnlinkedTaskCallId(state, info.parentID);
-				if (toolCallId) state.originatingToolCallBySessionId[info.id] = toolCallId;
+				if (toolCallId) {
+					state.originatingToolCallBySessionId[info.id] = toolCallId;
+				}
 			}
 			break;
 		}
@@ -330,6 +405,7 @@ export function eventReducer(state: SessionStore, event: WebviewSdkEvent): void 
 			if (msgs) state.messages[sessionID] = msgs.filter(message => message.id !== messageID);
 			// Clean up parts for this message
 			if (state.parts[messageID]) delete state.parts[messageID];
+			if (state.pendingPartDeltas[messageID]) delete state.pendingPartDeltas[messageID];
 			syncSessionModelFromMessages(state, sessionID);
 			break;
 		}
@@ -339,6 +415,10 @@ export function eventReducer(state: SessionStore, event: WebviewSdkEvent): void 
 			const { part } = event.properties;
 			if (SKIP_PARTS.has(part.type)) break;
 			const messageID = part.messageID;
+			const pendingText = consumePendingPartDelta(state, messageID, part.id, 'text');
+			if (pendingText && 'text' in part && typeof part.text === 'string') {
+				part.text += pendingText;
+			}
 			if (!state.parts[messageID]) state.parts[messageID] = [];
 			const parts = state.parts[messageID];
 			const idx = parts.findIndex(existingPart => existingPart.id === part.id);
@@ -350,7 +430,9 @@ export function eventReducer(state: SessionStore, event: WebviewSdkEvent): void 
 
 			// Track task tool → child session mapping
 			if (part.type === 'tool' && part.tool.toLowerCase() === 'task') {
-				const metadata = part.metadata as { sessionId?: string } | undefined;
+				const metadata = getToolPartMetadata(part as ToolPart) as
+					| { sessionId?: string }
+					| undefined;
 				if (metadata?.sessionId) {
 					state.originatingToolCallBySessionId[metadata.sessionId] = part.callID;
 					const siblings = state.childSessionIdsByParentId[part.sessionID] || [];
@@ -381,9 +463,15 @@ export function eventReducer(state: SessionStore, event: WebviewSdkEvent): void 
 		case 'message.part.delta': {
 			const { messageID, partID, field, delta } = event.properties;
 			const parts = state.parts[messageID];
-			if (!parts) break;
+			if (!parts) {
+				appendPendingPartDelta(state, messageID, partID, field, delta);
+				break;
+			}
 			const part = parts.find(p => p.id === partID);
-			if (!part) break;
+			if (!part) {
+				appendPendingPartDelta(state, messageID, partID, field, delta);
+				break;
+			}
 			const existing =
 				typeof (part as Record<string, unknown>)[field] === 'string'
 					? ((part as Record<string, unknown>)[field] as string)

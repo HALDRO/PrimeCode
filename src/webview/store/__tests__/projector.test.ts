@@ -92,6 +92,7 @@ function makeMinimalStore(overrides: Partial<SessionStore> = {}): SessionStore {
 		todos: {},
 		permissions: {},
 		questions: {},
+		pendingPartDeltas: {},
 		activeSessionId: undefined,
 		sessionOrder: [],
 		editingMessageId: null,

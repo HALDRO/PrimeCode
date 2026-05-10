@@ -698,6 +698,75 @@ describe('chatStore derived view streaming', () => {
 		}
 	});
 
+	it('buffers child deltas that arrive before the initial part snapshot', () => {
+		const userMsg: Message = {
+			id: 'u-child-live',
+			sessionID: 'child-live-1',
+			role: 'user',
+			time: { created: Date.now() },
+		} as Message;
+		const asstMsg: Message = {
+			id: 'a-child-live',
+			sessionID: 'child-live-1',
+			role: 'assistant',
+			parentID: 'u-child-live',
+			agent: 'build',
+			tokens: { input: 0, output: 0, reasoning: 0, total: 0, cache: { read: 0, write: 0 } },
+			cost: 0,
+			time: { created: Date.now() },
+		} as unknown as Message;
+
+		restoreFromEvents([
+			{
+				type: 'message.updated',
+				properties: { sessionID: 'child-live-1', info: userMsg },
+			} as never,
+			{
+				type: 'message.updated',
+				properties: { sessionID: 'child-live-1', info: asstMsg },
+			} as never,
+		]);
+
+		useChatStore.getState().actions.applyBatch([
+			{
+				type: 'message.part.delta',
+				properties: {
+					messageID: 'a-child-live',
+					partID: 'p-child-live',
+					field: 'text',
+					delta: 'Hello',
+				},
+			} as never,
+			{
+				type: 'message.part.delta',
+				properties: {
+					messageID: 'a-child-live',
+					partID: 'p-child-live',
+					field: 'text',
+					delta: ' world',
+				},
+			} as never,
+			{
+				type: 'message.part.updated',
+				properties: {
+					part: {
+						id: 'p-child-live',
+						messageID: 'a-child-live',
+						sessionID: 'child-live-1',
+						type: 'text',
+						text: '',
+					},
+				},
+			} as never,
+		]);
+
+		const state = useChatStore.getState();
+		expect(state.parts['a-child-live'][0]).toMatchObject({ text: 'Hello world' });
+		expect(state.pendingPartDeltas['a-child-live']).toBeUndefined();
+		const node = deriveSessionView(state, 'child-live-1').nodesById['msg-p-child-live'];
+		expect(node).toMatchObject({ kind: 'assistant', content: 'Hello world' });
+	});
+
 	it('recomputes derived view after each delta', () => {
 		setupAssistantStreaming();
 		const before = deriveSessionView(useChatStore.getState(), SESSION_ID);
@@ -873,6 +942,62 @@ describe('chatStore derived view streaming', () => {
 		expect(state.childSessionIdsByParentId[SESSION_ID]).toContain('child-task-ambiguous');
 	});
 
+	it('prefers the only unlinked running task call on session.created even if stale completed task calls exist', () => {
+		const userMsg: Message = {
+			id: 'u-task-running-preferred',
+			sessionID: SESSION_ID,
+			role: 'user',
+			time: { created: Date.now() },
+		} as Message;
+		const asstMsg: Message = {
+			id: 'a-task-running-preferred',
+			sessionID: SESSION_ID,
+			role: 'assistant',
+			parentID: 'u-task-running-preferred',
+			agent: 'build',
+			tokens: { input: 0, output: 0, reasoning: 0, total: 0, cache: { read: 0, write: 0 } },
+			cost: 0,
+			time: { created: Date.now() },
+		} as unknown as Message;
+		const staleCompletedTaskPart: Part = {
+			id: 'tool-task-stale-completed',
+			messageID: 'a-task-running-preferred',
+			sessionID: SESSION_ID,
+			type: 'tool',
+			tool: 'task',
+			callID: 'call-task-stale-completed',
+			state: { status: 'completed', input: { description: 'stale completed' }, output: 'done' },
+			metadata: {},
+		} as unknown as Part;
+		const activeRunningTaskPart: Part = {
+			id: 'tool-task-active-running',
+			messageID: 'a-task-running-preferred',
+			sessionID: SESSION_ID,
+			type: 'tool',
+			tool: 'task',
+			callID: 'call-task-active-running',
+			state: { status: 'running', input: { description: 'active running' } },
+			metadata: {},
+		} as unknown as Part;
+
+		restoreFromEvents([
+			{ type: 'message.updated', properties: { sessionID: SESSION_ID, info: userMsg } } as never,
+			{ type: 'message.updated', properties: { sessionID: SESSION_ID, info: asstMsg } } as never,
+			{ type: 'message.part.updated', properties: { part: staleCompletedTaskPart } } as never,
+			{ type: 'message.part.updated', properties: { part: activeRunningTaskPart } } as never,
+			{
+				type: 'session.created',
+				properties: { info: { id: 'child-task-running-preferred', parentID: SESSION_ID } },
+			} as never,
+		]);
+
+		const state = useChatStore.getState();
+		expect(state.originatingToolCallBySessionId['child-task-running-preferred']).toBe(
+			'call-task-active-running',
+		);
+		expect(state.childSessionIdsByParentId[SESSION_ID]).toContain('child-task-running-preferred');
+	});
+
 	it('prefers official task metadata sessionId over fallback task order', () => {
 		const userMsg: Message = {
 			id: 'u-task-metadata',
@@ -914,6 +1039,63 @@ describe('chatStore derived view streaming', () => {
 		const state = useChatStore.getState();
 		expect(state.originatingToolCallBySessionId['child-task-metadata']).toBe('call-task-metadata');
 		expect(state.childSessionIdsByParentId[SESSION_ID]).toContain('child-task-metadata');
+	});
+
+	it('preserves an early child link during reconcile before task metadata arrives', () => {
+		const userMsg: Message = {
+			id: 'u-task-preserve-link',
+			sessionID: SESSION_ID,
+			role: 'user',
+			time: { created: Date.now() },
+		} as Message;
+		const asstMsg: Message = {
+			id: 'a-task-preserve-link',
+			sessionID: SESSION_ID,
+			role: 'assistant',
+			parentID: 'u-task-preserve-link',
+			agent: 'build',
+			tokens: { input: 0, output: 0, reasoning: 0, total: 0, cache: { read: 0, write: 0 } },
+			cost: 0,
+			time: { created: Date.now() },
+		} as unknown as Message;
+		const runningTaskPart: Part = {
+			id: 'tool-task-preserve-link',
+			messageID: 'a-task-preserve-link',
+			sessionID: SESSION_ID,
+			type: 'tool',
+			tool: 'task',
+			callID: 'call-task-preserve-link',
+			state: { status: 'running', input: { description: 'preserve early link' } },
+			metadata: {},
+		} as unknown as Part;
+
+		restoreFromEvents([
+			{ type: 'message.updated', properties: { sessionID: SESSION_ID, info: userMsg } } as never,
+			{ type: 'message.updated', properties: { sessionID: SESSION_ID, info: asstMsg } } as never,
+			{ type: 'message.part.updated', properties: { part: runningTaskPart } } as never,
+			{
+				type: 'session.created',
+				properties: { info: { id: 'child-task-preserve-link', parentID: SESSION_ID } },
+			} as never,
+		]);
+
+		let state = useChatStore.getState();
+		expect(state.originatingToolCallBySessionId['child-task-preserve-link']).toBe(
+			'call-task-preserve-link',
+		);
+
+		useChatStore.getState().actions.applyEvent({
+			type: 'session.status',
+			properties: {
+				sessionID: 'child-task-preserve-link',
+				status: { type: 'busy' },
+			},
+		} as never);
+
+		state = useChatStore.getState();
+		expect(state.originatingToolCallBySessionId['child-task-preserve-link']).toBe(
+			'call-task-preserve-link',
+		);
 	});
 
 	it('replays restored parent and child session snapshots together', () => {

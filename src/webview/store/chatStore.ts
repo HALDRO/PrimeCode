@@ -335,6 +335,7 @@ export interface SessionStore {
 	todos: Record<string, Todo[]>;
 	permissions: Record<string, PermissionRequest[]>;
 	questions: Record<string, QuestionRequest[]>;
+	pendingPartDeltas: Record<string, Record<string, Record<string, string>>>;
 	activeSessionId: string | undefined;
 	sessionOrder: string[];
 	editingMessageId: string | null;
@@ -472,6 +473,7 @@ export function isSessionProcessing(
 export const useChatStore = create<SessionStore>()((set, get) => ({
 	// Domain state factories
 	...createMessageDomainState(),
+	pendingPartDeltas: {},
 	...createDraftDomainState(),
 	...createSessionMetaDomainState(),
 	actions: {

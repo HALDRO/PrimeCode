@@ -1,11 +1,9 @@
-import { createOpencodeClient } from '@opencode-ai/sdk/v2/client';
 import type { ExtensionMessage } from '../../common';
 import { useChatStore } from '../store';
 import type { WebviewSdkEvent } from '../store/eventReducer';
 import { useSettingsStore } from '../store/settingsStore';
 import { useUIStore } from '../store/uiStore';
 import { webviewLogger } from '../utils/logger';
-import { proxyFetch } from '../utils/proxyFetch';
 import { openCodeRuntime } from './opencodeRuntime';
 
 const log = webviewLogger.forComponent('EventRuntime');
@@ -23,23 +21,14 @@ interface GlobalStreamEnvelope {
 
 type QueuedEvent = WebviewSdkEvent;
 
-const STREAM_YIELD_MS = 8;
-const RECONNECT_DELAY_MS = 250;
-const HEARTBEAT_TIMEOUT_MS = 15_000;
 const RECONCILE_DEBOUNCE_MS = 1000;
 
 const queue: QueuedEvent[] = [];
 const coalesced = new Map<string, number>();
 let flushTimer: number | null = null;
 
-let rootAbort: AbortController | null = null;
-let attemptAbort: AbortController | null = null;
-let runPromise: Promise<void> | null = null;
 let currentKey: string | null = null;
-let streamErrorLogged = false;
 let lastEventAt = Date.now();
-let heartbeatTimer: number | null = null;
-let hasSeenConnected = false;
 let reconcileInFlight: Promise<void> | null = null;
 let lastReconcileAt = 0;
 
@@ -94,28 +83,6 @@ function enqueue(event: WebviewSdkEvent): void {
 	scheduleFlush();
 }
 
-function clearHeartbeat(): void {
-	if (heartbeatTimer === null) return;
-	window.clearTimeout(heartbeatTimer);
-	heartbeatTimer = null;
-}
-
-function resetHeartbeat(): void {
-	lastEventAt = Date.now();
-	clearHeartbeat();
-	heartbeatTimer = window.setTimeout(() => {
-		attemptAbort?.abort();
-	}, HEARTBEAT_TIMEOUT_MS);
-}
-
-function aborted(error: unknown): boolean {
-	return error instanceof DOMException && error.name === 'AbortError';
-}
-
-function wait(ms: number): Promise<void> {
-	return new Promise(resolve => window.setTimeout(resolve, ms));
-}
-
 function dispatchExtensionMessageToAuxStores(message: ExtensionMessage): void {
 	useUIStore.getState().actions.handleExtensionMessage(message);
 	useSettingsStore.getState().actions.handleExtensionMessage(message);
@@ -150,6 +117,7 @@ function reconcile(reason: 'server.connected' | 'reconnect'): Promise<void> {
 function handleGlobalEnvelope(
 	event: GlobalStreamEnvelope | StreamEnvelope | WebviewSdkEvent,
 ): void {
+	lastEventAt = Date.now();
 	const maybeEnvelope = event as GlobalStreamEnvelope;
 	if (maybeEnvelope?.payload && typeof maybeEnvelope.payload === 'object') {
 		if (maybeEnvelope.payload.type === 'sync') return;
@@ -175,107 +143,31 @@ function handleGlobalEnvelope(
 	}
 }
 
-async function runStream(
-	serverUrl: string,
-	workspaceRoot: string,
-	signal: AbortSignal,
-): Promise<void> {
-	const actions = useUIStore.getState().actions;
-	const client = createOpencodeClient({
-		baseUrl: serverUrl,
-		directory: workspaceRoot,
-		fetch: proxyFetch,
-	});
-
-	while (!signal.aborted) {
-		attemptAbort = new AbortController();
-		const onAbort = () => attemptAbort?.abort();
-		signal.addEventListener('abort', onAbort);
-
-		try {
-			lastEventAt = Date.now();
-			const events = await client.event.subscribe(
-				{ directory: workspaceRoot },
-				{
-					signal: attemptAbort.signal,
-					onSseError: () => {
-						actions.setServerStatus('error');
-					},
-				},
-			);
-
-			actions.setServerStatus('connected');
-			if (hasSeenConnected) {
-				void reconcile('reconnect').catch(() => {
-					actions.setServerStatus('error');
-				});
-			}
-			hasSeenConnected = true;
-			resetHeartbeat();
-
-			let yieldedAt = Date.now();
-			for await (const event of events.stream as AsyncGenerator<
-				GlobalStreamEnvelope | WebviewSdkEvent
-			>) {
-				if (signal.aborted) break;
-				resetHeartbeat();
-				streamErrorLogged = false;
-				handleGlobalEnvelope(event);
-				if (Date.now() - yieldedAt < STREAM_YIELD_MS) continue;
-				yieldedAt = Date.now();
-				await wait(0);
-			}
-
-			if (signal.aborted) break;
-			actions.setServerStatus('disconnected');
-		} catch (error) {
-			if (!aborted(error) && !streamErrorLogged) {
-				streamErrorLogged = true;
-				log.error('Stream failed', { serverUrl, error });
-			}
-			if (!signal.aborted) {
-				actions.setServerStatus('error');
-			}
-		} finally {
-			signal.removeEventListener('abort', onAbort);
-			attemptAbort = null;
-			clearHeartbeat();
-		}
-
-		if (signal.aborted) break;
-		await wait(RECONNECT_DELAY_MS);
-	}
-}
-
 export const eventRuntime = {
 	handleExtensionMessage(message: unknown): void {
-		useChatStore.getState().actions.handleExtensionMessage(message);
-		dispatchExtensionMessageToAuxStores(message as ExtensionMessage);
+		const extensionMessage = message as ExtensionMessage;
+		if (extensionMessage.type === 'opencodeEvent') {
+			handleGlobalEnvelope(extensionMessage.data as GlobalStreamEnvelope | WebviewSdkEvent);
+			useUIStore.getState().actions.setServerStatus('connected');
+			return;
+		}
+
+		useChatStore.getState().actions.handleExtensionMessage(extensionMessage);
+		dispatchExtensionMessageToAuxStores(extensionMessage);
 	},
 
 	start(serverUrl: string, workspaceRoot: string): void {
 		const normalizedWorkspaceRoot = normalizeDriveLetter(workspaceRoot);
 		const nextKey = `${serverUrl}::${normalizedWorkspaceRoot}`;
-		if (currentKey === nextKey && runPromise) return;
+		if (currentKey === nextKey) return;
 
 		this.stop();
 		currentKey = nextKey;
-		hasSeenConnected = false;
-		rootAbort = new AbortController();
-		runPromise = runStream(serverUrl, normalizedWorkspaceRoot, rootAbort.signal).finally(() => {
-			runPromise = null;
-			attemptAbort = null;
-			clearHeartbeat();
-			flushQueuedEvents();
-		});
+		lastEventAt = Date.now();
+		useUIStore.getState().actions.setServerStatus('connected');
 	},
 
 	stop(): void {
-		rootAbort?.abort();
-		rootAbort = null;
-		attemptAbort?.abort();
-		attemptAbort = null;
-		clearHeartbeat();
 		if (flushTimer !== null) {
 			window.cancelAnimationFrame(flushTimer);
 			flushTimer = null;
@@ -283,6 +175,7 @@ export const eventRuntime = {
 		queue.length = 0;
 		coalesced.clear();
 		currentKey = null;
+		useUIStore.getState().actions.setServerStatus('disconnected');
 	},
 
 	getLastEventAge(): number {

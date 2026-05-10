@@ -466,6 +466,8 @@ export type ServerInfoMessage = BaseExtensionMessage<
 	{ url: string; revision: number; workspaceRoot: string }
 >;
 
+export type OpencodeEventMessage = BaseExtensionMessage<'opencodeEvent', unknown>;
+
 // =============================================================================
 // Extension Version Check
 // =============================================================================
@@ -554,6 +556,7 @@ export type ExtensionMessage =
 	| ProjectUpdatedMessage
 	| EditorSelectionMessage
 	| ServerInfoMessage
+	| OpencodeEventMessage
 	| ExtensionVersionMessage
 	| ConnectionDetailsMessage
 	| OpenHistoryMessage

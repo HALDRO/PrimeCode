@@ -1083,6 +1083,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	}
 
 	private forwardBackendStatusEvent(event: unknown): void {
+		this.bridge.data('opencodeEvent', event);
+
 		const payload =
 			typeof event === 'object' &&
 			event !== null &&

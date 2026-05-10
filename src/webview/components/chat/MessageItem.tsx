@@ -244,7 +244,10 @@ const TaskCardItem = React.memo<{
 	const { title, modelId: childModelId } = message.childSummary;
 	const childSessionId = message.childSessionId;
 	const liveChildSummary = useChildSessionSummary(childSessionId);
-	const effectiveStatus = status;
+	const effectiveStatus =
+		liveChildSummary.statusType === 'busy' || liveChildSummary.statusType === 'retry'
+			? 'running'
+			: status;
 	const durationMs = liveChildSummary.durationMs ?? message.childSummary.durationMs;
 	const childTokens = liveChildSummary.tokens ?? message.childSummary.tokens;
 	const childCount = childSessionId ? liveChildSummary.childCount : message.childSummary.childCount;

@@ -272,6 +272,7 @@ export const useChildSessionSummary = (childSessionId: string | undefined) => {
 		const tokens = computeAssistantUsage(messages);
 		return {
 			title: session?.title,
+			statusType: status?.type,
 			isIdle: status?.type === 'idle',
 			childCount,
 			tokens,
