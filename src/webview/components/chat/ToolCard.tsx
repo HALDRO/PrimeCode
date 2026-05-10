@@ -387,7 +387,6 @@ const FileEditCard: React.FC<FileEditCardProps> = ({
 		lines,
 		filePath: effectiveFilePath,
 		name,
-		diffText,
 		hasDeleteChange,
 		stats,
 		firstChangedLine,
@@ -461,26 +460,6 @@ const FileEditCard: React.FC<FileEditCardProps> = ({
 										: 'Preparing diff...'}
 								</div>
 							)}
-						</div>
-						<div
-							className={cn(
-								'absolute right-(--tool-content-padding) bottom-0',
-								'opacity-0 transition-opacity duration-150 ease-out',
-								'group-hover:opacity-100',
-							)}
-						>
-							{hasContent && diffText.trim() ? (
-								<IconButton
-									icon={<CopyIcon size={14} />}
-									onClick={e => {
-										e.stopPropagation();
-										void copyTextToClipboard(diffText);
-									}}
-									title="Copy diff"
-									size={20}
-									className="bg-(--surface-base)/80 backdrop-blur-sm"
-								/>
-							) : null}
 						</div>
 					</div>
 				}

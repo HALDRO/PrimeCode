@@ -27,6 +27,7 @@ import { proxyFetch } from '../../utils/proxyFetch';
 import { useVSCode } from '../../utils/vscode';
 import { CloseIcon, MessageIcon } from '../icons';
 import { ScrollContainer } from '../ui';
+import { CopyActionsButton } from './CopyActions';
 import { HistoryDropdown } from './HistoryDropdown';
 
 /**
@@ -515,6 +516,9 @@ export const Header: React.FC = React.memo(() => {
 						tabsOverflowing && 'pb-2',
 					)}
 				>
+					{/* Copy Actions Button */}
+					<CopyActionsButton noBackground />
+
 					{/* Connection Status Button */}
 					<div className="relative">
 						<button

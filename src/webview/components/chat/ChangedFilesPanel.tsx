@@ -4,36 +4,25 @@
  *              Header layout mirrors FileRow structure for perfect alignment.
  *              Also displays current Todo list status when available.
  *              Session-specific changed files and todo state come from chatStore.
- *              Copy operations read directly from chatStore + copyTextToClipboard.
  *              OPTIMIZED: Todo display extracted to separate component to isolate rerenders.
  */
 
-import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { extractCanonicalTaskResult } from '../../../common';
-import { isMcpTool } from '../../constants';
 import { cn } from '../../lib/cn';
 import {
-	deriveSessionView,
-	mapSessionDiffEntries,
-	type RenderNode,
 	useHasTodos,
 	useIsActiveChildSession,
-	useMcpServers,
 	useSessionDiffFiles,
 	useSessionDiffSummary,
 	useTodoState,
 } from '../../store';
-import { useChatStore } from '../../store/chatStore';
 import type { SessionDiffEntry } from '../../store/selectors';
-import { useSettingsStore } from '../../store/settingsStore';
 import { useUIActions } from '../../store/uiStore';
-import { copyTextToClipboard } from '../../utils/clipboard';
 import { useVSCode } from '../../utils/vscode';
 import {
 	AcceptIcon,
 	ChevronIcon,
-	CopyIcon,
 	FileIcon,
 	RejectIcon,
 	TodoCheckIcon,
@@ -41,212 +30,13 @@ import {
 	TodoPendingIcon,
 	TodoProgressIcon,
 } from '../icons';
-import { DropdownMenu, IconButton, PathChip, ScrollContainer, Tooltip } from '../ui';
+import { PathChip, ScrollContainer, Tooltip } from '../ui';
 
 interface TodoItem {
 	content: string;
 	status: string;
 	priority: string;
 }
-
-interface CopyMenuItem {
-	label: string;
-	action: () => void;
-}
-
-// ─── Copy helpers (shared logic, no duplication) ───
-
-function getActiveMessages(): RenderNode[] | undefined {
-	const state = useChatStore.getState();
-	const sid = state.activeSessionId;
-	if (!sid) return undefined;
-	const mcpServerNames = Object.keys(useSettingsStore.getState().mcpServers || {});
-	const view = deriveSessionView(state, sid, mcpServerNames);
-	if (!view || view.nodeIds.length === 0) return undefined;
-	const items: RenderNode[] = [];
-	for (const id of view.nodeIds) {
-		const node = view.nodesById[id];
-		if (node) items.push(node);
-	}
-	return items.length > 0 ? items : undefined;
-}
-
-function findLastUserIndex(msgs: RenderNode[]): number {
-	for (let i = msgs.length - 1; i >= 0; i--) {
-		if (msgs[i].kind === 'user') return i;
-	}
-	return -1;
-}
-
-/** Check if a tool_use should be included in copy output (MCP, WebSearch, WebFetch) */
-function isCopyableToolResult(m: RenderNode, mcpServerNames: string[]): boolean {
-	if (m.kind !== 'tool_use') return false;
-	const name = m.toolName?.toLowerCase() ?? '';
-	if (name === 'websearch' || name === 'webfetch') return true;
-	return isMcpTool(m.toolName, mcpServerNames);
-}
-
-function formatMessage(
-	m: RenderNode,
-	mode: 'last' | 'all',
-	mcpServerNames: string[],
-): string | undefined {
-	if (m.kind === 'user') {
-		const text = m.parts
-			.filter(p => p.type === 'text' && 'text' in p)
-			.map(p => ('text' in p ? (p as { text: string }).text : ''))
-			.join('');
-		return `## User\n${text}`;
-	}
-	if (m.kind === 'assistant' && m.content) {
-		return mode === 'all' ? `## Assistant\n${m.content}` : m.content;
-	}
-	if (m.kind === 'task_card') {
-		const parts: string[] = [];
-		if (m.result) {
-			const result = extractCanonicalTaskResult(m.result).trim();
-			if (!result) return undefined;
-			parts.push(
-				mode === 'all'
-					? `## Agent: ${m.agent ?? 'SubAgent'}\n${result}`
-					: `[${m.agent ?? 'SubAgent'}] ${result}`,
-			);
-		}
-		return parts.length > 0 ? parts.join('\n\n') : undefined;
-	}
-	// Include completed tool output from MCP, WebSearch, WebFetch
-	if (m.kind === 'tool_use' && isCopyableToolResult(m, mcpServerNames)) {
-		const toolName = m.toolName ?? 'Tool';
-		const content = (() => {
-			const state = useChatStore.getState();
-			for (const messageParts of Object.values(state.parts)) {
-				for (const part of messageParts) {
-					if (part.type !== 'tool') continue;
-					const toolPart = part as import('@opencode-ai/sdk/v2/client').ToolPart;
-					if (toolPart.callID !== m.toolUseId) continue;
-					if ('output' in toolPart.state) return toolPart.state.output ?? '';
-					return '';
-				}
-			}
-			return '';
-		})();
-		if (!content.trim()) return undefined;
-		const prefix = mode === 'all' ? `## ${toolName}\n` : '';
-		return `${prefix}${content}`;
-	}
-	return undefined;
-}
-
-function formatMessages(
-	msgs: RenderNode[],
-	mode: 'last' | 'all',
-	mcpServerNames: string[],
-): string {
-	const parts: string[] = [];
-	for (const m of msgs) {
-		const text = formatMessage(m, mode, mcpServerNames);
-		if (text) parts.push(text);
-	}
-	return parts.join('\n\n');
-}
-
-function getActiveSessionDiffFiles(): SessionDiffEntry[] {
-	const state = useChatStore.getState();
-	const sid = state.activeSessionId;
-	if (!sid) return [];
-	return mapSessionDiffEntries(state.sessionDiff[sid]);
-}
-
-function formatSessionDiffSummary(files: SessionDiffEntry[]): string {
-	return files
-		.map(file => {
-			const status = file.status ? ` ${file.status}` : '';
-			return `${file.filePath} +${file.linesAdded} -${file.linesRemoved}${status}`;
-		})
-		.join('\n');
-}
-
-const CopyDropdown = React.memo<{
-	items: CopyMenuItem[];
-	onClose: () => void;
-}>(({ items, onClose }) => (
-	<DropdownMenu
-		items={items.map((item, idx) => ({
-			id: `copy-${idx}`,
-			label: item.label,
-			data: item,
-		}))}
-		onSelect={(item: CopyMenuItem) => {
-			item.action();
-			onClose();
-		}}
-		onClose={onClose}
-		position="top"
-		align="right"
-		minWidth={180}
-		maxWidth={220}
-		keyHints={{}}
-	/>
-));
-CopyDropdown.displayName = 'CopyDropdown';
-
-function useCopyMenuItems(): CopyMenuItem[] {
-	const mcpServers = useMcpServers();
-	const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
-
-	const handleCopyLastResponse = useCallback(() => {
-		const msgs = getActiveMessages();
-		if (!msgs) return;
-		const lastUserIdx = findLastUserIndex(msgs);
-		const slice = msgs.slice(Math.max(0, lastUserIdx));
-		const text = formatMessages(slice, 'last', mcpServerNames);
-		if (text) void copyTextToClipboard(text);
-	}, [mcpServerNames]);
-
-	const handleCopyAllMessages = useCallback(() => {
-		const msgs = getActiveMessages();
-		if (!msgs) return;
-		const text = formatMessages(msgs, 'all', mcpServerNames);
-		if (text) void copyTextToClipboard(text);
-	}, [mcpServerNames]);
-
-	const handleCopySessionDiffSummary = useCallback(() => {
-		const text = formatSessionDiffSummary(getActiveSessionDiffFiles());
-		if (text) void copyTextToClipboard(text);
-	}, []);
-
-	return useMemo<CopyMenuItem[]>(
-		() => [
-			{ label: 'Copy Last Response', action: handleCopyLastResponse },
-			{ label: 'Copy All Messages', action: handleCopyAllMessages },
-			{ label: 'Copy Changed Files', action: handleCopySessionDiffSummary },
-		],
-		[handleCopyLastResponse, handleCopyAllMessages, handleCopySessionDiffSummary],
-	);
-}
-
-const CopyActionsButton: React.FC<{ className?: string }> = React.memo(({ className }) => {
-	const [showCopyDropdown, setShowCopyDropdown] = useState(false);
-	const copyMenuItems = useCopyMenuItems();
-
-	return (
-		<div className={cn('relative', className)}>
-			{showCopyDropdown && (
-				<CopyDropdown items={copyMenuItems} onClose={() => setShowCopyDropdown(false)} />
-			)}
-			<IconButton
-				icon={<CopyIcon size={12} />}
-				onClick={e => {
-					e.stopPropagation();
-					setShowCopyDropdown(prev => !prev);
-				}}
-				title="Copy options"
-				size={20}
-			/>
-		</div>
-	);
-});
-CopyActionsButton.displayName = 'CopyActionsButton';
 
 /** Status icon for todo items */
 const TodoStatusIcon: React.FC<{ status: string }> = ({ status }) => {
@@ -392,9 +182,6 @@ const StandaloneTodoPanel: React.FC = React.memo(() => (
 				<div className="pointer-events-auto">
 					<TodoSection />
 				</div>
-			</div>
-			<div className="absolute right-(--tool-header-padding) top-1/2 -translate-y-1/2 flex items-center">
-				<CopyActionsButton />
 			</div>
 		</div>
 	</div>
@@ -580,8 +367,6 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 
 					{/* Right section - action buttons */}
 					<div className="flex items-center gap-1 ml-2 shrink-0">
-						<CopyActionsButton />
-
 						<Tooltip content="Keep all changes" position="top" delay={200}>
 							<button
 								type="button"

@@ -14,6 +14,7 @@ import { NotificationOverlay } from './components/chat/NotificationOverlay.tsx';
 import { QueuedMessageBanner } from './components/chat/QueuedMessageBanner';
 import { SessionStatisticsPanel } from './components/chat/SessionStatisticsPanel';
 import { getGroupedItemShouldCollapse } from './components/chat/SimpleTool';
+import { SectionCopyButton } from './components/header/CopyActions';
 import { Header } from './components/header/Header';
 import { ChevronDownIcon } from './components/icons';
 import { ChatInput } from './components/input/ChatInput.tsx';
@@ -123,6 +124,11 @@ const MessageSectionComponent = React.memo<MessageSectionProps>(
 						);
 					})}
 					{isLastSection && <GenerationStatus />}
+					{!section.isReverted && section.responses.length > 0 && (
+						<div className="flex items-center justify-end mt-0.5 pr-2">
+							<SectionCopyButton responses={section.responses} userMessage={section.userMessage} />
+						</div>
+					)}
 				</div>
 			</section>
 		);

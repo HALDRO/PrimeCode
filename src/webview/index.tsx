@@ -1,6 +1,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import './global.css';
 
 const isDev = process.env.NODE_ENV === 'development';
@@ -16,10 +17,14 @@ function renderApp() {
 	root.render(
 		isDev ? (
 			<React.StrictMode>
-				<App />
+				<ErrorBoundary>
+					<App />
+				</ErrorBoundary>
 			</React.StrictMode>
 		) : (
-			<App />
+			<ErrorBoundary>
+				<App />
+			</ErrorBoundary>
 		),
 	);
 }
