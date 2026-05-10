@@ -213,6 +213,7 @@ export interface RenderTaskCardNode {
 	parentMessageId?: string;
 	timestamp: string;
 	status: 'pending' | 'running' | 'completed' | 'error' | 'cancelled';
+	isBackgroundLaunch?: boolean;
 	agent?: string;
 	description?: string;
 	prompt?: string;
@@ -228,7 +229,6 @@ export interface RenderTaskCardNode {
 		modelId?: string;
 		durationMs?: number;
 		tokens?: TokenUsage;
-		diffStats: { added: number; removed: number };
 		childCount: number;
 	};
 }

@@ -30,7 +30,6 @@ const RECONCILE_DEBOUNCE_MS = 1000;
 
 const queue: QueuedEvent[] = [];
 const coalesced = new Map<string, number>();
-const staleDeltas = new Set<string>();
 let flushTimer: number | null = null;
 
 let rootAbort: AbortController | null = null;
@@ -48,16 +47,10 @@ function normalizeDriveLetter(dir: string): string {
 	return dir.length >= 2 && dir[1] === ':' ? dir[0].toUpperCase() + dir.slice(1) : dir;
 }
 
-function deltaKey(messageID: string, partID: string): string {
-	return `${messageID}:${partID}`;
-}
-
 function coalescingKey(event: WebviewSdkEvent): string | null {
 	switch (event.type) {
 		case 'session.status':
 			return `session.status:${event.properties.sessionID}`;
-		case 'message.part.updated':
-			return `message.part.updated:${event.properties.part.messageID}:${event.properties.part.id}`;
 		default:
 			return null;
 	}
@@ -70,21 +63,11 @@ function flushQueuedEvents(): void {
 
 	const events = queue.slice();
 	queue.length = 0;
-	const skip = staleDeltas.size > 0 ? new Set(staleDeltas) : null;
 	coalesced.clear();
-	staleDeltas.clear();
-
-	const filtered =
-		skip === null
-			? events
-			: events.filter(event => {
-					if (event.type !== 'message.part.delta') return true;
-					return !skip.has(deltaKey(event.properties.messageID, event.properties.partID));
-				});
 
 	try {
-		if (filtered.length > 0) {
-			useChatStore.getState().actions.applyBatch(filtered);
+		if (events.length > 0) {
+			useChatStore.getState().actions.applyBatch(events);
 		}
 	} catch (error) {
 		log.error('Failed to apply event batch', error);
@@ -102,10 +85,6 @@ function enqueue(event: WebviewSdkEvent): void {
 		const existing = coalesced.get(key);
 		if (existing !== undefined) {
 			queue[existing] = event;
-			if (event.type === 'message.part.updated') {
-				const part = event.properties.part;
-				staleDeltas.add(deltaKey(part.messageID, part.id));
-			}
 			return;
 		}
 		coalesced.set(key, queue.length);
@@ -303,7 +282,6 @@ export const eventRuntime = {
 		}
 		queue.length = 0;
 		coalesced.clear();
-		staleDeltas.clear();
 		currentKey = null;
 	},
 

@@ -72,7 +72,6 @@ const taskCardMsg = (id: string, description = 'nested task'): RenderNode =>
 		childSummary: {
 			description,
 			childCount: 0,
-			diffStats: { added: 0, removed: 0 },
 		},
 	}) as unknown as RenderNode;
 

@@ -194,18 +194,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	}
 
 	private async reloadOpenCodeRuntime(source: string): Promise<void> {
-		const sdkClient = this.cli.getSdkClient();
-		if (!sdkClient) {
-			this.clearOpenCodeRuntimeCaches();
-			return;
-		}
-
-		try {
-			await sdkClient.instance.dispose();
-			this.clearOpenCodeRuntimeCaches();
-		} catch (error) {
-			logger.error('[ChatProvider] Failed to reload OpenCode runtime:', { source, error });
-		}
+		logger.debug('[ChatProvider] Invalidating OpenCode runtime caches', { source });
+		this.clearOpenCodeRuntimeCaches();
 	}
 
 	private clearOpenCodeRuntimeCaches(): void {

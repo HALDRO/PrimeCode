@@ -1,3 +1,11 @@
+/**
+ * @file Inline attachment parsing and formatting helpers.
+ * @description Detects @[path] and @[path]#Lx-Ly references inside free-form prompt text,
+ * normalizes them into structured attachment payloads, and restores references when prompts
+ * are reconstructed. Includes lightweight validation so pasted code or regex literals that
+ * merely contain attachment-like syntax do not get promoted into real file attachments.
+ */
+
 export interface InlineSnippetAttachment {
 	filePath: string;
 	startLine: number;
@@ -19,6 +27,22 @@ export interface InlineAttachmentMatch {
 
 const INLINE_ATTACHMENT_RE = /@\[(.+?)\](?:#L(\d+)(?:-L?(\d+))?)?/g;
 const WINDOWS_ROOT_RE = /^[A-Za-z]:[\\/]?$/;
+
+const SIMPLE_ATTACHMENT_NAME_RE = /^[A-Za-z0-9 _.-]+$/;
+
+export function isLikelyInlineAttachmentPath(rawPath: string): boolean {
+	const value = rawPath.trim();
+	if (!value || /[\r\n\t`]/.test(value)) return false;
+	if (!/[A-Za-z0-9]/.test(value)) return false;
+	if (value.includes('${') || value.includes('=>')) return false;
+	if (/[<>|]/.test(value)) return false;
+
+	const hasPathMarkers =
+		WINDOWS_ROOT_RE.test(value) || value.startsWith('~') || /[./\\:]/.test(value);
+	if (!hasPathMarkers && !SIMPLE_ATTACHMENT_NAME_RE.test(value)) return false;
+
+	return true;
+}
 
 function normalizeAttachmentPath(rawPath: string): {
 	path: string;
@@ -43,7 +67,7 @@ export function extractInlineAttachmentMatches(text: string): InlineAttachmentMa
 		const raw = match[0];
 		const index = match.index ?? -1;
 		const rawPath = match[1]?.trim();
-		if (index < 0 || !rawPath) continue;
+		if (index < 0 || !rawPath || !isLikelyInlineAttachmentPath(rawPath)) continue;
 
 		const { path, displayPath, isDirectory } = normalizeAttachmentPath(rawPath);
 		const startLine = match[2] ? Number(match[2]) : undefined;

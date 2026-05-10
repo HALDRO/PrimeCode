@@ -927,6 +927,83 @@ describe('deriveSessionView', () => {
 			expect(view.nodesById[id]).toBeDefined();
 		}
 	});
+
+	it('keeps background task cards running until the child session becomes idle', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const asst = makeAssistantMessage('a1', 'ses1', 'u1', { completed: true });
+		const taskPart: Part = {
+			id: 'p-background-task',
+			messageID: 'a1',
+			sessionID: 'ses1',
+			type: 'tool',
+			tool: 'task',
+			callID: 'task-call-bg',
+			state: {
+				status: 'completed',
+				input: { description: 'launch child', run_in_background: true },
+				output:
+					'Background task launched.\n\nBackground Task ID: bg_123\nDescription: Launch child\nStatus: pending',
+			},
+			metadata: { sessionId: 'child-bg' },
+		} as unknown as Part;
+		const store = makeMinimalStore({
+			messages: { ses1: [user, asst] },
+			parts: { a1: [taskPart] },
+			sessionStatus: { 'child-bg': { type: 'busy' } },
+		});
+
+		const runningView = deriveSessionView(store, 'ses1');
+		const runningNode = runningView.nodesById[runningView.nodeIds[1]];
+		expect(runningNode.kind).toBe('task_card');
+		if (runningNode.kind === 'task_card') {
+			expect(runningNode.status).toBe('running');
+			expect(runningNode.isBackgroundLaunch).toBe(true);
+		}
+
+		const idleStore = makeMinimalStore({
+			...store,
+			sessionStatus: { 'child-bg': { type: 'idle' } },
+		});
+		const idleView = deriveSessionView(idleStore, 'ses1');
+		const idleNode = idleView.nodesById[idleView.nodeIds[1]];
+		expect(idleNode.kind).toBe('task_card');
+		if (idleNode.kind === 'task_card') {
+			expect(idleNode.status).toBe('completed');
+		}
+	});
+
+	it('does not mark restored background task cards as running without explicit child busy status', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const asst = makeAssistantMessage('a1', 'ses1', 'u1', { completed: true });
+		const taskPart: Part = {
+			id: 'p-restored-background-task',
+			messageID: 'a1',
+			sessionID: 'ses1',
+			type: 'tool',
+			tool: 'task',
+			callID: 'task-call-restored-bg',
+			state: {
+				status: 'completed',
+				input: { description: 'restore child', run_in_background: true },
+				output:
+					'Background task launched.\n\nBackground Task ID: bg_456\nDescription: Restore child\nStatus: pending',
+			},
+			metadata: { sessionId: 'child-restored-bg' },
+		} as unknown as Part;
+		const store = makeMinimalStore({
+			messages: { ses1: [user, asst] },
+			parts: { a1: [taskPart] },
+			sessions: [{ id: 'child-restored-bg', parentID: 'ses1' } as never],
+		});
+
+		const view = deriveSessionView(store, 'ses1');
+		const node = view.nodesById[view.nodeIds[1]];
+		expect(node.kind).toBe('task_card');
+		if (node.kind === 'task_card') {
+			expect(node.status).toBe('completed');
+			expect(node.isBackgroundLaunch).toBe(true);
+		}
+	});
 });
 
 // ---------------------------------------------------------------------------

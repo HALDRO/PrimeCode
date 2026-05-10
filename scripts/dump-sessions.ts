@@ -30,19 +30,53 @@ type OpenCodeProject = {
 	worktree?: string;
 };
 
-type OpenCodeMessageContentPart = {
-	type?: string;
-	text?: string;
-};
+type OpenCodeMessage = Record<string, unknown>;
 
-type OpenCodeMessage = {
-	role?: string;
-	content?: string | OpenCodeMessageContentPart[];
-};
-
-type ChildSession = {
+type ChildSession = Record<string, unknown> & {
 	id: string;
 	title?: string;
+	parentID?: string;
+};
+
+type SnapshotFileDiff = {
+	file?: string;
+	patch?: string;
+	additions?: number;
+	deletions?: number;
+	status?: string;
+};
+
+type SessionTodo = Record<string, unknown>;
+
+type SessionStatusMap = Record<string, unknown>;
+
+type PathInfo = Record<string, unknown>;
+
+type VcsInfo = Record<string, unknown>;
+
+type PermissionRequest = Record<string, unknown>;
+
+type QuestionRequest = Record<string, unknown>;
+
+type DumpedSessionNode = {
+	session: Record<string, unknown>;
+	messages: OpenCodeMessage[];
+	todo: SessionTodo[];
+	diff: SnapshotFileDiff[];
+	messageDiffs: Array<{
+		messageID: string;
+		role?: string;
+		parentID?: string;
+		diffs: SnapshotFileDiff[];
+	}>;
+	children: DumpedSessionNode[];
+	_meta: {
+		messageCount: number;
+		childCount: number;
+		todoCount: number;
+		diffCount: number;
+		messageDiffCount: number;
+	};
 };
 
 function toComparableTime(session: OpenCodeSession): number {
@@ -241,6 +275,107 @@ async function api<T>(base: string, ep: string, directory?: string): Promise<T> 
 	return res.json() as Promise<T>;
 }
 
+function extractMessageDiffs(messages: OpenCodeMessage[]) {
+	const result: DumpedSessionNode['messageDiffs'] = [];
+	for (const rawMessage of messages) {
+		const info =
+			rawMessage && typeof rawMessage === 'object' && 'info' in rawMessage
+				? ((rawMessage as { info?: Record<string, unknown> }).info ?? {})
+				: {};
+		const summary =
+			info && typeof info === 'object' && 'summary' in info
+				? ((info as { summary?: Record<string, unknown> }).summary ?? {})
+				: {};
+		const diffs = Array.isArray(summary.diffs) ? (summary.diffs as SnapshotFileDiff[]) : [];
+		if (diffs.length === 0) continue;
+		result.push({
+			messageID: typeof info.id === 'string' ? info.id : '(unknown)',
+			role: typeof info.role === 'string' ? info.role : undefined,
+			parentID: typeof info.parentID === 'string' ? info.parentID : undefined,
+			diffs,
+		});
+	}
+	return result;
+}
+
+function extractUserPreviewText(message: OpenCodeMessage): string {
+	const info =
+		message && typeof message === 'object' && 'info' in message
+			? ((message as { info?: Record<string, unknown> }).info ?? {})
+			: {};
+	if (info.role !== 'user') return '';
+	const parts =
+		message && typeof message === 'object' && 'parts' in message
+			? ((message as { parts?: unknown[] }).parts ?? [])
+			: [];
+	if (!Array.isArray(parts)) return '';
+	return parts
+		.filter(
+			(part): part is { type?: string; text?: string } =>
+				Boolean(part) && typeof part === 'object' && 'type' in part,
+		)
+		.filter(part => part.type === 'text' && typeof part.text === 'string')
+		.map(part => part.text?.trim() ?? '')
+		.filter(Boolean)
+		.join(' ');
+}
+
+async function safeApi<T>(base: string, ep: string, directory?: string, fallback?: T): Promise<T> {
+	try {
+		return await api<T>(base, ep, directory);
+	} catch {
+		if (fallback !== undefined) return fallback;
+		throw new Error(`Failed to fetch ${ep}`);
+	}
+}
+
+async function dumpSessionNode(
+	base: string,
+	session: Record<string, unknown>,
+	directory?: string,
+): Promise<DumpedSessionNode> {
+	const sessionId = typeof session.id === 'string' ? session.id : undefined;
+	if (!sessionId) {
+		throw new Error('Session node is missing id');
+	}
+
+	const [messages, todo, diff, children] = await Promise.all([
+		safeApi<OpenCodeMessage[]>(base, `/session/${sessionId}/message`, directory, []),
+		safeApi<SessionTodo[]>(base, `/session/${sessionId}/todo`, directory, []),
+		safeApi<SnapshotFileDiff[]>(base, `/session/${sessionId}/diff`, directory, []),
+		safeApi<ChildSession[]>(base, `/session/${sessionId}/children`, directory, []),
+	]);
+
+	const messageDiffs = extractMessageDiffs(messages);
+	const childNodes: DumpedSessionNode[] = [];
+	for (const child of children) {
+		const childSession = await safeApi<Record<string, unknown>>(
+			base,
+			`/session/${child.id}`,
+			directory,
+			child,
+		);
+		const childNode = await dumpSessionNode(base, childSession, directory);
+		childNodes.push(childNode);
+	}
+
+	return {
+		session,
+		messages,
+		todo,
+		diff,
+		messageDiffs,
+		children: childNodes,
+		_meta: {
+			messageCount: messages.length,
+			childCount: childNodes.length,
+			todoCount: todo.length,
+			diffCount: diff.length,
+			messageDiffCount: messageDiffs.length,
+		},
+	};
+}
+
 async function getSessionsAcrossWorkspaces(base: string, perWorkspaceLimit: number): Promise<OpenCodeSession[]> {
 	const projects = await api<OpenCodeProject[]>(base, '/project');
 	const directories = new Set<string>(getDirectoryVariants(WORKSPACE));
@@ -287,33 +422,48 @@ async function getSessionsAcrossWorkspaces(base: string, perWorkspaceLimit: numb
 
 async function dumpSession(base: string, id: string, directory?: string) {
 	console.log(`\nDumping ${id}...`);
-	const [session, messages, children] = await Promise.all([
+	const [session, statusMap, pathInfo, vcsInfo, permissions, questions] = await Promise.all([
 		api<Record<string, unknown>>(base, `/session/${id}`, directory),
-		api<OpenCodeMessage[]>(base, `/session/${id}/message`, directory),
-		api<ChildSession[]>(base, `/session/${id}/children`, directory),
+		safeApi<SessionStatusMap>(base, '/session/status', directory, {}),
+		safeApi<PathInfo>(base, '/path', directory, {}),
+		safeApi<VcsInfo>(base, '/vcs', directory, {}),
+		safeApi<PermissionRequest[]>(base, '/permission', directory, []),
+		safeApi<QuestionRequest[]>(base, '/question', directory, []),
 	]);
+	const rootNode = await dumpSessionNode(base, session, directory);
 	console.log(
-		`  ${messages.length} msgs, ${children.length} children — ${session.title ?? '(no title)'}`,
+		`  ${rootNode._meta.messageCount} msgs, ${rootNode._meta.childCount} children — ${session.title ?? '(no title)'}`,
 	);
-
-	const childData: Array<{ session: ChildSession; messages: OpenCodeMessage[] }> = [];
-	for (const c of children) {
-		const msgs = await api<OpenCodeMessage[]>(base, `/session/${c.id}/message`, directory);
-		console.log(`  child ${c.id}: ${msgs.length} msgs — ${c.title}`);
-		childData.push({ session: c, messages: msgs });
+	for (const child of rootNode.children) {
+		const childSessionId = typeof child.session.id === 'string' ? child.session.id : '(unknown)';
+		const childTitle = typeof child.session.title === 'string' ? child.session.title : '(no title)';
+		console.log(`  child ${childSessionId}: ${child._meta.messageCount} msgs — ${childTitle}`);
 	}
 
 	const dump = {
+		root: rootNode,
 		session,
-		messages,
-		children: childData,
+		status: {
+			current: typeof session.id === 'string' ? statusMap[session.id] : undefined,
+			all: statusMap,
+		},
+		instance: {
+			path: pathInfo,
+			vcs: vcsInfo,
+		},
+		pending: {
+			permissions,
+			questions,
+		},
+		children: rootNode.children,
 		_meta: {
 			dumpedAt: new Date().toISOString(),
 			serverUrl: base,
 			sessionId: id,
 			directory: directory ?? '(none)',
-			childCount: children.length,
-			totalMessages: messages.length,
+			childCount: rootNode._meta.childCount,
+			totalMessages: rootNode._meta.messageCount,
+			formatVersion: 2,
 		},
 	};
 
@@ -357,24 +507,14 @@ async function main() {
 				if (title && !title.startsWith('New session')) return title;
 				try {
 					const msgs = await api<OpenCodeMessage[]>(
-						base,
-						`/session/${s.id}/message`,
-						s.directory ?? WORKSPACE,
-					);
-					const first = msgs.find(m => m.role === 'user');
-					if (first?.content) {
-						const text =
-							typeof first.content === 'string'
-								? first.content
-								: Array.isArray(first.content)
-									? first.content
-											.filter(p => p.type === 'text')
-											.map(p => p.text)
-											.join(' ')
-									: '';
-						if (text)
-							return text.replace(/\s+/g, ' ').slice(0, 80) + (text.length > 80 ? '...' : '');
-					}
+					base,
+					`/session/${s.id}/message`,
+					s.directory ?? WORKSPACE,
+				);
+					const first = msgs.find(message => extractUserPreviewText(message));
+					const text = first ? extractUserPreviewText(first) : '';
+					if (text)
+						return text.replace(/\s+/g, ' ').slice(0, 80) + (text.length > 80 ? '...' : '');
 				} catch {}
 				return title || '(no title)';
 			}),

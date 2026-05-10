@@ -136,6 +136,18 @@ describe('buildPromptParts', () => {
 		});
 	});
 
+	it('skips malformed attachment paths instead of producing invalid file urls', () => {
+		const parts = buildPromptParts({
+			text: 'keep the message body',
+			attachments: {
+				files: ['^)'],
+				codeSnippets: [{ filePath: '^)', startLine: 1, endLine: 1, content: '' }],
+			},
+		});
+
+		expect(parts).toEqual([{ type: 'text', text: 'keep the message body' }]);
+	});
+
 	it('preserves large plain text without truncation', () => {
 		const text = 'large prompt '.repeat(20_000);
 		const parts = buildPromptParts({ text });

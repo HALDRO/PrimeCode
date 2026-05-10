@@ -546,8 +546,8 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 					}
 				: undefined);
 		const toolResult = syntheticToolResult;
-		const accessRequest = useAccessRequestByToolUseId(toolUseId);
-		const pendingQuestionFromStore = useQuestionRequestByToolUseId(toolUseId);
+		const accessRequest = useAccessRequestByToolUseId(toolUseId, sessionId);
+		const pendingQuestionFromStore = useQuestionRequestByToolUseId(toolUseId, sessionId);
 		const normalizedEntry = toolUse.normalizedEntry;
 
 		const isError = toolResult?.isError ?? false;

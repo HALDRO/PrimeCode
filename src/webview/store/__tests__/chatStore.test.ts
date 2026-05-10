@@ -1,4 +1,4 @@
-import type { Message, Part } from '@opencode-ai/sdk/v2/client';
+import type { Message, Part, SnapshotFileDiff } from '@opencode-ai/sdk/v2/client';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { isSessionProcessing, useChatStore } from '../chatStore';
 import { deriveSessionView } from '../derived';
@@ -1012,6 +1012,105 @@ describe('chatStore derived view streaming', () => {
 			expect(taskCard.childSummary.tokens?.total).toBe(9);
 			expect(taskCard.childSummary.durationMs).toBeGreaterThan(0);
 		}
+	});
+
+	it('keeps child task cards defined without file diff counters', () => {
+		const rootUser: Message = {
+			id: 'root-readonly-u1',
+			sessionID: SESSION_ID,
+			role: 'user',
+			time: { created: Date.now() },
+		} as Message;
+		const rootAsst: Message = {
+			id: 'root-readonly-a1',
+			sessionID: SESSION_ID,
+			role: 'assistant',
+			parentID: 'root-readonly-u1',
+			agent: 'build',
+			tokens: { input: 0, output: 0, reasoning: 0, total: 0, cache: { read: 0, write: 0 } },
+			cost: 0,
+			time: { created: Date.now(), completed: Date.now() + 1 },
+		} as unknown as Message;
+		const taskPart: Part = {
+			id: 'root-readonly-task',
+			messageID: 'root-readonly-a1',
+			sessionID: SESSION_ID,
+			type: 'tool',
+			tool: 'task',
+			callID: 'root-readonly-task-call',
+			state: { status: 'completed', input: { description: 'review' }, output: 'done' },
+			metadata: { sessionId: 'child-readonly-1' },
+		} as unknown as Part;
+		const childSession = {
+			id: 'child-readonly-1',
+			parentID: SESSION_ID,
+		} as never;
+		const childUser: Message = {
+			id: 'child-readonly-u1',
+			sessionID: 'child-readonly-1',
+			role: 'user',
+			time: { created: Date.now() },
+		} as Message;
+		const childAsst: Message = {
+			id: 'child-readonly-a1',
+			sessionID: 'child-readonly-1',
+			role: 'assistant',
+			parentID: 'child-readonly-u1',
+			agent: 'oracle',
+			tokens: { input: 0, output: 0, reasoning: 0, total: 0, cache: { read: 0, write: 0 } },
+			cost: 0,
+			time: { created: Date.now(), completed: Date.now() + 1 },
+		} as unknown as Message;
+		const readPart: Part = {
+			id: 'child-readonly-read',
+			messageID: 'child-readonly-a1',
+			sessionID: 'child-readonly-1',
+			type: 'tool',
+			tool: 'read',
+			callID: 'child-readonly-read-call',
+			state: { status: 'completed', input: { filePath: 'src/file.ts' }, output: 'content' },
+		} as unknown as Part;
+
+		useChatStore.getState().actions.replaySessionSnapshots([
+			{
+				session: { id: SESSION_ID } as never,
+				messageEntries: [
+					{ info: rootUser, parts: [] },
+					{ info: rootAsst, parts: [taskPart] },
+				],
+				todos: [],
+				diff: [],
+				activate: true,
+			},
+			{
+				session: childSession,
+				messageEntries: [
+					{ info: childUser, parts: [] },
+					{ info: childAsst, parts: [readPart] },
+				],
+				todos: [],
+				diff: [
+					{
+						file: 'src/file.ts',
+						patch: '',
+						additions: 2,
+						deletions: 43,
+						status: 'modified',
+					} satisfies SnapshotFileDiff,
+				],
+				activate: false,
+			},
+		]);
+
+		const parentView = deriveSessionView(useChatStore.getState(), SESSION_ID);
+		const childSummary = parentView.nodeIds
+			.map(id => parentView.nodesById[id])
+			.find((node): node is Extract<typeof node, { kind: 'task_card' }> =>
+				Boolean(node && node.kind === 'task_card'),
+			)?.childSummary;
+
+		expect(childSummary).toBeDefined();
+		expect(childSummary?.childCount).toBe(0);
 	});
 
 	it('removes restored child sessions from corrupted persisted tab state without dropping hydration data', () => {

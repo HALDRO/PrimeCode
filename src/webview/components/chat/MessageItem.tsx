@@ -103,10 +103,6 @@ function stripSubagentSuffix(title: string | undefined): string {
 	return title.replace(/\s*\(@[^)]*subagent\)\s*$/i, '').trim();
 }
 
-function formatDiffCount(value: number): string {
-	return `${value > 0 ? '+' : ''}${formatNumber(value)}`;
-}
-
 function summarizePreviewTools(items: Array<RenderNode | RenderNode[]>): Array<{
 	label: string;
 	count: number;
@@ -248,12 +244,10 @@ const TaskCardItem = React.memo<{
 	const { title, modelId: childModelId } = message.childSummary;
 	const childSessionId = message.childSessionId;
 	const liveChildSummary = useChildSessionSummary(childSessionId);
-	const effectiveStatus: RenderTaskCardNode['status'] =
-		status === 'running' && liveChildSummary.isIdle ? 'completed' : status;
+	const effectiveStatus = status;
 	const durationMs = liveChildSummary.durationMs ?? message.childSummary.durationMs;
 	const childTokens = liveChildSummary.tokens ?? message.childSummary.tokens;
 	const childCount = childSessionId ? liveChildSummary.childCount : message.childSummary.childCount;
-	const diffStats = childSessionId ? liveChildSummary.diffStats : message.childSummary.diffStats;
 
 	// Subscribe to child session messages independently via store hook.
 	// Each TaskCardItem re-renders only when its own child session changes.
@@ -381,20 +375,6 @@ const TaskCardItem = React.memo<{
 			}
 			headerRight={
 				<span className="flex items-center gap-3 text-sm text-vscode-descriptionForeground group-hover/subtask:opacity-100">
-					{(diffStats.added > 0 || diffStats.removed > 0) && (
-						<>
-							{diffStats.added > 0 && (
-								<span className="text-success whitespace-nowrap text-right min-w-0">
-									{formatDiffCount(diffStats.added)}
-								</span>
-							)}
-							{diffStats.removed > 0 && (
-								<span className="text-error whitespace-nowrap text-left min-w-0">
-									-{formatNumber(diffStats.removed)}
-								</span>
-							)}
-						</>
-					)}
 					{childTokens && (
 						<span
 							className="flex items-center gap-1"

@@ -28,11 +28,25 @@ function createProvider(promptAsyncImpl?: PromptAsyncMock, summarizeImpl?: Summa
 	const abort = vi.fn(async () => {
 		return {};
 	});
+	const dispose = vi.fn(async () => {
+		return {};
+	});
+	const clearAgentsCache = vi.fn();
+	const clearCommandsCache = vi.fn();
+	const clearSkillsCache = vi.fn();
+	const clearMcpCache = vi.fn();
 
 	const provider: any = Object.assign(Object.create(ChatProvider.prototype), {
 		bridge,
 		cli: {
-			getSdkClient: vi.fn(() => ({ session: { promptAsync, summarize, abort } })),
+			getSdkClient: vi.fn(() => ({
+				instance: { dispose },
+				session: { promptAsync, summarize, abort },
+			})),
+			clearAgentsCache,
+			clearCommandsCache,
+			clearSkillsCache,
+			clearMcpCache,
 			getAdminInfo: vi.fn(() => ({
 				baseUrl: 'http://127.0.0.1:4096',
 				directory: 'C:\\repo',
@@ -47,7 +61,18 @@ function createProvider(promptAsyncImpl?: PromptAsyncMock, summarizeImpl?: Summa
 		queueIdCounter: 0,
 	});
 
-	return { provider, postedMessages, promptAsync, summarize, abort };
+	return {
+		provider,
+		postedMessages,
+		promptAsync,
+		summarize,
+		abort,
+		dispose,
+		clearAgentsCache,
+		clearCommandsCache,
+		clearSkillsCache,
+		clearMcpCache,
+	};
 }
 
 describe('ChatProvider queue pipeline', () => {
@@ -235,5 +260,54 @@ describe('ChatProvider queue pipeline', () => {
 		expect(reloadOpenCodeRuntime).toHaveBeenCalledWith('manual-header');
 		expect(provider.sendServerInfo).toHaveBeenCalledWith(true);
 		expect(provider.syncAllOrDefer).toHaveBeenCalledWith('manual-server-restart');
+	});
+
+	it('reloadOpenCodeRuntime only invalidates caches while backend sessions are busy', async () => {
+		const { provider, dispose, clearAgentsCache } = createProvider();
+		provider.backendBusySessions.add('ses-1');
+
+		await provider.reloadOpenCodeRuntime('opencode-config:manual');
+
+		expect(dispose).not.toHaveBeenCalled();
+		expect(clearAgentsCache).toHaveBeenCalledTimes(1);
+	});
+
+	it('reloadOpenCodeRuntime only invalidates caches while prompt sends are in flight', async () => {
+		const { provider, dispose, clearAgentsCache } = createProvider();
+		provider.sendingLock.add('ses-1');
+
+		await provider.reloadOpenCodeRuntime('opencode-config:manual');
+
+		expect(dispose).not.toHaveBeenCalled();
+		expect(clearAgentsCache).toHaveBeenCalledTimes(1);
+	});
+
+	it('reloadOpenCodeRuntime only invalidates caches while backend busy status is pending', async () => {
+		const { provider, dispose, clearAgentsCache } = createProvider();
+		provider.awaitingBackendBusy.add('ses-1');
+
+		await provider.reloadOpenCodeRuntime('opencode-config:manual');
+
+		expect(dispose).not.toHaveBeenCalled();
+		expect(clearAgentsCache).toHaveBeenCalledTimes(1);
+	});
+
+	it('reloadOpenCodeRuntime only invalidates caches when no sessions are active', async () => {
+		const { provider, dispose, clearAgentsCache } = createProvider();
+
+		await provider.reloadOpenCodeRuntime('opencode-config:manual');
+
+		expect(dispose).not.toHaveBeenCalled();
+		expect(clearAgentsCache).toHaveBeenCalledTimes(1);
+	});
+
+	it('clears runtime caches when SDK client is unavailable', async () => {
+		const { provider, dispose, clearAgentsCache } = createProvider();
+		provider.cli.getSdkClient.mockReturnValue(null);
+
+		await provider.reloadOpenCodeRuntime('opencode-config:manual');
+
+		expect(dispose).not.toHaveBeenCalled();
+		expect(clearAgentsCache).toHaveBeenCalledTimes(1);
 	});
 });

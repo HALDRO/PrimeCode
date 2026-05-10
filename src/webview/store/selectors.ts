@@ -78,7 +78,6 @@ const EMPTY_QUEUED_MESSAGES: Array<{
 	createdAt: number;
 }> = [];
 const DEFAULT_CONTEXT_WINDOW = 200000;
-
 function isAssistantMessage(msg: Message): msg is AssistantMessage {
 	return msg.role === 'assistant';
 }
@@ -109,25 +108,6 @@ function summarizeSessionDiff(rawDiffs: SnapshotFileDiff[] | undefined) {
 	}
 
 	return { added, removed, files: rawDiffs.length };
-}
-
-function summarizeSessionTreeDiff(state: SessionStore, sessionId: string | undefined) {
-	if (!sessionId) return EMPTY_SESSION_DIFF_SUMMARY;
-
-	const sessionIds = [sessionId, ...collectDescendantSessionIds(state, sessionId)];
-	let added = 0;
-	let removed = 0;
-	let files = 0;
-
-	for (const currentSessionId of sessionIds) {
-		const summary = summarizeSessionDiff(state.sessionDiff[currentSessionId]);
-		added += summary.added;
-		removed += summary.removed;
-		files += summary.files;
-	}
-
-	if (added === 0 && removed === 0 && files === 0) return EMPTY_SESSION_DIFF_SUMMARY;
-	return { added, removed, files };
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +166,7 @@ function messagesStructurallyEqual(prev: RenderNode[], next: RenderNode[]): bool
 		if (p.kind === 'task_card' && n.kind === 'task_card') {
 			if (
 				p.status !== n.status ||
+				p.isBackgroundLaunch !== n.isBackgroundLaunch ||
 				p.childSessionId !== n.childSessionId ||
 				p.childSummary.title !== n.childSummary.title ||
 				p.childSummary.tokens?.total !== n.childSummary.tokens?.total ||
@@ -201,7 +182,23 @@ function messagesStructurallyEqual(prev: RenderNode[], next: RenderNode[]): bool
 			if (p.content !== n.content || p.taskIdLine !== n.taskIdLine) return false;
 		}
 		if (p.kind === 'tool_use' && n.kind === 'tool_use') {
-			if (p.isRunning !== n.isRunning || p.status !== n.status) return false;
+			if (
+				p.isRunning !== n.isRunning ||
+				p.status !== n.status ||
+				p.title !== n.title ||
+				p.toolName !== n.toolName
+			) {
+				return false;
+			}
+		}
+		if (p.kind === 'thinking' && n.kind === 'thinking') {
+			if (
+				p.content !== n.content ||
+				p.isStreaming !== n.isStreaming ||
+				p.durationMs !== n.durationMs
+			) {
+				return false;
+			}
 		}
 	}
 	return true;
@@ -271,24 +268,16 @@ export const useChildSessionSummary = (childSessionId: string | undefined) => {
 	const childCount = useChatStore((state: SessionStore) =>
 		childSessionId ? countSessionDescendants(state, childSessionId) : 0,
 	);
-	const childDiffStats = useChatStore(
-		useShallow((state: SessionStore) => {
-			const summary = summarizeSessionTreeDiff(state, childSessionId);
-			return { added: summary.added, removed: summary.removed };
-		}),
-	);
-
 	return useMemo(() => {
 		const tokens = computeAssistantUsage(messages);
 		return {
 			title: session?.title,
 			isIdle: status?.type === 'idle',
-			diffStats: childDiffStats,
 			childCount,
 			tokens,
 			durationMs: tokens?.durationMs,
 		};
-	}, [childCount, childDiffStats, messages, session?.title, status?.type]);
+	}, [childCount, messages, session?.title, status?.type]);
 };
 
 export const useIsProcessing = () =>
@@ -562,10 +551,10 @@ export const usePendingQuestions = () =>
 		}),
 	);
 
-export const useQuestionRequestByToolUseId = (toolUseId: string | undefined) =>
+export const useQuestionRequestByToolUseId = (toolUseId: string | undefined, sessionId?: string) =>
 	useChatStore((state: SessionStore) => {
 		if (!toolUseId) return undefined;
-		const sid = state.activeSessionId;
+		const sid = sessionId || state.activeSessionId;
 		if (!sid) return undefined;
 		return state.questions[sid]?.find(q => q.tool?.callID === toolUseId);
 	});
@@ -649,10 +638,10 @@ export const useToolPartByToolUseId = (toolUseId: string | undefined, sessionId?
 	}, [messages, parts, toolUseId]);
 };
 
-export const useAccessRequestByToolUseId = (toolUseId: string | undefined) => {
+export const useAccessRequestByToolUseId = (toolUseId: string | undefined, sessionId?: string) => {
 	const pending = useChatStore((state: SessionStore) => {
 		if (!toolUseId) return undefined;
-		const sid = state.activeSessionId;
+		const sid = sessionId || state.activeSessionId;
 		if (!sid) return undefined;
 		return state.permissions[sid]?.find(r => r.tool?.callID === toolUseId);
 	});

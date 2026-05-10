@@ -401,6 +401,12 @@ function getTaskId(
 	return outputTaskId || undefined;
 }
 
+function isBackgroundTaskLaunch(output: string | undefined): boolean {
+	return Boolean(
+		output?.includes('Background task launched.') && output.includes('Background Task ID:'),
+	);
+}
+
 function buildTaskPartIndex(parts: Record<string, Part[]>): TaskPartIndex {
 	const byCallId = new Map<string, ToolPart>();
 	const byChildSessionId = new Map<string, ToolPart>();
@@ -660,6 +666,8 @@ function materializeTaskCards(
 	state: Pick<
 		SessionStore,
 		| 'messages'
+		| 'parts'
+		| 'sessions'
 		| 'childSessionIdsByParentId'
 		| 'originatingToolCallBySessionId'
 		| 'sessionModel'
@@ -706,6 +714,14 @@ function materializeTaskCards(
 				(metadataModel?.providerID && metadataModel?.modelID
 					? `${metadataModel.providerID}/${metadataModel.modelID}`
 					: undefined);
+			const childStatus = childSessionId ? state.sessionStatus[childSessionId] : undefined;
+			const isBackgroundLaunch = isBackgroundTaskLaunch(taskOutput);
+			const taskStatus =
+				isBackgroundLaunch &&
+				item.status === 'completed' &&
+				(childStatus?.type === 'busy' || childStatus?.type === 'retry')
+					? 'running'
+					: (item.status ?? 'running');
 
 			const node: RenderTaskCardNode = {
 				kind: 'task_card',
@@ -714,7 +730,8 @@ function materializeTaskCards(
 				parentSessionId: sessionId,
 				parentMessageId: item.parentMessageId,
 				timestamp: item.timestamp,
-				status: item.status ?? 'running',
+				status: taskStatus,
+				isBackgroundLaunch,
 				agent: typeof taskInput.subagent_type === 'string' ? taskInput.subagent_type : undefined,
 				description: typeof taskInput.description === 'string' ? taskInput.description : undefined,
 				prompt: typeof taskInput.prompt === 'string' ? taskInput.prompt : undefined,
@@ -729,7 +746,6 @@ function materializeTaskCards(
 					modelId: childModelId,
 					durationMs: childStats.totalDuration || undefined,
 					tokens: childUsage,
-					diffStats: { added: 0, removed: 0 },
 					childCount: childStats.subagentCount,
 				},
 			};

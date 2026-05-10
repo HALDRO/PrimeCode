@@ -351,13 +351,10 @@ async function collectSessionSubtree(
 async function hydrateSession(sessionId: string, activate = true): Promise<void> {
 	const client = getClient();
 	const workspaceRoot = getWorkspaceRoot();
-	const [sessionResult, todoResult, diffResult] = await Promise.all([
+	const [sessionResult, todoResult] = await Promise.all([
 		client.session.get({ sessionID: sessionId, directory: workspaceRoot }),
 		client.session
 			.todo({ sessionID: sessionId, directory: workspaceRoot })
-			.catch(() => ({ data: [] })),
-		client.session
-			.diff({ sessionID: sessionId, directory: workspaceRoot })
 			.catch(() => ({ data: [] })),
 	]);
 
@@ -369,29 +366,38 @@ async function hydrateSession(sessionId: string, activate = true): Promise<void>
 	const subtreeSessions = await collectSessionSubtree(client, workspaceRoot, session);
 	const messagesBySession = await Promise.all(
 		subtreeSessions.map(async currentSession => {
-			const result = await client.session.messages({
-				sessionID: currentSession.id,
-				directory: workspaceRoot,
-			});
+			const [messagesResult, diffResult] = await Promise.all([
+				client.session.messages({
+					sessionID: currentSession.id,
+					directory: workspaceRoot,
+				}),
+				client.session
+					.diff({ sessionID: currentSession.id, directory: workspaceRoot })
+					.catch(() => ({ data: [] })),
+			]);
 			return {
 				session: currentSession,
-				messageEntries: (result.data ?? []) as SessionMessageEntry[],
+				messageEntries: (messagesResult.data ?? []) as SessionMessageEntry[],
+				diff: ((diffResult.data ?? []) as SnapshotFileDiff[]) || [],
 			};
 		}),
 	);
 	const todos = ((todoResult.data ?? []) as Todo[]) || [];
-	const diff = ((diffResult.data ?? []) as SnapshotFileDiff[]) || [];
 	useChatStore.getState().actions.replaySessionSnapshots(
-		messagesBySession.map(({ session: currentSession, messageEntries }) => ({
+		messagesBySession.map(({ session: currentSession, messageEntries, diff }) => ({
 			session: currentSession,
 			messageEntries: messageEntries.map(entry => ({
 				info: entry.info,
 				parts: entry.parts.filter(part => !SKIP_PARTS.has(part.type)),
 			})),
 			todos: currentSession.id === session.id ? todos : [],
-			diff: currentSession.id === session.id ? diff : [],
+			diff,
 			activate: currentSession.id === session.id ? activate : false,
 		})),
+	);
+	await openCodeRuntime.refreshRuntimeState(
+		session.id,
+		subtreeSessions.map(currentSession => currentSession.id),
 	);
 }
 
@@ -498,17 +504,32 @@ export const openCodeRuntime = {
 		}
 	},
 
-	async refreshRuntimeState(sessionId: string): Promise<void> {
+	async refreshRuntimeState(sessionId: string, sessionIds?: string[]): Promise<void> {
 		const client = getPermissionListsClient();
 		const directory = getWorkspaceRoot();
-		const [_statusResult, permissionResult, questionResult] = await Promise.all([
+		const [statusResult, permissionResult, questionResult] = await Promise.all([
 			client.session.status?.({ directory }).catch(() => null),
 			client.permission?.list?.({ sessionID: sessionId, directory }).catch(() => null),
 			client.question?.list?.({ sessionID: sessionId, directory }).catch(() => null),
 		]);
+		const relevantSessionIds = new Set(sessionIds?.filter(Boolean) ?? [sessionId]);
+		const statusMap =
+			statusResult?.data && typeof statusResult.data === 'object'
+				? (statusResult.data as Record<string, SessionStatus | undefined>)
+				: {};
 
 		useChatStore.setState(
 			produce((state: SessionStore) => {
+				for (const targetSessionId of relevantSessionIds) {
+					const status = statusMap[targetSessionId];
+					if (status) {
+						state.sessionStatus[targetSessionId] = status;
+						continue;
+					}
+					if (!(targetSessionId in state.sessionStatus)) {
+						state.sessionStatus[targetSessionId] = { type: 'idle' };
+					}
+				}
 				state.permissions[sessionId] = [...(permissionResult?.data ?? [])];
 				state.questions[sessionId] = [...(questionResult?.data ?? [])];
 			}),

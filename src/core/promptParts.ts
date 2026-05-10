@@ -1,7 +1,15 @@
+/**
+ * @file Prompt request part builders for OpenCode message sends.
+ * @description Converts plain text plus normalized attachments into SDK-ready prompt parts.
+ * Generates stable metadata for optimistic rendering, preserves source references for files and
+ * snippets, and defensively drops malformed attachment paths so pasted code or regex-like text
+ * cannot be misclassified as a real file attachment and crash message sending.
+ */
 import type { Part } from '@opencode-ai/sdk/v2/client';
 import {
 	formatInlineFileReference,
 	formatInlineSnippetReference,
+	isLikelyInlineAttachmentPath,
 } from '../common/inlineAttachments';
 import { getPathBaseName, toFileUri } from '../utils/path';
 
@@ -41,11 +49,27 @@ type PromptFilePart = {
 
 export type PromptRequestPart = PromptTextPart | PromptFilePart;
 
-function lineQuery(filePath: string, startLine?: number, endLine?: number): string {
-	const url = new URL(toFileUri(filePath));
-	if (startLine) url.searchParams.set('start', String(startLine));
-	if (endLine) url.searchParams.set('end', String(endLine));
-	return url.toString();
+function toPromptFileUrl(filePath: string): string | null {
+	if (!isLikelyInlineAttachmentPath(filePath)) return null;
+	try {
+		return toFileUri(filePath);
+	} catch {
+		return null;
+	}
+}
+
+function lineQuery(filePath: string, startLine?: number, endLine?: number): string | null {
+	const baseUrl = toPromptFileUrl(filePath);
+	if (!baseUrl) return null;
+
+	try {
+		const url = new URL(baseUrl);
+		if (startLine) url.searchParams.set('start', String(startLine));
+		if (endLine) url.searchParams.set('end', String(endLine));
+		return url.toString();
+	} catch {
+		return null;
+	}
 }
 
 function sourceForReference(text: string, value: string, path: string): PromptFilePart['source'] {
@@ -135,13 +159,15 @@ export function buildPromptParts(input: {
 
 	for (let index = 0; index < files.length; index++) {
 		const filePath = files[index];
+		const url = toPromptFileUrl(filePath);
+		if (!url) continue;
 		const value = formatInlineFileReference(filePath, /[\\/]$/.test(filePath));
 		const source = value ? sourceForReference(text, value, filePath) : undefined;
 		parts.push({
 			...(withIds ? { id: `${input.messageId}-file-${index}` } : {}),
 			type: 'file',
 			mime: 'text/plain',
-			url: toFileUri(filePath),
+			url,
 			filename: getPathBaseName(filePath) || filePath,
 			...(source ? { source } : {}),
 			...messageFields,
@@ -150,6 +176,8 @@ export function buildPromptParts(input: {
 
 	for (let index = 0; index < codeSnippets.length; index++) {
 		const snippet = codeSnippets[index];
+		const url = lineQuery(snippet.filePath, snippet.startLine, snippet.endLine);
+		if (!url) continue;
 		const value = formatInlineSnippetReference({
 			filePath: snippet.filePath,
 			startLine: snippet.startLine ?? 1,
@@ -160,7 +188,7 @@ export function buildPromptParts(input: {
 			...(withIds ? { id: `${input.messageId}-snippet-${index}` } : {}),
 			type: 'file',
 			mime: 'text/plain',
-			url: lineQuery(snippet.filePath, snippet.startLine, snippet.endLine),
+			url,
 			filename: getPathBaseName(snippet.filePath) || snippet.filePath,
 			...(source ? { source } : {}),
 			...messageFields,

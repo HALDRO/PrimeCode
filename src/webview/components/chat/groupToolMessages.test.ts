@@ -100,7 +100,7 @@ const taskCard = (id: string): RenderNode =>
 		status: 'running',
 		toolCallId: id,
 		parentSessionId: 'root',
-		childSummary: { childCount: 0, diffStats: { added: 0, removed: 0 } },
+		childSummary: { childCount: 0 },
 	}) as RenderNode;
 
 const NO_MCP: string[] = [];

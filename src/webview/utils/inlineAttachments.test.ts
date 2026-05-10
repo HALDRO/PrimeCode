@@ -85,6 +85,16 @@ describe('inlineAttachments', () => {
 		);
 	});
 
+	it('ignores inline-attachment syntax embedded inside pasted regex source', () => {
+		const text = 'const INLINE_ATTACHMENT_RE = /@\\[(.+?)\\](?:#L(\\d+)(?:-L?(\\d+))?)?/g;';
+		const matches = extractInlineAttachmentMatches(text);
+		const payload = extractInlineAttachmentPayload(text);
+
+		expect(matches).toEqual([]);
+		expect(payload.files).toEqual([]);
+		expect(payload.codeSnippets).toEqual([]);
+	});
+
 	it('does not duplicate existing inline references when restoring', () => {
 		const restored = prependInlineAttachmentReferences(
 			'@[src/app.ts] @[src/api.ts]#L2-L4\n\nPlease inspect both',
