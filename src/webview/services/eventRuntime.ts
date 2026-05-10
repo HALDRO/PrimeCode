@@ -4,7 +4,6 @@ import type { WebviewSdkEvent } from '../store/eventReducer';
 import { useSettingsStore } from '../store/settingsStore';
 import { useUIStore } from '../store/uiStore';
 import { webviewLogger } from '../utils/logger';
-import { openCodeRuntime } from './opencodeRuntime';
 
 const log = webviewLogger.forComponent('EventRuntime');
 
@@ -21,16 +20,12 @@ interface GlobalStreamEnvelope {
 
 type QueuedEvent = WebviewSdkEvent;
 
-const RECONCILE_DEBOUNCE_MS = 1000;
-
 const queue: QueuedEvent[] = [];
 const coalesced = new Map<string, number>();
 let flushTimer: number | null = null;
 
 let currentKey: string | null = null;
 let lastEventAt = Date.now();
-let reconcileInFlight: Promise<void> | null = null;
-let lastReconcileAt = 0;
 
 function normalizeDriveLetter(dir: string): string {
 	return dir.length >= 2 && dir[1] === ':' ? dir[0].toUpperCase() + dir.slice(1) : dir;
@@ -88,32 +83,6 @@ function dispatchExtensionMessageToAuxStores(message: ExtensionMessage): void {
 	useSettingsStore.getState().actions.handleExtensionMessage(message);
 }
 
-async function runReconcile(): Promise<void> {
-	const now = Date.now();
-	if (now - lastReconcileAt < RECONCILE_DEBOUNCE_MS) {
-		return;
-	}
-	lastReconcileAt = now;
-	await openCodeRuntime.reconcileOpenSessions();
-}
-
-function reconcile(reason: 'server.connected' | 'reconnect'): Promise<void> {
-	if (reconcileInFlight) {
-		return reconcileInFlight;
-	}
-
-	reconcileInFlight = runReconcile()
-		.catch(error => {
-			log.warn(`Reconcile failed (reason: ${reason})`, error);
-			throw error;
-		})
-		.finally(() => {
-			reconcileInFlight = null;
-		});
-
-	return reconcileInFlight;
-}
-
 function handleGlobalEnvelope(
 	event: GlobalStreamEnvelope | StreamEnvelope | WebviewSdkEvent,
 ): void {
@@ -122,9 +91,9 @@ function handleGlobalEnvelope(
 	if (maybeEnvelope?.payload && typeof maybeEnvelope.payload === 'object') {
 		if (maybeEnvelope.payload.type === 'sync') return;
 		if (maybeEnvelope.payload.type === 'server.connected') {
-			void reconcile('server.connected').catch(() => {
-				useUIStore.getState().actions.setServerStatus('error');
-			});
+			// server.connected is a heartbeat signal — no action needed.
+			// Session data arrives via individual SSE events (message.updated, session.status, etc.)
+			// Full reconcile only happens on bootstrap or explicit user reload.
 			return;
 		}
 		enqueue(maybeEnvelope.payload as WebviewSdkEvent);
@@ -134,9 +103,6 @@ function handleGlobalEnvelope(
 	const parsed = event as StreamEnvelope | WebviewSdkEvent;
 	if (parsed && typeof parsed === 'object' && 'type' in parsed) {
 		if (parsed.type === 'server.connected') {
-			void reconcile('server.connected').catch(() => {
-				useUIStore.getState().actions.setServerStatus('error');
-			});
 			return;
 		}
 		enqueue(parsed as WebviewSdkEvent);
@@ -161,6 +127,7 @@ export const eventRuntime = {
 		const nextKey = `${serverUrl}::${normalizedWorkspaceRoot}`;
 		if (currentKey === nextKey) return;
 
+		log.info('Event runtime starting', { serverUrl, workspaceRoot: normalizedWorkspaceRoot });
 		this.stop();
 		currentKey = nextKey;
 		lastEventAt = Date.now();
@@ -174,6 +141,9 @@ export const eventRuntime = {
 		}
 		queue.length = 0;
 		coalesced.clear();
+		if (currentKey) {
+			log.info('Event runtime stopped');
+		}
 		currentKey = null;
 		useUIStore.getState().actions.setServerStatus('disconnected');
 	},

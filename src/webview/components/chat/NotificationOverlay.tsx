@@ -120,7 +120,7 @@ const NotificationCard: React.FC<{
 						<span className="shrink-0" style={{ color: ui.accentColor }}>
 							{ui.icon}
 						</span>
-						<span className="text-sm text-vscode-foreground font-(family-name:--vscode-font-family) truncate">
+						<span className="text-sm text-vscode-foreground font-(family-name:--vscode-font-family) line-clamp-5">
 							{title}
 						</span>
 						{notification.count > 1 && (
@@ -223,23 +223,23 @@ export const NotificationOverlay: React.FC = () => {
 
 	const previousSessionIdRef = useRef<string | undefined>(activeSessionId);
 
-	// Auto-dismiss transient notices when configured.
-	useEffect(() => {
-		const timers: number[] = [];
-		for (const n of notifications) {
-			if (!n.autoDismissMs || n.autoDismissMs <= 0) continue;
-			timers.push(
-				window.setTimeout(() => {
-					dismissNotification(n.id);
-				}, n.autoDismissMs),
-			);
-		}
-		return () => {
-			for (const t of timers) {
-				window.clearTimeout(t);
-			}
-		};
-	}, [notifications, dismissNotification]);
+	// Auto-dismiss disabled: users should dismiss notifications manually.
+	// useEffect(() => {
+	// 	const timers: number[] = [];
+	// 	for (const n of notifications) {
+	// 		if (!n.autoDismissMs || n.autoDismissMs <= 0) continue;
+	// 		timers.push(
+	// 			window.setTimeout(() => {
+	// 				dismissNotification(n.id);
+	// 			}, n.autoDismissMs),
+	// 		);
+	// 	}
+	// 	return () => {
+	// 		for (const t of timers) {
+	// 			window.clearTimeout(t);
+	// 		}
+	// 	};
+	// }, [notifications, dismissNotification]);
 
 	// Overlay notifications are session-scoped and should reset on session switch.
 	useEffect(() => {

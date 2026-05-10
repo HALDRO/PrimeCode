@@ -241,6 +241,11 @@ const ConnectionStatusMenu: React.FC<{
 	);
 };
 
+/** Module-level health check cache to prevent duplicate requests within 750ms window. */
+let healthCachePromise: Promise<boolean> | null = null;
+let healthCacheAt = 0;
+const HEALTH_CACHE_MS = 750;
+
 export const Header: React.FC = React.memo(() => {
 	const HEALTH_POLL_INTERVAL_MS = 10_000;
 	const HEALTH_FETCH_TIMEOUT_MS = 3_000;
@@ -302,10 +307,11 @@ export const Header: React.FC = React.memo(() => {
 		let timer: number | null = null;
 		let consecutiveFailures = 0;
 		const MAX_BACKOFF_MS = 60_000;
+		const RETRY_COUNT = 2;
+		const RETRY_DELAY_MS = 100;
 
 		const getNextInterval = () => {
 			if (consecutiveFailures === 0) return HEALTH_POLL_INTERVAL_MS;
-			// Exponential backoff: 10s → 20s → 40s → 60s (capped)
 			return Math.min(HEALTH_POLL_INTERVAL_MS * 2 ** consecutiveFailures, MAX_BACKOFF_MS);
 		};
 
@@ -317,7 +323,16 @@ export const Header: React.FC = React.memo(() => {
 			}, getNextInterval());
 		};
 
-		const runCheck = async () => {
+		const isRetryable = (error: unknown): boolean => {
+			if (!(error instanceof Error)) return false;
+			if (error.name === 'AbortError' || error.name === 'TimeoutError') return false;
+			if (error instanceof TypeError) return true;
+			return /network|fetch|econnreset|econnrefused|enotfound|timedout/i.test(error.message);
+		};
+
+		const wait = (ms: number) => new Promise<void>(resolve => window.setTimeout(resolve, ms));
+
+		const attemptHealthCheck = async (retryCount: number): Promise<boolean | null> => {
 			try {
 				const controller = new AbortController();
 				const timeout = window.setTimeout(() => controller.abort(), HEALTH_FETCH_TIMEOUT_MS);
@@ -326,26 +341,47 @@ export const Header: React.FC = React.memo(() => {
 					signal: controller.signal,
 				});
 				window.clearTimeout(timeout);
-				if (disposed) return;
+				if (disposed) return null;
 
 				if (!response.ok) {
-					consecutiveFailures++;
-					setServerStatus('error');
-					scheduleNext();
-					return;
+					if (retryCount < RETRY_COUNT) {
+						await wait(RETRY_DELAY_MS * (retryCount + 1));
+						if (disposed) return null;
+						return attemptHealthCheck(retryCount + 1);
+					}
+					return false;
 				}
 
 				const payload = (await response.json()) as { healthy?: boolean };
-				if (disposed) return;
-				if (payload.healthy === true) {
-					consecutiveFailures = 0;
-					setServerStatus('connected');
-				} else {
-					consecutiveFailures++;
-					setServerStatus('error');
+				if (disposed) return null;
+				return payload.healthy === true;
+			} catch (error: unknown) {
+				if (disposed) return null;
+				if (retryCount < RETRY_COUNT && isRetryable(error)) {
+					await wait(RETRY_DELAY_MS * (retryCount + 1));
+					if (disposed) return null;
+					return attemptHealthCheck(retryCount + 1);
 				}
-			} catch {
-				if (disposed) return;
+				return false;
+			}
+		};
+
+		const runCheck = async () => {
+			const now = Date.now();
+			let resultPromise: Promise<boolean>;
+			if (healthCachePromise && now - healthCacheAt < HEALTH_CACHE_MS) {
+				resultPromise = healthCachePromise;
+			} else {
+				healthCacheAt = now;
+				healthCachePromise = attemptHealthCheck(0).then(r => r ?? false);
+				resultPromise = healthCachePromise;
+			}
+			const result = await resultPromise;
+			if (disposed) return;
+			if (result) {
+				consecutiveFailures = 0;
+				setServerStatus('connected');
+			} else {
 				consecutiveFailures++;
 				setServerStatus('error');
 			}

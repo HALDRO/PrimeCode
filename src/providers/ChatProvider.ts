@@ -56,6 +56,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private backendStatusAbort: AbortController | null = null;
 	private backendStatusRun: Promise<void> | null = null;
 	private backendStatusKey: string | null = null;
+	private healthMonitorTimer: ReturnType<typeof setInterval> | null = null;
+	private healthConsecutiveFailures = 0;
 	private readonly backendBusySessions = new Set<string>();
 	private readonly awaitingBackendBusy = new Set<string>();
 	// This backend-owned queue layer is intentionally kept in the extension.
@@ -310,6 +312,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			// Notify webview of server URL so it can establish SSE health polling
 			this.sendServerInfo(true);
 			this.startBackendStatusBridge();
+			this.startHealthMonitor();
 
 			// Hydrate all UI-visible state after server connection (providers, proxy models, MCP, etc.)
 			await this.syncAllOrDefer('opencode-start');
@@ -1021,6 +1024,53 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.suppressNextIdleDrain.clear();
 	}
 
+	// ─── Server Health Monitor & Reconnect ──────────────────────────────
+
+	private static readonly HEALTH_POLL_MS = 15_000;
+	private static readonly HEALTH_RECONNECT_THRESHOLD = 3;
+
+	private startHealthMonitor(): void {
+		this.stopHealthMonitor();
+		this.healthConsecutiveFailures = 0;
+		this.healthMonitorTimer = setInterval(() => {
+			void this.checkServerHealth();
+		}, ChatProvider.HEALTH_POLL_MS);
+	}
+
+	private stopHealthMonitor(): void {
+		if (this.healthMonitorTimer) {
+			clearInterval(this.healthMonitorTimer);
+			this.healthMonitorTimer = null;
+		}
+	}
+
+	private async checkServerHealth(): Promise<void> {
+		const admin = this.cli.getAdminInfo();
+		if (!admin?.baseUrl) return;
+
+		try {
+			const res = await fetch(`${admin.baseUrl}/global/health`, {
+				signal: AbortSignal.timeout(5000),
+			});
+			if (res.ok) {
+				this.healthConsecutiveFailures = 0;
+				return;
+			}
+		} catch {
+			// Network error or timeout
+		}
+
+		this.healthConsecutiveFailures++;
+		if (this.healthConsecutiveFailures >= ChatProvider.HEALTH_RECONNECT_THRESHOLD) {
+			logger.warn('[ChatProvider] Server health check failing', {
+				failures: this.healthConsecutiveFailures,
+			});
+			// Do NOT auto-reconnect: killing the SSE stream mid-conversation is destructive.
+			// The backend status bridge has its own reconnect logic with exponential backoff.
+			// Health monitor only tracks status for diagnostics.
+		}
+	}
+
 	private forwardNormalizedBackendStatus(
 		sessionId: string,
 		status: SessionStatus,
@@ -1054,31 +1104,48 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		signal: AbortSignal,
 	): Promise<void> {
 		const client = createOpencodeClient({ baseUrl, directory });
+		const BASE_RETRY_MS = 250;
+		const MAX_RETRY_MS = 30_000;
+		let consecutiveFailures = 0;
 
 		while (!signal.aborted) {
+			// Child controller per iteration prevents abort-listener accumulation on the parent signal.
+			// SDK internally calls signal.addEventListener('abort', ...) without cleanup on stream end,
+			// so reusing the same signal across iterations leaks listeners indefinitely.
+			const iterationController = new AbortController();
+			const onParentAbort = () => iterationController.abort();
+			signal.addEventListener('abort', onParentAbort);
+
 			try {
-				const subscription = await client.event.subscribe(
-					{ directory },
-					{
-						signal,
-						onSseError: () => {
-							// Webview owns connection chrome; this bridge is only for backend-owned session status.
-						},
+				logger.info('[ChatProvider] SSE bridge: subscribing to global events...', { baseUrl });
+				const subscription = await client.global.event({
+					signal: iterationController.signal,
+					onSseError: () => {
+						// Webview owns connection chrome; this bridge is only for backend-owned session status.
 					},
-				);
+				});
 
 				for await (const event of subscription.stream as AsyncGenerator<unknown>) {
 					if (signal.aborted) break;
+					consecutiveFailures = 0;
 					this.forwardBackendStatusEvent(event);
 				}
 			} catch (error) {
 				if (signal.aborted) break;
+				consecutiveFailures++;
 				logger.warn('[ChatProvider] Backend status bridge stream failed', {
 					baseUrl,
 					error,
+					attempt: consecutiveFailures,
 				});
-				await new Promise(resolve => setTimeout(resolve, 250));
+			} finally {
+				signal.removeEventListener('abort', onParentAbort);
+				iterationController.abort();
 			}
+
+			if (signal.aborted) break;
+			const backoff = Math.min(BASE_RETRY_MS * 2 ** (consecutiveFailures - 1), MAX_RETRY_MS);
+			await new Promise(resolve => setTimeout(resolve, backoff));
 		}
 	}
 
@@ -1254,6 +1321,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	}
 
 	dispose(): void {
+		this.stopHealthMonitor();
 		this.stopBackendStatusBridge();
 		for (const disposable of this.disposables) {
 			disposable.dispose();

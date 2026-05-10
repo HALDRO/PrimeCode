@@ -995,6 +995,7 @@ describe('deriveSessionView', () => {
 			messages: { ses1: [user, asst] },
 			parts: { a1: [taskPart] },
 			sessions: [{ id: 'child-restored-bg', parentID: 'ses1' } as never],
+			sessionStatus: { 'child-restored-bg': { type: 'idle' } },
 		});
 
 		const view = deriveSessionView(store, 'ses1');

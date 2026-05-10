@@ -13,6 +13,7 @@ const pendingFetches = new Map<
 		resolve: (value: Response) => void;
 		reject: (reason?: unknown) => void;
 		abortController: AbortController;
+		cleanup?: () => void;
 		streamController?: ReadableStreamDefaultController<Uint8Array>;
 		chunkBuffer?: Uint8Array[];
 		streamEnded?: boolean;
@@ -65,6 +66,7 @@ const initListener = () => {
 				return;
 			}
 			entry.streamController.close();
+			entry.cleanup?.();
 			pendingFetches.delete(message.id);
 			return;
 		}
@@ -78,6 +80,7 @@ const initListener = () => {
 				return;
 			}
 			entry.streamController.error(new Error(errorMessage));
+			entry.cleanup?.();
 			pendingFetches.delete(message.id);
 			return;
 		}
@@ -89,12 +92,16 @@ const initListener = () => {
 		const entry = pendingFetches.get(id);
 		if (!entry) return;
 
-		if (!ok) {
+		// Network-level failure (extension host could not reach the server at all)
+		if (!ok && !status) {
+			entry.cleanup?.();
 			pendingFetches.delete(id);
 			entry.reject(new Error(error ?? 'Proxy fetch failed'));
 			return;
 		}
 
+		// HTTP response received (including 4xx/5xx) — return as Response object
+		// so SDK can parse status and body normally, just like native fetch.
 		const responseHeaders = new Headers(headers ?? {});
 		if (isStream) {
 			const response = new Response(
@@ -107,15 +114,18 @@ const initListener = () => {
 						entry.chunkBuffer = undefined;
 						if (entry.streamError) {
 							controller.error(new Error(entry.streamError));
+							entry.cleanup?.();
 							pendingFetches.delete(id);
 							return;
 						}
 						if (entry.streamEnded) {
 							controller.close();
+							entry.cleanup?.();
 							pendingFetches.delete(id);
 						}
 					},
 					cancel() {
+						entry.cleanup?.();
 						pendingFetches.delete(id);
 						vscode.postMessage({ type: 'proxyFetchAbort', id });
 					},
@@ -130,6 +140,7 @@ const initListener = () => {
 			return;
 		}
 
+		entry.cleanup?.();
 		pendingFetches.delete(id);
 
 		// Reconstruct Response object
@@ -187,21 +198,30 @@ export async function proxyFetch(input: RequestInfo | URL, init?: RequestInit): 
 	return new Promise<Response>((resolve, reject) => {
 		const abortController = new AbortController();
 
-		// Handle AbortSignal
+		// Handle AbortSignal — clean up listener on completion to prevent memory leaks.
+		let abortHandler: (() => void) | null = null;
 		if (init?.signal) {
 			if (init.signal.aborted) {
 				reject(new DOMException('Aborted', 'AbortError'));
 				return;
 			}
-			init.signal.addEventListener('abort', () => {
+			abortHandler = () => {
 				abortController.abort();
 				pendingFetches.delete(id);
 				vscode.postMessage({ type: 'proxyFetchAbort', id });
 				reject(new DOMException('Aborted', 'AbortError'));
-			});
+			};
+			init.signal.addEventListener('abort', abortHandler);
 		}
 
-		pendingFetches.set(id, { resolve, reject, abortController });
+		const cleanup = () => {
+			if (abortHandler && init?.signal) {
+				init.signal.removeEventListener('abort', abortHandler);
+				abortHandler = null;
+			}
+		};
+
+		pendingFetches.set(id, { resolve, reject, abortController, cleanup });
 
 		// Serialize headers
 		const headers: Record<string, string> = {};

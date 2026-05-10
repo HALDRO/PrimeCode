@@ -17,8 +17,11 @@ import { type SessionStore, useChatStore } from '../store/chatStore';
 import { clearSessionViewCache } from '../store/derived';
 import { useSettingsStore } from '../store/settingsStore';
 import { useUIStore } from '../store/uiStore';
+import { webviewLogger } from '../utils/logger';
 import { proxyFetch } from '../utils/proxyFetch';
 import { vscode } from '../utils/vscode';
+
+const log = webviewLogger.forComponent('OpenCodeRuntime');
 
 type RestorableSession = Session & {
 	lastModified?: number;
@@ -190,7 +193,47 @@ async function deleteMessagesFrom(sessionId: string, messageId: string): Promise
 	}
 }
 
+interface ServerError {
+	name: string;
+	data?: {
+		path?: string;
+		message?: string;
+		issues?: Array<{ message: string; path: string[] }>;
+	};
+}
+
+function isServerError(error: unknown): error is ServerError {
+	return (
+		typeof error === 'object' &&
+		error !== null &&
+		'name' in error &&
+		typeof (error as ServerError).name === 'string'
+	);
+}
+
+function isConfigError(error: unknown): boolean {
+	return isServerError(error) && error.name === 'ConfigInvalidError';
+}
+
+function formatConfigError(error: ServerError): string {
+	const data = error.data;
+	if (!data) return 'Invalid configuration';
+	const file = data.path ?? 'opencode.json';
+	const issues = (data.issues ?? [])
+		.map(issue => {
+			if (!issue.path.length) return issue.message;
+			return `${issue.path.join('.')}: ${issue.message}`;
+		})
+		.filter(Boolean);
+	const detail = issues.length ? issues.join('; ') : (data.message ?? '');
+	return detail ? `Config error in ${file}: ${detail}` : `Invalid config at ${file}`;
+}
+
 function showRuntimeError(error: unknown): void {
+	log.error('Runtime error', {
+		error: error instanceof Error ? error.message : String(error),
+		stack: error instanceof Error ? error.stack : undefined,
+	});
 	useUIStore.getState().actions.pushNotification({
 		type: 'error',
 		content: error instanceof Error ? error.message : 'OpenCode request failed',
@@ -359,6 +402,13 @@ async function hydrateSession(sessionId: string, activate = true): Promise<void>
 	]);
 
 	if (sessionResult.error || !sessionResult.data) {
+		log.error('hydrateSession: SDK returned error', {
+			sessionId,
+			error: sessionResult.error,
+			hasData: !!sessionResult.data,
+			serverUrl: cachedUrl,
+			workspaceRoot,
+		});
 		throw new Error(`Failed to load session ${sessionId}`);
 	}
 
@@ -409,6 +459,16 @@ async function refreshConversationList(): Promise<void> {
 		archived: false,
 		limit: 200,
 	});
+	if (result.error) {
+		log.warn('refreshConversationList: SDK returned error', {
+			error: result.error,
+			serverUrl: cachedUrl,
+			workspaceRoot,
+		});
+		if (isConfigError(result.error)) {
+			throw result.error;
+		}
+	}
 	const sessions = ((result.data ?? []) as RestorableSession[]).filter(
 		session => session.id && !session.parentID,
 	);
@@ -447,8 +507,11 @@ async function reconcileOpenSessions(): Promise<void> {
 			if (!sessionId) return;
 			try {
 				await hydrateSession(sessionId, sessionId === state.activeSessionId);
-			} catch {
-				// Best-effort reconcile for sessions that may have been deleted or temporarily unavailable.
+			} catch (error: unknown) {
+				log.warn('Reconcile: failed to hydrate session', {
+					sessionId,
+					error: error instanceof Error ? error.message : String(error),
+				});
 			}
 		}),
 	);
@@ -480,12 +543,35 @@ export const openCodeRuntime = {
 	async bootstrap(): Promise<void> {
 		try {
 			await refreshConversationList();
+		} catch (error: unknown) {
+			if (isConfigError(error)) {
+				const msg = formatConfigError(error as ServerError);
+				log.error('Bootstrap blocked by invalid project config', { error: msg });
+				useUIStore.getState().actions.pushNotification({
+					type: 'error',
+					content: msg,
+					timestamp: new Date().toISOString(),
+				});
+				return;
+			}
+			showRuntimeError(error);
+			return;
+		}
+
+		try {
 			const persisted =
 				(window.vscode?.getState() as { openTabs?: string[]; activeTab?: string } | undefined) ??
 				{};
 			if (persisted.openTabs?.length) {
 				for (const sessionId of persisted.openTabs) {
-					await hydrateSession(sessionId, sessionId === persisted.activeTab);
+					try {
+						await hydrateSession(sessionId, sessionId === persisted.activeTab);
+					} catch (error: unknown) {
+						log.warn('Bootstrap: failed to hydrate persisted tab', {
+							sessionId,
+							error: error instanceof Error ? error.message : String(error),
+						});
+					}
 				}
 				if (useChatStore.getState().sessionOrder.length > 0) {
 					persistTabs();
@@ -638,8 +724,15 @@ export const openCodeRuntime = {
 
 	async createSession(): Promise<string> {
 		const client = getClient();
-		const result = await client.session.create({ directory: getWorkspaceRoot() });
+		const workspaceRoot = getWorkspaceRoot();
+		const result = await client.session.create({ directory: workspaceRoot });
 		if (result.error || !result.data) {
+			log.error('createSession: SDK returned error', {
+				error: result.error,
+				hasData: !!result.data,
+				serverUrl: cachedUrl,
+				workspaceRoot,
+			});
 			throw new Error('Failed to create session');
 		}
 		const session = result.data as Session;
