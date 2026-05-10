@@ -2,7 +2,7 @@
 	"name": "primecode",
 	"displayName": "PrimeCode",
 	"description": "OpenCode-first AI coding assistant for VS Code",
-	"version": "1.5.0",
+	"version": "1.5.1",
 	"main": "./dist/extension.js",
 	"scripts": {
 		"vscode:prepublish": "npm run build",
