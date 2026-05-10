@@ -1,3 +1,4 @@
+import * as path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as vscode from 'vscode';
 import { OpenCodeConfigService, ProjectConfigParseError } from './OpenCodeConfigService';
@@ -33,8 +34,8 @@ vi.mock('vscode', async () => {
 	};
 });
 
-const workspaceRoot = 'C:\\repo';
-const configPath = 'C:\\repo\\opencode.json';
+const workspaceRoot = '/test-workspace';
+const configPath = path.join(workspaceRoot, 'opencode.json');
 
 describe('OpenCodeConfigService', () => {
 	let service: OpenCodeConfigService;
