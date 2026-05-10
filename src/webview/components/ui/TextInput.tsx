@@ -1,3 +1,9 @@
+/**
+ * @file Compact text input primitive
+ * @description Provides the shared VS Code themed input used across settings forms. The control keeps
+ *              a fixed box model and line height so dense settings rows align labels and inputs reliably.
+ */
+
 import type React from 'react';
 import { cn } from '../../lib/cn';
 
@@ -13,7 +19,7 @@ export const TextInput: React.FC<TextInputProps> = ({
 	<input
 		{...props}
 		className={cn(
-			'w-(--input-width-sm) px-2 py-(--gap-1) text-xs bg-vscode-input-background text-vscode-input-foreground border border-vscode-input-border rounded-sm outline-none h-6',
+			'block box-border w-(--input-width-sm) h-(--field-height) min-h-(--field-height) px-(--control-padding-x) py-0 text-sm leading-[var(--field-line-height)] bg-vscode-input-background text-vscode-input-foreground border border-vscode-input-border rounded-(--control-radius) outline-none',
 			'focus:border-vscode-focusBorder',
 			className,
 		)}

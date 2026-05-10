@@ -11,18 +11,26 @@ export class McpHandler implements WebviewMessageHandler {
 	async handleMessage(msg: WebviewCommand): Promise<void> {
 		switch (msg.type) {
 			case 'loadMCPServers':
+				logger.info('[McpHandler] User loaded MCP servers');
 				await this.onLoadMcpServers();
 				break;
 			case 'saveMCPServer':
+				logger.info('[McpHandler] User saved MCP server', { name: msg.name });
 				await this.onSaveMcpServer(msg);
 				break;
 			case 'setMCPServerEnabled':
+				logger.info('[McpHandler] User toggled MCP server', {
+					name: msg.name,
+					enabled: msg.enabled,
+				});
 				await this.onSetMcpServerEnabled(msg);
 				break;
 			case 'deleteMCPServer':
+				logger.info('[McpHandler] User deleted MCP server', { name: msg.name });
 				await this.onDeleteMcpServer(msg);
 				break;
 			case 'openMcpConfig':
+				logger.info('[McpHandler] User opened MCP config');
 				await this.onOpenMcpConfig();
 				break;
 		}

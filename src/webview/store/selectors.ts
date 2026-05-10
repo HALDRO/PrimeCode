@@ -1,5 +1,5 @@
 /**
- * @file Zustand selectors for the SDK-native chat store.
+ * @file Zustand selectors for the SDK-native chat and settings stores.
  */
 
 import type {
@@ -753,6 +753,7 @@ export const useModelSelection = () => {
 			proxyEndpoints: state.proxyEndpoints,
 			opencodeProviders: state.opencodeProviders,
 			enabledOpenCodeModels: state.enabledOpenCodeModels,
+			providerModelVisibility: state.providerModelVisibility,
 			getModelVariant: state.actions.getModelVariant,
 			setModelVariant: state.actions.setModelVariant,
 			setLastSelectedModel: state.actions.setLastSelectedModel,
@@ -1020,8 +1021,14 @@ function sessionTreeUsageStatsEqual(
 		prev.hasActiveSession === next.hasActiveSession &&
 		prev.hasActivity === next.hasActivity &&
 		prev.totalTokens === next.totalTokens &&
+		prev.totalInputTokens === next.totalInputTokens &&
+		prev.totalOutputTokens === next.totalOutputTokens &&
 		prev.rootTokens === next.rootTokens &&
+		prev.rootInputTokens === next.rootInputTokens &&
+		prev.rootOutputTokens === next.rootOutputTokens &&
 		prev.childTokens === next.childTokens &&
+		prev.childInputTokens === next.childInputTokens &&
+		prev.childOutputTokens === next.childOutputTokens &&
 		prev.requestCount === next.requestCount &&
 		prev.childSessionCount === next.childSessionCount &&
 		prev.cost === next.cost &&

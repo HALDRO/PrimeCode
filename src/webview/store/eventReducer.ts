@@ -146,11 +146,15 @@ function syncSessionModelFromMessages(state: SessionStore, sessionId: string): v
 		if (message.role !== 'user') continue;
 		const model = extractCompositeModelId(message);
 		if (model) {
+			if (state.sessionModelSource[sessionId] === 'user') return;
 			state.sessionModel[sessionId] = model;
+			state.sessionModelSource[sessionId] = 'history';
 			return;
 		}
 	}
+	if (state.sessionModelSource[sessionId] === 'user') return;
 	delete state.sessionModel[sessionId];
+	delete state.sessionModelSource[sessionId];
 }
 
 function ensureCompactionParentMessage(
@@ -263,6 +267,7 @@ export function eventReducer(state: SessionStore, event: WebviewSdkEvent): void 
 				}
 			}
 			delete state.messages[sessionID];
+			delete state.sessionModelSource[sessionID];
 			delete state.sessionStatus[sessionID];
 			delete state.sessionDiff[sessionID];
 			delete state.todos[sessionID];
@@ -308,8 +313,9 @@ export function eventReducer(state: SessionStore, event: WebviewSdkEvent): void 
 			upsertMessage(msgs, info);
 			if (info.role === 'user') {
 				const model = extractCompositeModelId(info);
-				if (model) {
+				if (model && state.sessionModelSource[sessionID] !== 'user') {
 					state.sessionModel[sessionID] = model;
+					state.sessionModelSource[sessionID] = 'history';
 				}
 			}
 			if (info.role === 'assistant') {

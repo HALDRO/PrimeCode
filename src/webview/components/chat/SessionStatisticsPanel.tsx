@@ -53,6 +53,10 @@ function getContextUsage(stats: SessionTreeUsageStats): number | null {
 	return stats.latestRootContext?.usage ?? null;
 }
 
+function formatInOut(input: number, output: number): string {
+	return `${formatTokens(input)} / ${formatTokens(output)}`;
+}
+
 function buildDetailRows(stats: SessionTreeUsageStats): DetailRow[] {
 	const rows: DetailRow[] = [
 		{
@@ -62,15 +66,15 @@ function buildDetailRows(stats: SessionTreeUsageStats): DetailRow[] {
 			emphasis: true,
 		},
 		{
-			key: 'total-tokens',
-			label: 'Total tokens',
+			key: 'total-usage',
+			label: 'Total usage',
 			value: formatTokens(stats.totalTokens),
 			emphasis: true,
 		},
 		{
-			key: 'session-tokens',
-			label: 'Session tokens',
-			value: formatTokens(stats.rootTokens),
+			key: 'session-io',
+			label: 'Session in / out',
+			value: formatInOut(stats.rootInputTokens, stats.rootOutputTokens),
 		},
 		{
 			key: 'child-sessions',
@@ -78,19 +82,14 @@ function buildDetailRows(stats: SessionTreeUsageStats): DetailRow[] {
 			value: formatNumber(stats.childSessionCount),
 		},
 		{
-			key: 'subagent-tokens',
-			label: 'Subagent tokens',
-			value: formatTokens(stats.childTokens),
+			key: 'subagent-io',
+			label: 'Subagent in / out',
+			value: formatInOut(stats.childInputTokens, stats.childOutputTokens),
 		},
 		{
-			key: 'cache-read',
-			label: 'Cache read',
-			value: formatTokens(stats.cacheRead),
-		},
-		{
-			key: 'cache-write',
-			label: 'Cache write',
-			value: formatTokens(stats.cacheWrite),
+			key: 'cache',
+			label: 'Cache read / write',
+			value: `${formatTokens(stats.cacheRead)} / ${formatTokens(stats.cacheWrite)}`,
 		},
 		{
 			key: 'requests',
@@ -205,7 +204,7 @@ export const SessionStatisticsPanel: React.FC = () => {
 							ref={refs.setFloating}
 							role="dialog"
 							aria-label="Detailed session statistics"
-							className="pointer-events-auto w-[min(220px,calc(100vw-var(--gap-7)*2))] overflow-hidden rounded-lg border border-(--border-subtle) bg-(--surface-overlay) font-(family-name:--vscode-font-family) text-vscode-foreground shadow-[0_8px_28px_color-mix(in_srgb,var(--vscode-editor-background)_68%,transparent)] backdrop-blur-sm"
+							className="pointer-events-auto w-[min(320px,calc(100vw-var(--gap-7)*2))] overflow-hidden rounded-lg border border-(--border-subtle) bg-(--surface-overlay) font-(family-name:--vscode-font-family) text-vscode-foreground shadow-[0_8px_28px_color-mix(in_srgb,var(--vscode-editor-background)_68%,transparent)] backdrop-blur-sm"
 							style={{
 								...floatingStyles,
 								...transitionStyles,

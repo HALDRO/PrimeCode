@@ -62,12 +62,24 @@ export class ToolHandler implements WebviewMessageHandler {
 				await this.onGetPermissions();
 				break;
 			case 'setPermissionPolicy':
+				logger.info(`[ToolHandler] User set permission policy`, {
+					category: msg.category,
+					policy: msg.policy,
+				});
 				await this.setPermissionPolicy(msg.category, msg.policy);
 				break;
 			case 'setAutoAccept':
+				logger.info(`[ToolHandler] User set auto-accept`, {
+					mode: msg.mode,
+					sessionId: msg.sessionId,
+				});
 				this.onSetAutoAccept(msg);
 				break;
 			case 'setAlwaysAllowTool':
+				logger.info(`[ToolHandler] User set always-allow tool`, {
+					toolName: msg.toolName,
+					allow: msg.allow,
+				});
 				await this.onSetAlwaysAllowTool(msg.toolName, msg.allow);
 				break;
 			case 'checkDiscoveryStatus':

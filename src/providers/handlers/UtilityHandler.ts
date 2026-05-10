@@ -34,18 +34,30 @@ export class UtilityHandler implements WebviewMessageHandler {
 			case 'openSkillFile':
 			case 'openPluginFile':
 			case 'openSubagentFile':
+				logger.info(`[UtilityHandler] User opened resource file`, {
+					type: msg.type,
+					filePath: (msg as { filePath?: string }).filePath,
+				});
 				return this.handleOpenResourceFile(msg);
 			case 'acceptFile':
+				logger.info(`[UtilityHandler] User accepted file`, {
+					filePath: (msg as { filePath?: string }).filePath,
+				});
 				return this.handleAcceptFile(msg);
 			case 'acceptAllFiles':
+				logger.info(`[UtilityHandler] User accepted all files`, {
+					count: (msg as { filePaths?: string[] }).filePaths?.length,
+				});
 				return this.handleAcceptAllFiles(msg);
 			case 'getWorkspaceFiles':
 				return this.handleGetWorkspaceFiles(msg);
 			case 'checkExtensionVersion':
 				return this.handleCheckExtensionVersion();
 			case 'restartOpenCode':
+				logger.info('[UtilityHandler] User restarted OpenCode');
 				return this.handleRestartOpenCode();
 			case 'reloadExtension':
+				logger.info('[UtilityHandler] User reloaded extension');
 				return this.handleReloadExtension();
 			case 'getConnectionDetails':
 				return this.handleGetConnectionDetails();
@@ -133,7 +145,7 @@ export class UtilityHandler implements WebviewMessageHandler {
 		} catch (error) {
 			if (timer) clearTimeout(timer);
 			if ((error as Error).name === 'AbortError') {
-				logger.warn('[UtilityHandler] proxyFetch timed out or aborted', { id, url });
+				logger.debug('[UtilityHandler] proxyFetch timed out or aborted', { id, url });
 			} else {
 				logger.error('[UtilityHandler] proxyFetch failed:', { id, url, error });
 			}

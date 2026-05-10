@@ -18,6 +18,10 @@ import {
 } from '../../store';
 import type { SessionStore } from '../../store/chatStore';
 import { useSettingsStore } from '../../store/settingsStore';
+import { webviewLogger } from '../../utils/logger';
+
+const log = webviewLogger.forComponent('Header');
+
 import { useUIStore } from '../../store/uiStore';
 import { proxyFetch } from '../../utils/proxyFetch';
 import { useVSCode } from '../../utils/vscode';
@@ -358,6 +362,7 @@ export const Header: React.FC = React.memo(() => {
 	}, [serverUrl, setServerStatus]);
 
 	const handleSwitchSession = useCallback((sessionId: string) => {
+		log.info('User switched session', { sessionId });
 		openCodeRuntime.switchSession(sessionId);
 	}, []);
 

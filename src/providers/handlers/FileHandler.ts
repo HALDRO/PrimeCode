@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import type { CommandOf, WebviewCommand } from '../../common/protocol';
+import { logger } from '../../utils/logger';
 import { decodeFilePath, getPathBaseName, pathsReferToSameFile } from '../../utils/path';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
@@ -48,6 +49,7 @@ export class FileHandler implements WebviewMessageHandler {
 
 	private async onOpenFile(msg: CommandOf<'openFile'>): Promise<void> {
 		const { filePath, line, startLine, endLine } = msg;
+		logger.info(`[FileHandler] User opened file`, { filePath, line: line ?? startLine });
 		let uri: vscode.Uri;
 		try {
 			uri = this.resolveFileUri(filePath);
@@ -91,6 +93,7 @@ export class FileHandler implements WebviewMessageHandler {
 
 	private async onOpenFileDiff(msg: CommandOf<'openFileDiff'>): Promise<void> {
 		const { filePath, oldContent, newContent } = msg;
+		logger.info(`[FileHandler] User opened file diff`, { filePath });
 		const fileUri = this.resolveFileUri(filePath);
 		const absolutePath = fileUri.fsPath;
 
@@ -147,10 +150,12 @@ export class FileHandler implements WebviewMessageHandler {
 	}
 
 	private async onOpenExternal(msg: CommandOf<'openExternal'>): Promise<void> {
+		logger.info(`[FileHandler] User opened external URL`, { url: msg.url });
 		await vscode.env.openExternal(vscode.Uri.parse(msg.url));
 	}
 
 	private async onGetImageData(msg: CommandOf<'getImageData'>): Promise<void> {
+		logger.info(`[FileHandler] User requested image data`, { id: msg.id, path: msg.path });
 		const maybeId = msg.id;
 		const maybeName = msg.name;
 		const requestedPath = msg.path;
@@ -225,6 +230,7 @@ export class FileHandler implements WebviewMessageHandler {
 	]);
 
 	private async onBrowseFiles(): Promise<void> {
+		logger.info('[FileHandler] User opened file browser');
 		const picks = await vscode.window.showOpenDialog({
 			canSelectFiles: true,
 			canSelectFolders: false,
@@ -285,6 +291,7 @@ export class FileHandler implements WebviewMessageHandler {
 	}
 
 	private async onBrowseFolders(): Promise<void> {
+		logger.info('[FileHandler] User opened folder browser');
 		const picks = await vscode.window.showOpenDialog({
 			canSelectFiles: false,
 			canSelectFolders: true,

@@ -1,3 +1,10 @@
+/**
+ * @file User message component
+ * @description Renders sent user messages, edit mode, attachments, message metadata, restore
+ *              actions, and compaction cards. Keeps read and edit layouts width-stable so
+ *              switching into edit mode does not shift the message bubble geometry.
+ */
+
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { resolveModelDisplayName } from '../../../common';
@@ -638,6 +645,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 						value={editText}
 						onChange={setEditText}
 						onSend={handleSendUpdate}
+						className="px-0 pb-0"
 						onCancel={handleCancel}
 						autoFocus
 						hideFilesPanel

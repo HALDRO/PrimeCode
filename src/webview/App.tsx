@@ -515,9 +515,25 @@ export const App: React.FC = () => {
 			};
 			eventRuntime.handleExtensionMessage(event.data);
 			if (message.type === 'backendRuntimeStatus' && message.data?.sessionId) {
+				const data = message.data as {
+					sessionId: string;
+					status?: { type: string; attempt?: number; message?: string; next?: number };
+					reason?: string;
+					timestamp?: string;
+				};
+				const status = data.status;
 				openCodeRuntime.handleBackendRuntimeStatus(
-					message.data.sessionId,
-					message.data.status ?? 'idle',
+					data.sessionId,
+					status?.type === 'retry'
+						? {
+								type: 'retry',
+								attempt: status.attempt ?? 1,
+								message: status.message ?? 'Retrying…',
+								next: status.next ?? Date.now() + 1000,
+							}
+						: status?.type === 'busy'
+							? { type: 'busy' }
+							: { type: 'idle' },
 				);
 			}
 		};

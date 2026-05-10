@@ -1,4 +1,3 @@
-import * as vscode from 'vscode';
 import {
 	buildCustomEndpointAuthHeaders,
 	getCustomEndpointDefaultName,
@@ -12,6 +11,7 @@ import {
 } from '../../common';
 import type { CommandOf, WebviewCommand } from '../../common/protocol';
 import type { EnrichedProxyModel } from '../../services/OpenCodeClientService';
+import { logger } from '../../utils/logger';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
 export class ProviderHandler implements WebviewMessageHandler {
@@ -81,6 +81,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 	}
 
 	private async onReloadAllProviders(): Promise<void> {
+		logger.info('[ProviderHandler] User reloaded all providers');
 		const gen = ++this._reloadGeneration;
 		const results = await Promise.all([
 			this.onCheckOpenCodeStatus(),
@@ -100,6 +101,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 	}
 
 	private async onCheckOpenCodeStatus(): Promise<void> {
+		logger.info('[ProviderHandler] User checked OpenCode status');
 		const info = this.context.cli.getAdminInfo();
 		if (!info) {
 			this.context.bridge.data('openCodeStatus', {
@@ -115,6 +117,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 	}
 
 	private async onLoadOpenCodeProviders(): Promise<void> {
+		logger.info('[ProviderHandler] User loaded OpenCode providers');
 		try {
 			const sdkClient = this.context.cli.getSdkClient();
 			if (!sdkClient) {
@@ -142,6 +145,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 	}
 
 	private async onLoadAvailableProviders(): Promise<void> {
+		logger.info('[ProviderHandler] User loaded available providers');
 		try {
 			const sdkClient = this.context.cli.getSdkClient();
 			if (!sdkClient) {
@@ -160,6 +164,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 	private async onSetOpenCodeProviderAuth(
 		msg: CommandOf<'setOpenCodeProviderAuth'>,
 	): Promise<void> {
+		logger.info('[ProviderHandler] User set provider auth', { providerId: msg.providerId });
 		const { providerId, apiKey } = msg;
 		if (!providerId || !apiKey) {
 			this.context.bridge.data('openCodeAuthResult', {
@@ -197,6 +202,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 	private async onDisconnectOpenCodeProvider(
 		msg: CommandOf<'disconnectOpenCodeProvider'>,
 	): Promise<void> {
+		logger.info('[ProviderHandler] User disconnected provider', { providerId: msg.providerId });
 		const { providerId } = msg;
 		if (!providerId) {
 			this.context.bridge.data('openCodeDisconnectResult', {
@@ -236,21 +242,20 @@ export class ProviderHandler implements WebviewMessageHandler {
 	}
 
 	private async onSetOpenCodeModel(msg: CommandOf<'setOpenCodeModel'>): Promise<void> {
-		const { model } = msg;
-		if (model && parseModelId(model)) {
-			const workspaceRoot = this.context.settings.getWorkspaceRoot();
-			if (!workspaceRoot) return;
-			const result = await this.context.services.openCodeClient.setProjectDefaultModel(
-				workspaceRoot,
-				model,
-			);
-			this.context.services.mcpConfigWatcher.notifyUiSave(result.contentHash);
+		logger.info('[ProviderHandler] User set OpenCode model', { model: msg.model });
+		await this.writeProjectModel(msg.model, model => {
 			this.context.bridge.data('openCodeModelSet', { model });
-		}
+		});
 	}
 
 	private async onSelectModel(msg: CommandOf<'selectModel'>): Promise<void> {
-		const { model } = msg;
+		logger.info('[ProviderHandler] User selected model', { model: msg.model });
+		await this.writeProjectModel(msg.model, model => {
+			this.context.bridge.send({ type: 'modelSelected', model });
+		});
+	}
+
+	private async writeProjectModel(model: string, notify: (model: string) => void): Promise<void> {
 		if (model && parseModelId(model)) {
 			const workspaceRoot = this.context.settings.getWorkspaceRoot();
 			if (!workspaceRoot) return;
@@ -259,11 +264,12 @@ export class ProviderHandler implements WebviewMessageHandler {
 				model,
 			);
 			this.context.services.mcpConfigWatcher.notifyUiSave(result.contentHash);
-			this.context.bridge.send({ type: 'modelSelected', model });
+			notify(model);
 		}
 	}
 
 	private async onLoadProxyModels(msg: CommandOf<'loadProxyModels'>): Promise<void> {
+		logger.info('[ProviderHandler] User loaded proxy models', { baseUrl: msg.baseUrl });
 		const endpointId = msg.endpointId;
 		const customHeaders = msg.headers;
 		const protocol = getProxyEndpointProtocol(msg.protocol);
@@ -410,6 +416,10 @@ export class ProviderHandler implements WebviewMessageHandler {
 	 * Triggered when the user toggles models in the ProviderManager UI.
 	 */
 	private async onSyncProxyModels(msg: CommandOf<'syncProxyModels'>): Promise<void> {
+		logger.info('[ProviderHandler] User synced proxy models', {
+			providerId: msg.providerId,
+			baseUrl: msg.baseUrl,
+		});
 		const {
 			baseUrl,
 			apiKey,
@@ -428,15 +438,16 @@ export class ProviderHandler implements WebviewMessageHandler {
 		const defaultName = getCustomEndpointDefaultName(protocol);
 
 		try {
-			const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+			const workspaceRoot = this.context.settings.getWorkspaceRoot();
 			if (!workspaceRoot) return;
 			// Use the exact list from the UI message — never read from settings,
 			// which may contain stale/merged data from OpenCode CLI global config.
 			const enabledModelIds = (rawEnabledIds ?? []).filter(Boolean);
 
-			const resolvedProviderId =
-				providerId || (endpointId ? getProxyEndpointProviderId(endpointId) : '');
-
+			const resolvedProviderId = (
+				providerId?.trim() || (endpointId ? getProxyEndpointProviderId(endpointId) : '')
+			).trim();
+			if (!resolvedProviderId) return;
 			if (!enabledModelIds?.length) {
 				const result = await this.context.services.openCodeClient.upsertCustomProvider(
 					workspaceRoot,
@@ -508,12 +519,13 @@ export class ProviderHandler implements WebviewMessageHandler {
 			);
 			this.context.services.mcpConfigWatcher.notifyUiSave(result.contentHash);
 		} catch (syncErr) {
-			console.warn('[ProviderHandler] Failed to sync proxy models to opencode.json:', syncErr);
+			logger.warn('[ProviderHandler] Failed to sync proxy models to opencode.json:', syncErr);
 		}
 	}
 
 	private async onRemoveProxyEndpoint(msg: CommandOf<'removeProxyEndpoint'>): Promise<void> {
-		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		logger.info('[ProviderHandler] User removed proxy endpoint', { providerId: msg.providerId });
+		const workspaceRoot = this.context.settings.getWorkspaceRoot();
 		if (!workspaceRoot || !msg.providerId) return;
 
 		try {
@@ -528,7 +540,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 				this.context.services.mcpConfigWatcher.notifyUiSave(result.contentHash);
 			}
 		} catch (error) {
-			console.warn('[ProviderHandler] Failed to remove proxy endpoint:', error);
+			logger.warn('[ProviderHandler] Failed to remove proxy endpoint:', error);
 		}
 	}
 

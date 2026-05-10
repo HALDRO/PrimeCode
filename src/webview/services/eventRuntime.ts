@@ -4,8 +4,11 @@ import { useChatStore } from '../store';
 import type { WebviewSdkEvent } from '../store/eventReducer';
 import { useSettingsStore } from '../store/settingsStore';
 import { useUIStore } from '../store/uiStore';
+import { webviewLogger } from '../utils/logger';
 import { proxyFetch } from '../utils/proxyFetch';
 import { openCodeRuntime } from './opencodeRuntime';
+
+const log = webviewLogger.forComponent('EventRuntime');
 
 interface StreamEnvelope {
 	directory?: string;
@@ -84,7 +87,7 @@ function flushQueuedEvents(): void {
 			useChatStore.getState().actions.applyBatch(filtered);
 		}
 	} catch (error) {
-		console.error('[PrimeCode][EventRuntime] failed to apply event batch', error);
+		log.error('Failed to apply event batch', error);
 	}
 }
 
@@ -155,7 +158,7 @@ function reconcile(reason: 'server.connected' | 'reconnect'): Promise<void> {
 
 	reconcileInFlight = runReconcile()
 		.catch(error => {
-			console.warn('[PrimeCode][EventRuntime] reconcile failed', { reason, error });
+			log.warn(`Reconcile failed (reason: ${reason})`, error);
 			throw error;
 		})
 		.finally(() => {
@@ -249,7 +252,7 @@ async function runStream(
 		} catch (error) {
 			if (!aborted(error) && !streamErrorLogged) {
 				streamErrorLogged = true;
-				console.error('[PrimeCode][EventRuntime] stream failed', { serverUrl, error });
+				log.error('Stream failed', { serverUrl, error });
 			}
 			if (!signal.aborted) {
 				actions.setServerStatus('error');

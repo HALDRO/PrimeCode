@@ -109,7 +109,7 @@ describe('ChatProvider queue pipeline', () => {
 		]);
 		provider.backendBusySessions.add('ses-1');
 
-		(provider as any).forwardNormalizedBackendStatus('ses-1', 'idle', 'session.idle');
+		(provider as any).forwardNormalizedBackendStatus('ses-1', { type: 'idle' }, 'session.idle');
 		await Promise.resolve();
 
 		expect(promptAsync).toHaveBeenCalledTimes(1);
@@ -118,8 +118,8 @@ describe('ChatProvider queue pipeline', () => {
 		);
 		expect(provider.pendingMessages.get('ses-1')).toHaveLength(1);
 
-		(provider as any).forwardNormalizedBackendStatus('ses-1', 'busy', 'session.status');
-		(provider as any).forwardNormalizedBackendStatus('ses-1', 'idle', 'session.idle');
+		(provider as any).forwardNormalizedBackendStatus('ses-1', { type: 'busy' }, 'session.status');
+		(provider as any).forwardNormalizedBackendStatus('ses-1', { type: 'idle' }, 'session.idle');
 		await Promise.resolve();
 
 		expect(promptAsync).toHaveBeenCalledTimes(2);
@@ -134,12 +134,12 @@ describe('ChatProvider queue pipeline', () => {
 		]);
 		provider.backendBusySessions.add('ses-1');
 
-		(provider as any).forwardNormalizedBackendStatus('ses-1', 'idle', 'session.idle');
+		(provider as any).forwardNormalizedBackendStatus('ses-1', { type: 'idle' }, 'session.idle');
 		await Promise.resolve();
 		expect(promptAsync).toHaveBeenCalledTimes(1);
 		expect(provider.pendingMessages.get('ses-1')).toHaveLength(1);
 
-		(provider as any).forwardNormalizedBackendStatus('ses-1', 'idle', 'session.idle');
+		(provider as any).forwardNormalizedBackendStatus('ses-1', { type: 'idle' }, 'session.idle');
 		await Promise.resolve();
 
 		expect(promptAsync).toHaveBeenCalledTimes(1);

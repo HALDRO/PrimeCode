@@ -7,10 +7,12 @@
 import type { Model as ModelV2, OpencodeClient } from '@opencode-ai/sdk/v2/client';
 import * as vscode from 'vscode';
 import {
+	formatModelId,
 	getCustomEndpointProtocolFromNpm,
 	isCustomEndpointNpm,
 	normalizeCustomEndpointBaseUrl,
 	type ProxyEndpointProtocol,
+	parseModelId,
 } from '../common';
 import {
 	mapQuestionRuntimePayloadToRequest,
@@ -492,8 +494,9 @@ export class OpenCodeClientService {
 		},
 	): Promise<{ contentHash: string }> {
 		this.setWorkspaceRoot(workspaceRoot);
-		const existing = await this.readProjectConfig(workspaceRoot);
 		const { providerId, name, npm, baseUrl, apiKey = '', headers, models = [] } = input;
+		const canonicalProviderId = providerId.trim();
+		if (!canonicalProviderId) throw new Error('Provider ID is required');
 		const protocol = getCustomEndpointProtocolFromNpm(npm);
 
 		const modelsRecord: Record<string, OpenCodeModelConfig> = {};
@@ -528,36 +531,42 @@ export class OpenCodeClientService {
 		}
 
 		const normalizedBaseUrl = normalizeCustomEndpointBaseUrl(protocol, baseUrl);
+		const result = await this.projectConfig.patchProjectConfig(config => {
+			const typedConfig = config as OpenCodeJsonConfig;
+			const providerSection = typedConfig.provider ?? {};
+			typedConfig.provider = providerSection;
+			const duplicateIds = this.findProxyProviderIdsByBaseUrl(
+				providerSection,
+				normalizedBaseUrl,
+				npm,
+			);
 
-		const providerSection = existing.provider ?? {};
-		const duplicateIds = this.findProxyProviderIdsByBaseUrl(
-			providerSection,
-			normalizedBaseUrl,
-			npm,
-		);
-		const canonicalProviderId = providerSection[providerId]
-			? providerId
-			: duplicateIds[0] || providerId;
-
-		for (const duplicateId of duplicateIds) {
-			if (duplicateId !== canonicalProviderId) {
-				delete providerSection[duplicateId];
+			for (const duplicateId of duplicateIds) {
+				if (duplicateId !== canonicalProviderId) {
+					delete providerSection[duplicateId];
+				}
 			}
-		}
 
-		providerSection[canonicalProviderId] = {
-			...providerSection[canonicalProviderId],
-			name: name || providerId,
-			npm,
-			options: {
-				baseURL: normalizedBaseUrl,
-				apiKey,
-				...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
-			},
-			models: modelsRecord,
-		};
+			providerSection[canonicalProviderId] = {
+				...providerSection[canonicalProviderId],
+				name: name?.trim() || canonicalProviderId,
+				npm,
+				options: {
+					baseURL: normalizedBaseUrl,
+					apiKey,
+					...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
+				},
+				models: modelsRecord,
+			};
 
-		const result = await this.projectConfig.setProjectField('provider', providerSection);
+			this.reconcileProjectModelForProxyProvider(
+				typedConfig,
+				canonicalProviderId,
+				new Set(duplicateIds),
+				modelsRecord,
+			);
+			return typedConfig;
+		});
 		return { contentHash: result.contentHash };
 	}
 
@@ -566,30 +575,60 @@ export class OpenCodeClientService {
 		input: { providerId: string; baseUrl?: string },
 	): Promise<{ contentHash?: string }> {
 		this.setWorkspaceRoot(workspaceRoot);
-		const existing = await this.readProjectConfig(workspaceRoot);
-		if (!existing.provider) return {};
 		const { providerId, baseUrl } = input;
-
-		const idsToRemove = new Set<string>();
-		if (existing.provider[providerId]) idsToRemove.add(providerId);
-		if (baseUrl?.trim()) {
-			const providerProtocol = getCustomEndpointProtocolFromNpm(existing.provider[providerId]?.npm);
-			for (const id of this.findProxyProviderIdsByBaseUrl(
-				existing.provider,
-				normalizeCustomEndpointBaseUrl(providerProtocol, baseUrl),
-				existing.provider[providerId]?.npm,
-			)) {
-				idsToRemove.add(id);
+		const result = await this.projectConfig.patchProjectConfig(config => {
+			const typedConfig = config as OpenCodeJsonConfig;
+			if (!typedConfig.provider) return typedConfig;
+			const idsToRemove = new Set<string>();
+			if (typedConfig.provider[providerId]) idsToRemove.add(providerId);
+			if (baseUrl?.trim()) {
+				const providerProtocol = getCustomEndpointProtocolFromNpm(
+					typedConfig.provider[providerId]?.npm,
+				);
+				for (const id of this.findProxyProviderIdsByBaseUrl(
+					typedConfig.provider,
+					normalizeCustomEndpointBaseUrl(providerProtocol, baseUrl),
+					typedConfig.provider[providerId]?.npm,
+				)) {
+					idsToRemove.add(id);
+				}
 			}
-		}
-		if (idsToRemove.size === 0) return {};
-		for (const id of idsToRemove) {
-			delete existing.provider[id];
-		}
-		const result = await this.projectConfig.setProjectField('provider', existing.provider);
+			if (idsToRemove.size === 0) return typedConfig;
+			for (const id of idsToRemove) {
+				delete typedConfig.provider[id];
+			}
+			const currentModel =
+				typeof typedConfig.model === 'string' ? parseModelId(typedConfig.model) : undefined;
+			if (currentModel && idsToRemove.has(currentModel.providerId)) {
+				delete typedConfig.model;
+			}
+			return typedConfig;
+		});
 		return { contentHash: result.contentHash };
 	}
 
+	private reconcileProjectModelForProxyProvider(
+		config: OpenCodeJsonConfig,
+		canonicalProviderId: string,
+		duplicateProviderIds: Set<string>,
+		modelsRecord: Record<string, OpenCodeModelConfig>,
+	): void {
+		const currentModel = typeof config.model === 'string' ? parseModelId(config.model) : undefined;
+		if (!currentModel) return;
+
+		const modelStillAvailable = Object.hasOwn(modelsRecord, currentModel.modelId);
+		if (currentModel.providerId === canonicalProviderId) {
+			if (!modelStillAvailable) delete config.model;
+			return;
+		}
+
+		if (!duplicateProviderIds.has(currentModel.providerId)) return;
+		if (modelStillAvailable) {
+			config.model = formatModelId(canonicalProviderId, currentModel.modelId);
+			return;
+		}
+		delete config.model;
+	}
 	private findProxyProviderIdsByBaseUrl(
 		providerSection: NonNullable<OpenCodeJsonConfig['provider']>,
 		normalizedBaseUrl: string,

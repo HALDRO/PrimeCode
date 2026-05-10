@@ -60,6 +60,7 @@ import { handleSettingsData } from './settingsUtils';
 
 type PersistedSelectionState = {
 	modelVariants?: Record<string, string | undefined>;
+	providerModelVisibility?: Record<string, boolean | undefined>;
 };
 
 type ResourceState<T extends ManagedResource = ManagedResource> = {
@@ -88,8 +89,10 @@ function readPersistedSelectionState(): PersistedSelectionState {
 	if (!raw || typeof raw !== 'object') return {};
 	const state = raw as {
 		modelVariants?: unknown;
+		providerModelVisibility?: unknown;
 	};
 	let modelVariants: Record<string, string | undefined> | undefined;
+	let providerModelVisibility: Record<string, boolean | undefined> | undefined;
 	if (
 		state.modelVariants &&
 		typeof state.modelVariants === 'object' &&
@@ -101,8 +104,20 @@ function readPersistedSelectionState(): PersistedSelectionState {
 			),
 		) as Record<string, string | undefined>;
 	}
+	if (
+		state.providerModelVisibility &&
+		typeof state.providerModelVisibility === 'object' &&
+		!Array.isArray(state.providerModelVisibility)
+	) {
+		providerModelVisibility = Object.fromEntries(
+			Object.entries(state.providerModelVisibility as Record<string, unknown>).filter(
+				([, value]) => typeof value === 'boolean' || value === undefined,
+			),
+		) as Record<string, boolean | undefined>;
+	}
 	return {
 		modelVariants,
+		providerModelVisibility,
 	};
 }
 
@@ -112,6 +127,9 @@ function writePersistedSelectionState(input: PersistedSelectionState): void {
 		current && typeof current === 'object' ? { ...(current as Record<string, unknown>) } : {};
 	delete next.selectedModel;
 	if (input.modelVariants !== undefined) next.modelVariants = input.modelVariants;
+	if (input.providerModelVisibility !== undefined) {
+		next.providerModelVisibility = input.providerModelVisibility;
+	}
 	vscode.setState(next);
 }
 
@@ -406,6 +424,7 @@ export interface SettingsActions {
 	setEnabledOpenCodeModels: (models: string[]) => void;
 	setModelVariant: (modelId: string, variant: string | undefined) => void;
 	getModelVariant: (modelId: string | undefined) => string | undefined;
+	setProviderModelVisibility: (providerId: string, visible: boolean) => void;
 	// Discovery
 	setDiscoveryStatus: (status: DiscoveryStatus) => void;
 	// Rules
@@ -494,6 +513,7 @@ export interface SettingsState {
 	providerAuthState: ProviderAuthState | null;
 	// Enabled models for chat dropdown (format: "providerId/modelId")
 	enabledOpenCodeModels: string[];
+	providerModelVisibility: Record<string, boolean | undefined>;
 	// Session-only list of disconnected providers (to filter out stale CLI cache data)
 	sessionDisconnectedProviders: string[];
 
@@ -588,6 +608,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 	availableProviders: [],
 	providerAuthState: null,
 	enabledOpenCodeModels: [],
+	providerModelVisibility: persistedSelection.providerModelVisibility ?? {},
 	sessionDisconnectedProviders: [],
 
 	discoveryStatus: {
@@ -681,9 +702,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 		setLastSelectedModel: lastSelectedModel => {
 			writePersistedSelectionState({
 				modelVariants: get().modelVariants,
+				providerModelVisibility: get().providerModelVisibility,
 			});
 			set({ lastSelectedModel });
-			useChatStore.getState().actions.initializeUnassignedSessionModels(lastSelectedModel);
+			useChatStore.getState().actions.syncProjectModel(lastSelectedModel);
 		},
 		setModelVariant: (modelId, variant) =>
 			set(state => {
@@ -692,6 +714,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 				else delete next[modelId];
 				writePersistedSelectionState({
 					modelVariants: next,
+					providerModelVisibility: state.providerModelVisibility,
 				});
 				return { modelVariants: next };
 			}),
@@ -699,6 +722,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 			if (!modelId || modelId === 'default') return undefined;
 			return get().modelVariants[modelId];
 		},
+		setProviderModelVisibility: (providerId, visible) =>
+			set(state => {
+				const next = { ...state.providerModelVisibility, [providerId]: visible };
+				writePersistedSelectionState({
+					modelVariants: state.modelVariants,
+					providerModelVisibility: next,
+				});
+				return { providerModelVisibility: next };
+			}),
 		setProxyEndpoints: proxyEndpoints => set({ proxyEndpoints }),
 		addProxyEndpoint: proxyEndpoint =>
 			set(state => ({

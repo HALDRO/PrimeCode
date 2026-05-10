@@ -105,6 +105,7 @@ function makeMinimalStore(overrides: Partial<SessionStore> = {}): SessionStore {
 		queuedMessagesBySession: {},
 		sessionAgent: {},
 		sessionModel: {},
+		sessionModelSource: {},
 		sessionAutoAccept: {},
 		draftAttachments: {},
 		draftAgent: {},

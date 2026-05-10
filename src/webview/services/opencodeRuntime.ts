@@ -6,6 +6,7 @@ import {
 	type PermissionRequest,
 	type QuestionRequest,
 	type Session,
+	type SessionStatus,
 	type SnapshotFileDiff,
 	type Todo,
 } from '@opencode-ai/sdk/v2/client';
@@ -95,7 +96,7 @@ function getPermissionListsClient() {
 	};
 }
 
-function writeSessionStatus(sessionId: string, status: { type: 'idle' } | { type: 'busy' }): void {
+function writeSessionStatus(sessionId: string, status: SessionStatus): void {
 	useChatStore.setState(
 		produce((state: SessionStore) => {
 			state.sessionStatus[sessionId] = status;
@@ -453,34 +454,21 @@ export const openCodeRuntime = {
 	refreshConversationList,
 	reconcileOpenSessions,
 
-	handleBackendRuntimeStatus(sessionId: string, status: string): void {
+	handleBackendRuntimeStatus(sessionId: string, status: SessionStatus): void {
 		if (!sessionId) return;
 
-		if (status === 'busy') {
-			useChatStore.setState(
-				produce((state: SessionStore) => {
-					state.sessionStatus[sessionId] = { type: 'busy' };
-				}),
-			);
+		if (status.type === 'busy') {
+			writeSessionStatus(sessionId, status);
 			return;
 		}
 
-		if (status === 'retry') {
-			useChatStore.setState(
-				produce((state: SessionStore) => {
-					state.sessionStatus[sessionId] = {
-						type: 'retry',
-						attempt: 1,
-						message: 'Retrying...',
-						next: Date.now() + 1000,
-					};
-				}),
-			);
+		if (status.type === 'retry') {
+			writeSessionStatus(sessionId, status);
 			return;
 		}
 
-		if (status !== 'idle') return;
-		writeSessionStatus(sessionId, { type: 'idle' });
+		if (status.type !== 'idle') return;
+		writeSessionStatus(sessionId, status);
 	},
 
 	async bootstrap(): Promise<void> {

@@ -7,7 +7,7 @@
 
 import { useMemo } from 'react';
 import {
-	getProxyEndpointProviderId,
+	getProxyEndpointProviderIdFromName,
 	isProxyEndpointProviderId,
 	OPENAI_COMPATIBLE_PROVIDER_ID,
 	type OpenCodeProviderData,
@@ -60,7 +60,7 @@ export function buildModelOptions({
 
 	for (const endpoint of proxyEndpoints) {
 		if (endpoint.enabledModels.length === 0 || endpoint.models.length === 0) continue;
-		const providerId = getProxyEndpointProviderId(endpoint.id);
+		const providerId = getProxyEndpointProviderIdFromName(endpoint.name, endpoint.id);
 		const enabled = new Set(endpoint.enabledModels);
 		for (const model of endpoint.models) {
 			if (!enabled.has(model.id)) continue;
@@ -75,7 +75,6 @@ export function buildModelOptions({
 			});
 		}
 	}
-
 	return opts;
 }
 
@@ -83,13 +82,22 @@ export function useModelOptions(includeDefault = true): ModelOption[] {
 	const opencodeProviders = useSettingsStore(s => s.opencodeProviders);
 	const enabledOpenCodeModels = useSettingsStore(s => s.enabledOpenCodeModels);
 	const proxyEndpoints = useSettingsStore(s => s.proxyEndpoints);
+	const providerModelVisibility = useSettingsStore(s => s.providerModelVisibility);
 
 	return useMemo(() => {
 		return buildModelOptions({
-			opencodeProviders,
+			opencodeProviders: opencodeProviders.filter(
+				provider => providerModelVisibility[provider.id] !== false,
+			),
 			enabledOpenCodeModels,
 			proxyEndpoints,
 			includeDefault,
 		});
-	}, [opencodeProviders, enabledOpenCodeModels, proxyEndpoints, includeDefault]);
+	}, [
+		opencodeProviders,
+		enabledOpenCodeModels,
+		proxyEndpoints,
+		providerModelVisibility,
+		includeDefault,
+	]);
 }

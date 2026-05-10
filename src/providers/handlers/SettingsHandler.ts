@@ -1,10 +1,5 @@
 import * as vscode from 'vscode';
-import {
-	getCustomEndpointDedupeKey,
-	getProxyEndpointProtocol,
-	isProxyEndpointProviderId,
-	OPENAI_COMPATIBLE_PROVIDER_ID,
-} from '../../common';
+import { getCustomEndpointDedupeKey, getProxyEndpointProtocol } from '../../common';
 import type {
 	AgentResource,
 	CommandListItem,
@@ -170,6 +165,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 			id: string;
 			baseUrl: string;
 			apiKey: string;
+			protocol?: NonNullable<PrimeCodeSettings['proxy.endpoints']>[number]['protocol'];
 			headers?: Record<string, string>;
 			modelVariants?: Record<string, string[]>;
 		}>
@@ -180,6 +176,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 			id: ep.id,
 			baseUrl: ep.baseUrl,
 			apiKey: ep.apiKey,
+			protocol: ep.protocol,
 			headers: ep.headers,
 			modelVariants: ep.modelVariants,
 		}));
@@ -219,24 +216,41 @@ export class SettingsHandler implements WebviewMessageHandler {
 			const mergedSettings = { ...settings };
 
 			// Merge all OpenAI-compatible providers from opencode.json into proxy.endpoints.
-			// Provider IDs in opencode.json use the "oai-{endpointId}" format;
-			// strip the prefix to get the endpoint ID used by the UI.
+			// Provider IDs in opencode.json are runtime IDs; keep them unchanged
+			// so selected model prefixes match OpenCode provider IDs exactly.
 			const mergedEndpoints = [...existingEndpoints];
 
 			for (const provider of configProviders) {
-				const endpointId = isProxyEndpointProviderId(provider.id)
-					? provider.id.replace(`${OPENAI_COMPATIBLE_PROVIDER_ID}-`, '')
-					: provider.id;
+				const endpointId = provider.id;
 
-				// Skip if already exists by ID or by canonical (baseUrl + protocol) key
-				// (prevents duplicates when the same endpoint is in both VS Code settings
-				// and opencode.json with different IDs or slightly different URLs).
-				// Two endpoints with the same URL but different protocols are distinct.
+				// Skip if already exists by ID or merge into the endpoint with the same
+				// canonical (baseUrl + protocol) key. The config provider ID is the
+				// runtime ID used in model selections, so it must win over stale settings IDs.
 				const protocol = getProxyEndpointProtocol(provider.protocol);
 				const baseUrlKey = provider.baseUrl?.trim()
 					? getCustomEndpointDedupeKey(protocol, provider.baseUrl)
 					: '';
-				if (existingById.has(endpointId) || (baseUrlKey && existingByBaseUrlKey.has(baseUrlKey))) {
+				if (existingById.has(endpointId)) {
+					continue;
+				}
+				const existingByBaseUrl = baseUrlKey ? existingByBaseUrlKey.get(baseUrlKey) : undefined;
+				if (existingByBaseUrl) {
+					const previousEndpointId = existingByBaseUrl.id;
+					Object.assign(existingByBaseUrl, {
+						id: endpointId,
+						name: provider.name,
+						baseUrl: provider.baseUrl,
+						apiKey: provider.apiKey,
+						protocol,
+						enabledModels: provider.models.map(m => m.id),
+						modelVariants: Object.fromEntries(
+							provider.models.flatMap(m =>
+								m.variants && m.variants.length > 0 ? [[m.id, m.variants] as const] : [],
+							),
+						),
+					});
+					existingById.delete(previousEndpointId);
+					existingById.set(endpointId, existingByBaseUrl);
 					continue;
 				}
 
@@ -268,6 +282,13 @@ export class SettingsHandler implements WebviewMessageHandler {
 	}
 
 	private async onUpdateSettings(msg: CommandOf<'updateSettings'>): Promise<void> {
+		const changedKeys = Object.keys(msg.settings);
+		logger.info(`[SettingsHandler] User updated settings`, {
+			keys: changedKeys,
+			changed: Object.fromEntries(
+				changedKeys.map(k => [k, (msg.settings as Record<string, unknown>)[k]]),
+			),
+		});
 		await this.applyWebviewSettingsPatch(msg.settings);
 		this.context.settings.refresh();
 		const settings = this.context.settings.getAll();
@@ -316,7 +337,10 @@ export class SettingsHandler implements WebviewMessageHandler {
 			});
 
 		for (const [rawKey, value] of Object.entries(patch)) {
-			if (rawKey === 'model') continue;
+			if (rawKey === 'model') {
+				logger.debug('[SettingsHandler] Ignored settings patch for opencode project model');
+				continue;
+			}
 
 			if (rawKey === 'provider') {
 				if (value === 'opencode') {

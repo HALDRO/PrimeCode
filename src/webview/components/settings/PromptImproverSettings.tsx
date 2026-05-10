@@ -111,7 +111,7 @@ export const PromptImproverSettings: React.FC = () => {
 						<span className="text-sm text-vscode-foreground">System Prompt Template</span>
 						<div className="flex items-center gap-1.5">
 							<Button
-								size="xs"
+								size="sm"
 								variant="secondary"
 								onClick={() =>
 									saveSetting('promptImproveTemplate', IMPROVE_PROMPT_DEFAULT_TEMPLATE)
@@ -120,7 +120,7 @@ export const PromptImproverSettings: React.FC = () => {
 								Reset Default
 							</Button>
 							<Button
-								size="xs"
+								size="sm"
 								variant="ghost"
 								onClick={() => setExpanded(!expanded)}
 								className="flex items-center gap-1"

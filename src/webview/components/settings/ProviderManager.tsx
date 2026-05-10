@@ -2,7 +2,7 @@
  * @file Provider Manager Component
  * @description Unified interface for managing AI providers. Shows connected providers with
  *              ability to enable/disable individual models and disconnect providers.
- *              Uses shared SettingsUI primitives. Custom endpoints are managed separately.
+ *              Uses shared SettingsUI primitives with provider-level model visibility controls.
  *              For OpenCode CLI, provider auth is handled via OpenCode server endpoints.
  */
 
@@ -11,6 +11,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
 	getProxyEndpointProtocol,
 	getProxyEndpointProviderId,
+	getProxyEndpointProviderIdFromName,
 	isNonDisconnectableProviderId,
 	isProxyEndpointProviderId,
 	OPENAI_COMPATIBLE_PROVIDER_ID,
@@ -80,7 +81,7 @@ export const AddProviderSection: React.FC<AddProviderSectionProps> = ({
 		<>
 			<SettingRow title="Add Provider" last={!selectedProvider && last}>
 				<div className="flex items-center gap-2">
-					<span className="text-xs text-vscode-descriptionForeground shrink-0">
+					<span className="text-sm text-vscode-descriptionForeground shrink-0">
 						{availableForConnection.length} available
 					</span>
 					<Select
@@ -94,14 +95,6 @@ export const AddProviderSection: React.FC<AddProviderSectionProps> = ({
 					/>
 				</div>
 			</SettingRow>
-
-			{selectedProvider?.env && selectedProvider.env.length > 0 && (
-				<SettingRow title="Environment">
-					<span className="text-xs font-mono text-vscode-descriptionForeground">
-						{selectedProvider.env[0]}
-					</span>
-				</SettingRow>
-			)}
 
 			{selectedProvider && (
 				<>
@@ -134,7 +127,7 @@ export const AddProviderSection: React.FC<AddProviderSectionProps> = ({
 							variant="primary"
 							onClick={() => onConnect(selectedProvider.id)}
 							disabled={!apiKeyInput.trim() || Boolean(isAuthLoading)}
-							className="text-xs px-3"
+							className="px-3"
 						>
 							{isAuthLoading ? 'Connecting...' : 'Connect'}
 						</Button>
@@ -149,6 +142,7 @@ export const ProviderManager: React.FC = () => {
 	const {
 		provider: cliProvider,
 		opencodeProviders,
+		providerModelVisibility,
 		availableProviders,
 		providerAuthState,
 		proxyEndpoints,
@@ -161,13 +155,14 @@ export const ProviderManager: React.FC = () => {
 		updateProxyEndpoint,
 		removeProxyEndpoint,
 		setEnabledOpenCodeModels,
+		setProviderModelVisibility,
 	} = useSettingsActions();
 	const { postMessage } = useVSCode();
 
 	const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
 	const [editingApiKey, setEditingApiKey] = useState<string | null>(null);
 	const [editApiKeyInput, setEditApiKeyInput] = useState('');
-	const [modelSearch, setModelSearch] = useState('');
+	const [modelSearchByProvider, setModelSearchByProvider] = useState<Record<string, string>>({});
 
 	const isOpenCodeCLI = cliProvider === 'opencode';
 
@@ -205,7 +200,11 @@ export const ProviderManager: React.FC = () => {
 		if (!isOpenCodeCLI) return [];
 
 		const proxyProviderIds = new Set(
-			proxyEndpoints.flatMap(endpoint => [endpoint.id, getProxyEndpointProviderId(endpoint.id)]),
+			proxyEndpoints.flatMap(endpoint => [
+				endpoint.id,
+				getProxyEndpointProviderId(endpoint.id),
+				getProxyEndpointProviderIdFromName(endpoint.name, endpoint.id),
+			]),
 		);
 
 		// Connected system providers (exclude custom endpoint providers)
@@ -249,16 +248,30 @@ export const ProviderManager: React.FC = () => {
 	const handleToggleProvider = (providerId: string) => {
 		if (expandedProvider === providerId) {
 			setExpandedProvider(null);
-			setModelSearch('');
 			return;
 		}
 		setExpandedProvider(providerId);
-		setModelSearch('');
 	};
 
 	const canDisconnect = (provider: ProviderItemData) => {
 		if (provider.source === 'env') return false;
 		return !isNonDisconnectableProviderId(provider.id);
+	};
+
+	const resolveEndpointProviderId = (endpoint: { id: string; name?: string }): string => {
+		const trimmedName = endpoint.name?.trim();
+		const hasDuplicateName = Boolean(
+			trimmedName &&
+				proxyEndpoints.some(other => other.id !== endpoint.id && other.name.trim() === trimmedName),
+		);
+		return getProxyEndpointProviderIdFromName(
+			hasDuplicateName ? undefined : endpoint.name,
+			endpoint.id,
+		);
+	};
+
+	const updateProviderModelSearch = (providerId: string, value: string) => {
+		setModelSearchByProvider(prev => ({ ...prev, [providerId]: value }));
 	};
 
 	const handleRefresh = () => {
@@ -344,14 +357,15 @@ export const ProviderManager: React.FC = () => {
 			: [...endpoint.enabledModels, modelId];
 		updateProxyEndpoint(endpointId, { enabledModels });
 		persistProxyEndpoints(useSettingsStore.getState().proxyEndpoints);
+		const providerId = resolveEndpointProviderId(endpoint);
 		postMessage({
 			type: 'syncProxyModels',
 			baseUrl: endpoint.baseUrl,
 			apiKey: endpoint.apiKey,
 			enabledModelIds: enabledModels,
 			endpointId,
-			providerId: getProxyEndpointProviderId(endpointId),
-			providerName: endpoint.name || undefined,
+			providerId,
+			providerName: providerId,
 			headers: endpoint.headers,
 			protocol: getProxyEndpointProtocol(endpoint.protocol),
 		});
@@ -363,7 +377,9 @@ export const ProviderManager: React.FC = () => {
 			.proxyEndpoints.find(item => item.id === endpointId);
 		postMessage({
 			type: 'removeProxyEndpoint',
-			providerId: getProxyEndpointProviderId(endpointId),
+			providerId: endpoint
+				? resolveEndpointProviderId(endpoint)
+				: getProxyEndpointProviderId(endpointId),
 			baseUrl: endpoint?.baseUrl,
 		});
 		const nextEndpoints = useSettingsStore
@@ -397,6 +413,10 @@ export const ProviderManager: React.FC = () => {
 		postMessage({ type: 'updateSettings', settings: { 'opencode.enabledModels': newEnabled } });
 	};
 
+	const handleToggleOpenCodeProviderModels = (provider: ProviderItemData) => {
+		setProviderModelVisibility(provider.id, providerModelVisibility[provider.id] === false);
+	};
+
 	const getEnabledCountForProvider = (providerId: string) =>
 		enabledOpenCodeModels.filter(id => id.startsWith(`${providerId}/`)).length;
 
@@ -413,7 +433,7 @@ export const ProviderManager: React.FC = () => {
 					<button
 						type="button"
 						onClick={handleRefresh}
-						className="text-xs text-vscode-descriptionForeground hover:text-vscode-foreground pr-1"
+						className="text-sm text-vscode-descriptionForeground hover:text-vscode-foreground pr-1"
 					>
 						<RefreshIcon size={10} />
 					</button>
@@ -425,6 +445,7 @@ export const ProviderManager: React.FC = () => {
 					const isExpanded = expandedProvider === provider.id;
 					const modelCount = provider.models?.length ?? 0;
 					const enabledCount = getEnabledCountForProvider(provider.id);
+					const modelSearch = modelSearchByProvider[provider.id] ?? '';
 					const isThisProvider = providerAuthState?.providerId === provider.id;
 					const isAuthLoading = isThisProvider && providerAuthState?.isLoading;
 					const authSuccess = isThisProvider ? providerAuthState?.success : undefined;
@@ -440,28 +461,6 @@ export const ProviderManager: React.FC = () => {
 							onToggle={() => handleToggleProvider(provider.id)}
 							last={idx === allProviders.length - 1}
 						>
-							<SettingRow title="Provider">
-								<div className="flex items-center gap-2">
-									{provider.connected && canDisconnect(provider) && (
-										<button
-											type="button"
-											onClick={() => handleDisconnectProvider(provider.id)}
-											className="text-xs text-vscode-errorForeground/70 hover:text-vscode-errorForeground transition-colors"
-										>
-											Disconnect
-										</button>
-									)}
-								</div>
-							</SettingRow>
-
-							{provider.env && provider.env.length > 0 && (
-								<SettingRow title="Environment">
-									<span className="text-xs font-mono text-vscode-descriptionForeground">
-										{provider.env[0]}
-									</span>
-								</SettingRow>
-							)}
-
 							<SettingRow title="API Key" last={!provider.models?.length}>
 								{editingApiKey === provider.id ? (
 									<div className="flex items-center gap-1.5">
@@ -477,7 +476,7 @@ export const ProviderManager: React.FC = () => {
 											variant="primary"
 											onClick={() => handleUpdateApiKey(provider.id)}
 											disabled={!editApiKeyInput.trim() || Boolean(isAuthLoading)}
-											className="text-xs px-2"
+											className="px-2"
 										>
 											{isAuthLoading ? '...' : provider.connected ? 'Save' : 'Connect'}
 										</Button>
@@ -488,7 +487,7 @@ export const ProviderManager: React.FC = () => {
 												setEditingApiKey(null);
 												setEditApiKeyInput('');
 											}}
-											className="text-xs px-2"
+											className="px-2"
 										>
 											Cancel
 										</Button>
@@ -501,7 +500,7 @@ export const ProviderManager: React.FC = () => {
 											setEditingApiKey(provider.id);
 											setEditApiKeyInput('');
 										}}
-										className="text-xs px-2"
+										className="px-2"
 									>
 										{provider.connected ? 'Change' : 'Configure'}
 									</Button>
@@ -519,29 +518,60 @@ export const ProviderManager: React.FC = () => {
 							)}
 
 							{provider.models && provider.models.length > 0 ? (
-								<ModelList searchValue={modelSearch} onSearchChange={setModelSearch}>
-									{provider.models
-										.filter(
-											model =>
-												!modelSearch ||
-												model.name.toLowerCase().includes(modelSearch.toLowerCase()) ||
-												model.id.toLowerCase().includes(modelSearch.toLowerCase()),
-										)
-										.map(model => {
-											const isEnabled = isOpenCodeModelEnabled(provider.id, model.id);
-											return (
-												<ModelItem key={model.id} name={model.name} id={model.id}>
-													{model.reasoning && (
-														<BrainSideIcon size={14} style={{ color: 'rgba(168, 85, 247, 0.8)' }} />
-													)}
-													<Switch
-														checked={isEnabled}
-														onChange={() => handleToggleOpenCodeModel(provider.id, model.id)}
-													/>
-												</ModelItem>
-											);
-										})}
-								</ModelList>
+								<>
+									<SettingRow title="Show Models" last>
+										<div className="flex items-center gap-2">
+											{provider.connected && canDisconnect(provider) && (
+												<button
+													type="button"
+													onClick={() => handleDisconnectProvider(provider.id)}
+													className="text-sm text-vscode-errorForeground/70 hover:text-vscode-errorForeground transition-colors"
+												>
+													Disconnect
+												</button>
+											)}
+											<Switch
+												checked={providerModelVisibility[provider.id] !== false}
+												indeterminate={
+													providerModelVisibility[provider.id] !== false &&
+													enabledCount > 0 &&
+													enabledCount < modelCount
+												}
+												onChange={() => handleToggleOpenCodeProviderModels(provider)}
+											/>
+										</div>
+									</SettingRow>
+									<ModelList
+										searchValue={modelSearch}
+										onSearchChange={value => updateProviderModelSearch(provider.id, value)}
+										maxHeight={320}
+									>
+										{provider.models
+											.filter(
+												model =>
+													!modelSearch ||
+													model.name.toLowerCase().includes(modelSearch.toLowerCase()) ||
+													model.id.toLowerCase().includes(modelSearch.toLowerCase()),
+											)
+											.map(model => {
+												const isEnabled = isOpenCodeModelEnabled(provider.id, model.id);
+												return (
+													<ModelItem key={model.id} name={model.name} id={model.id}>
+														{model.reasoning && (
+															<BrainSideIcon
+																size={14}
+																style={{ color: 'rgba(168, 85, 247, 0.8)' }}
+															/>
+														)}
+														<Switch
+															checked={isEnabled}
+															onChange={() => handleToggleOpenCodeModel(provider.id, model.id)}
+														/>
+													</ModelItem>
+												);
+											})}
+									</ModelList>
+								</>
 							) : (
 								<EmptyState>No models available</EmptyState>
 							)}
@@ -556,7 +586,7 @@ export const ProviderManager: React.FC = () => {
 					size="sm"
 					variant="secondary"
 					onClick={handleAddProxyEndpoint}
-					className="text-xs px-2 py-0.5 h-(--btn-height-sm) min-h-[unset]"
+					className="px-2 py-0.5 h-(--btn-height-sm) min-h-[unset]"
 				>
 					+ Add Endpoint
 				</Button>
@@ -674,10 +704,19 @@ const CustomEndpointConfig: React.FC<CustomEndpointConfigProps> = ({
 	return (
 		<>
 			<SettingRow
-				title="Show In PrimeCode"
-				tooltip="This controls PrimeCode UI visibility only. It does not disable the provider in OpenCode runtime config."
+				title="Show Models"
+				tooltip="Controls PrimeCode UI visibility only. Does not disable the provider in OpenCode runtime config."
 			>
-				<Switch checked={enabled} onChange={onToggle} />
+				<div className="flex items-center gap-2">
+					<button
+						type="button"
+						onClick={onRemove}
+						className="text-sm text-vscode-errorForeground/70 hover:text-vscode-errorForeground transition-colors"
+					>
+						Disconnect
+					</button>
+					<Switch checked={enabled} onChange={onToggle} />
+				</div>
 			</SettingRow>
 			<SettingRow title="Name">
 				<TextInput
@@ -711,7 +750,7 @@ const CustomEndpointConfig: React.FC<CustomEndpointConfigProps> = ({
 						className="flex-1"
 					/>
 					{baseUrlError && (
-						<span className="text-xs text-vscode-errorForeground mt-0.5">{baseUrlError}</span>
+						<span className="text-sm text-vscode-errorForeground mt-0.5">{baseUrlError}</span>
 					)}
 				</div>
 			</SettingRow>
@@ -725,20 +764,20 @@ const CustomEndpointConfig: React.FC<CustomEndpointConfigProps> = ({
 					className="flex-1 max-w-(--input-width-lg)"
 				/>
 			</SettingRow>
-			<div className="px-2.5 py-1.5">
+			<div className="px-2.5 py-0.5">
 				<div className="flex items-center justify-between mb-1">
 					<span className="text-sm text-vscode-foreground">Headers</span>
 					{headerEntries.length > 0 && <SettingsBadge>{headerEntries.length}</SettingsBadge>}
 				</div>
 				{headerEntries.map(([key, value]) => (
-					<div key={key} className="flex items-center gap-1 mb-1">
-						<span className="text-xs text-vscode-descriptionForeground truncate min-w-0 flex-1">
+					<div key={key} className="flex items-center gap-1 mb-0.5">
+						<span className="text-sm text-vscode-descriptionForeground truncate min-w-0 flex-1">
 							{key}: {value}
 						</span>
 						<button
 							type="button"
 							onClick={() => handleRemoveHeader(key)}
-							className="text-xs text-vscode-errorForeground/70 hover:text-vscode-errorForeground shrink-0"
+							className="text-sm text-vscode-errorForeground/70 hover:text-vscode-errorForeground shrink-0"
 						>
 							×
 						</button>
@@ -749,26 +788,26 @@ const CustomEndpointConfig: React.FC<CustomEndpointConfigProps> = ({
 						value={headerKey}
 						onChange={e => setHeaderKey(e.target.value)}
 						placeholder="Header name"
-						className="flex-1 text-xs"
+						className="flex-1 text-sm"
 					/>
 					<TextInput
 						value={headerValue}
 						onChange={e => setHeaderValue(e.target.value)}
 						placeholder="Value"
-						className="flex-1 text-xs"
+						className="flex-1 text-sm"
 					/>
 					<Button
 						size="sm"
 						variant="secondary"
 						onClick={handleAddHeader}
 						disabled={!headerKey.trim()}
-						className="text-xs px-2 py-0.5 h-(--btn-height-sm) min-h-[unset] shrink-0"
+						className="px-2 py-0.5 h-(--btn-height-sm) min-h-[unset] shrink-0"
 					>
 						Add
 					</Button>
 				</div>
 			</div>
-			<div className="flex items-center justify-between px-2.5 py-1.5">
+			<div className="flex items-center justify-between px-2.5 py-0.5">
 				<div className="flex items-center gap-1.5">
 					<span className="text-sm text-vscode-foreground">Models</span>
 					{endpoint.models.length > 0 && (
@@ -781,7 +820,7 @@ const CustomEndpointConfig: React.FC<CustomEndpointConfigProps> = ({
 					variant="secondary"
 					onClick={onFetchModels}
 					disabled={endpoint.testStatus.isLoading || !endpoint.baseUrl.trim() || !!baseUrlError}
-					className="text-xs px-2 py-0.5 h-(--btn-height-sm) min-h-[unset]"
+					className="px-2 py-0.5 h-(--btn-height-sm) min-h-[unset]"
 				>
 					{endpoint.testStatus.isLoading
 						? 'Loading...'
@@ -791,12 +830,12 @@ const CustomEndpointConfig: React.FC<CustomEndpointConfigProps> = ({
 				</Button>
 			</div>
 			{endpoint.testStatus.error && (
-				<div className="px-2.5 py-1.5">
+				<div className="px-2.5 py-0.5">
 					<StatusMessage error={endpoint.testStatus.error} />
 				</div>
 			)}
 			{endpoint.models.length > 0 ? (
-				<ModelList searchValue={modelSearch} onSearchChange={setModelSearch}>
+				<ModelList searchValue={modelSearch} onSearchChange={setModelSearch} maxHeight={320}>
 					{filteredModels.map(model => (
 						<ModelItem key={model.id} name={model.name} id={model.id}>
 							<Switch
@@ -815,15 +854,6 @@ const CustomEndpointConfig: React.FC<CustomEndpointConfigProps> = ({
 						: 'Enter a Base URL first'}
 				</EmptyState>
 			)}
-			<SettingRow title="" last>
-				<button
-					type="button"
-					onClick={onRemove}
-					className="text-xs text-vscode-errorForeground/70 hover:text-vscode-errorForeground transition-colors"
-				>
-					Remove Endpoint
-				</button>
-			</SettingRow>
 		</>
 	);
 };

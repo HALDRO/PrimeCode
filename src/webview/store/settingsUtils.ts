@@ -89,8 +89,12 @@ export const handleSettingsData = (
 
 	if (settings['opencode.agent'] !== undefined)
 		mappedSettings.opencodeAgent = settings['opencode.agent'];
-	if (settings['opencode.enabledModels'] !== undefined)
+	if (settings['opencode.enabledModels'] !== undefined) {
 		mappedSettings.enabledOpenCodeModels = settings['opencode.enabledModels'];
+	}
+	if (settings['opencode.providerModelVisibility'] !== undefined) {
+		mappedSettings.providerModelVisibility = settings['opencode.providerModelVisibility'];
+	}
 
 	actions.setSettings(mappedSettings);
 };

@@ -145,6 +145,18 @@ const NotificationCard: React.FC<{
 								Critical
 							</span>
 						)}
+						{notification.errorCode && (
+							<span
+								className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded"
+								style={{
+									backgroundColor: `color-mix(in srgb, ${ui.accentColor} 12%, transparent)`,
+									color: ui.accentColor,
+								}}
+								title={notification.sessionId ? `Session: ${notification.sessionId}` : undefined}
+							>
+								{notification.errorCode}
+							</span>
+						)}
 					</div>
 
 					<div className="flex items-center gap-1 shrink-0 ml-2">

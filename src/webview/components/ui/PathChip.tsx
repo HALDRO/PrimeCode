@@ -73,7 +73,7 @@ export const PathChip: React.FC<PathChipProps> = ({
 		<span
 			className={cn(
 				'inline-flex items-center gap-(--gap-0-5) px-(--gap-1-5) py-0 h-(--badge-height) rounded-sm shrink-0 group/pathchip',
-				'text-xs border border-(--border-subtle) bg-transparent transition-colors duration-75 ease-out',
+				'text-xs border border-(--border-default) bg-transparent transition-colors duration-75 ease-out',
 				canClick ? 'cursor-pointer hover:border-vscode-focusBorder' : 'cursor-default',
 				onRemove && 'select-none',
 				className,

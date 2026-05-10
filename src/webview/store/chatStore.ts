@@ -58,6 +58,7 @@ function createSessionMetaDomainState() {
 		originatingToolCallBySessionId: {},
 		sessionAgent: {},
 		sessionModel: {},
+		sessionModelSource: {},
 		sessionAutoAccept: {},
 	};
 }
@@ -98,9 +99,11 @@ function syncSessionModelFromMessages(state: SessionStore, sessionId: string): v
 		const directProviderId =
 			typeof message.providerID === 'string' ? message.providerID.trim() : '';
 		if (directModelId) {
+			if (state.sessionModelSource[sessionId] === 'user') return;
 			state.sessionModel[sessionId] = directProviderId
 				? `${directProviderId}/${directModelId}`
 				: directModelId;
+			state.sessionModelSource[sessionId] = 'history';
 			return;
 		}
 		const nestedModel =
@@ -112,13 +115,17 @@ function syncSessionModelFromMessages(state: SessionStore, sessionId: string): v
 		const nestedProviderId =
 			typeof nestedModel?.providerID === 'string' ? nestedModel.providerID.trim() : '';
 		if (nestedModelId) {
+			if (state.sessionModelSource[sessionId] === 'user') return;
 			state.sessionModel[sessionId] = nestedProviderId
 				? `${nestedProviderId}/${nestedModelId}`
 				: nestedModelId;
+			state.sessionModelSource[sessionId] = 'history';
 			return;
 		}
 	}
+	if (state.sessionModelSource[sessionId] === 'user') return;
 	delete state.sessionModel[sessionId];
+	delete state.sessionModelSource[sessionId];
 }
 
 function normalizeTopLevelTabs(state: SessionStore): void {
@@ -363,6 +370,7 @@ export interface SessionStore {
 	>;
 	sessionAgent: Record<string, string | undefined>;
 	sessionModel: Record<string, string | undefined>;
+	sessionModelSource: Record<string, 'history' | 'user' | undefined>;
 	sessionAutoAccept: Record<string, boolean>;
 	draftAttachments: Record<
 		string,
@@ -386,7 +394,7 @@ export interface SessionActions {
 	appendInput: (text: string, sessionId?: string) => void;
 	updateSessionAgent: (agent: string | undefined, sessionId?: string) => void;
 	updateSessionModel: (model: string | undefined, sessionId?: string) => void;
-	initializeUnassignedSessionModels: (model: string | undefined) => void;
+	syncProjectModel: (model: string | undefined) => void;
 	addOptimisticMessage: (input: { sessionId: string; message: Message; parts: Part[] }) => void;
 	removeOptimisticMessage: (input: { sessionId: string; messageId: string }) => void;
 	truncateSessionMessages: (sessionId: string, messageId: string, includeTarget?: boolean) => void;
@@ -615,6 +623,7 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 							delete state.sessionInput[sessionId];
 							delete state.sessionAgent[sessionId];
 							delete state.sessionModel[sessionId];
+							delete state.sessionModelSource[sessionId];
 							delete state.sessionAutoAccept[sessionId];
 							delete state.draftAttachments[sessionId];
 							delete state.draftAgent[sessionId];
@@ -673,28 +682,37 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 			if (sid) {
 				set(
 					produce((s: SessionStore) => {
-						s.sessionModel[sid] = model;
+						if (model) {
+							s.sessionModel[sid] = model;
+							s.sessionModelSource[sid] = 'user';
+						} else {
+							delete s.sessionModel[sid];
+							delete s.sessionModelSource[sid];
+						}
 					}),
 				);
 			}
 		},
 
-		initializeUnassignedSessionModels: model => {
-			const initialModel = model && model !== 'default' ? model : undefined;
-			if (!initialModel) return;
+		syncProjectModel: model => {
+			const projectModel = model && model !== 'default' ? model : undefined;
 			set(
 				produce((s: SessionStore) => {
 					const sessionIds = new Set<string>(s.sessionOrder);
 					if (s.activeSessionId) sessionIds.add(s.activeSessionId);
 					for (const sessionId of sessionIds) {
-						if (s.sessionModel[sessionId] === undefined) {
-							s.sessionModel[sessionId] = initialModel;
+						if (s.sessionModelSource[sessionId] === 'user') continue;
+						if (projectModel) {
+							s.sessionModel[sessionId] = projectModel;
+							delete s.sessionModelSource[sessionId];
+						} else {
+							delete s.sessionModel[sessionId];
+							delete s.sessionModelSource[sessionId];
 						}
 					}
 				}),
 			);
 		},
-
 		addOptimisticMessage: ({ sessionId, message, parts }) => {
 			set(
 				produce((state: SessionStore) => {

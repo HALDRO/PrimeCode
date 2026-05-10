@@ -1,7 +1,7 @@
 /**
  * @file Settings UI Components
  * @description Unified UI primitives for settings pages. Provides consistent styling for
- *              group titles, setting rows, status messages, expandable sections, and CLI status bars.
+ *              group titles, setting rows, status messages, expandable sections, and model lists.
  *              All components follow the same compact design language with white/opacity colors.
  */
 
@@ -34,7 +34,7 @@ interface GroupTitleProps {
 export const GroupTitle: React.FC<GroupTitleProps> = ({ children, className }) => (
 	<h3
 		className={cn(
-			'text-xs font-medium text-vscode-descriptionForeground mb-(--gap-2) uppercase tracking-wide',
+			'text-sm font-medium text-vscode-descriptionForeground mb-(--gap-2) uppercase tracking-wide',
 			className,
 		)}
 	>
@@ -86,19 +86,23 @@ export const SettingRow: React.FC<SettingRowProps> = ({
 	const content = (
 		<div
 			className={cn(
-				'flex items-center px-2.5 py-1.5 gap-2 min-h-(--settings-row-height)',
+				'flex items-center px-2.5 py-0 gap-2 h-(--settings-row-height) min-h-(--settings-row-height)',
 				!last && 'border-b border-(--border-subtle)',
 				'hover:bg-vscode-list-hoverBackground transition-colors',
 				className,
 			)}
 		>
-			<div className="flex-1 min-w-0 flex items-center justify-start gap-2">
-				<span className="text-sm text-vscode-foreground whitespace-nowrap truncate">{title}</span>
+			<div className="flex-1 min-w-0 flex items-center justify-start gap-2 h-full">
+				<span className="text-sm leading-none text-vscode-foreground whitespace-nowrap truncate">
+					{title}
+				</span>
 				{titleExtra && (
 					<div className="shrink-0 inline-flex items-center gap-1.5">{titleExtra}</div>
 				)}
 			</div>
-			<div className="shrink-0 ml-auto">{children}</div>
+			<div className="shrink-0 ml-auto flex items-center justify-end min-h-(--control-height)">
+				{children}
+			</div>
 		</div>
 	);
 
@@ -154,7 +158,7 @@ export const StatusMessage: React.FC<StatusMessageProps> = ({
 	return (
 		<div
 			className={cn(
-				'text-xs px-2 py-1 rounded flex items-center gap-1.5',
+				'text-sm px-2 py-1 rounded flex items-center gap-1.5',
 				isLoading && 'bg-vscode-button-background/10 text-vscode-button-background',
 				success &&
 					'bg-vscode-editorGutter-addedBackground/10 text-vscode-editorGutter-addedBackground',
@@ -244,9 +248,9 @@ export const ExpandableRow: React.FC<ExpandableRowProps> = ({
 		<button
 			type="button"
 			onClick={onToggle}
-			className="w-full flex items-center justify-between px-2.5 py-1.5 gap-2 min-h-(--settings-row-height) hover:bg-vscode-list-hoverBackground transition-colors"
+			className="w-full flex items-center justify-between px-2.5 py-0 gap-2 h-(--settings-row-height) min-h-(--settings-row-height) hover:bg-vscode-list-hoverBackground transition-colors"
 		>
-			<div className="flex items-center gap-2">
+			<div className="flex items-center gap-2 h-full min-w-0">
 				{statusDot !== 'none' && (
 					<div
 						className={cn(
@@ -259,7 +263,7 @@ export const ExpandableRow: React.FC<ExpandableRowProps> = ({
 				)}
 				<span
 					className={cn(
-						'text-sm',
+						'text-sm leading-none',
 						statusDot === 'connected' || statusDot === 'none'
 							? 'text-vscode-foreground'
 							: 'text-vscode-descriptionForeground',
@@ -269,8 +273,10 @@ export const ExpandableRow: React.FC<ExpandableRowProps> = ({
 				</span>
 				{badge}
 			</div>
-			<div className="flex items-center gap-2">
-				{subtitle && <span className="text-xs text-vscode-foreground">{subtitle}</span>}
+			<div className="flex items-center gap-2 h-full shrink-0">
+				{subtitle && (
+					<span className="text-sm leading-none text-vscode-foreground">{subtitle}</span>
+				)}
 				{expanded ? (
 					<ChevronDownIcon size={12} className="text-vscode-descriptionForeground" />
 				) : (
@@ -279,7 +285,7 @@ export const ExpandableRow: React.FC<ExpandableRowProps> = ({
 			</div>
 		</button>
 		{expanded && (
-			<div className="bg-vscode-editor-background border-t border-(--border-subtle) space-y-0.5">
+			<div className="bg-vscode-editor-background border-t border-(--border-subtle)">
 				{children}
 			</div>
 		)}
@@ -310,17 +316,17 @@ export const ModelList: React.FC<ModelListProps> = ({
 	const showSearch = onSearchChange !== undefined;
 
 	return (
-		<div className="p-(--gap-2)">
+		<div className="p-(--gap-3)">
 			<div className={cn('border border-vscode-panel-border rounded overflow-hidden', className)}>
 				{showSearch && (
-					<div className="flex items-center gap-1.5 px-2 py-1 border-b border-(--border-subtle) bg-(--alpha-5)">
+					<div className="flex items-center gap-1.5 px-(--gap-3) py-0 h-(--settings-row-height) min-h-(--settings-row-height) border-b border-(--border-subtle) bg-(--alpha-5)">
 						<SearchIcon size={12} className="text-(--alpha-40) shrink-0" />
 						<input
 							type="text"
 							value={searchValue ?? ''}
 							onChange={e => onSearchChange(e.target.value)}
 							placeholder={searchPlaceholder}
-							className="w-full bg-transparent border-none p-0 outline-none text-sm text-(--alpha-90) placeholder:text-(--alpha-30)"
+							className="w-full h-(--field-height) min-h-(--field-height) bg-transparent border-none p-0 outline-none text-sm leading-[var(--field-line-height)] text-(--alpha-90) placeholder:text-(--alpha-30)"
 						/>
 					</div>
 				)}
@@ -344,8 +350,11 @@ interface ModelItemProps {
 }
 
 export const ModelItem: React.FC<ModelItemProps> = ({ name, id, children }) => (
-	<div className="flex items-center justify-between px-2.5 py-1.5 min-h-(--settings-row-height)">
-		<span className="text-sm text-vscode-foreground truncate flex-1" title={id || name}>
+	<div className="flex items-center justify-between px-2.5 py-0.5 min-h-(--model-row-height)">
+		<span
+			className="text-sm leading-normal text-vscode-foreground truncate flex-1"
+			title={id || name}
+		>
 			{name}
 		</span>
 		<div className="flex items-center gap-2 shrink-0">{children}</div>
@@ -393,7 +402,7 @@ export const SettingsBadge: React.FC<SettingsBadgeProps> = ({
 	return (
 		<span
 			className={cn(
-				'inline-flex items-center box-border ml-1 min-h-[18px] px-2 py-px rounded-md border text-[11px] leading-[14px] font-medium whitespace-nowrap',
+				'inline-flex items-center box-border ml-1 min-h-[18px] px-2 py-px rounded-md border text-sm leading-[14px] font-medium whitespace-nowrap',
 				className,
 			)}
 			style={variantStyles[variant]}

@@ -545,7 +545,7 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 						}
 					}}
 					className={cn(
-						'flex items-center justify-between w-full h-(--tool-header-height) px-(--tool-header-padding)',
+						'relative flex items-center justify-between w-full h-(--tool-header-height) px-(--tool-header-padding)',
 						'text-sm font-(family-name:--vscode-font-family)',
 						'bg-transparent border-none cursor-pointer',
 						expanded && 'rounded-b-lg',

@@ -51,6 +51,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 		opencodeProviders,
 		enabledOpenCodeModels,
 		setLastSelectedModel,
+		providerModelVisibility,
 		setSessionModel,
 	} = useModelSelection();
 	const { setShowModelDropdown } = useModelDropdownState();
@@ -121,10 +122,14 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 	// Build flat list of models with provider as badge
 	const items = useMemo((): DropdownMenuItem<ModelData>[] => {
 		const result: DropdownMenuItem<ModelData>[] = [...(extraItems ?? [])];
+		const visibleProviders = opencodeProviders.filter(
+			provider => providerModelVisibility[provider.id] !== false,
+		);
+		const visibleEndpoints = proxyEndpoints;
 		const modelOptions = buildModelOptions({
-			opencodeProviders,
+			opencodeProviders: visibleProviders,
 			enabledOpenCodeModels,
-			proxyEndpoints,
+			proxyEndpoints: visibleEndpoints,
 			includeDefault: false,
 		});
 
@@ -168,6 +173,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
 		enabledOpenCodeModels,
 		extraItems,
 		opencodeProviders,
+		providerModelVisibility,
 		proxyEndpoints,
 	]);
 

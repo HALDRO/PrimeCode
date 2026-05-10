@@ -1,3 +1,4 @@
+import type { SessionStatus } from '@opencode-ai/sdk/v2/client';
 import { createOpencodeClient } from '@opencode-ai/sdk/v2/client';
 import * as vscode from 'vscode';
 import { generateId, parseModelId } from '../common';
@@ -9,6 +10,7 @@ import { Settings } from '../core/Settings';
 import { CommandRouter } from '../transport/CommandRouter';
 
 import { OutboundBridge } from '../transport/OutboundBridge';
+import { extractErrorInfo } from '../utils/errorInfo';
 import { logger } from '../utils/logger';
 import { getHtml } from '../utils/webviewHtml';
 import { FileHandler } from './handlers/FileHandler';
@@ -19,35 +21,7 @@ import { ToolHandler } from './handlers/ToolHandler';
 import type { HandlerContext } from './handlers/types';
 import { UtilityHandler } from './handlers/UtilityHandler';
 
-/** Commands whose errors should not be surfaced as chat messages (file/UI ops). */
-const SILENT_COMMANDS = new Set([
-	'openFile',
-	'openFileDiff',
-	'openExternal',
-	'getImageData',
-	'stopRequest',
-]);
-
 const MAX_MESSAGE_QUEUE_SIZE = 4;
-
-function stringifyUnknownError(error: unknown): string {
-	if (error instanceof Error) return error.message;
-	if (typeof error === 'string' && error.trim()) return error.trim();
-	if (!error || typeof error !== 'object') return 'Unknown error';
-	const record = error as Record<string, unknown>;
-	const message = record.message;
-	if (typeof message === 'string' && message.trim()) return message.trim();
-	const data = record.data;
-	if (data && typeof data === 'object') {
-		const dataMessage = (data as Record<string, unknown>).message;
-		if (typeof dataMessage === 'string' && dataMessage.trim()) return dataMessage.trim();
-	}
-	try {
-		return JSON.stringify(error);
-	} catch {
-		return 'Unknown error';
-	}
-}
 
 type BackendSendParams = {
 	sessionId: string;
@@ -221,17 +195,24 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 	private async reloadOpenCodeRuntime(source: string): Promise<void> {
 		const sdkClient = this.cli.getSdkClient();
-		if (!sdkClient) return;
+		if (!sdkClient) {
+			this.clearOpenCodeRuntimeCaches();
+			return;
+		}
 
 		try {
 			await sdkClient.instance.dispose();
-			this.cli.clearAgentsCache?.();
-			this.cli.clearCommandsCache?.();
-			this.cli.clearSkillsCache?.();
-			this.cli.clearMcpCache?.();
+			this.clearOpenCodeRuntimeCaches();
 		} catch (error) {
 			logger.error('[ChatProvider] Failed to reload OpenCode runtime:', { source, error });
 		}
+	}
+
+	private clearOpenCodeRuntimeCaches(): void {
+		this.cli.clearAgentsCache?.();
+		this.cli.clearCommandsCache?.();
+		this.cli.clearSkillsCache?.();
+		this.cli.clearMcpCache?.();
 	}
 
 	private async handleResourceChange(
@@ -246,15 +227,12 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 			switch (resourceType) {
 				case 'commands':
-					this.cli.clearCommandsCache?.();
 					await this.settingsHandler.handleMessage({ type: 'getResources', kind: 'command' });
 					return;
 				case 'skills':
-					this.cli.clearSkillsCache?.();
 					await this.settingsHandler.handleMessage({ type: 'getResources', kind: 'skill' });
 					return;
 				case 'subagents':
-					this.cli.clearAgentsCache?.();
 					await this.settingsHandler.handleMessage({ type: 'getResources', kind: 'agent' });
 					return;
 				case 'plugins':
@@ -508,6 +486,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 	private async syncAll(): Promise<void> {
 		// Pull everything the UI can display. This keeps startup and reconnect logic simple.
+		logger.debug('[ChatProvider] syncAll started');
 		const startedAt = Date.now();
 
 		// Send server URL first so webview can establish SSE health polling immediately
@@ -528,8 +507,15 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		];
 
 		const results = await Promise.allSettled(requests);
-		void startedAt;
-		void results;
+		const failures = results.filter(
+			(result): result is PromiseRejectedResult => result.status === 'rejected',
+		);
+		if (failures.length > 0) {
+			logger.warn('[ChatProvider] syncAll completed with failed tasks', {
+				failures: failures.map(result => extractErrorInfo(result.reason)),
+			});
+		}
+		logger.debug('[ChatProvider] syncAll completed', { durationMs: Date.now() - startedAt });
 
 		// Auto-fetch models for custom proxy endpoints so they appear in the UI
 		// after restart without requiring the user to click "Fetch" manually.
@@ -557,6 +543,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					apiKey: ep.apiKey ?? '',
 					endpointId: ep.id,
 					headers: ep.headers,
+					protocol: ep.protocol,
 				}),
 			);
 
@@ -608,34 +595,51 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	}
 
 	private async handleWebviewMessage(msg: WebviewCommand): Promise<void> {
+		// Forward webview diagnostic logs to the Output channel
+		if (msg.type === 'webviewLog') {
+			const logFn = logger[msg.level] as (m: string, ...args: unknown[]) => void;
+			const line = msg.details
+				? `[WebView][${msg.component}] ${msg.message} ${msg.details}`
+				: `[WebView][${msg.component}] ${msg.message}`;
+			logFn(line);
+			return;
+		}
+
 		try {
 			const handled = await this.router.dispatch(msg);
 			if (!handled) {
 				logger.warn(`[ChatProvider] Unhandled webview command: ${msg.type}`);
 			}
 		} catch (error) {
-			logger.error(`[ChatProvider] Error handling message:`, error);
+			const errorInfo = extractErrorInfo(error);
 
-			// Don't surface file/UI operation errors as chat messages — they are not actionable for the user
-			if (SILENT_COMMANDS.has(msg.type)) return;
+			// CodeExpectedError = VS Code refusing to open a file (too large, binary).
+			// Not our bug — VS Code's own limitation. Log at debug, don't surface.
+			if (errorInfo.name === 'CodeExpectedError') {
+				logger.debug(
+					`[ChatProvider] VS Code refused to open file (${msg.type}):`,
+					errorInfo.message,
+				);
+				return;
+			}
 
-			this.bridge.showNotification({
-				notification: {
-					id: `error-${Date.now()}`,
-					type: 'error',
-					content: stringifyUnknownError(error),
-					timestamp: new Date().toISOString(),
-				},
-			});
+			logger.error(`[ChatProvider] Error handling "${msg.type}" command:`, errorInfo);
+			// Command errors are extension bugs, not actionable for the user.
+			// Full context is available in the Output channel (Developer: Show Output → PrimeCode).
 		}
 	}
 
 	private async handleSessionCommand(msg: WebviewCommand): Promise<void> {
 		switch (msg.type) {
 			case 'sendMessage':
+				logger.info(`[ChatProvider] User sent message in session ${msg.sessionId}`, {
+					agent: (msg as { agent?: string }).agent,
+					model: (msg as { model?: string }).model,
+				});
 				await this.handleSendMessageCommand(msg);
 				return;
 			case 'stopRequest':
+				logger.info(`[ChatProvider] User stopped generation in session ${msg.sessionId}`);
 				await this.abortSession(msg.sessionId);
 				this.forceIdleWithoutDrain(msg.sessionId, 'local.stop');
 				return;
@@ -724,7 +728,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			return;
 		}
 
-		await this.sendPromptAsync({
+		const params: BackendSendParams = {
 			sessionId: msg.sessionId,
 			text: msg.text,
 			messageID: msg.messageID,
@@ -732,7 +736,26 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			agent: msg.agent,
 			variant: msg.variant,
 			attachments: msg.attachments,
-		});
+		};
+
+		try {
+			await this.sendPromptAsync(params);
+		} catch (error) {
+			if (!params.model) throw error;
+			// Model may have been removed externally (another VS Code instance).
+			// Refresh providers and retry once before giving up.
+			logger.info(
+				`[ChatProvider] Send failed with model "${params.model}", refreshing and retrying`,
+			);
+			try {
+				await this.reloadOpenCodeRuntime('model-retry');
+				await this.settingsHandler.handleMessage({ type: 'getSettings' });
+				await this.providerHandler.handleMessage({ type: 'loadOpenCodeProviders' });
+			} catch (refreshError) {
+				logger.warn('[ChatProvider] Provider refresh failed during retry:', refreshError);
+			}
+			await this.sendPromptAsync(params);
+		}
 	}
 
 	private async sendCompactionAsync(params: BackendSendParams): Promise<void> {
@@ -765,7 +788,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.sendingLock.add(params.sessionId);
 		this.suppressNextIdleDrain.delete(params.sessionId);
 		this.awaitingBackendBusy.add(params.sessionId);
-		this.sendBackendRuntimeStatus(params.sessionId, 'busy', 'local.compact');
+		this.sendBackendRuntimeStatus(params.sessionId, { type: 'busy' }, 'local.compact');
 		try {
 			const result = await compactionClient.session.summarize({
 				sessionID: params.sessionId,
@@ -775,11 +798,14 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				auto: false,
 			});
 			if (result?.error) {
-				throw new Error(`Compaction failed: ${JSON.stringify(result.error)}`);
+				const errorInfo = extractErrorInfo(result.error);
+				throw new Error(errorInfo.message);
 			}
 		} catch (error) {
+			const errorInfo = extractErrorInfo(error);
+			logger.error(`[ChatProvider] Compaction failed for session ${params.sessionId}:`, errorInfo);
 			this.awaitingBackendBusy.delete(params.sessionId);
-			this.sendBackendRuntimeStatus(params.sessionId, 'idle', 'local.error');
+			this.sendBackendRuntimeStatus(params.sessionId, { type: 'idle' }, 'local.error');
 			throw error;
 		} finally {
 			this.sendingLock.delete(params.sessionId);
@@ -817,7 +843,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.sendingLock.add(params.sessionId);
 		this.suppressNextIdleDrain.delete(params.sessionId);
 		this.awaitingBackendBusy.add(params.sessionId);
-		this.sendBackendRuntimeStatus(params.sessionId, 'busy', 'local.send');
+		this.sendBackendRuntimeStatus(params.sessionId, { type: 'busy' }, 'local.send');
 		try {
 			const result = await promptClient.session.promptAsync({
 				sessionID: params.sessionId,
@@ -830,11 +856,20 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				parts: this.buildRequestParts(params),
 			});
 			if (result?.error) {
-				throw new Error(`Message send failed: ${stringifyUnknownError(result.error)}`);
+				const errorInfo = extractErrorInfo(result.error);
+				throw Object.assign(new Error(`Message send failed: ${errorInfo.message}`), {
+					code: errorInfo.code,
+					cause: result.error,
+				});
 			}
 		} catch (error) {
+			const errorInfo = extractErrorInfo(error);
+			logger.error(
+				`[ChatProvider] sendPromptAsync failed for session ${params.sessionId}:`,
+				errorInfo,
+			);
 			this.awaitingBackendBusy.delete(params.sessionId);
-			this.sendBackendRuntimeStatus(params.sessionId, 'idle', 'local.error');
+			this.sendBackendRuntimeStatus(params.sessionId, { type: 'idle' }, 'local.error');
 			throw error;
 		} finally {
 			this.sendingLock.delete(params.sessionId);
@@ -844,7 +879,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
-	private sendBackendRuntimeStatus(sessionId: string, status: string, reason: string): void {
+	private sendBackendRuntimeStatus(sessionId: string, status: SessionStatus, reason: string): void {
 		this.bridge.data('backendRuntimeStatus', {
 			sessionId,
 			status,
@@ -924,7 +959,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		try {
 			await this.sendPromptAsync(entry);
 		} catch (error) {
-			logger.error('[ChatProvider] Failed to send queued message', error);
+			const errorInfo = extractErrorInfo(error);
+			logger.error(
+				`[ChatProvider] Failed to send queued message for session ${sessionId}:`,
+				errorInfo,
+			);
 			this.bridge.queueUpdate(
 				'cancelled',
 				sessionId,
@@ -952,7 +991,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.backendBusySessions.delete(sessionId);
 		this.pendingIdleDrain.delete(sessionId);
 		this.suppressNextIdleDrain.delete(sessionId);
-		this.sendBackendRuntimeStatus(sessionId, 'idle', reason);
+		this.sendBackendRuntimeStatus(sessionId, { type: 'idle' }, reason);
 	}
 
 	private handleSettingsChange(): void {
@@ -994,22 +1033,24 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 	private forwardNormalizedBackendStatus(
 		sessionId: string,
-		status: string,
+		status: SessionStatus,
 		reason: 'session.idle' | 'session.status',
 	): void {
-		if (status === 'idle') {
+		const statusType = status.type;
+
+		if (statusType === 'idle') {
 			if (this.awaitingBackendBusy.has(sessionId)) return;
 			if (!this.backendBusySessions.has(sessionId)) return;
 			this.backendBusySessions.delete(sessionId);
 			const shouldDrain = !this.suppressNextIdleDrain.delete(sessionId);
-			this.sendBackendRuntimeStatus(sessionId, 'idle', reason);
+			this.sendBackendRuntimeStatus(sessionId, status, reason);
 			if (shouldDrain) {
 				void this.processQueueOnIdle(sessionId);
 			}
 			return;
 		}
 
-		if (status === 'busy' || status === 'retry') {
+		if (statusType === 'busy' || statusType === 'retry') {
 			this.awaitingBackendBusy.delete(sessionId);
 			this.backendBusySessions.add(sessionId);
 		}
@@ -1064,24 +1105,65 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			return;
 		}
 
+		const properties = payload.properties as Record<string, unknown>;
+
 		if (payload.type === 'session.idle') {
-			const properties = payload.properties as Record<string, unknown>;
 			const sessionId = typeof properties.sessionID === 'string' ? properties.sessionID : null;
 			if (!sessionId) return;
-			this.forwardNormalizedBackendStatus(sessionId, 'idle', 'session.idle');
+			this.forwardNormalizedBackendStatus(sessionId, { type: 'idle' }, 'session.idle');
 			return;
 		}
 
 		if (payload.type === 'session.status') {
-			const properties = payload.properties as Record<string, unknown>;
 			const sessionId = typeof properties.sessionID === 'string' ? properties.sessionID : null;
-			const status =
+			const rawStatus =
 				typeof properties.status === 'object' && properties.status !== null
 					? (properties.status as Record<string, unknown>)
 					: null;
-			const statusType = typeof status?.type === 'string' ? status.type : null;
-			if (!sessionId || !statusType) return;
-			this.forwardNormalizedBackendStatus(sessionId, statusType, 'session.status');
+			const statusType = typeof rawStatus?.type === 'string' ? rawStatus.type : null;
+			if (!sessionId || !rawStatus || !statusType) return;
+
+			// Reconstruct the full SessionStatus from the raw event payload so
+			// retry metadata (attempt, message, next) reaches the webview intact.
+			const sessionStatus: SessionStatus =
+				statusType === 'retry'
+					? {
+							type: 'retry',
+							attempt: typeof rawStatus.attempt === 'number' ? rawStatus.attempt : 1,
+							message: typeof rawStatus.message === 'string' ? rawStatus.message : 'Retrying…',
+							next: typeof rawStatus.next === 'number' ? rawStatus.next : Date.now() + 1000,
+						}
+					: statusType === 'busy'
+						? { type: 'busy' }
+						: { type: 'idle' };
+
+			this.forwardNormalizedBackendStatus(sessionId, sessionStatus, 'session.status');
+			return;
+		}
+
+		if (payload.type === 'session.error') {
+			const sessionId = typeof properties.sessionID === 'string' ? properties.sessionID : null;
+			const rawError = properties.error;
+			if (!sessionId || !rawError) return;
+
+			const errorInfo = extractErrorInfo(rawError);
+
+			// Skip noise: MessageAbortedError is user-initiated cancellation
+			if (errorInfo.name === 'MessageAbortedError') return;
+
+			logger.error(`[ChatProvider] Session ${sessionId} error from backend:`, errorInfo);
+
+			this.bridge.showNotification({
+				notification: {
+					type: 'error',
+					content: errorInfo.message,
+					severity: errorInfo.severity,
+					errorCode: errorInfo.code,
+					sessionId,
+					reason: errorInfo.name,
+					timestamp: new Date().toISOString(),
+				},
+			});
 		}
 	}
 
@@ -1175,6 +1257,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	}
 
 	public async createSessionFromCommand(): Promise<void> {
+		logger.info('[ChatProvider] User requested new chat');
 		this.postMessage({ type: 'requestNewSession' });
 	}
 

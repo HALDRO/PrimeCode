@@ -1,9 +1,17 @@
+/**
+ * @file Switch component
+ * @description Compact accessible switch control used by settings and model toggles. Supports
+ *              checked, unchecked, and visual indeterminate states without changing the click
+ *              contract, so parent components keep full ownership of state transitions.
+ */
+
 import type React from 'react';
 import { cn } from '../../lib/cn';
 
 interface SwitchProps {
 	checked: boolean;
 	onChange: (checked: boolean) => void;
+	indeterminate?: boolean;
 	disabled?: boolean;
 	className?: string;
 	style?: React.CSSProperties;
@@ -12,6 +20,7 @@ interface SwitchProps {
 export const Switch: React.FC<SwitchProps> = ({
 	checked,
 	onChange,
+	indeterminate = false,
 	disabled,
 	className,
 	style,
@@ -19,13 +28,13 @@ export const Switch: React.FC<SwitchProps> = ({
 	<button
 		type="button"
 		role="switch"
-		aria-checked={checked}
+		aria-checked={indeterminate ? 'mixed' : checked}
 		onClick={() => !disabled && onChange(!checked)}
 		disabled={disabled}
 		className={cn(
 			'relative inline-flex items-center justify-start p-0 border-none outline-none transition-colors duration-200 rounded-full shrink-0',
 			'w-(--switch-width) h-(--switch-height) min-w-(--switch-width) min-h-(--switch-height)',
-			checked ? 'bg-(--color-accent)' : 'bg-(--alpha-10) hover:bg-(--alpha-15)',
+			checked || indeterminate ? 'bg-(--color-accent)' : 'bg-(--alpha-10) hover:bg-(--alpha-15)',
 			disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer',
 			className,
 		)}
@@ -35,7 +44,11 @@ export const Switch: React.FC<SwitchProps> = ({
 			className={cn(
 				'bg-vscode-button-foreground rounded-full shadow-[0_1px_2px_color-mix(in_srgb,var(--vscode-editor-background)_60%,transparent)] transition-transform duration-200 ease-out',
 				'w-(--switch-thumb) h-(--switch-thumb)',
-				checked ? 'translate-x-[14px]' : 'translate-x-(--switch-thumb-offset)',
+				checked
+					? 'translate-x-[14px]'
+					: indeterminate
+						? 'translate-x-[7px]'
+						: 'translate-x-(--switch-thumb-offset)',
 			)}
 		/>
 	</button>

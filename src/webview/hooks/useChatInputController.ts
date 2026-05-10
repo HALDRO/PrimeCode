@@ -30,6 +30,9 @@ import {
 } from '../store';
 import { useSettingsStore } from '../store/settingsStore';
 import { useUIStore } from '../store/uiStore';
+import { webviewLogger } from '../utils/logger';
+
+const log = webviewLogger.forComponent('Send');
 
 interface AttachmentState {
 	images: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
@@ -302,7 +305,7 @@ export function useChatInputController(
 				attachments: hasAttachments ? builtAttachments : undefined,
 			});
 		} catch (error) {
-			console.error('[PrimeCode][Send] request-failed', error);
+			log.error('Request failed', error);
 			updateSessionInput(originalInputValue);
 			throw error;
 		}

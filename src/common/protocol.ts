@@ -326,6 +326,12 @@ export type ShowNotificationMessage = BaseExtensionMessage<
 			id?: string;
 			type: 'error' | 'system_notice';
 			content: string;
+			/** Machine-readable severity for styling and filtering. */
+			severity?: 'critical' | 'error' | 'warning' | 'info';
+			/** Machine-readable error code for programmatic handling (e.g. 'PROVIDER_AUTH'). */
+			errorCode?: string;
+			/** Session the error belongs to, if known. */
+			sessionId?: string;
 			timestamp?: string;
 			reason?: string;
 		};
@@ -788,6 +794,20 @@ export interface GetConnectionDetailsCommand {
 }
 
 // =============================================================================
+// Webview → Extension log forwarding (developer diagnostics)
+// =============================================================================
+
+export interface WebviewLogCommand {
+	type: 'webviewLog';
+	level: 'info' | 'warn' | 'error' | 'debug';
+	component: string;
+	message: string;
+	details?: unknown;
+}
+
+// =============================================================================
+// Webview → Extension Union
+// =============================================================================
 // File Commands
 // =============================================================================
 
@@ -970,7 +990,8 @@ export type WebviewCommand =
 	| CheckExtensionVersionCommand
 	| RestartOpenCodeCommand
 	| ReloadExtensionCommand
-	| GetConnectionDetailsCommand;
+	| GetConnectionDetailsCommand
+	| WebviewLogCommand;
 
 // =============================================================================
 // Utility

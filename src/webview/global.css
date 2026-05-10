@@ -23,7 +23,7 @@
 	/* ===========================================
 	   TYPOGRAPHY - 5 sizes
 	   =========================================== */
-	--text-2xs: 9px; /* tiny labels, badges */
+	--text-2xs: 9px; /* compact labels, badges */
 	--text-xs: 10px; /* metadata, badges, hints */
 	--text-sm: 11px; /* labels, secondary text, tool headers */
 	--text-md: 12px; /* medium text */
@@ -55,8 +55,8 @@
 	/* ===========================================
 	   HEIGHTS - 4 sizes for all elements
 	   =========================================== */
-	--h-xs: 18px; /* badges, small tags */
-	--h-sm: 20px; /* dropdown items, small buttons */
+	--h-xs: 20px; /* badges, small tags */
+	--h-sm: 22px; /* dropdown items, compact buttons */
 	--h-md: 24px; /* standard buttons, inputs */
 	--h-lg: 28px; /* headers, large buttons */
 
@@ -118,7 +118,11 @@
 	--surface-raised: color-mix(in srgb, var(--vscode-sideBar-background) 90%, black);
 	--surface-overlay: var(--vscode-editor-background);
 
-	--border-subtle: var(--vscode-panel-border);
+	--border-subtle: color-mix(
+		in srgb,
+		var(--vscode-panel-border) 35%,
+		var(--vscode-editor-background)
+	);
 	--border-muted: color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
 	--border-default: var(--vscode-panel-border);
 	--border-accent: color-mix(in srgb, var(--vscode-panel-border) 95%, var(--vscode-foreground) 5%);
@@ -139,15 +143,27 @@
 
 	/* Inputs */
 	--input-bg: var(--surface-raised);
-	--input-border: var(--border-accent);
+	--input-border: color-mix(
+		in srgb,
+		var(--vscode-panel-border) 75%,
+		var(--vscode-editor-background)
+	);
 	--input-radius: var(--radius-lg);
 	--input-height: var(--h-md);
 
 	/* Buttons */
-	--btn-height: var(--h-sm);
+	--btn-height: var(--h-md);
 	--btn-padding: var(--gap-4);
 	--btn-radius: var(--radius-sm);
 
+	/* Form controls */
+	--control-height: 24px;
+	--field-height: 22px;
+	--control-font-size: var(--text-sm);
+	--control-padding-x: var(--gap-3);
+	--control-radius: var(--radius-md);
+	--control-line-height: calc(var(--control-height) - 2px);
+	--field-line-height: calc(var(--field-height) - 2px);
 	/* Dropdowns */
 	--dropdown-item-height: var(--h-sm);
 	--dropdown-padding: var(--gap-4);
@@ -316,6 +332,27 @@ body {
 	height: 100vh;
 	width: 100vw;
 	overflow: hidden;
+}
+
+input,
+select,
+textarea,
+button {
+	font-size: var(--control-font-size);
+}
+
+input:not([type='checkbox']):not([type='radio']),
+select {
+	box-sizing: border-box;
+	min-height: var(--control-height);
+}
+
+.text-xs {
+	font-size: var(--text-xs);
+}
+
+.text-sm {
+	font-size: var(--text-sm);
 }
 
 code,
@@ -692,9 +729,9 @@ div:hover > .user-copy-btn {
 	--input-width-lg: 280px;
 
 	/* Buttons */
-	--btn-height-xs: var(--h-sm);
-	--btn-height-sm: 22px;
-	--btn-height-md: var(--h-md);
+	--btn-height-xs: var(--h-xs);
+	--btn-height-sm: var(--control-height);
+	--btn-height-md: var(--h-lg);
 
 	/* Icon Buttons */
 	--icon-btn-xs: 16px;
@@ -757,7 +794,6 @@ div:hover > .user-copy-btn {
 
 	/* Select */
 	--select-min-width: 120px;
-
 	/* Switch */
 	--switch-width: 28px;
 	--switch-height: 16px;
@@ -773,6 +809,7 @@ div:hover > .user-copy-btn {
 
 	/* Settings */
 	--settings-row-height: 28px;
+	--model-row-height: var(--settings-row-height);
 
 	/* Alpha (numeric aliases) */
 	--alpha-5: var(--alpha-subtle);

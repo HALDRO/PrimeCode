@@ -64,6 +64,8 @@ export interface TransientNotification {
 	type: 'error' | 'system_notice';
 	content: string;
 	reason?: string;
+	errorCode?: string;
+	sessionId?: string;
 	severity: NotificationSeverity;
 	timestamp: string;
 	createdAt: number;
@@ -205,6 +207,7 @@ export const useUIStore = create<UIState>((set, get) => ({
 		pushNotification: notification => {
 			const id = notification.id || generateId('notif');
 			const createdAt = notification.createdAt ?? Date.now();
+			// Protocol-provided severity takes precedence over inference
 			const severity =
 				notification.severity ?? inferSeverity(notification.type, notification.content);
 			set(state => {
@@ -219,6 +222,8 @@ export const useUIStore = create<UIState>((set, get) => ({
 						count: updated[existingIdx].count + 1,
 						createdAt,
 						timestamp: notification.timestamp,
+						errorCode: notification.errorCode ?? updated[existingIdx].errorCode,
+						sessionId: notification.sessionId ?? updated[existingIdx].sessionId,
 					};
 					return { notifications: updated };
 				}
@@ -230,6 +235,8 @@ export const useUIStore = create<UIState>((set, get) => ({
 							type: notification.type,
 							content: notification.content,
 							reason: notification.reason,
+							errorCode: notification.errorCode,
+							sessionId: notification.sessionId,
 							severity,
 							timestamp: notification.timestamp,
 							createdAt,
@@ -296,6 +303,37 @@ export const useUIStore = create<UIState>((set, get) => ({
 				case 'connectionDetails':
 					set({ connectionDetails: message.data as UIState['connectionDetails'] });
 					break;
+
+				case 'showNotification': {
+					const data = message.data as
+						| {
+								notification?: {
+									type?: string;
+									content?: string;
+									severity?: string;
+									errorCode?: string;
+									sessionId?: string;
+									timestamp?: string;
+									reason?: string;
+								};
+						  }
+						| undefined;
+					const n = data?.notification;
+					if (n?.content) {
+						actions.pushNotification({
+							type: (n.type === 'system_notice' ? 'system_notice' : 'error') as
+								| 'error'
+								| 'system_notice',
+							content: n.content,
+							severity: n.severity as NotificationSeverity | undefined,
+							timestamp: n.timestamp ?? new Date().toISOString(),
+							reason: n.reason,
+							errorCode: n.errorCode,
+							sessionId: n.sessionId,
+						});
+					}
+					break;
+				}
 
 				default:
 					break;

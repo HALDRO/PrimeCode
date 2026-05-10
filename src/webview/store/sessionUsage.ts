@@ -39,8 +39,14 @@ export interface SessionTreeUsageStats {
 	hasActiveSession: boolean;
 	hasActivity: boolean;
 	totalTokens: number;
+	totalInputTokens: number;
+	totalOutputTokens: number;
 	rootTokens: number;
+	rootInputTokens: number;
+	rootOutputTokens: number;
 	childTokens: number;
+	childInputTokens: number;
+	childOutputTokens: number;
 	requestCount: number;
 	childSessionCount: number;
 	cost: number;
@@ -55,8 +61,14 @@ export const EMPTY_SESSION_TREE_USAGE_STATS: SessionTreeUsageStats = {
 	hasActiveSession: false,
 	hasActivity: false,
 	totalTokens: 0,
+	totalInputTokens: 0,
+	totalOutputTokens: 0,
 	rootTokens: 0,
+	rootInputTokens: 0,
+	rootOutputTokens: 0,
 	childTokens: 0,
+	childInputTokens: 0,
+	childOutputTokens: 0,
 	requestCount: 0,
 	childSessionCount: 0,
 	cost: 0,
@@ -89,7 +101,9 @@ export function computeAssistantUsageSummary(
 	contextLimit = 0,
 ): AssistantUsageSummary {
 	let previousSessionSnapshotTotal = 0;
+	let previousSnapshotExCache = 0;
 	let usageTokens = 0;
+	let usageTokensExCache = 0;
 	let inputTokens = 0;
 	let outputTokens = 0;
 	let reasoningTokens = 0;
@@ -127,7 +141,6 @@ export function computeAssistantUsageSummary(
 		requestCount += 1;
 		cost += messageCost;
 		durationMs += messageDurationMs;
-		inputTokens += msg.tokens.input ?? 0;
 		outputTokens += msg.tokens.output ?? 0;
 		reasoningTokens += msg.tokens.reasoning ?? 0;
 		cacheRead += msg.tokens.cache?.read ?? 0;
@@ -137,6 +150,14 @@ export function computeAssistantUsageSummary(
 			const usage = computeTurnUsage(msg.tokens, { previousSessionSnapshotTotal });
 			usageTokens += usage.usageTokens;
 			previousSessionSnapshotTotal = usage.nextSessionSnapshotTotal;
+
+			// Compute usage excluding cache for meaningful input/output breakdown
+			const snapshotExCache =
+				(msg.tokens.input ?? 0) + (msg.tokens.output ?? 0) + (msg.tokens.reasoning ?? 0);
+			const deltaExCache = Math.max(0, snapshotExCache - previousSnapshotExCache);
+			usageTokensExCache += deltaExCache;
+			previousSnapshotExCache = snapshotExCache;
+
 			latestContext = {
 				input: msg.tokens.input ?? 0,
 				output: msg.tokens.output ?? 0,
@@ -152,6 +173,9 @@ export function computeAssistantUsageSummary(
 
 		incompleteUsageCount += 1;
 	}
+
+	// inputTokens = usage excluding cache minus output (so input + output = usageExCache)
+	inputTokens = Math.max(0, usageTokensExCache - outputTokens);
 
 	return {
 		usageTokens,
@@ -211,7 +235,11 @@ export function computeSessionTreeUsageStats(
 
 	const sessionIds = collectSessionTreeIds(state.childSessionIdsByParentId, sessionId);
 	let rootTokens = 0;
+	let rootInputTokens = 0;
+	let rootOutputTokens = 0;
 	let childTokens = 0;
+	let childInputTokens = 0;
+	let childOutputTokens = 0;
 	let requestCount = 0;
 	let cost = 0;
 	let durationMs = 0;
@@ -226,10 +254,14 @@ export function computeSessionTreeUsageStats(
 			currentSessionId === sessionId ? contextLimit : 0,
 		);
 		if (currentSessionId === sessionId) {
-			rootTokens = summary.usageTokens;
+			rootInputTokens = summary.inputTokens;
+			rootOutputTokens = summary.outputTokens;
+			rootTokens = rootInputTokens + rootOutputTokens;
 			latestRootContext = summary.latestContext;
 		} else {
-			childTokens += summary.usageTokens;
+			childInputTokens += summary.inputTokens;
+			childOutputTokens += summary.outputTokens;
+			childTokens += summary.inputTokens + summary.outputTokens;
 		}
 		requestCount += summary.requestCount;
 		cost += summary.cost;
@@ -240,13 +272,21 @@ export function computeSessionTreeUsageStats(
 	}
 
 	const totalTokens = rootTokens + childTokens;
+	const totalOutputTokens = rootOutputTokens + childOutputTokens;
+	const totalInputTokens = rootInputTokens + childInputTokens;
 
 	return {
 		hasActiveSession: true,
 		hasActivity: requestCount > 0,
 		totalTokens,
+		totalInputTokens,
+		totalOutputTokens,
 		rootTokens,
+		rootInputTokens,
+		rootOutputTokens,
 		childTokens,
+		childInputTokens,
+		childOutputTokens,
 		requestCount,
 		childSessionCount: Math.max(0, sessionIds.length - 1),
 		cost,

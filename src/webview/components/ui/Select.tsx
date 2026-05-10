@@ -1,3 +1,9 @@
+/**
+ * @file Compact select primitive
+ * @description Renders a VS Code themed dropdown trigger backed by the shared DropdownMenu. The trigger
+ *              uses the same fixed control metrics as inputs so settings rows stay vertically aligned.
+ */
+
 import type React from 'react';
 import { useRef, useState } from 'react';
 import { cn } from '../../lib/cn';
@@ -35,7 +41,7 @@ export const Select: React.FC<SelectProps> = ({
 				disabled={disabled}
 				onClick={() => setIsOpen(!isOpen)}
 				className={cn(
-					'flex items-center justify-between gap-(--gap-2) px-(--gap-2-5) h-(--btn-height-sm) min-w-(--select-min-width) rounded-md bg-(--alpha-5) border border-(--alpha-10) text-sm text-(--alpha-90) cursor-pointer outline-none transition-all duration-200',
+					'flex items-center justify-between box-border gap-(--gap-2) h-(--field-height) min-h-(--field-height) min-w-(--select-min-width) px-(--control-padding-x) py-0 rounded-(--control-radius) bg-(--alpha-5) border border-(--alpha-10) text-sm leading-none text-(--alpha-90) cursor-pointer outline-none transition-all duration-200',
 					'hover:bg-(--alpha-8) hover:border-(--alpha-20)',
 					isOpen && 'border-(--color-accent)/50 bg-(--alpha-10) ring-1 ring-(--color-accent)/20',
 					disabled && 'opacity-40 cursor-not-allowed',
@@ -43,7 +49,7 @@ export const Select: React.FC<SelectProps> = ({
 				)}
 				style={style}
 			>
-				<span className="truncate">{selectedOption?.label}</span>
+				<span className="truncate leading-none">{selectedOption?.label}</span>
 				<ChevronDownIcon
 					size={12}
 					className={cn(
@@ -59,8 +65,7 @@ export const Select: React.FC<SelectProps> = ({
 					onClose={() => setIsOpen(false)}
 					minWidth={triggerRef.current?.offsetWidth || 120}
 					maxWidth={400}
-					disableKeyboardNav={true}
-					keyHints={{}}
+					keyHints={{ navigate: true, select: true, close: true }}
 					items={options.map(opt => ({
 						id: opt.value,
 						label: opt.label,
@@ -78,7 +83,7 @@ export const Select: React.FC<SelectProps> = ({
 								onClick={onSelect}
 								onMouseEnter={onHover}
 								className={cn(
-									'flex items-center px-(--gap-3) py-(--gap-1) my-px rounded-md cursor-pointer h-(--dropdown-item-height) text-sm leading-[1.2] transition-colors hover:bg-(--alpha-8)',
+									'flex items-center px-(--gap-3) py-0 my-px rounded-md cursor-pointer h-(--dropdown-item-height) text-sm leading-[1.25] transition-colors hover:bg-(--alpha-8)',
 									hovered ? 'bg-(--alpha-10) text-vscode-foreground' : 'text-(--alpha-70)',
 									isSelected && 'text-(--color-accent) font-medium bg-(--color-accent)/10',
 								)}

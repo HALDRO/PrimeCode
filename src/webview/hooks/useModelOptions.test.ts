@@ -52,7 +52,7 @@ describe('buildModelOptions', () => {
 				reasoning: true,
 			},
 			{
-				value: 'oai-local/qwen3',
+				value: 'Local Proxy/qwen3',
 				label: 'Qwen 3 (Local Proxy)',
 				modelLabel: 'Qwen 3',
 				providerLabel: 'Local Proxy',
@@ -118,7 +118,7 @@ describe('buildModelOptions', () => {
 
 		expect(options).toEqual([
 			{
-				value: 'oai-enabled/qwen3',
+				value: 'Enabled Proxy/qwen3',
 				label: 'Qwen 3 (Enabled Proxy)',
 				modelLabel: 'Qwen 3',
 				providerLabel: 'Enabled Proxy',
@@ -136,5 +136,27 @@ describe('buildModelOptions', () => {
 		});
 
 		expect(options).toEqual([]);
+	});
+
+	it('uses the trimmed endpoint name as the proxy provider id', () => {
+		const options = buildModelOptions({
+			opencodeProviders: [],
+			enabledOpenCodeModels: [],
+			proxyEndpoints: [
+				{
+					id: 'endpoint-id',
+					name: '  User Named Proxy  ',
+					protocol: 'openai-compatible',
+					baseUrl: 'http://localhost:3333/v1',
+					apiKey: '',
+					models: [{ id: 'codex', name: 'Codex' }],
+					enabledModels: ['codex'],
+					testStatus: { isLoading: false, success: null, error: null, lastTested: null },
+				},
+			],
+			includeDefault: false,
+		});
+
+		expect(options[0]?.value).toBe('User Named Proxy/codex');
 	});
 });
