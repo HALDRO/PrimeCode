@@ -4,6 +4,7 @@ import type { WebviewSdkEvent } from '../store/eventReducer';
 import { useSettingsStore } from '../store/settingsStore';
 import { useUIStore } from '../store/uiStore';
 import { webviewLogger } from '../utils/logger';
+import { openCodeRuntime } from './opencodeRuntime';
 
 const log = webviewLogger.forComponent('EventRuntime');
 
@@ -52,6 +53,19 @@ function flushQueuedEvents(): void {
 	try {
 		if (events.length > 0) {
 			useChatStore.getState().actions.applyBatch(events);
+			const completedSessionIds = new Set<string>();
+			for (const event of events) {
+				if (event.type === 'session.idle') {
+					completedSessionIds.add(event.properties.sessionID);
+					continue;
+				}
+				if (event.type === 'session.status' && event.properties.status.type === 'idle') {
+					completedSessionIds.add(event.properties.sessionID);
+				}
+			}
+			for (const sessionId of completedSessionIds) {
+				void openCodeRuntime.flushQueuedMessages(sessionId).catch(openCodeRuntime.showRuntimeError);
+			}
 		}
 	} catch (error) {
 		log.error('Failed to apply event batch', error);

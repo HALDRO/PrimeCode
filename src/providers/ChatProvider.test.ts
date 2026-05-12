@@ -9,12 +9,6 @@ type PromptAsyncMock = ReturnType<typeof vi.fn>;
 type SummarizeMock = ReturnType<typeof vi.fn>;
 
 function createProvider(promptAsyncImpl?: PromptAsyncMock, summarizeImpl?: SummarizeMock) {
-	const postedMessages: unknown[] = [];
-	const bridge = new OutboundBridge();
-	vi.spyOn(bridge, 'send').mockImplementation((msg: unknown) => {
-		postedMessages.push(msg);
-	});
-
 	const promptAsync =
 		promptAsyncImpl ??
 		vi.fn(async () => {
@@ -25,9 +19,6 @@ function createProvider(promptAsyncImpl?: PromptAsyncMock, summarizeImpl?: Summa
 		vi.fn(async () => {
 			return {};
 		});
-	const abort = vi.fn(async () => {
-		return {};
-	});
 	const dispose = vi.fn(async () => {
 		return {};
 	});
@@ -37,11 +28,11 @@ function createProvider(promptAsyncImpl?: PromptAsyncMock, summarizeImpl?: Summa
 	const clearMcpCache = vi.fn();
 
 	const provider: any = Object.assign(Object.create(ChatProvider.prototype), {
-		bridge,
+		bridge: new OutboundBridge(),
 		cli: {
 			getSdkClient: vi.fn(() => ({
 				instance: { dispose },
-				session: { promptAsync, summarize, abort },
+				session: { promptAsync, summarize },
 			})),
 			clearAgentsCache,
 			clearCommandsCache,
@@ -52,21 +43,13 @@ function createProvider(promptAsyncImpl?: PromptAsyncMock, summarizeImpl?: Summa
 				directory: 'C:\\repo',
 			})),
 		},
-		backendBusySessions: new Set<string>(),
-		awaitingBackendBusy: new Set<string>(),
-		pendingMessages: new Map(),
-		sendingLock: new Set<string>(),
-		pendingIdleDrain: new Set<string>(),
-		suppressNextIdleDrain: new Set<string>(),
-		queueIdCounter: 0,
+		backendStatusRun: null,
 	});
 
 	return {
 		provider,
-		postedMessages,
 		promptAsync,
 		summarize,
-		abort,
 		dispose,
 		clearAgentsCache,
 		clearCommandsCache,
@@ -75,65 +58,9 @@ function createProvider(promptAsyncImpl?: PromptAsyncMock, summarizeImpl?: Summa
 	};
 }
 
-describe('ChatProvider queue pipeline', () => {
+describe('ChatProvider send pipeline', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
-	});
-
-	it('queues follow-up messages while the backend session is busy', async () => {
-		const { provider, postedMessages, promptAsync } = createProvider();
-		provider.backendBusySessions.add('ses-1');
-
-		await (provider as any).handleSendMessageCommand({
-			type: 'sendMessage',
-			sessionId: 'ses-1',
-			text: 'queued message',
-		});
-
-		expect(promptAsync).not.toHaveBeenCalled();
-		expect(provider.pendingMessages.get('ses-1')).toHaveLength(1);
-		expect(postedMessages).toContainEqual(
-			expect.objectContaining({
-				type: 'messageQueue',
-				data: expect.objectContaining({
-					action: 'enqueued',
-					sessionId: 'ses-1',
-				}),
-			}),
-		);
-	});
-
-	it('includes sessionId when queue full notification is emitted', async () => {
-		const { provider, postedMessages, promptAsync } = createProvider();
-		provider.backendBusySessions.add('ses-1');
-		provider.pendingMessages.set(
-			'ses-1',
-			Array.from({ length: 4 }, (_, index) => ({
-				queueId: `q${index + 1}`,
-				sessionId: 'ses-1',
-				text: `queued ${index + 1}`,
-				queuedAt: index + 1,
-			})),
-		);
-
-		await (provider as any).handleSendMessageCommand({
-			type: 'sendMessage',
-			sessionId: 'ses-1',
-			text: 'overflow message',
-		});
-
-		expect(promptAsync).not.toHaveBeenCalled();
-		expect(postedMessages).toContainEqual(
-			expect.objectContaining({
-				type: 'showNotification',
-				data: expect.objectContaining({
-					notification: expect.objectContaining({
-						type: 'system_notice',
-						sessionId: 'ses-1',
-					}),
-				}),
-			}),
-		);
 	});
 
 	it('routes /compact through summarize instead of promptAsync', async () => {
@@ -155,79 +82,6 @@ describe('ChatProvider queue pipeline', () => {
 				providerID: 'openai',
 				modelID: 'gpt-5',
 				auto: false,
-			}),
-		);
-	});
-
-	it('drains queued messages one-by-one on each real busy -> idle turn completion', async () => {
-		const { provider, promptAsync } = createProvider();
-		provider.pendingMessages.set('ses-1', [
-			{ queueId: 'q1', sessionId: 'ses-1', text: 'first', queuedAt: 1 },
-			{ queueId: 'q2', sessionId: 'ses-1', text: 'second', queuedAt: 2 },
-		]);
-		provider.backendBusySessions.add('ses-1');
-
-		(provider as any).forwardNormalizedBackendStatus('ses-1', { type: 'idle' });
-		await Promise.resolve();
-
-		expect(promptAsync).toHaveBeenCalledTimes(1);
-		expect((promptAsync as any).mock.calls[0][0]).toEqual(
-			expect.objectContaining({ sessionID: 'ses-1' }),
-		);
-		expect(provider.pendingMessages.get('ses-1')).toHaveLength(1);
-
-		(provider as any).forwardNormalizedBackendStatus('ses-1', { type: 'busy' });
-		(provider as any).forwardNormalizedBackendStatus('ses-1', { type: 'idle' });
-		await Promise.resolve();
-
-		expect(promptAsync).toHaveBeenCalledTimes(2);
-		expect(provider.pendingMessages.get('ses-1')).toBeUndefined();
-	});
-
-	it('ignores trailing idle events when session is neither busy nor awaiting busy', async () => {
-		const { provider, promptAsync } = createProvider();
-		provider.pendingMessages.set('ses-1', [
-			{ queueId: 'q1', sessionId: 'ses-1', text: 'first', queuedAt: 1 },
-			{ queueId: 'q2', sessionId: 'ses-1', text: 'second', queuedAt: 2 },
-		]);
-		// Session is not in backendBusySessions or awaitingBackendBusy — idle should be ignored.
-
-		(provider as any).forwardNormalizedBackendStatus('ses-1', { type: 'idle' });
-		await Promise.resolve();
-
-		expect(promptAsync).toHaveBeenCalledTimes(0);
-		expect(provider.pendingMessages.get('ses-1')).toHaveLength(2);
-	});
-
-	it('does not double-send when force sending a queued message during an active turn', async () => {
-		const { provider, promptAsync, abort } = createProvider();
-		provider.pendingMessages.set('ses-1', [
-			{ queueId: 'q1', sessionId: 'ses-1', text: 'first', queuedAt: 1 },
-			{ queueId: 'q2', sessionId: 'ses-1', text: 'second', queuedAt: 2 },
-		]);
-		provider.backendBusySessions.add('ses-1');
-
-		await (provider as any).forceQueuedMessage('ses-1', 'q2');
-
-		expect(abort).toHaveBeenCalledTimes(1);
-		expect(promptAsync).toHaveBeenCalledTimes(1);
-		expect(provider.pendingMessages.get('ses-1')).toEqual([
-			expect.objectContaining({ queueId: 'q1' }),
-		]);
-	});
-
-	it('delegates stopRequest to backend abort without emitting a local status message', async () => {
-		const { provider, postedMessages, abort } = createProvider();
-
-		await (provider as any).handleSessionCommand({
-			type: 'stopRequest',
-			sessionId: 'ses-1',
-		});
-
-		expect(abort).toHaveBeenCalledTimes(1);
-		expect(postedMessages).not.toContainEqual(
-			expect.objectContaining({
-				type: 'backendRuntimeStatus',
 			}),
 		);
 	});
@@ -306,29 +160,9 @@ describe('ChatProvider queue pipeline', () => {
 		expect(provider.syncAllOrDefer).toHaveBeenCalledWith('manual-server-restart');
 	});
 
-	it('reloadOpenCodeRuntime only invalidates caches while backend sessions are busy', async () => {
+	it('reloadOpenCodeRuntime only invalidates caches while backend status bridge is active', async () => {
 		const { provider, dispose, clearAgentsCache } = createProvider();
-		provider.backendBusySessions.add('ses-1');
-
-		await provider.reloadOpenCodeRuntime('opencode-config:manual');
-
-		expect(dispose).not.toHaveBeenCalled();
-		expect(clearAgentsCache).toHaveBeenCalledTimes(1);
-	});
-
-	it('reloadOpenCodeRuntime only invalidates caches while prompt sends are in flight', async () => {
-		const { provider, dispose, clearAgentsCache } = createProvider();
-		provider.sendingLock.add('ses-1');
-
-		await provider.reloadOpenCodeRuntime('opencode-config:manual');
-
-		expect(dispose).not.toHaveBeenCalled();
-		expect(clearAgentsCache).toHaveBeenCalledTimes(1);
-	});
-
-	it('reloadOpenCodeRuntime only invalidates caches while backend busy status is pending', async () => {
-		const { provider, dispose, clearAgentsCache } = createProvider();
-		provider.awaitingBackendBusy.add('ses-1');
+		provider.backendStatusRun = Promise.resolve();
 
 		await provider.reloadOpenCodeRuntime('opencode-config:manual');
 

@@ -641,7 +641,9 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 			return '';
 		}, [actionType, isBash, isWebSearch, isWebFetch, isMcp, rawInput]);
 
-		const fullText = content || liveToolOutput || '';
+		const fallbackRawOutput =
+			typeof toolUse.rawOutput === 'string' && toolUse.rawOutput.trim() ? toolUse.rawOutput : '';
+		const fullText = content || liveToolOutput || fallbackRawOutput || '';
 		const hasBody = fullText.trim().length > 0;
 		const lineCount = useMemo(
 			() => (hasBody ? fullText.split('\n').length : 0),

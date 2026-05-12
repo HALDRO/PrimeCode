@@ -121,4 +121,61 @@ describe('sanitizeToolPartForUi', () => {
 		expect(metadata.files?.[0]?.patch).toBeUndefined();
 		expect(metadata.files?.[0]?.binary).toBe(true);
 	});
+
+	it('truncates oversized output for unknown tools', () => {
+		const huge = 'x'.repeat(30_000);
+		const part = {
+			id: 'tool-custom-output',
+			type: 'tool',
+			tool: 'custom_invalid_tool',
+			callID: 'call-custom-output',
+			state: {
+				status: 'error',
+				input: { foo: 'bar' },
+				output: huge,
+			},
+		};
+
+		const result = sanitizeToolPartForUi(part);
+		expect(result.state.output.length).toBeLessThan(13_000);
+		expect(result.state.output).toContain('[primecode truncated tool output:');
+	});
+
+	it('replaces binary-like output for unknown tools', () => {
+		const part = {
+			id: 'tool-custom-binary',
+			type: 'tool',
+			tool: 'custom_invalid_tool',
+			callID: 'call-custom-binary',
+			state: {
+				status: 'error',
+				input: { foo: 'bar' },
+				output: '\u0000MZ\u0001\u0002',
+			},
+		};
+
+		const result = sanitizeToolPartForUi(part);
+		expect(result.state.output).toBe('[primecode omitted tool output: binary-like content]');
+	});
+
+	it('truncates oversized input for unknown tools', () => {
+		const huge = 'x'.repeat(20_000);
+		const part = {
+			id: 'tool-custom-input',
+			type: 'tool',
+			tool: 'custom_invalid_tool',
+			callID: 'call-custom-input',
+			state: {
+				status: 'error',
+				input: { payload: huge },
+				output: 'failed',
+			},
+		};
+
+		const result = sanitizeToolPartForUi(part) as {
+			state: { input: { __raw?: string } };
+		};
+		expect(result.state.input.__raw).toContain('[primecode truncated tool input:');
+		expect(result.state.input.__raw?.length).toBeLessThan(9_000);
+	});
 });

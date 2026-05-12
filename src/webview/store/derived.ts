@@ -1,5 +1,9 @@
 import type { AssistantMessage, Message, Part, ToolPart } from '@opencode-ai/sdk/v2/client';
-import { extractCanonicalTaskResult, stripTaskResultDisplayMetadata } from '../../common';
+import {
+	extractCanonicalTaskResult,
+	getToolDisplayName,
+	stripTaskResultDisplayMetadata,
+} from '../../common';
 import {
 	computeTurnUsage,
 	getTurnUsageDuration,
@@ -279,9 +283,10 @@ function getRunningToolMeta(
 			if (part.type !== 'tool') continue;
 			const toolPart = part as ToolPart;
 			if (toolPart.state.status !== 'running') continue;
+			const displayName = getToolDisplayName(toolPart.tool);
 			return {
 				toolName: toolPart.tool,
-				label: `Running ${toolPart.tool}...`,
+				label: `Running ${displayName}...`,
 				toolUseId: toolPart.callID,
 			};
 		}
@@ -647,6 +652,12 @@ function projectMessages(
 				const status = tp.state.status;
 				const isRunning = status === 'pending' || status === 'running';
 				const title = 'title' in tp.state ? (tp.state as { title?: string }).title : undefined;
+				const rawInput =
+					'input' in tp.state && tp.state.input && typeof tp.state.input === 'object'
+						? (tp.state.input as Record<string, unknown>)
+						: undefined;
+				const rawOutput =
+					'output' in tp.state && typeof tp.state.output === 'string' ? tp.state.output : undefined;
 
 				nodes.push({
 					kind: 'tool_use',
@@ -655,6 +666,8 @@ function projectMessages(
 					parentMessageId,
 					toolName: tp.tool,
 					toolUseId: tp.callID,
+					rawInput,
+					rawOutput,
 					isRunning,
 					status,
 					title,

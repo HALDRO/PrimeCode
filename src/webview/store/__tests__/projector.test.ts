@@ -213,6 +213,93 @@ describe('deriveSessionView', () => {
 		}
 	});
 
+	it('preserves raw tool input and output for unknown tools', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const asst = makeAssistantMessage('a1', 'ses1', 'u1', { completed: true });
+		const part = {
+			id: 'p-unknown-tool',
+			messageID: 'a1',
+			sessionID: 'ses1',
+			type: 'tool',
+			tool: 'custom_invalid_tool',
+			callID: 'call-unknown-1',
+			state: {
+				status: 'error',
+				input: { weird_param: 'value', nested_arg: { bad: true } },
+				output: 'invalid tool invocation payload',
+				title: 'Invalid',
+				metadata: {},
+				time: { start: Date.now(), end: Date.now() + 1 },
+			},
+			metadata: {},
+		} as unknown as Part;
+		const store = makeMinimalStore({
+			messages: { ses1: [user, asst] },
+			parts: { a1: [part] },
+		});
+		const view = deriveSessionView(store, 'ses1');
+		const toolNode = view.nodesById[view.nodeIds[1]];
+		expect(toolNode.kind).toBe('tool_use');
+		if (toolNode.kind === 'tool_use') {
+			expect(toolNode.toolName).toBe('custom_invalid_tool');
+			expect(toolNode.rawInput).toEqual({ weird_param: 'value', nested_arg: { bad: true } });
+			expect(toolNode.rawOutput).toBe('invalid tool invocation payload');
+			expect(toolNode.status).toBe('error');
+		}
+	});
+
+	it('humanizes running tool activity and clears it when session is idle', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const asst = makeAssistantMessage('a1', 'ses1', 'u1');
+		const runningBash = {
+			id: 'p-running-bash',
+			messageID: 'a1',
+			sessionID: 'ses1',
+			type: 'tool',
+			tool: 'bash',
+			callID: 'call-bash-1',
+			state: { status: 'running', input: {}, output: '' },
+			metadata: {},
+		} as unknown as Part;
+
+		const busyStore = makeMinimalStore({
+			messages: { ses1: [user, asst] },
+			parts: { a1: [runningBash] },
+			sessionStatus: { ses1: { type: 'busy' } },
+		});
+		const busyView = deriveSessionView(busyStore, 'ses1');
+		expect(busyView.toolActivity).toEqual(
+			expect.objectContaining({
+				toolName: 'bash',
+				label: 'Running Bash...',
+				toolUseId: 'call-bash-1',
+			}),
+		);
+
+		const idleStore = makeMinimalStore({
+			messages: { ses1: [user, asst] },
+			parts: {
+				a1: [
+					{
+						...runningBash,
+						state: {
+							status: 'completed',
+							input: {},
+							output: 'done',
+							title: 'Done',
+							metadata: {},
+							time: { start: Date.now(), end: Date.now() + 1 },
+						},
+					} as unknown as Part,
+				],
+			},
+			sessionStatus: { ses1: { type: 'idle' } },
+		});
+		const idleView = deriveSessionView(idleStore, 'ses1');
+		expect(idleView.toolActivity).toBeNull();
+		expect(idleView.streamingToolId).toBeNull();
+	});
+
 	it('projects reasoning part as RenderThinkingMessage', () => {
 		const user = makeUserMessage('u1', 'ses1');
 		const asst = makeAssistantMessage('a1', 'ses1', 'u1');

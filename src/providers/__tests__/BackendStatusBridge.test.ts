@@ -20,12 +20,6 @@ function createBridgeProvider() {
 				directory: 'C:\\repo',
 			})),
 		},
-		backendBusySessions: new Set<string>(),
-		awaitingBackendBusy: new Set<string>(),
-		pendingMessages: new Map(),
-		sendingLock: new Set<string>(),
-		pendingIdleDrain: new Set<string>(),
-		suppressNextIdleDrain: new Set<string>(),
 		healthMonitorTimer: null,
 		healthConsecutiveFailures: 0,
 	});
@@ -128,7 +122,7 @@ describe('forwardBackendStatusEvent', () => {
 		expect(postedMessages[0]).toEqual({ type: 'opencodeEvent', data: event });
 	});
 
-	it('forwards session.idle for untracked sessions without triggering queue drain', () => {
+	it('forwards session.idle for untracked sessions without local mutation', () => {
 		const { provider, postedMessages } = createBridgeProvider();
 		const event = {
 			payload: { type: 'session.idle', properties: { sessionID: 'ses-unknown' } },
@@ -136,22 +130,17 @@ describe('forwardBackendStatusEvent', () => {
 
 		(provider as any).forwardBackendStatusEvent(event);
 
-		// Raw event is always forwarded to webview for canonical processing.
 		expect(postedMessages).toContainEqual({ type: 'opencodeEvent', data: event });
-		// But no local state change occurs for untracked sessions.
-		expect(provider.backendBusySessions.has('ses-unknown')).toBe(false);
 	});
 
-	it('forwards early session.idle while waiting for backend busy confirmation', () => {
+	it('forwards tracked session idle without local normalization', () => {
 		const { provider, postedMessages } = createBridgeProvider();
-		provider.awaitingBackendBusy.add('ses-1');
 		const event = {
 			payload: { type: 'session.idle', properties: { sessionID: 'ses-1' } },
 		};
 
 		(provider as any).forwardBackendStatusEvent(event);
 
-		expect(provider.awaitingBackendBusy.has('ses-1')).toBe(false);
 		expect(postedMessages).toContainEqual({ type: 'opencodeEvent', data: event });
 	});
 });

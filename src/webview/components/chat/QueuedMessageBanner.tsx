@@ -8,8 +8,8 @@
 import type React from 'react';
 import { useCallback, useRef, useState } from 'react';
 import { cn } from '../../lib/cn';
+import { openCodeRuntime } from '../../services/opencodeRuntime';
 import { useQueuedMessages } from '../../store';
-import { vscode } from '../../utils/vscode';
 
 // ---------------------------------------------------------------------------
 // Icons
@@ -116,22 +116,16 @@ export const QueuedMessageBanner: React.FC = () => {
 	const dragItemRef = useRef<number | null>(null);
 
 	const handleCancel = useCallback((queueId: string, sessionId: string) => {
-		vscode.postMessage({ type: 'cancelQueuedMessage', sessionId, queueId });
+		void openCodeRuntime
+			.cancelQueuedMessage(sessionId, queueId)
+			.catch(openCodeRuntime.showRuntimeError);
 	}, []);
 
-	const handleForceSend = useCallback(
-		(queueId: string, sessionId: string) => {
-			const queueIndex = queuedMessages.findIndex(entry => entry.queueId === queueId);
-			if (queueIndex > 0) {
-				const ids = queuedMessages.map(m => m.queueId);
-				const [moved] = ids.splice(queueIndex, 1);
-				ids.unshift(moved);
-				vscode.postMessage({ type: 'reorderQueue', sessionId, queueIds: ids });
-			}
-			vscode.postMessage({ type: 'forceQueuedMessage', sessionId, queueId });
-		},
-		[queuedMessages],
-	);
+	const handleForceSend = useCallback((queueId: string, sessionId: string) => {
+		void openCodeRuntime
+			.forceSendQueuedMessage(sessionId, queueId)
+			.catch(openCodeRuntime.showRuntimeError);
+	}, []);
 
 	const handleDragStart = useCallback((e: React.DragEvent, idx: number) => {
 		dragItemRef.current = idx;
@@ -166,7 +160,9 @@ export const QueuedMessageBanner: React.FC = () => {
 			ids.splice(dropIdx, 0, moved);
 			const sessionId = queuedMessages[0]?.sessionId;
 			if (sessionId) {
-				vscode.postMessage({ type: 'reorderQueue', sessionId, queueIds: ids });
+				void openCodeRuntime
+					.reorderQueuedMessages(sessionId, ids)
+					.catch(openCodeRuntime.showRuntimeError);
 			}
 			handleDragEnd();
 		},

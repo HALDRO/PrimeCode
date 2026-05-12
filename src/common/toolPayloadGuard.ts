@@ -2,6 +2,8 @@ import { resolveToolName } from './toolRegistry';
 
 const APPLY_PATCH_DIFF_LIMIT = 16_384;
 const APPLY_PATCH_FILE_PATCH_LIMIT = 8_192;
+const GENERIC_TOOL_OUTPUT_LIMIT = 12_288;
+const GENERIC_TOOL_INPUT_LIMIT = 8_192;
 const BINARY_FILE_EXTENSIONS = new Set([
 	'.exe',
 	'.dll',
@@ -101,6 +103,38 @@ function truncateString(value: string, limit: number, label: string): string {
 	if (value.length <= limit) return value;
 	const truncated = value.slice(0, limit);
 	return `${truncated}\n\n[primecode truncated ${label}: ${value.length} chars]`;
+}
+
+function sanitizeGenericTextOutput(output: string, label: string): string {
+	if (containsBinaryContent(output)) {
+		return `[primecode omitted ${label}: binary-like content]`;
+	}
+	return truncateString(output, GENERIC_TOOL_OUTPUT_LIMIT, label);
+}
+
+function sanitizeUnknownToolInput(input: unknown): { value: unknown; changed: boolean } {
+	if (!isRecord(input)) {
+		if (typeof input !== 'string') return { value: input, changed: false };
+		const sanitized = sanitizeGenericTextOutput(input, 'tool input');
+		return { value: sanitized, changed: sanitized !== input };
+	}
+
+	let serialized = '';
+	try {
+		serialized = JSON.stringify(input, null, 2);
+	} catch {
+		return { value: '[primecode omitted tool input: unserializable payload]', changed: true };
+	}
+
+	const sanitized = sanitizeGenericTextOutput(serialized, 'tool input');
+	if (sanitized === serialized) {
+		return { value: input, changed: false };
+	}
+
+	return {
+		value: { __raw: truncateString(sanitized, GENERIC_TOOL_INPUT_LIMIT, 'tool input') },
+		changed: true,
+	};
 }
 
 function sanitizeApplyPatchMetadata(metadata: unknown): { value: unknown; changed: boolean } {
@@ -237,44 +271,70 @@ export function sanitizeToolPartForUi<T>(part: T): T {
 				: undefined)) as Record<string, unknown> | undefined;
 		const isTruncated = metadata?.truncated === true;
 		const outputPath = typeof metadata?.outputPath === 'string' ? metadata.outputPath : undefined;
-		if (!isTruncated || !outputPath || !('output' in state) || typeof state.output !== 'string') {
+		if (isTruncated && outputPath && 'output' in state && typeof state.output === 'string') {
+			return {
+				...part,
+				state: {
+					...state,
+					output: '',
+					...(metadata && 'metadata' in state
+						? {
+								metadata: {
+									...metadata,
+									...(typeof metadata.output === 'string' ? { output: '' } : {}),
+								},
+							}
+						: {}),
+				},
+			} as T;
+		}
+
+		let changed = false;
+		const nextState: AnyRecord = { ...state };
+
+		if ('output' in state && typeof state.output === 'string') {
+			const sanitizedOutput = sanitizeGenericTextOutput(state.output, 'tool output');
+			if (sanitizedOutput !== state.output) {
+				nextState.output = sanitizedOutput;
+				changed = true;
+			}
+		}
+
+		if ('input' in state) {
+			const sanitizedInput = sanitizeUnknownToolInput(state.input);
+			if (sanitizedInput.changed) {
+				nextState.input = sanitizedInput.value;
+				changed = true;
+			}
+		}
+
+		if (!changed) {
 			return part;
 		}
 
 		return {
 			...part,
-			state: {
-				...state,
-				output: '',
-				...(metadata && 'metadata' in state
-					? {
-							metadata: {
-								...metadata,
-								...(typeof metadata.output === 'string' ? { output: '' } : {}),
-							},
-						}
-					: {}),
-			},
+			state: nextState,
 		} as T;
 	}
 
 	const partMetadata = sanitizeApplyPatchMetadata('metadata' in part ? part.metadata : undefined);
 	const stateMetadata = sanitizeApplyPatchMetadata(state.metadata);
 
-	if (!partMetadata.changed && !stateMetadata.changed) {
-		return part;
+	if (partMetadata.changed || stateMetadata.changed) {
+		return {
+			...part,
+			...(partMetadata.changed ? { metadata: partMetadata.value } : {}),
+			...(state && stateMetadata.changed
+				? {
+						state: {
+							...state,
+							metadata: stateMetadata.value,
+						},
+					}
+				: {}),
+		} as T;
 	}
 
-	return {
-		...part,
-		...(partMetadata.changed ? { metadata: partMetadata.value } : {}),
-		...(state && stateMetadata.changed
-			? {
-					state: {
-						...state,
-						metadata: stateMetadata.value,
-					},
-				}
-			: {}),
-	} as T;
+	return part;
 }

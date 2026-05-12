@@ -298,6 +298,8 @@ export interface RenderToolUseMessage {
 	parentMessageId?: string;
 	toolName: string;
 	toolUseId: string;
+	rawInput?: Record<string, unknown>;
+	rawOutput?: string;
 	isRunning?: boolean;
 	status?: 'pending' | 'running' | 'completed' | 'error' | 'cancelled';
 	title?: string;
@@ -413,6 +415,24 @@ export interface SessionActions {
 	getSessionAutoAccept: (sessionId?: string) => boolean;
 	removePendingQuestion: (requestId: string, sessionId: string) => void;
 	removePendingPermission: (requestId: string, sessionId: string) => void;
+	enqueueMessage: (input: {
+		sessionId: string;
+		text: string;
+		messageId?: string;
+		attachments?: SessionStore['queuedMessagesBySession'][string][number]['attachments'];
+		agent?: string;
+		model?: string;
+		variant?: string;
+	}) => string;
+	dequeueMessage: (
+		sessionId: string,
+	) => SessionStore['queuedMessagesBySession'][string][number] | undefined;
+	prependQueuedMessage: (
+		sessionId: string,
+		entry: SessionStore['queuedMessagesBySession'][string][number],
+	) => void;
+	reorderQueuedMessages: (sessionId: string, queueIds: string[]) => void;
+	cancelQueuedMessage: (sessionId: string, queueId: string) => void;
 	hydrateSessionSnapshot: (params: SessionSnapshotInput | SessionSnapshotInput[]) => void;
 	replaySessionSnapshots: (params: SessionSnapshotInput | SessionSnapshotInput[]) => void;
 }
@@ -534,47 +554,6 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 						}
 						if (typeof msgData.sessionId === 'string') {
 							state.sessionAutoAccept[msgData.sessionId] = Boolean(msgData.autoAccept);
-						}
-					}),
-				);
-				return;
-			}
-
-			if (msgType === 'messageQueue' && msgData) {
-				const sessionId = typeof msgData.sessionId === 'string' ? msgData.sessionId : null;
-				const queue = Array.isArray(msgData.queue) ? msgData.queue : [];
-				if (!sessionId) return;
-				set(
-					produce((state: SessionStore) => {
-						if (queue.length > 0) {
-							state.queuedMessagesBySession[sessionId] = queue.map(entry => {
-								const item = entry as {
-									queueId: string;
-									messageId?: string;
-									sessionId: string;
-									text: string;
-									attachments?: SessionStore['queuedMessagesBySession'][string][number]['attachments'];
-									agent?: string;
-									model?: string;
-									variant?: string;
-									queuedAt?: number;
-								};
-								return { ...item, createdAt: item.queuedAt ?? Date.now() };
-							});
-						} else {
-							delete state.queuedMessagesBySession[sessionId];
-						}
-
-						if (typeof msgData.cancelledText === 'string') {
-							state.sessionInput[sessionId] = msgData.cancelledText;
-							state.draftAttachments[sessionId] =
-								typeof msgData.cancelledAttachments === 'object' && msgData.cancelledAttachments
-									? (msgData.cancelledAttachments as {
-											images?: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
-										})
-									: {};
-							state.draftAgent[sessionId] =
-								typeof msgData.cancelledAgent === 'string' ? msgData.cancelledAgent : undefined;
 						}
 					}),
 				);
@@ -818,6 +797,102 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 					if (perms) {
 						s.permissions[sessionId] = perms.filter(permission => permission.id !== requestId);
 					}
+				}),
+			);
+		},
+
+		enqueueMessage: input => {
+			const queueId = `q-${Date.now()}-${crypto.randomUUID()}`;
+			set(
+				produce((state: SessionStore) => {
+					const queue = state.queuedMessagesBySession[input.sessionId] ?? [];
+					queue.push({
+						queueId,
+						messageId: input.messageId,
+						sessionId: input.sessionId,
+						text: input.text,
+						attachments: input.attachments,
+						agent: input.agent,
+						model: input.model,
+						variant: input.variant,
+						createdAt: Date.now(),
+					});
+					state.queuedMessagesBySession[input.sessionId] = queue;
+				}),
+			);
+			return queueId;
+		},
+
+		dequeueMessage: sessionId => {
+			let removed: SessionStore['queuedMessagesBySession'][string][number] | undefined;
+			set(
+				produce((state: SessionStore) => {
+					const queue = state.queuedMessagesBySession[sessionId] ?? [];
+					const next = queue.shift();
+					removed = next
+						? {
+								...next,
+								attachments: next.attachments
+									? {
+											...next.attachments,
+											files: next.attachments.files ? [...next.attachments.files] : undefined,
+											codeSnippets: next.attachments.codeSnippets
+												? next.attachments.codeSnippets.map(snippet => ({ ...snippet }))
+												: undefined,
+											images: next.attachments.images
+												? next.attachments.images.map(image => ({ ...image }))
+												: undefined,
+										}
+									: undefined,
+							}
+						: undefined;
+					if (queue.length === 0) delete state.queuedMessagesBySession[sessionId];
+				}),
+			);
+			return removed;
+		},
+
+		prependQueuedMessage: (sessionId, entry) => {
+			set(
+				produce((state: SessionStore) => {
+					const queue = state.queuedMessagesBySession[sessionId] ?? [];
+					state.queuedMessagesBySession[sessionId] = [entry, ...queue];
+				}),
+			);
+		},
+
+		reorderQueuedMessages: (sessionId, queueIds) => {
+			set(
+				produce((state: SessionStore) => {
+					const queue = state.queuedMessagesBySession[sessionId];
+					if (!queue || queue.length < 2) return;
+					const byId = new Map(queue.map(item => [item.queueId, item]));
+					const reordered = queueIds
+						.map(id => byId.get(id))
+						.filter((item): item is SessionStore['queuedMessagesBySession'][string][number] =>
+							Boolean(item),
+						);
+					for (const item of queue) {
+						if (!queueIds.includes(item.queueId)) reordered.push(item);
+					}
+					state.queuedMessagesBySession[sessionId] = reordered;
+				}),
+			);
+		},
+
+		cancelQueuedMessage: (sessionId, queueId) => {
+			set(
+				produce((state: SessionStore) => {
+					const queue = state.queuedMessagesBySession[sessionId] ?? [];
+					const index = queue.findIndex(item => item.queueId === queueId);
+					if (index === -1) return;
+					const [removed] = queue.splice(index, 1);
+					if (queue.length === 0) delete state.queuedMessagesBySession[sessionId];
+					state.sessionInput[sessionId] = removed.text;
+					state.draftAttachments[sessionId] = removed.attachments?.images
+						? { images: removed.attachments.images }
+						: {};
+					state.draftAgent[sessionId] = removed.agent;
 				}),
 			);
 		},

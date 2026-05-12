@@ -20,7 +20,6 @@ export type {
 	PluginResource,
 	QuestionAnswer,
 	QueuedMessageData,
-	QueueEventMessage,
 	ResourceKind,
 	SendMessageAttachments,
 	SessionPermissionRequest,

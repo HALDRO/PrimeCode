@@ -107,59 +107,17 @@ function getNextUserMessageId(sessionId: string, messageId: string): string | nu
 	return nextUserMessage?.id ?? null;
 }
 
-function waitForSessionIdle(sessionId: string, timeoutMs = 15_000): Promise<void> {
-	const currentStatus = useChatStore.getState().sessionStatus[sessionId];
-	if (currentStatus?.type !== 'busy' && currentStatus?.type !== 'retry') {
-		return Promise.resolve();
-	}
-
-	// If SSE is already disconnected, don't wait — backend won't send idle.
-	if (useUIStore.getState().serverStatus !== 'connected') {
-		return Promise.resolve();
-	}
-
-	return new Promise((resolve, reject) => {
-		const timeout = window.setTimeout(() => {
-			unsubscribeChat();
-			unsubscribeUI();
-			reject(new Error(`Timed out waiting for session ${sessionId} to become idle`));
-		}, timeoutMs);
-
-		const cleanup = () => {
-			window.clearTimeout(timeout);
-			unsubscribeChat();
-			unsubscribeUI();
-		};
-
-		const unsubscribeChat = useChatStore.subscribe(state => {
-			const status = state.sessionStatus[sessionId];
-			if (status?.type === 'busy' || status?.type === 'retry') return;
-			cleanup();
-			resolve();
-		});
-
-		// Resolve immediately if SSE connection drops while waiting.
-		const unsubscribeUI = useUIStore.subscribe(state => {
-			if (state.serverStatus !== 'connected') {
-				cleanup();
-				resolve();
-			}
-		});
-	});
-}
-
 async function haltSessionIfBusy(sessionId: string): Promise<void> {
 	const status = useChatStore.getState().sessionStatus[sessionId];
 	if (status?.type !== 'busy' && status?.type !== 'retry') return;
-	vscode.postMessage({ type: 'stopRequest', sessionId });
-	await waitForSessionIdle(sessionId);
+	await getClient()
+		.session.abort({ sessionID: sessionId, directory: getWorkspaceRoot() })
+		.catch(() => {
+			// Best effort only. Revert/restore should still continue even if abort fails.
+		});
 }
 
-function applyLocalRevertState(
-	sessionId: string,
-	revert: { messageID: string } | undefined,
-	status: { type: 'idle' } | { type: 'busy' } = { type: 'idle' },
-): void {
+function applyLocalRevertState(sessionId: string, revert: { messageID: string } | undefined): void {
 	useChatStore.setState(
 		produce((state: SessionStore) => {
 			const sessionIndex = state.sessions.findIndex(session => session.id === sessionId);
@@ -169,7 +127,6 @@ function applyLocalRevertState(
 					revert,
 				};
 			}
-			state.sessionStatus[sessionId] = status;
 		}),
 	);
 }
@@ -194,6 +151,44 @@ type RuntimeSendParams = {
 	variant?: string;
 	attachments?: RuntimeAttachments;
 };
+
+function isSessionActive(sessionId: string): boolean {
+	const status = useChatStore.getState().sessionStatus[sessionId];
+	return status?.type === 'busy' || status?.type === 'retry';
+}
+
+async function dispatchMessage(params: RuntimeSendParams): Promise<void> {
+	vscode.postMessage({
+		type: 'sendMessage',
+		sessionId: params.sessionId,
+		text: params.text,
+		messageID: params.messageID,
+		model: params.model,
+		agent: params.agent,
+		variant: params.variant,
+		attachments: params.attachments,
+	});
+}
+
+async function flushQueuedMessages(sessionId: string): Promise<void> {
+	if (isSessionActive(sessionId)) return;
+	const entry = useChatStore.getState().actions.dequeueMessage(sessionId);
+	if (!entry) return;
+	try {
+		await dispatchMessage({
+			sessionId: entry.sessionId,
+			text: entry.text,
+			messageID: entry.messageId,
+			model: entry.model,
+			agent: entry.agent,
+			variant: entry.variant,
+			attachments: entry.attachments,
+		});
+	} catch (error) {
+		useChatStore.getState().actions.prependQueuedMessage(sessionId, entry);
+		throw error;
+	}
+}
 
 async function deleteMessagesFrom(sessionId: string, messageId: string): Promise<void> {
 	const messages = useChatStore.getState().messages[sessionId] ?? [];
@@ -839,7 +834,7 @@ export const openCodeRuntime = {
 	},
 
 	async abortSession(sessionId: string): Promise<void> {
-		vscode.postMessage({ type: 'stopRequest', sessionId });
+		await getClient().session.abort({ sessionID: sessionId, directory: getWorkspaceRoot() });
 	},
 
 	async restoreMessage(sessionId: string, messageId: string): Promise<void> {
@@ -980,15 +975,50 @@ export const openCodeRuntime = {
 	},
 
 	async sendMessage(params: RuntimeSendParams): Promise<void> {
-		vscode.postMessage({
-			type: 'sendMessage',
-			sessionId: params.sessionId,
-			text: params.text,
-			messageID: params.messageID,
-			model: params.model,
-			agent: params.agent,
-			variant: params.variant,
-			attachments: params.attachments,
-		});
+		if (isSessionActive(params.sessionId)) {
+			useChatStore.getState().actions.enqueueMessage({
+				sessionId: params.sessionId,
+				text: params.text,
+				messageId: params.messageID,
+				attachments: params.attachments,
+				agent: params.agent,
+				model: params.model,
+				variant: params.variant,
+			});
+			return;
+		}
+
+		await dispatchMessage(params);
+	},
+
+	async flushQueuedMessages(sessionId: string): Promise<void> {
+		await flushQueuedMessages(sessionId);
+	},
+
+	async cancelQueuedMessage(sessionId: string, queueId: string): Promise<void> {
+		useChatStore.getState().actions.cancelQueuedMessage(sessionId, queueId);
+	},
+
+	async reorderQueuedMessages(sessionId: string, queueIds: string[]): Promise<void> {
+		useChatStore.getState().actions.reorderQueuedMessages(sessionId, queueIds);
+	},
+
+	async forceSendQueuedMessage(sessionId: string, queueId: string): Promise<void> {
+		const queue = useChatStore.getState().queuedMessagesBySession[sessionId] ?? [];
+		const queueIndex = queue.findIndex(entry => entry.queueId === queueId);
+		if (queueIndex === -1) return;
+		if (queueIndex > 0) {
+			const ids = queue.map(item => item.queueId);
+			const [moved] = ids.splice(queueIndex, 1);
+			ids.unshift(moved);
+			useChatStore.getState().actions.reorderQueuedMessages(sessionId, ids);
+		}
+
+		if (isSessionActive(sessionId)) {
+			await this.abortSession(sessionId).catch(() => {});
+			return;
+		}
+
+		await flushQueuedMessages(sessionId);
 	},
 };

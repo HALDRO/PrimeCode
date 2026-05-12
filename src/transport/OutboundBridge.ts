@@ -7,13 +7,7 @@
  *              This is the ONLY place that touches `view.postMessage()`.
  */
 
-import type {
-	QueuedMessageData,
-	QueueEventMessage,
-	SendMessageAttachments,
-	ShowNotificationMessage,
-	TabStateMessage,
-} from '../common';
+import type { ShowNotificationMessage, TabStateMessage } from '../common';
 import type { IView } from '../core/contracts';
 import { logger } from '../utils/logger';
 
@@ -93,19 +87,5 @@ export class OutboundBridge {
 
 	public showNotification(data: ShowNotificationMessage['data']): void {
 		this.send({ type: 'showNotification', data } satisfies ShowNotificationMessage);
-	}
-
-	public queueUpdate(
-		action: 'enqueued' | 'dequeued' | 'cancelled' | 'cleared',
-		sessionId: string,
-		queue: QueuedMessageData[],
-		cancelledText?: string,
-		cancelledAttachments?: Pick<NonNullable<SendMessageAttachments>, 'images'>,
-		cancelledAgent?: string,
-	): void {
-		this.send({
-			type: 'messageQueue',
-			data: { action, sessionId, queue, cancelledText, cancelledAttachments, cancelledAgent },
-		} satisfies QueueEventMessage);
 	}
 }

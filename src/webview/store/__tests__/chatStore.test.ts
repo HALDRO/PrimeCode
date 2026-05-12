@@ -331,6 +331,74 @@ describe('chatStore restore', () => {
 		expect(state.parts['msg-2']).toBeUndefined();
 	});
 
+	it('returns a plain queued message object from dequeueMessage', () => {
+		useChatStore.getState().actions.enqueueMessage({
+			sessionId: SESSION_ID,
+			text: 'queued',
+			agent: 'build',
+			attachments: {
+				images: [{ id: 'img-1', name: 'shot.png', dataUrl: 'data:image/png;base64,AAA' }],
+				files: ['src/index.ts'],
+				codeSnippets: [
+					{ filePath: 'src/index.ts', content: 'const x = 1', startLine: 1, endLine: 1 },
+				],
+			},
+		});
+
+		const entry = useChatStore.getState().actions.dequeueMessage(SESSION_ID);
+
+		expect(entry).toBeDefined();
+		expect(entry?.text).toBe('queued');
+		expect(() => entry?.attachments?.images?.[0]?.name).not.toThrow();
+		expect(entry?.attachments?.images?.[0]?.name).toBe('shot.png');
+		expect(entry?.attachments?.files).toEqual(['src/index.ts']);
+		expect(entry?.attachments?.codeSnippets?.[0]).toEqual(
+			expect.objectContaining({ filePath: 'src/index.ts', content: 'const x = 1' }),
+		);
+	});
+
+	it('cancels queued message and restores it into draft state', () => {
+		const queueId = useChatStore.getState().actions.enqueueMessage({
+			sessionId: SESSION_ID,
+			text: 'restore me',
+			agent: 'builder',
+			attachments: {
+				images: [{ id: 'img-1', name: 'shot.png', dataUrl: 'data:image/png;base64,AAA' }],
+			},
+		});
+
+		useChatStore.getState().actions.cancelQueuedMessage(SESSION_ID, queueId);
+
+		const state = useChatStore.getState();
+		expect(state.queuedMessagesBySession[SESSION_ID]).toBeUndefined();
+		expect(state.sessionInput[SESSION_ID]).toBe('restore me');
+		expect(state.draftAgent[SESSION_ID]).toBe('builder');
+		expect(state.draftAttachments[SESSION_ID]).toEqual({
+			images: [{ id: 'img-1', name: 'shot.png', dataUrl: 'data:image/png;base64,AAA' }],
+		});
+	});
+
+	it('reorders queued messages deterministically', () => {
+		const firstId = useChatStore.getState().actions.enqueueMessage({
+			sessionId: SESSION_ID,
+			text: 'first',
+		});
+		const secondId = useChatStore.getState().actions.enqueueMessage({
+			sessionId: SESSION_ID,
+			text: 'second',
+		});
+		const thirdId = useChatStore.getState().actions.enqueueMessage({
+			sessionId: SESSION_ID,
+			text: 'third',
+		});
+
+		useChatStore.getState().actions.reorderQueuedMessages(SESSION_ID, [thirdId, firstId, secondId]);
+
+		expect(
+			useChatStore.getState().queuedMessagesBySession[SESSION_ID]?.map(item => item.text),
+		).toEqual(['third', 'first', 'second']);
+	});
+
 	it('maps server revert marker to the previous visible user turn', () => {
 		const first = createUserMessage('msg-1', 'first');
 		const second = createUserMessage('msg-2', 'second');

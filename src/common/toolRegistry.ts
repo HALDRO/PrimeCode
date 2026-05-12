@@ -247,12 +247,18 @@ export function getToolDisplayName(toolName: string): string {
 		return DISPLAY_NAMES.get(canonical) ?? toolName;
 	}
 
-	// Generic PascalCase → spaced
+	// Fallback normalization for unknown/custom tools:
+	// - snake_case -> Snake Case
+	// - kebab-case -> Kebab Case
+	// - camelCase / PascalCase -> Camel Case / Pascal Case
 	const spaced = toolName
+		.replace(/[_-]+/g, ' ')
 		.replace(/([a-z])([A-Z])/g, '$1 $2')
 		.replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2');
 	return spaced
 		.split(' ')
+		.map(w => w.trim())
+		.filter(Boolean)
 		.map(w => w.charAt(0).toUpperCase() + w.slice(1))
 		.join(' ');
 }

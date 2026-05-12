@@ -1,4 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const flushQueuedMessagesMock = vi.fn(async () => {});
+const showRuntimeErrorMock = vi.fn();
+
+vi.mock('../opencodeRuntime', () => ({
+	openCodeRuntime: {
+		flushQueuedMessages: flushQueuedMessagesMock,
+		showRuntimeError: showRuntimeErrorMock,
+	},
+}));
+
 import { useChatStore } from '../../store/chatStore';
 import { useSettingsStore } from '../../store/settingsStore';
 import { useUIStore } from '../../store/uiStore';
@@ -6,12 +17,15 @@ import { eventRuntime } from '../eventRuntime';
 
 // Mock window.requestAnimationFrame/cancelAnimationFrame for Node environment
 let rafCallbacks: Array<() => void> = [];
-vi.stubGlobal('window', {
-	requestAnimationFrame: vi.fn((cb: () => void) => {
-		rafCallbacks.push(cb);
-		return rafCallbacks.length;
-	}),
-	cancelAnimationFrame: vi.fn(),
+Object.defineProperty(globalThis, 'window', {
+	value: {
+		requestAnimationFrame: vi.fn((cb: () => void) => {
+			rafCallbacks.push(cb);
+			return rafCallbacks.length;
+		}),
+		cancelAnimationFrame: vi.fn(),
+	},
+	configurable: true,
 });
 
 function flushRaf() {
@@ -28,6 +42,8 @@ function resetStores() {
 	useSettingsStore.setState(useSettingsStore.getInitialState(), true);
 	useUIStore.setState(useUIStore.getInitialState(), true);
 	appliedBatches = [];
+	flushQueuedMessagesMock.mockClear();
+	showRuntimeErrorMock.mockClear();
 	// Patch applyBatch to capture calls
 	const state = useChatStore.getState();
 	const actions = state.actions;
@@ -189,6 +205,41 @@ describe('eventRuntime', () => {
 
 			expect(appliedBatches).toHaveLength(1);
 			expect(appliedBatches[0]).toEqual([event]);
+			expect(flushQueuedMessagesMock).not.toHaveBeenCalled();
+		});
+
+		it('flushes queued messages after canonical session.idle', () => {
+			const event = {
+				type: 'session.idle',
+				properties: { sessionID: 'ses-1' },
+			};
+
+			eventRuntime.handleExtensionMessage({
+				type: 'opencodeEvent',
+				data: { payload: event },
+			});
+			flushRaf();
+
+			expect(appliedBatches).toHaveLength(1);
+			expect(appliedBatches[0]).toEqual([event]);
+			expect(flushQueuedMessagesMock).toHaveBeenCalledWith('ses-1');
+		});
+
+		it('flushes queued messages after canonical session.status idle', () => {
+			const event = {
+				type: 'session.status',
+				properties: { sessionID: 'ses-1', status: { type: 'idle' } },
+			};
+
+			eventRuntime.handleExtensionMessage({
+				type: 'opencodeEvent',
+				data: { payload: event },
+			});
+			flushRaf();
+
+			expect(appliedBatches).toHaveLength(1);
+			expect(appliedBatches[0]).toEqual([event]);
+			expect(flushQueuedMessagesMock).toHaveBeenCalledWith('ses-1');
 		});
 	});
 

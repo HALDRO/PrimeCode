@@ -350,18 +350,6 @@ export interface QueuedMessageData {
 	queuedAt: number;
 }
 
-export type QueueEventMessage = BaseExtensionMessage<
-	'messageQueue',
-	{
-		action: 'enqueued' | 'dequeued' | 'cancelled' | 'cleared';
-		sessionId: string;
-		queue: QueuedMessageData[];
-		cancelledText?: string;
-		cancelledAttachments?: Pick<NonNullable<SendMessageAttachments>, 'images'>;
-		cancelledAgent?: string;
-	}
->;
-
 export type ResourceKind = 'agent' | 'command' | 'skill' | 'plugin';
 export type ResourceAction = 'setDisabled';
 export type ResourceActionResult =
@@ -562,8 +550,7 @@ export type ExtensionMessage =
 	| OpenHistoryMessage
 	| RequestNewSessionMessage
 	| OpenSettingsMessage
-	| ShowNotificationMessage
-	| QueueEventMessage;
+	| ShowNotificationMessage;
 
 // #############################################################################
 //
@@ -599,29 +586,6 @@ export interface SendMessageCommand {
 	agent?: string;
 	variant?: string;
 	attachments?: SendMessageAttachments;
-}
-
-export interface StopRequestCommand {
-	type: 'stopRequest';
-	sessionId: string;
-}
-
-export interface CancelQueuedMessageCommand {
-	type: 'cancelQueuedMessage';
-	sessionId: string;
-	queueId: string;
-}
-
-export interface ForceQueuedMessageCommand {
-	type: 'forceQueuedMessage';
-	sessionId: string;
-	queueId: string;
-}
-
-export interface ReorderQueueCommand {
-	type: 'reorderQueue';
-	sessionId: string;
-	queueIds: string[];
 }
 
 // =============================================================================
@@ -936,10 +900,6 @@ export interface SyncAllCommand {
 export type WebviewCommand =
 	| WebviewDidLaunchCommand
 	| SendMessageCommand
-	| StopRequestCommand
-	| CancelQueuedMessageCommand
-	| ForceQueuedMessageCommand
-	| ReorderQueueCommand
 	| GetSettingsCommand
 	| UpdateSettingsCommand
 	| GetRulesCommand

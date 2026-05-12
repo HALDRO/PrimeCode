@@ -199,14 +199,19 @@ export const GenerationStatus: React.FC<{ sessionId?: string }> = ({ sessionId }
 	const [visible, setVisible] = useState(false);
 	const [displayStatus, setDisplayStatus] = useState('');
 	const prevStatusRef = useRef('');
+	const lastToolActivityRef = useRef<typeof toolActivity>(null);
 
 	// Active stream means tool output or text is being streamed to the user.
 	const hasActiveStream = !!streamingToolId || isTextStreaming;
+	if (toolActivity) {
+		lastToolActivityRef.current = toolActivity;
+	}
+	const stableToolActivity = isProcessing ? (toolActivity ?? lastToolActivityRef.current) : null;
 
-	// Show the indicator when:
-	// 1. Processing with no active stream (waiting between tool calls, model thinking)
-	// 2. Processing with tool activity info (even during streams — shows what tool is running)
-	const shouldShow = isProcessing && (!hasActiveStream || !!toolActivity);
+	// Keep the status visible for the whole processing window.
+	// Tool activity refines the label, but should not control visibility,
+	// otherwise tool->text and text->tool transitions cause flicker/disappearance.
+	const shouldShow = isProcessing;
 
 	// Grace period: once shown, keep visible for a minimum duration to prevent
 	// rapid show→hide→show flickering during tool→text transitions.
@@ -236,7 +241,7 @@ export const GenerationStatus: React.FC<{ sessionId?: string }> = ({ sessionId }
 	// Update display status — tool activity takes priority over generic session status.
 	// Debounce rapid status transitions to avoid visual flickering.
 	useEffect(() => {
-		const text = deriveStatusText(toolActivity, status);
+		const text = deriveStatusText(stableToolActivity, status);
 		if (text) {
 			// If status text is the same, skip the update to avoid unnecessary re-renders.
 			if (text === prevStatusRef.current) return undefined;
@@ -249,15 +254,18 @@ export const GenerationStatus: React.FC<{ sessionId?: string }> = ({ sessionId }
 		}
 		prevStatusRef.current = '';
 		setDisplayStatus('');
+		if (!isProcessing) {
+			lastToolActivityRef.current = null;
+		}
 		return undefined;
-	}, [toolActivity, status]);
+	}, [stableToolActivity, status, isProcessing]);
 
 	const isActive = visible && isProcessing;
 	const isThinking = isThinkingStatus(displayStatus || status);
 	const showStatus = displayStatus || (isProcessing ? 'Generating' : '');
 
 	// When there's an active stream but we have tool activity, show a compact inline indicator
-	const isCompact = hasActiveStream && !!toolActivity;
+	const isCompact = hasActiveStream && !!stableToolActivity;
 
 	// Always render the container to reserve layout space and prevent layout
 	// shifts when the status appears/disappears. Use opacity + visibility to

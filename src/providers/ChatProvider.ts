@@ -1,8 +1,7 @@
-import type { SessionStatus } from '@opencode-ai/sdk/v2/client';
 import { createOpencodeClient } from '@opencode-ai/sdk/v2/client';
 import * as vscode from 'vscode';
 import { generateId, parseModelId } from '../common';
-import type { QueuedMessageData, SendMessageAttachments, WebviewCommand } from '../common/protocol';
+import type { SendMessageAttachments, WebviewCommand } from '../common/protocol';
 import { OpenCodeExecutor } from '../core/executor/OpenCode';
 import { buildPromptParts } from '../core/promptParts';
 import type { ServiceRegistry } from '../core/ServiceRegistry';
@@ -20,8 +19,6 @@ import { SettingsHandler } from './handlers/SettingsHandler';
 import { ToolHandler } from './handlers/ToolHandler';
 import type { HandlerContext } from './handlers/types';
 import { UtilityHandler } from './handlers/UtilityHandler';
-
-const MAX_MESSAGE_QUEUE_SIZE = 4;
 
 type BackendSendParams = {
 	sessionId: string;
@@ -58,18 +55,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private backendStatusKey: string | null = null;
 	private healthMonitorTimer: ReturnType<typeof setInterval> | null = null;
 	private healthConsecutiveFailures = 0;
-	private readonly backendBusySessions = new Set<string>();
-	private readonly awaitingBackendBusy = new Set<string>();
-	// This backend-owned queue layer is intentionally kept in the extension.
-	// The webview-only approach looked simpler, but status/idle ordering across
-	// the SDK stream, webview runtime, and VS Code bridge caused repeat races.
-	// Keeping queue ownership next to the normalized backend lifecycle makes
-	// dequeue happen from one authority instead of several competing consumers.
-	private readonly pendingMessages = new Map<string, QueuedMessageData[]>();
-	private readonly sendingLock = new Set<string>();
-	private readonly pendingIdleDrain = new Set<string>();
-	private readonly suppressNextIdleDrain = new Set<string>();
-	private queueIdCounter = 0;
 
 	// Handlers
 	private settingsHandler: SettingsHandler;
@@ -342,7 +327,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			{
 				handleMessage: msg => this.handleSessionCommand(msg),
 			},
-			['sendMessage', 'stopRequest', 'cancelQueuedMessage', 'forceQueuedMessage', 'reorderQueue'],
+			['sendMessage'],
 			'session',
 		);
 
@@ -632,83 +617,13 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				});
 				await this.handleSendMessageCommand(msg);
 				return;
-			case 'stopRequest':
-				logger.info(`[ChatProvider] User stopped generation in session ${msg.sessionId}`);
-				await this.abortSession(msg.sessionId);
-				return;
-			case 'cancelQueuedMessage':
-				this.cancelQueuedMessage(msg.sessionId, msg.queueId);
-				return;
-			case 'forceQueuedMessage':
-				await this.forceQueuedMessage(msg.sessionId, msg.queueId);
-				return;
-			case 'reorderQueue':
-				this.reorderQueue(msg.sessionId, msg.queueIds);
-				return;
 		}
-	}
-
-	private updateQueue(
-		sessionId: string,
-		mutator: (queue: QueuedMessageData[]) => QueuedMessageData[],
-	): QueuedMessageData[] {
-		const current = this.pendingMessages.get(sessionId) ?? [];
-		const next = mutator([...current]);
-		if (next.length === 0) this.pendingMessages.delete(sessionId);
-		else this.pendingMessages.set(sessionId, next);
-		return next;
-	}
-
-	private isBackendSessionBusy(sessionId: string): boolean {
-		return this.backendBusySessions.has(sessionId) || this.sendingLock.has(sessionId);
-	}
-
-	private enqueueMessage(params: BackendSendParams): void {
-		const queue = this.pendingMessages.get(params.sessionId) ?? [];
-		if (queue.length >= MAX_MESSAGE_QUEUE_SIZE) {
-			this.bridge.showNotification({
-				notification: {
-					type: 'system_notice',
-					content: 'Message queue is full. Wait for the current response to finish.',
-					sessionId: params.sessionId,
-					timestamp: new Date().toISOString(),
-				},
-			});
-			return;
-		}
-
-		const entry: QueuedMessageData = {
-			queueId: `q-${Date.now()}-${++this.queueIdCounter}`,
-			messageId: params.messageID,
-			sessionId: params.sessionId,
-			text: params.text,
-			model: params.model,
-			agent: params.agent,
-			variant: params.variant,
-			attachments: params.attachments,
-			queuedAt: Date.now(),
-		};
-		queue.push(entry);
-		this.pendingMessages.set(params.sessionId, queue);
-		this.bridge.queueUpdate('enqueued', params.sessionId, [...queue]);
 	}
 
 	private async handleSendMessageCommand(
 		msg: Extract<WebviewCommand, { type: 'sendMessage' }>,
 	): Promise<void> {
 		if (!msg.sessionId) return;
-		if (this.isBackendSessionBusy(msg.sessionId)) {
-			this.enqueueMessage({
-				sessionId: msg.sessionId,
-				text: msg.text,
-				messageID: msg.messageID,
-				model: msg.model,
-				agent: msg.agent,
-				variant: msg.variant,
-				attachments: msg.attachments,
-			});
-			return;
-		}
 		if (isCompactionCommand(msg.text)) {
 			await this.sendCompactionAsync({
 				sessionId: msg.sessionId,
@@ -779,9 +694,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			throw new Error('Session summarize API unavailable');
 		}
 
-		this.sendingLock.add(params.sessionId);
-		this.suppressNextIdleDrain.delete(params.sessionId);
-		this.awaitingBackendBusy.add(params.sessionId);
 		try {
 			const result = await compactionClient.session.summarize({
 				sessionID: params.sessionId,
@@ -797,13 +709,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		} catch (error) {
 			const errorInfo = extractErrorInfo(error);
 			logger.error(`[ChatProvider] Compaction failed for session ${params.sessionId}:`, errorInfo);
-			this.awaitingBackendBusy.delete(params.sessionId);
 			throw error;
-		} finally {
-			this.sendingLock.delete(params.sessionId);
-			if (this.pendingIdleDrain.delete(params.sessionId)) {
-				void this.processQueueOnIdle(params.sessionId);
-			}
 		}
 	}
 
@@ -832,9 +738,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			throw new Error('Session promptAsync API unavailable');
 		}
 
-		this.sendingLock.add(params.sessionId);
-		this.suppressNextIdleDrain.delete(params.sessionId);
-		this.awaitingBackendBusy.add(params.sessionId);
 		try {
 			const result = await promptClient.session.promptAsync({
 				sessionID: params.sessionId,
@@ -859,13 +762,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				`[ChatProvider] sendPromptAsync failed for session ${params.sessionId}:`,
 				errorInfo,
 			);
-			this.awaitingBackendBusy.delete(params.sessionId);
 			throw error;
-		} finally {
-			this.sendingLock.delete(params.sessionId);
-			if (this.pendingIdleDrain.delete(params.sessionId)) {
-				void this.processQueueOnIdle(params.sessionId);
-			}
 		}
 	}
 
@@ -874,104 +771,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			text: params.text,
 			attachments: params.attachments,
 		}) as Record<string, unknown>[];
-	}
-
-	private cancelQueuedMessage(sessionId: string, queueId: string): void {
-		let removed: QueuedMessageData | undefined;
-		const queue = this.updateQueue(sessionId, items => {
-			const index = items.findIndex(item => item.queueId === queueId);
-			if (index >= 0) removed = items.splice(index, 1)[0];
-			return items;
-		});
-		if (!removed) return;
-		this.bridge.queueUpdate(
-			'cancelled',
-			sessionId,
-			[...queue],
-			removed.text,
-			removed.attachments?.images ? { images: removed.attachments.images } : undefined,
-			removed.agent,
-		);
-	}
-
-	private reorderQueue(sessionId: string, queueIds: string[]): void {
-		const queue = this.pendingMessages.get(sessionId);
-		if (!queue || queue.length < 2) return;
-		const byId = new Map(queue.map(item => [item.queueId, item]));
-		const reordered = queueIds
-			.map(id => byId.get(id))
-			.filter((item): item is QueuedMessageData => Boolean(item));
-		for (const item of queue) {
-			if (!queueIds.includes(item.queueId)) reordered.push(item);
-		}
-		this.updateQueue(sessionId, () => reordered);
-		this.bridge.queueUpdate('enqueued', sessionId, [...reordered]);
-	}
-
-	private async forceQueuedMessage(sessionId: string, queueId: string): Promise<void> {
-		let entry: QueuedMessageData | undefined;
-		const queue = this.updateQueue(sessionId, items => {
-			const index = items.findIndex(item => item.queueId === queueId);
-			if (index >= 0) entry = items.splice(index, 1)[0];
-			return items;
-		});
-		if (!entry) return;
-		if (this.backendBusySessions.has(sessionId)) {
-			this.suppressNextIdleDrain.add(sessionId);
-			await this.abortSession(sessionId);
-			this.forceIdleWithoutDrain(sessionId);
-		}
-		this.bridge.queueUpdate('dequeued', sessionId, [...queue]);
-		await this.sendPromptAsync(entry);
-	}
-
-	private async processQueueOnIdle(sessionId: string): Promise<void> {
-		if (this.sendingLock.has(sessionId)) {
-			this.pendingIdleDrain.add(sessionId);
-			return;
-		}
-		let entry: QueuedMessageData | undefined;
-		const remaining = this.updateQueue(sessionId, queue => {
-			entry = queue.shift();
-			return queue;
-		});
-		if (!entry) return;
-		this.bridge.queueUpdate('dequeued', sessionId, [...remaining]);
-		try {
-			await this.sendPromptAsync(entry);
-		} catch (error) {
-			const errorInfo = extractErrorInfo(error);
-			logger.error(
-				`[ChatProvider] Failed to send queued message for session ${sessionId}:`,
-				errorInfo,
-			);
-			this.bridge.queueUpdate(
-				'cancelled',
-				sessionId,
-				[...remaining],
-				entry.text,
-				entry.attachments?.images ? { images: entry.attachments.images } : undefined,
-				entry.agent,
-			);
-		}
-	}
-
-	private async abortSession(sessionId: string): Promise<void> {
-		const client = this.cli.getSdkClient();
-		const admin = this.cli.getAdminInfo();
-		if (!client || !admin?.directory) return;
-		await client.session
-			.abort({ sessionID: sessionId, directory: admin.directory })
-			.catch(error => {
-				logger.debug('[ChatProvider] Abort request ignored', { sessionId, error });
-			});
-	}
-
-	private forceIdleWithoutDrain(sessionId: string): void {
-		this.awaitingBackendBusy.delete(sessionId);
-		this.backendBusySessions.delete(sessionId);
-		this.pendingIdleDrain.delete(sessionId);
-		this.suppressNextIdleDrain.delete(sessionId);
 	}
 
 	private handleSettingsChange(): void {
@@ -1005,10 +804,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.backendStatusAbort = null;
 		this.backendStatusRun = null;
 		this.backendStatusKey = null;
-		this.backendBusySessions.clear();
-		this.awaitingBackendBusy.clear();
-		this.pendingIdleDrain.clear();
-		this.suppressNextIdleDrain.clear();
 	}
 
 	// ─── Server Health Monitor & Reconnect ──────────────────────────────
@@ -1055,28 +850,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			// Do NOT auto-reconnect: killing the SSE stream mid-conversation is destructive.
 			// The backend status bridge has its own reconnect logic with exponential backoff.
 			// Health monitor only tracks status for diagnostics.
-		}
-	}
-
-	private forwardNormalizedBackendStatus(sessionId: string, status: SessionStatus): void {
-		const statusType = status.type;
-
-		if (statusType === 'idle') {
-			if (!this.awaitingBackendBusy.has(sessionId) && !this.backendBusySessions.has(sessionId)) {
-				return;
-			}
-			this.awaitingBackendBusy.delete(sessionId);
-			this.backendBusySessions.delete(sessionId);
-			const shouldDrain = !this.suppressNextIdleDrain.delete(sessionId);
-			if (shouldDrain) {
-				void this.processQueueOnIdle(sessionId);
-			}
-			return;
-		}
-
-		if (statusType === 'busy' || statusType === 'retry') {
-			this.awaitingBackendBusy.delete(sessionId);
-			this.backendBusySessions.add(sessionId);
 		}
 	}
 
@@ -1151,7 +924,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		if (payload.type === 'session.idle') {
 			const sessionId = typeof properties.sessionID === 'string' ? properties.sessionID : null;
 			if (!sessionId) return;
-			this.forwardNormalizedBackendStatus(sessionId, { type: 'idle' });
 			return;
 		}
 
@@ -1166,19 +938,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 			// Reconstruct the full SessionStatus from the raw event payload so
 			// retry metadata (attempt, message, next) reaches the webview intact.
-			const sessionStatus: SessionStatus =
-				statusType === 'retry'
-					? {
-							type: 'retry',
-							attempt: typeof rawStatus.attempt === 'number' ? rawStatus.attempt : 1,
-							message: typeof rawStatus.message === 'string' ? rawStatus.message : 'Retrying…',
-							next: typeof rawStatus.next === 'number' ? rawStatus.next : Date.now() + 1000,
-						}
-					: statusType === 'busy'
-						? { type: 'busy' }
-						: { type: 'idle' };
-
-			this.forwardNormalizedBackendStatus(sessionId, sessionStatus);
 			return;
 		}
 	}
