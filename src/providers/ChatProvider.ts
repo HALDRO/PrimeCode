@@ -104,6 +104,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			...baseContext,
 			// Lazy getter — ToolHandler is created below but the closure captures `this`
 			getPermissionPolicies: () => this.toolHandler.getPermissionPolicies(),
+			getPermissionPoliciesAsync: () => this.toolHandler.getPermissionPoliciesAsync(),
 			setPermissionPolicy: (category, policy) =>
 				this.toolHandler.setPermissionPolicy(category, policy),
 			getSessionAutoAccept: (sessionId: string) => this.toolHandler.isAutoAcceptAsync(sessionId),
@@ -287,7 +288,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		const opencodeAgent = this.settings.get('opencode.agent');
 		const opencodeServerTimeout = this.settings.get('opencode.serverTimeout');
 		const opencodeServerUrl = this.settings.get('opencode.serverUrl');
-		const policies = this.toolHandler.getPermissionPolicies();
+		const policies = await this.toolHandler.getPermissionPoliciesAsync();
 
 		const config = {
 			provider: 'opencode' as const,
@@ -634,7 +635,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			case 'stopRequest':
 				logger.info(`[ChatProvider] User stopped generation in session ${msg.sessionId}`);
 				await this.abortSession(msg.sessionId);
-				this.forceIdleWithoutDrain(msg.sessionId, 'local.stop');
 				return;
 			case 'cancelQueuedMessage':
 				this.cancelQueuedMessage(msg.sessionId, msg.queueId);
@@ -670,6 +670,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				notification: {
 					type: 'system_notice',
 					content: 'Message queue is full. Wait for the current response to finish.',
+					sessionId: params.sessionId,
 					timestamp: new Date().toISOString(),
 				},
 			});
@@ -781,7 +782,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.sendingLock.add(params.sessionId);
 		this.suppressNextIdleDrain.delete(params.sessionId);
 		this.awaitingBackendBusy.add(params.sessionId);
-		this.sendBackendRuntimeStatus(params.sessionId, { type: 'busy' }, 'local.compact');
 		try {
 			const result = await compactionClient.session.summarize({
 				sessionID: params.sessionId,
@@ -798,7 +798,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			const errorInfo = extractErrorInfo(error);
 			logger.error(`[ChatProvider] Compaction failed for session ${params.sessionId}:`, errorInfo);
 			this.awaitingBackendBusy.delete(params.sessionId);
-			this.sendBackendRuntimeStatus(params.sessionId, { type: 'idle' }, 'local.error');
 			throw error;
 		} finally {
 			this.sendingLock.delete(params.sessionId);
@@ -836,7 +835,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.sendingLock.add(params.sessionId);
 		this.suppressNextIdleDrain.delete(params.sessionId);
 		this.awaitingBackendBusy.add(params.sessionId);
-		this.sendBackendRuntimeStatus(params.sessionId, { type: 'busy' }, 'local.send');
 		try {
 			const result = await promptClient.session.promptAsync({
 				sessionID: params.sessionId,
@@ -862,7 +860,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				errorInfo,
 			);
 			this.awaitingBackendBusy.delete(params.sessionId);
-			this.sendBackendRuntimeStatus(params.sessionId, { type: 'idle' }, 'local.error');
 			throw error;
 		} finally {
 			this.sendingLock.delete(params.sessionId);
@@ -870,15 +867,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				void this.processQueueOnIdle(params.sessionId);
 			}
 		}
-	}
-
-	private sendBackendRuntimeStatus(sessionId: string, status: SessionStatus, reason: string): void {
-		this.bridge.data('backendRuntimeStatus', {
-			sessionId,
-			status,
-			reason,
-			timestamp: new Date().toISOString(),
-		});
 	}
 
 	private buildRequestParts(params: BackendSendParams): Record<string, unknown>[] {
@@ -931,7 +919,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		if (this.backendBusySessions.has(sessionId)) {
 			this.suppressNextIdleDrain.add(sessionId);
 			await this.abortSession(sessionId);
-			this.forceIdleWithoutDrain(sessionId, 'local.force');
+			this.forceIdleWithoutDrain(sessionId);
 		}
 		this.bridge.queueUpdate('dequeued', sessionId, [...queue]);
 		await this.sendPromptAsync(entry);
@@ -979,12 +967,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			});
 	}
 
-	private forceIdleWithoutDrain(sessionId: string, reason: string): void {
+	private forceIdleWithoutDrain(sessionId: string): void {
 		this.awaitingBackendBusy.delete(sessionId);
 		this.backendBusySessions.delete(sessionId);
 		this.pendingIdleDrain.delete(sessionId);
 		this.suppressNextIdleDrain.delete(sessionId);
-		this.sendBackendRuntimeStatus(sessionId, { type: 'idle' }, reason);
 	}
 
 	private handleSettingsChange(): void {
@@ -1071,19 +1058,16 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
-	private forwardNormalizedBackendStatus(
-		sessionId: string,
-		status: SessionStatus,
-		reason: 'session.idle' | 'session.status',
-	): void {
+	private forwardNormalizedBackendStatus(sessionId: string, status: SessionStatus): void {
 		const statusType = status.type;
 
 		if (statusType === 'idle') {
-			if (this.awaitingBackendBusy.has(sessionId)) return;
-			if (!this.backendBusySessions.has(sessionId)) return;
+			if (!this.awaitingBackendBusy.has(sessionId) && !this.backendBusySessions.has(sessionId)) {
+				return;
+			}
+			this.awaitingBackendBusy.delete(sessionId);
 			this.backendBusySessions.delete(sessionId);
 			const shouldDrain = !this.suppressNextIdleDrain.delete(sessionId);
-			this.sendBackendRuntimeStatus(sessionId, status, reason);
 			if (shouldDrain) {
 				void this.processQueueOnIdle(sessionId);
 			}
@@ -1094,8 +1078,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			this.awaitingBackendBusy.delete(sessionId);
 			this.backendBusySessions.add(sessionId);
 		}
-
-		this.sendBackendRuntimeStatus(sessionId, status, reason);
 	}
 
 	private async runBackendStatusBridge(
@@ -1169,7 +1151,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		if (payload.type === 'session.idle') {
 			const sessionId = typeof properties.sessionID === 'string' ? properties.sessionID : null;
 			if (!sessionId) return;
-			this.forwardNormalizedBackendStatus(sessionId, { type: 'idle' }, 'session.idle');
+			this.forwardNormalizedBackendStatus(sessionId, { type: 'idle' });
 			return;
 		}
 
@@ -1196,33 +1178,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 						? { type: 'busy' }
 						: { type: 'idle' };
 
-			this.forwardNormalizedBackendStatus(sessionId, sessionStatus, 'session.status');
+			this.forwardNormalizedBackendStatus(sessionId, sessionStatus);
 			return;
-		}
-
-		if (payload.type === 'session.error') {
-			const sessionId = typeof properties.sessionID === 'string' ? properties.sessionID : null;
-			const rawError = properties.error;
-			if (!sessionId || !rawError) return;
-
-			const errorInfo = extractErrorInfo(rawError);
-
-			// Skip noise: MessageAbortedError is user-initiated cancellation
-			if (errorInfo.name === 'MessageAbortedError') return;
-
-			logger.error(`[ChatProvider] Session ${sessionId} error from backend:`, errorInfo);
-
-			this.bridge.showNotification({
-				notification: {
-					type: 'error',
-					content: errorInfo.message,
-					severity: errorInfo.severity,
-					errorCode: errorInfo.code,
-					sessionId,
-					reason: errorInfo.name,
-					timestamp: new Date().toISOString(),
-				},
-			});
 		}
 	}
 

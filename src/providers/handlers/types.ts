@@ -19,6 +19,8 @@ export interface HandlerContext {
 	services: ServiceRegistry;
 	/** Returns current permission policies from ToolHandler. */
 	getPermissionPolicies?: () => PermissionPolicies;
+	/** Returns current permission policies after hydrating project config when available. */
+	getPermissionPoliciesAsync?: () => Promise<PermissionPolicies>;
 	/** Applies a permission policy through ToolHandler so in-memory, storage, and project config stay in sync. */
 	setPermissionPolicy?: (
 		category: PermissionCategory,

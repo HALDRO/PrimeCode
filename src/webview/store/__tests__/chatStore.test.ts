@@ -4,12 +4,14 @@ import { isSessionProcessing, useChatStore } from '../chatStore';
 import { deriveSessionView } from '../derived';
 import type { WebviewSdkEvent } from '../eventReducer';
 import { useSettingsStore } from '../settingsStore';
+import { useUIStore } from '../uiStore';
 
 const SESSION_ID = 'session-1';
 
 function resetStore() {
 	useChatStore.setState(useChatStore.getInitialState(), true);
 	useSettingsStore.setState(useSettingsStore.getInitialState(), true);
+	useUIStore.setState(useUIStore.getInitialState(), true);
 }
 
 function createUserMessage(id: string, text: string): { message: Message; part: Part } {
@@ -101,6 +103,53 @@ describe('chatStore restore', () => {
 		expect(state.messages[SESSION_ID].map(message => message.id)).toEqual(['msg-1', 'msg-2']);
 		expect(state.parts['msg-1'][0]).toMatchObject({ text: 'first' });
 		expect(state.parts['msg-2'][0]).toMatchObject({ text: 'second' });
+	});
+
+	it('stores session.error notifications with their origin sessionId', () => {
+		restoreFromEvents([
+			{
+				type: 'session.error',
+				properties: {
+					sessionID: SESSION_ID,
+					error: { name: 'ModelUnavailableError', message: 'Model is down' },
+				},
+			} as never,
+		]);
+
+		expect(useUIStore.getState().notifications).toEqual([
+			expect.objectContaining({
+				type: 'error',
+				content: 'Model is down',
+				sessionId: SESSION_ID,
+			}),
+		]);
+	});
+
+	it('does not deduplicate identical error content across different sessions', () => {
+		restoreFromEvents([
+			{
+				type: 'session.error',
+				properties: {
+					sessionID: SESSION_ID,
+					error: { name: 'ModelUnavailableError', message: 'Model is down' },
+				},
+			} as never,
+			{
+				type: 'session.error',
+				properties: {
+					sessionID: 'session-2',
+					error: { name: 'ModelUnavailableError', message: 'Model is down' },
+				},
+			} as never,
+		]);
+
+		const notifications = useUIStore.getState().notifications;
+		expect(notifications).toHaveLength(2);
+		expect(notifications.map(notification => notification.sessionId).sort()).toEqual([
+			SESSION_ID,
+			'session-2',
+		]);
+		expect(notifications.every(notification => notification.count === 1)).toBe(true);
 	});
 
 	it('restores session model from the last user message in session history', () => {

@@ -20,9 +20,9 @@ import {
 	useCompactionMessage,
 	useEditDraft,
 	useEditingMessageId,
-	useIsProcessing,
 	useMessageTurnTokens,
 	useSessionModel,
+	useSessionProcessing,
 } from '../../store';
 import type { SectionStats } from '../../store/derived';
 import { useSettingsStore } from '../../store/settingsStore';
@@ -418,7 +418,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 		// Use optimized selectors to prevent unnecessary re-renders
 		const editingMessageId = useEditingMessageId();
 
-		const isProcessing = useIsProcessing();
+		const isProcessing = useSessionProcessing(message.message.sessionID);
 		const sessionModel = useSessionModel();
 		const chatActions = useChatActions();
 		const { setEditingMessageId } = chatActions;

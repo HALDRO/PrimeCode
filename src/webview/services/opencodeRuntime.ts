@@ -99,13 +99,6 @@ function getPermissionListsClient() {
 	};
 }
 
-function writeSessionStatus(sessionId: string, status: SessionStatus): void {
-	useChatStore.setState(
-		produce((state: SessionStore) => {
-			state.sessionStatus[sessionId] = status;
-		}),
-	);
-}
 function getNextUserMessageId(sessionId: string, messageId: string): string | null {
 	const messages = useChatStore.getState().messages[sessionId] ?? [];
 	const nextUserMessage = messages.find(
@@ -114,14 +107,52 @@ function getNextUserMessageId(sessionId: string, messageId: string): string | nu
 	return nextUserMessage?.id ?? null;
 }
 
+function waitForSessionIdle(sessionId: string, timeoutMs = 15_000): Promise<void> {
+	const currentStatus = useChatStore.getState().sessionStatus[sessionId];
+	if (currentStatus?.type !== 'busy' && currentStatus?.type !== 'retry') {
+		return Promise.resolve();
+	}
+
+	// If SSE is already disconnected, don't wait — backend won't send idle.
+	if (useUIStore.getState().serverStatus !== 'connected') {
+		return Promise.resolve();
+	}
+
+	return new Promise((resolve, reject) => {
+		const timeout = window.setTimeout(() => {
+			unsubscribeChat();
+			unsubscribeUI();
+			reject(new Error(`Timed out waiting for session ${sessionId} to become idle`));
+		}, timeoutMs);
+
+		const cleanup = () => {
+			window.clearTimeout(timeout);
+			unsubscribeChat();
+			unsubscribeUI();
+		};
+
+		const unsubscribeChat = useChatStore.subscribe(state => {
+			const status = state.sessionStatus[sessionId];
+			if (status?.type === 'busy' || status?.type === 'retry') return;
+			cleanup();
+			resolve();
+		});
+
+		// Resolve immediately if SSE connection drops while waiting.
+		const unsubscribeUI = useUIStore.subscribe(state => {
+			if (state.serverStatus !== 'connected') {
+				cleanup();
+				resolve();
+			}
+		});
+	});
+}
+
 async function haltSessionIfBusy(sessionId: string): Promise<void> {
 	const status = useChatStore.getState().sessionStatus[sessionId];
 	if (status?.type !== 'busy' && status?.type !== 'retry') return;
-	try {
-		await getClient().session.abort({ sessionID: sessionId, directory: getWorkspaceRoot() });
-	} catch {
-		// Best effort only. Revert/restore should still continue even if abort fails.
-	}
+	vscode.postMessage({ type: 'stopRequest', sessionId });
+	await waitForSessionIdle(sessionId);
 }
 
 function applyLocalRevertState(
@@ -497,9 +528,6 @@ async function refreshConversationList(): Promise<void> {
 async function reconcileOpenSessions(): Promise<void> {
 	const state = useChatStore.getState();
 	const sessionIds = [...new Set(state.sessionOrder)];
-	if (state.activeSessionId && !sessionIds.includes(state.activeSessionId)) {
-		sessionIds.push(state.activeSessionId);
-	}
 
 	await refreshConversationList();
 	await Promise.all(
@@ -522,23 +550,6 @@ export const openCodeRuntime = {
 	persistTabs,
 	refreshConversationList,
 	reconcileOpenSessions,
-
-	handleBackendRuntimeStatus(sessionId: string, status: SessionStatus): void {
-		if (!sessionId) return;
-
-		if (status.type === 'busy') {
-			writeSessionStatus(sessionId, status);
-			return;
-		}
-
-		if (status.type === 'retry') {
-			writeSessionStatus(sessionId, status);
-			return;
-		}
-
-		if (status.type !== 'idle') return;
-		writeSessionStatus(sessionId, status);
-	},
 
 	async bootstrap(): Promise<void> {
 		try {
@@ -666,27 +677,27 @@ export const openCodeRuntime = {
 		response?: 'once' | 'always' | 'reject';
 	}): Promise<void> {
 		const client = getClient();
-		const response =
+		const reply =
 			params.response ?? (params.approved ? (params.alwaysAllow ? 'always' : 'once') : 'reject');
 		const permissionClient = client as OpencodeClient & {
 			permission?: {
-				respond?: (input: {
+				reply?: (input: {
 					requestID: string;
-					response: 'once' | 'always' | 'reject';
+					reply: 'once' | 'always' | 'reject';
 				}) => Promise<{ error?: unknown }>;
 			};
 		};
-		if (permissionClient.permission?.respond) {
-			const result = await permissionClient.permission.respond({
+		if (permissionClient.permission?.reply) {
+			const result = await permissionClient.permission.reply({
 				requestID: params.requestId,
-				response,
+				reply,
 			});
 			if (result?.error) {
 				throw new Error(`Permission response failed: ${JSON.stringify(result.error)}`);
 			}
 			return;
 		}
-		throw new Error('Permission respond API unavailable in webview runtime');
+		throw new Error('Permission reply API unavailable in webview runtime');
 	},
 
 	async respondToQuestion(params: { requestId: string; answers: string[][] }): Promise<void> {
@@ -853,6 +864,7 @@ export const openCodeRuntime = {
 
 	async unrevert(sessionId: string): Promise<void> {
 		const client = getClient();
+		await haltSessionIfBusy(sessionId);
 		await client.session.unrevert({ sessionID: sessionId, directory: getWorkspaceRoot() });
 		applyLocalRevertState(sessionId, undefined);
 	},

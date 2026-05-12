@@ -103,6 +103,39 @@ describe('ChatProvider queue pipeline', () => {
 		);
 	});
 
+	it('includes sessionId when queue full notification is emitted', async () => {
+		const { provider, postedMessages, promptAsync } = createProvider();
+		provider.backendBusySessions.add('ses-1');
+		provider.pendingMessages.set(
+			'ses-1',
+			Array.from({ length: 4 }, (_, index) => ({
+				queueId: `q${index + 1}`,
+				sessionId: 'ses-1',
+				text: `queued ${index + 1}`,
+				queuedAt: index + 1,
+			})),
+		);
+
+		await (provider as any).handleSendMessageCommand({
+			type: 'sendMessage',
+			sessionId: 'ses-1',
+			text: 'overflow message',
+		});
+
+		expect(promptAsync).not.toHaveBeenCalled();
+		expect(postedMessages).toContainEqual(
+			expect.objectContaining({
+				type: 'showNotification',
+				data: expect.objectContaining({
+					notification: expect.objectContaining({
+						type: 'system_notice',
+						sessionId: 'ses-1',
+					}),
+				}),
+			}),
+		);
+	});
+
 	it('routes /compact through summarize instead of promptAsync', async () => {
 		const { provider, promptAsync, summarize } = createProvider();
 
@@ -134,7 +167,7 @@ describe('ChatProvider queue pipeline', () => {
 		]);
 		provider.backendBusySessions.add('ses-1');
 
-		(provider as any).forwardNormalizedBackendStatus('ses-1', { type: 'idle' }, 'session.idle');
+		(provider as any).forwardNormalizedBackendStatus('ses-1', { type: 'idle' });
 		await Promise.resolve();
 
 		expect(promptAsync).toHaveBeenCalledTimes(1);
@@ -143,32 +176,27 @@ describe('ChatProvider queue pipeline', () => {
 		);
 		expect(provider.pendingMessages.get('ses-1')).toHaveLength(1);
 
-		(provider as any).forwardNormalizedBackendStatus('ses-1', { type: 'busy' }, 'session.status');
-		(provider as any).forwardNormalizedBackendStatus('ses-1', { type: 'idle' }, 'session.idle');
+		(provider as any).forwardNormalizedBackendStatus('ses-1', { type: 'busy' });
+		(provider as any).forwardNormalizedBackendStatus('ses-1', { type: 'idle' });
 		await Promise.resolve();
 
 		expect(promptAsync).toHaveBeenCalledTimes(2);
 		expect(provider.pendingMessages.get('ses-1')).toBeUndefined();
 	});
 
-	it('ignores trailing idle events that arrive before the new queued turn reports busy', async () => {
+	it('ignores trailing idle events when session is neither busy nor awaiting busy', async () => {
 		const { provider, promptAsync } = createProvider();
 		provider.pendingMessages.set('ses-1', [
 			{ queueId: 'q1', sessionId: 'ses-1', text: 'first', queuedAt: 1 },
 			{ queueId: 'q2', sessionId: 'ses-1', text: 'second', queuedAt: 2 },
 		]);
-		provider.backendBusySessions.add('ses-1');
+		// Session is not in backendBusySessions or awaitingBackendBusy — idle should be ignored.
 
-		(provider as any).forwardNormalizedBackendStatus('ses-1', { type: 'idle' }, 'session.idle');
-		await Promise.resolve();
-		expect(promptAsync).toHaveBeenCalledTimes(1);
-		expect(provider.pendingMessages.get('ses-1')).toHaveLength(1);
-
-		(provider as any).forwardNormalizedBackendStatus('ses-1', { type: 'idle' }, 'session.idle');
+		(provider as any).forwardNormalizedBackendStatus('ses-1', { type: 'idle' });
 		await Promise.resolve();
 
-		expect(promptAsync).toHaveBeenCalledTimes(1);
-		expect(provider.pendingMessages.get('ses-1')).toHaveLength(1);
+		expect(promptAsync).toHaveBeenCalledTimes(0);
+		expect(provider.pendingMessages.get('ses-1')).toHaveLength(2);
 	});
 
 	it('does not double-send when force sending a queued message during an active turn', async () => {
@@ -186,6 +214,22 @@ describe('ChatProvider queue pipeline', () => {
 		expect(provider.pendingMessages.get('ses-1')).toEqual([
 			expect.objectContaining({ queueId: 'q1' }),
 		]);
+	});
+
+	it('delegates stopRequest to backend abort without emitting a local status message', async () => {
+		const { provider, postedMessages, abort } = createProvider();
+
+		await (provider as any).handleSessionCommand({
+			type: 'stopRequest',
+			sessionId: 'ses-1',
+		});
+
+		expect(abort).toHaveBeenCalledTimes(1);
+		expect(postedMessages).not.toContainEqual(
+			expect.objectContaining({
+				type: 'backendRuntimeStatus',
+			}),
+		);
 	});
 
 	it('buildRequestParts preserves snippet line ranges and image mime types', () => {

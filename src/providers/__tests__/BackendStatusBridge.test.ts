@@ -47,7 +47,7 @@ describe('forwardBackendStatusEvent', () => {
 		expect(postedMessages).toContainEqual({ type: 'opencodeEvent', data: event });
 	});
 
-	it('extracts session.status with busy and forwards normalized status', () => {
+	it('extracts session.status with busy and forwards canonical event only', () => {
 		const { provider, postedMessages } = createBridgeProvider();
 		const event = {
 			payload: {
@@ -61,18 +61,10 @@ describe('forwardBackendStatusEvent', () => {
 
 		(provider as any).forwardBackendStatusEvent(event);
 
-		expect(postedMessages).toContainEqual(
-			expect.objectContaining({
-				type: 'backendRuntimeStatus',
-				data: expect.objectContaining({
-					sessionId: 'ses-1',
-					status: { type: 'busy' },
-				}),
-			}),
-		);
+		expect(postedMessages).toContainEqual({ type: 'opencodeEvent', data: event });
 	});
 
-	it('extracts session.status with retry and preserves metadata', () => {
+	it('extracts session.status with retry and preserves metadata in canonical event', () => {
 		const { provider, postedMessages } = createBridgeProvider();
 		const event = {
 			payload: {
@@ -86,18 +78,10 @@ describe('forwardBackendStatusEvent', () => {
 
 		(provider as any).forwardBackendStatusEvent(event);
 
-		expect(postedMessages).toContainEqual(
-			expect.objectContaining({
-				type: 'backendRuntimeStatus',
-				data: expect.objectContaining({
-					sessionId: 'ses-1',
-					status: { type: 'retry', attempt: 3, message: 'Rate limited', next: 1700000000 },
-				}),
-			}),
-		);
+		expect(postedMessages).toContainEqual({ type: 'opencodeEvent', data: event });
 	});
 
-	it('shows notification on session.error (non-abort)', () => {
+	it('forwards session.error through canonical opencodeEvent without showNotification', () => {
 		const { provider, postedMessages } = createBridgeProvider();
 		const event = {
 			payload: {
@@ -111,19 +95,11 @@ describe('forwardBackendStatusEvent', () => {
 
 		(provider as any).forwardBackendStatusEvent(event);
 
-		expect(postedMessages).toContainEqual(
-			expect.objectContaining({
-				type: 'showNotification',
-				data: expect.objectContaining({
-					notification: expect.objectContaining({
-						type: 'error',
-					}),
-				}),
-			}),
-		);
+		expect(postedMessages).toContainEqual({ type: 'opencodeEvent', data: event });
+		expect(postedMessages.filter((msg: any) => msg.type === 'showNotification')).toHaveLength(0);
 	});
 
-	it('skips notification for MessageAbortedError', () => {
+	it('forwards aborted session.error without direct notification side-channel', () => {
 		const { provider, postedMessages } = createBridgeProvider();
 		const event = {
 			payload: {
@@ -137,6 +113,7 @@ describe('forwardBackendStatusEvent', () => {
 
 		(provider as any).forwardBackendStatusEvent(event);
 
+		expect(postedMessages).toContainEqual({ type: 'opencodeEvent', data: event });
 		const notifications = postedMessages.filter((msg: any) => msg.type === 'showNotification');
 		expect(notifications).toHaveLength(0);
 	});
@@ -151,7 +128,7 @@ describe('forwardBackendStatusEvent', () => {
 		expect(postedMessages[0]).toEqual({ type: 'opencodeEvent', data: event });
 	});
 
-	it('ignores session.idle for sessions not tracked as busy', () => {
+	it('forwards session.idle for untracked sessions without triggering queue drain', () => {
 		const { provider, postedMessages } = createBridgeProvider();
 		const event = {
 			payload: { type: 'session.idle', properties: { sessionID: 'ses-unknown' } },
@@ -159,8 +136,23 @@ describe('forwardBackendStatusEvent', () => {
 
 		(provider as any).forwardBackendStatusEvent(event);
 
-		const statusMessages = postedMessages.filter((msg: any) => msg.type === 'backendRuntimeStatus');
-		expect(statusMessages).toHaveLength(0);
+		// Raw event is always forwarded to webview for canonical processing.
+		expect(postedMessages).toContainEqual({ type: 'opencodeEvent', data: event });
+		// But no local state change occurs for untracked sessions.
+		expect(provider.backendBusySessions.has('ses-unknown')).toBe(false);
+	});
+
+	it('forwards early session.idle while waiting for backend busy confirmation', () => {
+		const { provider, postedMessages } = createBridgeProvider();
+		provider.awaitingBackendBusy.add('ses-1');
+		const event = {
+			payload: { type: 'session.idle', properties: { sessionID: 'ses-1' } },
+		};
+
+		(provider as any).forwardBackendStatusEvent(event);
+
+		expect(provider.awaitingBackendBusy.has('ses-1')).toBe(false);
+		expect(postedMessages).toContainEqual({ type: 'opencodeEvent', data: event });
 	});
 });
 

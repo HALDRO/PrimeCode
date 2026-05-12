@@ -12,13 +12,7 @@
 import type React from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { cn } from '../../lib/cn';
-import {
-	useChatStatus,
-	useIsLastMessageStreaming,
-	useIsProcessing,
-	useStreamingToolId,
-	useToolActivity,
-} from '../../store';
+import { useGenerationStatusSnapshot } from '../../store';
 
 /**
  * Animated typing dots indicator
@@ -199,12 +193,9 @@ export const SubtaskGenerationStatus: React.FC<SubtaskGenerationStatusProps> = (
 };
 SubtaskGenerationStatus.displayName = 'SubtaskGenerationStatus';
 
-export const GenerationStatus: React.FC = () => {
-	const isProcessing = useIsProcessing();
-	const status = useChatStatus();
-	const streamingToolId = useStreamingToolId();
-	const isTextStreaming = useIsLastMessageStreaming();
-	const toolActivity = useToolActivity();
+export const GenerationStatus: React.FC<{ sessionId?: string }> = ({ sessionId }) => {
+	const { isProcessing, status, streamingToolId, isTextStreaming, toolActivity } =
+		useGenerationStatusSnapshot(sessionId);
 	const [visible, setVisible] = useState(false);
 	const [displayStatus, setDisplayStatus] = useState('');
 	const prevStatusRef = useRef('');

@@ -21,6 +21,8 @@ import { DropdownMenu } from '../ui';
 interface AccessGateProps {
 	/** Permission request id */
 	requestId: string;
+	/** Session that owns this permission request */
+	sessionId: string;
 	/** Store message id (for optimistic update) */
 	messageId?: string;
 	/** Tool name */
@@ -78,21 +80,16 @@ export function useAccessResponse({
 	requestId: string;
 	tool: string;
 	messageId?: string;
-	sessionId?: string;
+	sessionId: string;
 }) {
-	const activeSessionId = useChatStore(state => state.activeSessionId);
-
 	return useCallback(
 		(isApproved: boolean, alwaysAllow = false) => {
-			const targetSessionId = sessionId ?? activeSessionId;
-			if (!targetSessionId || !requestId) return;
+			if (!requestId) return;
 			const response: AccessResponseType = isApproved
 				? alwaysAllow
 					? 'always'
 					: 'once'
 				: 'reject';
-
-			useChatStore.getState().actions.removePendingPermission(requestId, targetSessionId);
 
 			if (alwaysAllow && isApproved) {
 				const nextAccess = [...useSettingsStore.getState().access];
@@ -112,16 +109,19 @@ export function useAccessResponse({
 					alwaysAllow,
 					response,
 				})
+				.then(() => {
+					useChatStore.getState().actions.removePendingPermission(requestId, sessionId);
+				})
 				.catch(error => {
 					openCodeRuntime.showRuntimeError(error);
 					void openCodeRuntime
-						.refreshRuntimeState(targetSessionId)
+						.refreshRuntimeState(sessionId)
 						.catch(openCodeRuntime.showRuntimeError);
 				});
 
 			void messageId;
 		},
-		[activeSessionId, messageId, requestId, sessionId, tool],
+		[messageId, requestId, sessionId, tool],
 	);
 }
 
@@ -131,6 +131,7 @@ export function useAccessResponse({
 
 export const AccessGate: React.FC<AccessGateProps> = ({
 	requestId,
+	sessionId,
 	messageId,
 	tool,
 	input,
@@ -138,7 +139,7 @@ export const AccessGate: React.FC<AccessGateProps> = ({
 	className,
 	hideDetails,
 }) => {
-	const handleResponse = useAccessResponse({ requestId, tool, messageId });
+	const handleResponse = useAccessResponse({ requestId, tool, messageId, sessionId });
 	const [menuOpen, setMenuOpen] = useState(false);
 	const anchorRef = useRef<HTMLButtonElement>(null);
 

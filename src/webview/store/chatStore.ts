@@ -145,12 +145,13 @@ function normalizeTopLevelTabs(state: SessionStore): void {
 	}
 }
 
-function pushSessionErrorNotification(error: unknown): void {
+function pushSessionErrorNotification(error: unknown, sessionId?: string): void {
 	const errorMsg = getSessionErrorMessage(error);
 	if (!errorMsg) return;
 	useUIStore.getState().actions.pushNotification({
 		type: 'error',
 		content: errorMsg,
+		sessionId,
 		timestamp: new Date().toISOString(),
 		autoDismissMs: 8000,
 	});
@@ -479,7 +480,7 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 	actions: {
 		applyEvent: event => {
 			if (event.type === 'session.error') {
-				pushSessionErrorNotification(event.properties.error);
+				pushSessionErrorNotification(event.properties.error, event.properties.sessionID);
 			}
 			set(
 				produce((state: SessionStore) => {
@@ -492,7 +493,7 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 		applyBatch: events => {
 			for (const event of events) {
 				if (event.type === 'session.error') {
-					pushSessionErrorNotification(event.properties.error);
+					pushSessionErrorNotification(event.properties.error, event.properties.sessionID);
 				}
 			}
 
@@ -511,23 +512,6 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 			const msg = message as Record<string, unknown>;
 			const msgType = msg.type as string | undefined;
 			const msgData = msg.data as Record<string, unknown> | undefined;
-
-			if (msgType === 'showNotification' && msgData) {
-				const notification = msgData.notification as {
-					id?: string;
-					type: 'error' | 'system_notice';
-					content: string;
-					timestamp?: string;
-				};
-				useUIStore.getState().actions.pushNotification({
-					id: notification.id,
-					type: notification.type,
-					content: notification.content,
-					timestamp: notification.timestamp ?? new Date().toISOString(),
-					autoDismissMs: notification.type === 'system_notice' ? 6000 : 8000,
-				});
-				return;
-			}
 
 			if (msgType === 'tabState' && msgData) {
 				get().actions.applyTabState(
@@ -555,8 +539,6 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 				);
 				return;
 			}
-
-			if (msgType === 'backendRuntimeStatus' && msgData) return;
 
 			if (msgType === 'messageQueue' && msgData) {
 				const sessionId = typeof msgData.sessionId === 'string' ? msgData.sessionId : null;

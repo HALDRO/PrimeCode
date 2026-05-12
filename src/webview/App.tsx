@@ -25,8 +25,12 @@ import { ScrollThumb } from './components/ui/ScrollContainer';
 import { useElementHeight } from './hooks/useElementHeight';
 import { useOpenCodeBootstrap } from './hooks/useOpenCodeBootstrap';
 import { eventRuntime } from './services/eventRuntime';
-import { openCodeRuntime } from './services/opencodeRuntime';
-import { useActiveModal, useActiveSessionId, useIsProcessing, useMessageSections } from './store';
+import {
+	useActiveModal,
+	useActiveSessionId,
+	useMessageSections,
+	useSessionProcessing,
+} from './store';
 import type { MessageSection } from './store/derived';
 import { useSettingsStore } from './store/settingsStore';
 import { useUIStore } from './store/uiStore';
@@ -123,7 +127,7 @@ const MessageSectionComponent = React.memo<MessageSectionProps>(
 							/>
 						);
 					})}
-					{isLastSection && <GenerationStatus />}
+					{isLastSection && <GenerationStatus sessionId={sessionId} />}
 					{!section.isReverted && section.responses.length > 0 && (
 						<div className="flex items-center justify-end mt-0.5 pr-2">
 							<SectionCopyButton responses={section.responses} userMessage={section.userMessage} />
@@ -203,7 +207,7 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 	const sessionSwitchRef = useRef(false);
 
 	const sections = useMessageSections();
-	const isProcessing = useIsProcessing();
+	const isProcessing = useSessionProcessing(activeSessionId);
 
 	const virtuosoComponents = useMemo(
 		() => ({
@@ -516,38 +520,7 @@ export const App: React.FC = () => {
 
 	useEffect(() => {
 		const handleMessage = (event: MessageEvent) => {
-			const message = event.data as {
-				type?: string;
-				data?: {
-					sessionId?: string;
-					status?: string;
-					reason?: string;
-					timestamp?: string;
-				};
-			};
 			eventRuntime.handleExtensionMessage(event.data);
-			if (message.type === 'backendRuntimeStatus' && message.data?.sessionId) {
-				const data = message.data as {
-					sessionId: string;
-					status?: { type: string; attempt?: number; message?: string; next?: number };
-					reason?: string;
-					timestamp?: string;
-				};
-				const status = data.status;
-				openCodeRuntime.handleBackendRuntimeStatus(
-					data.sessionId,
-					status?.type === 'retry'
-						? {
-								type: 'retry',
-								attempt: status.attempt ?? 1,
-								message: status.message ?? 'Retrying…',
-								next: status.next ?? Date.now() + 1000,
-							}
-						: status?.type === 'busy'
-							? { type: 'busy' }
-							: { type: 'idle' },
-				);
-			}
 		};
 
 		window.addEventListener('message', handleMessage);

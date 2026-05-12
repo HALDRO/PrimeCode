@@ -5,14 +5,14 @@
  */
 
 import type React from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { cn } from '../../lib/cn';
 import {
 	useActiveSessionId,
 	useIsAutoRetrying,
 	useRetryInfo,
-	useTransientNotifications,
 	useUIActions,
+	useVisibleTransientNotifications,
 } from '../../store';
 import type { NotificationSeverity, TransientNotification } from '../../store/uiStore';
 import { copyTextToClipboard } from '../../utils/clipboard';
@@ -215,13 +215,11 @@ const NotificationCard: React.FC<{
 };
 
 export const NotificationOverlay: React.FC = () => {
-	const notifications = useTransientNotifications();
+	const notifications = useVisibleTransientNotifications();
 	const activeSessionId = useActiveSessionId();
 	const isAutoRetrying = useIsAutoRetrying();
 	const retryInfo = useRetryInfo();
-	const { dismissNotification, clearNotifications } = useUIActions();
-
-	const previousSessionIdRef = useRef<string | undefined>(activeSessionId);
+	const { dismissNotification } = useUIActions();
 
 	// Auto-dismiss disabled: users should dismiss notifications manually.
 	// useEffect(() => {
@@ -240,14 +238,6 @@ export const NotificationOverlay: React.FC = () => {
 	// 		}
 	// 	};
 	// }, [notifications, dismissNotification]);
-
-	// Overlay notifications are session-scoped and should reset on session switch.
-	useEffect(() => {
-		if (previousSessionIdRef.current !== activeSessionId) {
-			clearNotifications();
-			previousSessionIdRef.current = activeSessionId;
-		}
-	}, [activeSessionId, clearNotifications]);
 
 	if (!notifications.length) {
 		return null;
@@ -269,9 +259,9 @@ export const NotificationOverlay: React.FC = () => {
 						>
 							<NotificationCard
 								notification={n}
-								showRetryBadge={index === 0}
-								isAutoRetrying={isAutoRetrying}
-								retryInfo={retryInfo}
+								showRetryBadge={index === 0 && n.sessionId === activeSessionId}
+								isAutoRetrying={n.sessionId === activeSessionId && isAutoRetrying}
+								retryInfo={n.sessionId === activeSessionId ? retryInfo : null}
 								onDismiss={dismissNotification}
 							/>
 						</div>

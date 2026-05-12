@@ -20,11 +20,11 @@ import {
 	useDraftAttachments,
 	useImprovingPromptRequestId,
 	useIsImprovingPrompt,
-	useIsProcessing,
 	useModelSelection,
 	usePromptVersions,
 	useSessionAgent,
 	useSessionModel,
+	useSessionProcessing,
 	useSessionVariant,
 	useStoreInput,
 } from '../store';
@@ -92,13 +92,13 @@ export function useChatInputController(
 		togglePromptVersion,
 		clearDraftState,
 	} = useChatActions();
-	const isProcessing = useIsProcessing();
+	const activeSessionId = useChatStore(state => state.activeSessionId);
+	const isProcessing = useSessionProcessing(activeSessionId);
 	const { proxyEndpoints, opencodeProviders, getSessionModel, getSessionAgent, setSessionAgent } =
 		useModelSelection();
 	const isImproving = useIsImprovingPrompt();
 	const currentImproveRequestId = useImprovingPromptRequestId();
 	const promptVersions = usePromptVersions();
-	const activeSessionId = useChatStore(state => state.activeSessionId);
 	const agentResources = useSettingsStore(s => s.resources.agent.items);
 	const lastSelectedModel = useSettingsStore(s => s.lastSelectedModel);
 	const pushNotification = useUIStore(s => s.actions.pushNotification);

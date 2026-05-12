@@ -2,6 +2,7 @@ import {
 	DEFAULT_POLICIES,
 	isPermissionCategory,
 	isValidPolicyValue,
+	mergePolicies,
 	type PermissionCategory,
 	type PermissionPolicyValue,
 	policiesToServerFormat,
@@ -22,6 +23,7 @@ export class ToolHandler implements WebviewMessageHandler {
 	private alwaysAllowByTool: Record<string, true> = {};
 	private policies: PermissionPolicies;
 	private readonly autoAcceptBySession = new Map<string, PermissionAutoAcceptMode>();
+	private hydratePoliciesPromise: Promise<void> | null = null;
 
 	constructor(private context: HandlerContext) {
 		this.alwaysAllowByTool =
@@ -54,6 +56,42 @@ export class ToolHandler implements WebviewMessageHandler {
 				}
 			}
 		}
+	}
+
+	private async ensurePoliciesHydrated(): Promise<void> {
+		if (this.hydratePoliciesPromise) {
+			await this.hydratePoliciesPromise;
+			return;
+		}
+
+		this.hydratePoliciesPromise = (async () => {
+			try {
+				const config = await this.context.services.openCodeConfig.readProjectConfigForInspection();
+				const permissionValue = config.permission;
+				if (
+					!permissionValue ||
+					typeof permissionValue !== 'object' ||
+					Array.isArray(permissionValue)
+				) {
+					return;
+				}
+
+				const partial: Partial<PermissionPolicies> = {};
+				for (const [key, value] of Object.entries(permissionValue as Record<string, unknown>)) {
+					if (isPermissionCategory(key) && isValidPolicyValue(value)) {
+						partial[key] = value;
+					}
+				}
+				if (Object.keys(partial).length === 0) {
+					return;
+				}
+				this.policies = mergePolicies(partial);
+			} catch (error) {
+				logger.warn('[ToolHandler] Failed to hydrate policies from project config', error);
+			}
+		})();
+
+		await this.hydratePoliciesPromise;
 	}
 
 	async handleMessage(msg: WebviewCommand): Promise<void> {
@@ -135,6 +173,11 @@ export class ToolHandler implements WebviewMessageHandler {
 		return { ...this.policies };
 	}
 
+	async getPermissionPoliciesAsync(): Promise<PermissionPolicies> {
+		await this.ensurePoliciesHydrated();
+		return { ...this.policies };
+	}
+
 	async setPermissionPolicy(
 		category: PermissionCategory,
 		policy: PermissionPolicyValue,
@@ -144,6 +187,7 @@ export class ToolHandler implements WebviewMessageHandler {
 	}
 
 	private async onGetPermissions(): Promise<void> {
+		await this.ensurePoliciesHydrated();
 		this.context.bridge.data('permissionsUpdated', { policies: { ...this.policies } });
 		const entries = await Promise.all(
 			[...this.autoAcceptBySession.keys()].map(async sessionId => {

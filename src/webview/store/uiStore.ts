@@ -211,9 +211,12 @@ export const useUIStore = create<UIState>((set, get) => ({
 			const severity =
 				notification.severity ?? inferSeverity(notification.type, notification.content);
 			set(state => {
-				// Deduplicate: increment count on existing notification with same type+content
+				// Deduplicate within the same session/global scope only.
 				const existingIdx = state.notifications.findIndex(
-					n => n.type === notification.type && n.content === notification.content,
+					n =>
+						n.type === notification.type &&
+						n.content === notification.content &&
+						n.sessionId === notification.sessionId,
 				);
 				if (existingIdx !== -1) {
 					const updated = [...state.notifications];

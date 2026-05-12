@@ -118,6 +118,13 @@ function summarizeSessionDiff(rawDiffs: SnapshotFileDiff[] | undefined) {
 
 const EMPTY_NODE_IDS: string[] = [];
 const EMPTY_SECTIONS: MessageSection[] = [];
+const EMPTY_GENERATION_STATUS_SNAPSHOT = {
+	isProcessing: false,
+	status: 'Ready',
+	streamingToolId: null,
+	isTextStreaming: false,
+	toolActivity: null,
+} as const;
 
 /** Subscribe to the ordered list of RenderNode IDs for the active session. */
 export const useNodeIds = () =>
@@ -288,6 +295,13 @@ export const useIsProcessing = () =>
 		return isSessionProcessing(state, sid);
 	});
 
+export const useSessionProcessing = (sessionId?: string) =>
+	useChatStore((state: SessionStore) => {
+		const sid = sessionId ?? state.activeSessionId;
+		if (!sid) return false;
+		return isSessionProcessing(state, sid);
+	});
+
 export const useQueuedMessages = () =>
 	useChatStore((state: SessionStore) => {
 		const sid = state.activeSessionId;
@@ -316,30 +330,27 @@ export const useRetryInfo = () =>
 export const useActiveSessionId = () =>
 	useChatStore((state: SessionStore) => state.activeSessionId);
 
-export const useChatStatus = () =>
-	useChatStore((state: SessionStore) => {
-		const sid = state.activeSessionId;
-		if (!sid) return 'Ready';
-		const status = state.sessionStatus[sid];
-		if (!status) return 'Ready';
-		if (status.type === 'busy') return 'Working...';
-		if (status.type === 'retry') return 'Retrying…';
-		return 'Ready';
-	});
-
-export const useStreamingToolId = () =>
-	useChatStore((state: SessionStore) => {
-		const sid = state.activeSessionId;
-		if (!sid) return null;
-		return deriveSessionView(state, sid).streamingToolId ?? null;
-	});
-
-export const useToolActivity = () =>
+export const useGenerationStatusSnapshot = (sessionId?: string) =>
 	useChatStore(
 		useShallow((state: SessionStore) => {
-			const sid = state.activeSessionId;
-			if (!sid) return null;
-			return deriveSessionView(state, sid).toolActivity ?? null;
+			const sid = sessionId ?? state.activeSessionId;
+			if (!sid) return EMPTY_GENERATION_STATUS_SNAPSHOT;
+
+			const sessionRuntimeStatus = state.sessionStatus[sid];
+			const derivedView = deriveSessionView(state, sid);
+			return {
+				isProcessing: isSessionProcessing(state, sid),
+				status:
+					sessionRuntimeStatus?.type === 'busy'
+						? 'Working...'
+						: sessionRuntimeStatus?.type === 'retry'
+							? 'Retrying…'
+							: 'Ready',
+				streamingToolId: derivedView.streamingToolId ?? null,
+				isTextStreaming:
+					sessionRuntimeStatus?.type === 'busy' && (derivedView.isLastAssistantStreaming ?? false),
+				toolActivity: derivedView.toolActivity ?? null,
+			};
 		}),
 	);
 
@@ -465,16 +476,6 @@ export const useCompactionMessage = (messageId: string | undefined) => {
 		prevRef.current = next;
 		return next;
 	}, [activeSessionId, messageId, messages, partsByMessageId]);
-};
-
-export const useIsLastMessageStreaming = () => {
-	return useChatStore((state: SessionStore) => {
-		const sid = state.activeSessionId;
-		if (!sid) return false;
-		const status = state.sessionStatus[sid];
-		if (!status || status.type !== 'busy') return false;
-		return deriveSessionView(state, sid).isLastAssistantStreaming ?? false;
-	});
 };
 
 export const useContextPercentage = () => {
@@ -808,6 +809,20 @@ export const useModelContextWindow = () =>
 
 export const useTransientNotifications = () =>
 	useUIStore((state: UIState) => state.notifications ?? EMPTY_NOTIFICATIONS);
+
+export const useVisibleTransientNotifications = () => {
+	const activeSessionId = useChatStore((state: SessionStore) => state.activeSessionId);
+	const notifications = useUIStore(
+		useShallow((state: UIState) => state.notifications ?? EMPTY_NOTIFICATIONS),
+	);
+	return useMemo(
+		() =>
+			notifications.filter(
+				notification => !notification.sessionId || notification.sessionId === activeSessionId,
+			),
+		[notifications, activeSessionId],
+	);
+};
 
 export const useDraftAttachments = () =>
 	useChatStore((state: SessionStore) => {

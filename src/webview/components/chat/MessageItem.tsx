@@ -477,6 +477,7 @@ const TaskCardItem = React.memo<{
 							{shouldRenderTranscript && pendingAccess && (
 								<AccessGate
 									requestId={pendingAccess.requestId}
+									sessionId={ctx.sessionId}
 									messageId={pendingAccess.id}
 									tool={pendingAccess.tool}
 									input={pendingAccess.input}

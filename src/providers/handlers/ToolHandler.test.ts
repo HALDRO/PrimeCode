@@ -6,6 +6,9 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('vscode', async () => await import('../../__mocks__/vscode.js'));
+
 import { createMockExtensionContext } from '../../__mocks__/vscode';
 import { OutboundBridge } from '../../transport/OutboundBridge';
 import { ToolHandler } from './ToolHandler';
@@ -133,6 +136,78 @@ describe('ToolHandler', () => {
 			expect(policies.edit).toBe('allow');
 			expect((policies as any).terminal).toBeUndefined();
 			expect((policies as any).network).toBeUndefined();
+		});
+
+		it('should hydrate policies from project config before sending permissionsUpdated', async () => {
+			const ctx = createMockHandlerContext({
+				services: {
+					openCodeConfig: {
+						readProjectConfigForInspection: vi.fn().mockResolvedValue({
+							permission: {
+								edit: 'allow',
+								bash: 'deny',
+							},
+						}),
+					},
+				} as any,
+			});
+			const handler = new ToolHandler(ctx);
+			await handler.handleMessage({ type: 'getPermissions' });
+
+			const msg = ctx.postedMessages.find((m: any) => m.type === 'permissionsUpdated') as any;
+			expect(msg).toBeDefined();
+			expect(msg.data.policies.edit).toBe('allow');
+			expect(msg.data.policies.bash).toBe('deny');
+			expect(msg.data.policies.read).toBe('allow');
+		});
+
+		it('should prefer project config over workspaceState when project config has simple permission values', async () => {
+			const ctx = createMockHandlerContext({
+				services: {
+					openCodeConfig: {
+						readProjectConfigForInspection: vi.fn().mockResolvedValue({
+							permission: {
+								edit: 'allow',
+								bash: 'deny',
+							},
+						}),
+					},
+				} as any,
+			});
+			await ctx.extensionContext.workspaceState.update('primeCode.permissionPolicies', {
+				edit: 'deny',
+				bash: 'allow',
+			});
+
+			const handler = new ToolHandler(ctx);
+			await handler.handleMessage({ type: 'getPermissions' });
+
+			const msg = ctx.postedMessages.find((m: any) => m.type === 'permissionsUpdated') as any;
+			expect(msg.data.policies.edit).toBe('allow');
+			expect(msg.data.policies.bash).toBe('deny');
+		});
+
+		it('should keep workspaceState policies when project config permission shape is unsupported', async () => {
+			const ctx = createMockHandlerContext({
+				services: {
+					openCodeConfig: {
+						readProjectConfigForInspection: vi.fn().mockResolvedValue({
+							permission: {
+								edit: { action: 'allow' },
+							},
+						}),
+					},
+				} as any,
+			});
+			await ctx.extensionContext.workspaceState.update('primeCode.permissionPolicies', {
+				edit: 'deny',
+			});
+
+			const handler = new ToolHandler(ctx);
+			await handler.handleMessage({ type: 'getPermissions' });
+
+			const msg = ctx.postedMessages.find((m: any) => m.type === 'permissionsUpdated') as any;
+			expect(msg.data.policies.edit).toBe('deny');
 		});
 	});
 

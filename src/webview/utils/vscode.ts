@@ -5,13 +5,11 @@
  * Hook (`useVSCode`) provides stable references for React components to prevent
  * unnecessary re-renders. Includes localStorage fallback for state when running
  * outside VS Code environment (development mode).
- * `useSessionMessage` hook automatically attaches activeSessionId to messages.
  */
 
 import { useCallback, useMemo } from 'react';
 import type { VSCodeApi } from '../../common';
 import type { WebviewCommand } from '../../common/protocol';
-import { useChatStore } from '../store/chatStore';
 
 // ============================================================================
 // VS Code API Singleton
@@ -141,48 +139,5 @@ export function useVSCode() {
 			setState,
 		}),
 		[postMessage, onMessage, getState, setState],
-	);
-}
-
-// ============================================================================
-// Session-Aware Message Hook
-// ============================================================================
-
-/** Commands that carry an optional sessionId field. */
-type SessionCommand = Extract<WebviewCommand, { sessionId?: string }>;
-
-/**
- * React hook that automatically attaches activeSessionId to messages
- * Use this for any message that needs to be routed to a specific session
- *
- * @example
- * const { postSessionMessage } = useSessionMessage();
- * postSessionMessage({ type: 'sendMessage', text: 'Hello' });
- * // Automatically becomes: { type: 'sendMessage', text: 'Hello', sessionId: 'session-xxx' }
- */
-export function useSessionMessage() {
-	const activeSessionId = useChatStore(
-		(state: { activeSessionId?: string }) => state.activeSessionId,
-	);
-
-	// Post message with automatic sessionId attachment — fully typed
-	const postSessionMessage = useCallback(
-		(message: SessionCommand) => {
-			const sessionId = message.sessionId ?? activeSessionId;
-			if (sessionId) {
-				vscode.postMessage({ ...message, sessionId });
-			} else {
-				vscode.postMessage(message);
-			}
-		},
-		[activeSessionId],
-	);
-
-	return useMemo(
-		() => ({
-			postSessionMessage,
-			activeSessionId,
-		}),
-		[postSessionMessage, activeSessionId],
 	);
 }

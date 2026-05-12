@@ -19,11 +19,11 @@ interface AccessRequestMessageProps {
 export const AccessRequestMessage: React.FC<AccessRequestMessageProps> = ({ toolUseId }) => {
 	const message = useAccessRequestByToolUseId(toolUseId);
 	const requestId = message?.requestId ?? '';
-	const sessionId = message?.sessionId;
+	const sessionId = message?.sessionId ?? '';
 	const tool = message?.tool ?? '';
 	const id = message?.id;
 	const handleResponse = useAccessResponse({ requestId, tool, messageId: id, sessionId });
-	if (!message) return null;
+	if (!message?.sessionId) return null;
 	const { pattern, input } = message;
 
 	return (

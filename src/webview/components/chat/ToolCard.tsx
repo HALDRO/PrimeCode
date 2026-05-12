@@ -464,9 +464,10 @@ const FileEditCard: React.FC<FileEditCardProps> = ({
 					</div>
 				}
 				accessGate={
-					showAccessGate ? (
+					showAccessGate && accessRequest?.sessionId ? (
 						<AccessGate
 							requestId={accessRequest?.requestId}
+							sessionId={accessRequest.sessionId}
 							messageId={accessRequest?.id}
 							tool={accessRequest?.tool || toolName}
 							input={accessRequest?.input || rawInput || {}}
@@ -873,9 +874,10 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 					) : undefined
 				}
 				accessGate={
-					showAccessGate ? (
+					showAccessGate && sessionId ? (
 						<AccessGate
 							requestId={accessRequest?.requestId}
+							sessionId={sessionId}
 							messageId={accessRequest?.id}
 							tool={accessRequest?.tool || toolName}
 							input={accessRequest?.input || rawInput || {}}

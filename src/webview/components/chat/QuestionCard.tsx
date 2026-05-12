@@ -145,7 +145,6 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ request }) => {
 	const savedAnswers = ('answers' in request ? request.answers : undefined) as
 		| string[][]
 		| undefined;
-	const activeSessionId = useChatStore(state => state.activeSessionId);
 	const inputRef = useRef<HTMLInputElement>(null);
 
 	const isCarousel = questions.length > 1;
@@ -197,36 +196,34 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ request }) => {
 	);
 
 	const handleSubmit = useCallback(() => {
-		const targetSessionId = request.sessionID || activeSessionId;
-		if (!targetSessionId) return;
+		if (!request.sessionID) return;
 		const answers = questions.map((_: QuestionInfo, i: number) => {
 			const parts = [...(selections[i] ?? [])];
 			const custom = customInputs[i]?.trim();
 			if (custom) parts.push(custom);
 			return parts;
 		});
-		useChatStore.getState().actions.removePendingQuestion(String(requestId), targetSessionId);
+		useChatStore.getState().actions.removePendingQuestion(String(requestId), request.sessionID);
 		void openCodeRuntime
 			.respondToQuestion({ requestId: String(requestId), answers })
 			.catch(error => {
 				openCodeRuntime.showRuntimeError(error);
 				void openCodeRuntime
-					.refreshRuntimeState(targetSessionId)
+					.refreshRuntimeState(request.sessionID)
 					.catch(openCodeRuntime.showRuntimeError);
 			});
-	}, [activeSessionId, customInputs, questions, request.sessionID, requestId, selections]);
+	}, [customInputs, questions, request.sessionID, requestId, selections]);
 
 	const handleDismiss = useCallback(() => {
-		const targetSessionId = request.sessionID || activeSessionId;
-		if (!targetSessionId) return;
-		useChatStore.getState().actions.removePendingQuestion(String(requestId), targetSessionId);
+		if (!request.sessionID) return;
+		useChatStore.getState().actions.removePendingQuestion(String(requestId), request.sessionID);
 		void openCodeRuntime.rejectQuestion(String(requestId)).catch(error => {
 			openCodeRuntime.showRuntimeError(error);
 			void openCodeRuntime
-				.refreshRuntimeState(targetSessionId)
+				.refreshRuntimeState(request.sessionID)
 				.catch(openCodeRuntime.showRuntimeError);
 		});
-	}, [activeSessionId, request.sessionID, requestId]);
+	}, [request.sessionID, requestId]);
 
 	const q = questions[step];
 	if (!q) return null;
