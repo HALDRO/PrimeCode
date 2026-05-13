@@ -143,9 +143,15 @@ export const SimpleTool: React.FC<SimpleToolProps> = ({
 				<div className="relative group">
 					<div
 						id={contentId}
-						style={{ maxHeight: maxExpandedHeight }}
+						style={{
+							maxHeight: maxExpandedHeight,
+							opacity: 1,
+							transform: 'translateY(0)',
+							transition:
+								'max-height 240ms ease-out, opacity 220ms ease-out, transform 220ms ease-out',
+						}}
 						className={cn(
-							'pl-3 ml-1 border-l border-(--border-subtle) mt-1 py-1 text-sm overflow-x-auto overflow-y-auto',
+							'pl-3 ml-1 border-l border-(--border-subtle) mt-1 py-1 text-sm overflow-x-auto overflow-y-auto animate-fade-in',
 							contentClassName,
 						)}
 					>
@@ -173,14 +179,6 @@ export { useElapsedTimer };
 
 export const ThinkingMessage = React.memo<ThinkingMessageProps>(
 	({ content, durationMs, isStreaming, startTime, defaultExpanded }) => {
-		const preview = useMemo(
-			() =>
-				content
-					.split('\n')
-					.find(line => line.trim().length > 0)
-					?.trim() ?? '',
-			[content],
-		);
 		const [expanded, setExpanded] = useState(defaultExpanded ?? isStreaming ?? false);
 		const wasStreamingRef = useRef(isStreaming);
 		const autoExpandedRef = useRef(Boolean(defaultExpanded ?? isStreaming));
@@ -210,15 +208,11 @@ export const ThinkingMessage = React.memo<ThinkingMessageProps>(
 		// This prevents the timer from disappearing when durationMs is not yet computed.
 		const displayDuration = isStreaming ? liveElapsed : (durationMs ?? liveElapsed);
 
-		// Combine preview and timer into a single meta ReactNode so they share
-		// the same flex container and the timer doesn't push the preview out.
+		// Keep the header minimal: just the timer next to the Thinking label.
 		const combinedMeta = (
 			<span className="flex items-center gap-1 w-full min-w-0">
-				{preview && (
-					<span className="truncate text-sm text-vscode-descriptionForeground">{preview}</span>
-				)}
 				{displayDuration != null && displayDuration > 0 && (
-					<span className="ml-auto shrink-0 flex items-center gap-1 text-sm font-bold text-vscode-descriptionForeground">
+					<span className="shrink-0 flex items-center gap-1 text-sm font-bold text-vscode-descriptionForeground">
 						<TimerIcon size={11} />
 						{formatDuration(displayDuration)}
 					</span>

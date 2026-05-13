@@ -176,6 +176,17 @@ const PreviewToolSummary: React.FC<{
 });
 PreviewToolSummary.displayName = 'PreviewToolSummary';
 
+function useGroupedTranscript(
+	items: RenderNode[] | undefined,
+	mcpServerNames: string[],
+	isRunning: boolean,
+): GroupedResponseItem[] {
+	return useMemo(() => {
+		if (!items || items.length === 0) return [];
+		return groupToolMessages(items, mcpServerNames, isRunning);
+	}, [items, mcpServerNames, isRunning]);
+}
+
 function TaskResultLine({ message }: { message: RenderTaskResultNode }) {
 	const content = extractCanonicalTaskResult(message.content).trim();
 	if (!content) return null;
@@ -219,18 +230,6 @@ function SystemEventLine({ message }: { message: RenderSystemEventNode }) {
 	);
 }
 
-/** Hook to group child session items for rendering — avoids duplicating grouping logic. */
-function useGroupedTranscript(
-	items: RenderNode[] | undefined,
-	mcpServerNames: string[],
-	isRunning: boolean,
-): GroupedResponseItem[] {
-	return useMemo(() => {
-		if (!items || items.length === 0) return [];
-		return groupToolMessages(items, mcpServerNames, isRunning);
-	}, [items, mcpServerNames, isRunning]);
-}
-
 const TaskCardItem = React.memo<{
 	message: RenderTaskCardNode;
 	ctx: MessageItemContext;
@@ -254,12 +253,10 @@ const TaskCardItem = React.memo<{
 	const childTokens = liveChildSummary.tokens ?? message.childSummary.tokens;
 	const childCount = childSessionId ? liveChildSummary.childCount : message.childSummary.childCount;
 
-	// Subscribe to child session messages independently via store hook.
-	// Each TaskCardItem re-renders only when its own child session changes.
-	const rawChildItems = useChildSessionMessages(childSessionId);
 	const childSessionAgent = useChildSessionAgent(childSessionId);
 	const childSessionSlug = useChildSessionSlug(childSessionId);
 	const childTitle = useChildSessionTitle(childSessionId);
+	const rawChildItems = useChildSessionMessages(childSessionId);
 	const taskResultItems = rawChildItems.filter(
 		(item): item is RenderTaskResultNode => item.kind === 'task_result',
 	);
@@ -267,8 +264,6 @@ const TaskCardItem = React.memo<{
 	const isPending = effectiveStatus === 'pending';
 	const isPreviewMode = expandState === 'preview';
 	const shouldRenderTranscript = expandState === 'expanded' || isRunning;
-
-	// Group child session items for rendering (both preview summary and expanded transcript)
 	const groupedChildren = useGroupedTranscript(rawChildItems, mcpServerNames, isRunning);
 	const toolSummary = useMemo(() => summarizePreviewTools(groupedChildren), [groupedChildren]);
 	const retryInfo = message.retryInfo;
@@ -337,7 +332,6 @@ const TaskCardItem = React.memo<{
 		);
 	});
 
-	// Full child session transcript: isolated child history, including projected terminal task results.
 	const childTranscriptBlock = <div className="flex flex-col gap-2">{renderedGroupedChildren}</div>;
 
 	const metaBlock =
@@ -574,14 +568,7 @@ const SimpleToolGroup = React.memo<{
 
 	/** Ordered list of renderable items: tool_use messages and bridge messages (assistant/thinking) */
 	const renderItems = useMemo(
-		() =>
-			messages.filter(
-				m =>
-					m.kind === 'tool_use' ||
-					m.kind === 'assistant' ||
-					m.kind === 'thinking' ||
-					m.kind === 'task_result',
-			),
+		() => messages.filter(m => m.kind === 'tool_use' || m.kind === 'task_result'),
 		[messages],
 	);
 
@@ -639,33 +626,6 @@ const SimpleToolGroup = React.memo<{
 						if (msg.kind === 'task_result') {
 							return <TaskResultLine key={msg.id} message={msg as RenderTaskResultNode} />;
 						}
-						if (msg.kind === 'assistant') {
-							const assistantContent = (msg as RenderAssistantMessage).content || '';
-							if (!assistantContent.trim()) return null;
-							return (
-								<div
-									key={msg.id}
-									className="py-1 text-sm leading-(--line-height-base) font-(family-name:--font-family-base)"
-									style={{ color: 'var(--input-text-color)' }}
-								>
-									<Markdown
-										content={assistantContent}
-										isStreaming={(msg as RenderAssistantMessage).isStreaming}
-									/>
-								</div>
-							);
-						}
-						if (msg.kind === 'thinking') {
-							return (
-								<ThinkingMessage
-									key={msg.id}
-									content={(msg as RenderThinkingMessage).content || ''}
-									durationMs={(msg as RenderThinkingMessage).durationMs}
-									isStreaming={(msg as RenderThinkingMessage).isStreaming}
-									startTime={(msg as RenderThinkingMessage).startTime}
-								/>
-							);
-						}
 						// tool_use
 						const toolMsg = msg as RenderToolUseMessage;
 						return <ToolCardMessage key={toolMsg.id} toolUse={toolMsg} sessionId={sessionId} />;
@@ -709,12 +669,18 @@ export const MessageItem = React.memo<{
 }>(
 	({ item, ctx, collapseGroupedTools = false }) => {
 		if (Array.isArray(item)) {
+			const bridges = (item as ToolGroup).bridges ?? [];
 			return (
-				<SimpleToolGroup
-					messages={item as RenderNode[]}
-					shouldCollapse={collapseGroupedTools || getGroupedItemShouldCollapse(item)}
-					sessionId={ctx.sessionId}
-				/>
+				<>
+					<SimpleToolGroup
+						messages={item as RenderNode[]}
+						shouldCollapse={collapseGroupedTools || getGroupedItemShouldCollapse(item)}
+						sessionId={ctx.sessionId}
+					/>
+					{bridges.map(bridge => (
+						<MessageItem key={bridge.id} item={bridge} ctx={ctx} collapseGroupedTools={false} />
+					))}
+				</>
 			);
 		}
 

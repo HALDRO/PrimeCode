@@ -206,6 +206,9 @@ export const GenerationStatus: React.FC<{ sessionId?: string }> = ({ sessionId }
 	if (toolActivity) {
 		lastToolActivityRef.current = toolActivity;
 	}
+	if (isTextStreaming && !streamingToolId) {
+		lastToolActivityRef.current = null;
+	}
 	const stableToolActivity = isProcessing ? (toolActivity ?? lastToolActivityRef.current) : null;
 
 	// Keep the status visible for the whole processing window.

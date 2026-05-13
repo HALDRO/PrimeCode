@@ -158,42 +158,6 @@ function ensureSessionMessages(state: SessionStore, sessionId: string): Message[
 	return state.messages[sessionId];
 }
 
-function appendPendingPartDelta(
-	state: SessionStore,
-	messageID: string,
-	partID: string,
-	field: string,
-	delta: string,
-): void {
-	let partDeltas = state.pendingPartDeltas[messageID];
-	if (!partDeltas) {
-		partDeltas = {};
-		state.pendingPartDeltas[messageID] = partDeltas;
-	}
-	let fieldDeltas = partDeltas[partID];
-	if (!fieldDeltas) {
-		fieldDeltas = {};
-		partDeltas[partID] = fieldDeltas;
-	}
-	fieldDeltas[field] = `${fieldDeltas[field] ?? ''}${delta}`;
-}
-
-function consumePendingPartDelta(
-	state: SessionStore,
-	messageID: string,
-	partID: string,
-	field: string,
-): string | undefined {
-	const pendingByMessage = state.pendingPartDeltas[messageID];
-	const pendingByPart = pendingByMessage?.[partID];
-	const pending = pendingByPart?.[field];
-	if (pending === undefined) return undefined;
-	delete pendingByPart[field];
-	if (Object.keys(pendingByPart).length === 0) delete pendingByMessage[partID];
-	if (Object.keys(pendingByMessage).length === 0) delete state.pendingPartDeltas[messageID];
-	return pending;
-}
-
 function extractCompositeModelId(message: Message): string | undefined {
 	const record = message as Record<string, unknown>;
 	const directModelId = typeof record.modelID === 'string' ? record.modelID.trim() : '';
@@ -254,25 +218,6 @@ function syncCompactionParentFromAssistant(
 ): void {
 	if (info.mode !== 'compaction' || !info.parentID) return;
 	ensureCompactionParentMessage(state, sessionId, info.parentID, info.time.created);
-}
-
-function shouldKeepAccumulatedTextPart(existingPart: unknown, nextPart: unknown): boolean {
-	if (
-		!existingPart ||
-		!nextPart ||
-		typeof existingPart !== 'object' ||
-		typeof nextPart !== 'object'
-	) {
-		return false;
-	}
-
-	const existing = existingPart as { type?: string; text?: unknown };
-	const next = nextPart as { type?: string; text?: unknown };
-	if (existing.type !== next.type) return false;
-	if (existing.type !== 'text' && existing.type !== 'reasoning') return false;
-	if (typeof existing.text !== 'string' || typeof next.text !== 'string') return false;
-
-	return existing.text.length > next.text.length && existing.text.startsWith(next.text);
 }
 
 // ─── Subset of SDK Event types that the webview cares about ─────────────────
@@ -405,7 +350,6 @@ export function eventReducer(state: SessionStore, event: WebviewSdkEvent): void 
 			if (msgs) state.messages[sessionID] = msgs.filter(message => message.id !== messageID);
 			// Clean up parts for this message
 			if (state.parts[messageID]) delete state.parts[messageID];
-			if (state.pendingPartDeltas[messageID]) delete state.pendingPartDeltas[messageID];
 			syncSessionModelFromMessages(state, sessionID);
 			break;
 		}
@@ -415,17 +359,11 @@ export function eventReducer(state: SessionStore, event: WebviewSdkEvent): void 
 			const { part } = event.properties;
 			if (SKIP_PARTS.has(part.type)) break;
 			const messageID = part.messageID;
-			const pendingText = consumePendingPartDelta(state, messageID, part.id, 'text');
-			if (pendingText && 'text' in part && typeof part.text === 'string') {
-				part.text += pendingText;
-			}
 			if (!state.parts[messageID]) state.parts[messageID] = [];
 			const parts = state.parts[messageID];
 			const idx = parts.findIndex(existingPart => existingPart.id === part.id);
 			if (idx >= 0) {
-				if (!shouldKeepAccumulatedTextPart(parts[idx], part)) {
-					parts[idx] = part;
-				}
+				parts[idx] = part;
 			} else parts.push(part);
 
 			// Track task tool → child session mapping
@@ -463,15 +401,9 @@ export function eventReducer(state: SessionStore, event: WebviewSdkEvent): void 
 		case 'message.part.delta': {
 			const { messageID, partID, field, delta } = event.properties;
 			const parts = state.parts[messageID];
-			if (!parts) {
-				appendPendingPartDelta(state, messageID, partID, field, delta);
-				break;
-			}
+			if (!parts) break;
 			const part = parts.find(p => p.id === partID);
-			if (!part) {
-				appendPendingPartDelta(state, messageID, partID, field, delta);
-				break;
-			}
+			if (!part) break;
 			const existing =
 				typeof (part as Record<string, unknown>)[field] === 'string'
 					? ((part as Record<string, unknown>)[field] as string)

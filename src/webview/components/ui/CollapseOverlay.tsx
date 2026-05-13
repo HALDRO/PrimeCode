@@ -32,7 +32,7 @@ export const CollapseOverlay: React.FC<CollapseOverlayProps> = ({
 			className={cn(
 				'pointer-events-none absolute inset-x-0 bottom-0 flex justify-center',
 				'z-10',
-				'opacity-0 transition-opacity duration-150 ease-out',
+				'opacity-0 transition-opacity duration-250 ease-out',
 				'group-hover:opacity-100',
 				className,
 			)}
@@ -51,8 +51,8 @@ export const CollapseOverlay: React.FC<CollapseOverlayProps> = ({
 					'flex items-center justify-center',
 					'h-6 w-20',
 					'bg-transparent border-none p-0',
-					'opacity-85 hover:opacity-100',
-					'transition-[opacity,transform] duration-150 ease-out',
+					'opacity-85 hover:opacity-100 hover:-translate-y-0.5',
+					'transition-[opacity,transform] duration-250 ease-out',
 					'active:translate-y-px',
 				)}
 				style={undefined}

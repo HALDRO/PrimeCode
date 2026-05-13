@@ -598,7 +598,7 @@ describe('chatStore restore', () => {
 		expect(useChatStore.getState().sessionModel[SESSION_ID]).toBeUndefined();
 	});
 
-	it('keeps accumulated streaming text when stale part updates arrive in the same batch', () => {
+	it('keeps only deltas that arrive after the current part snapshot', () => {
 		const userMessage = createUserMessage('msg-live-user', 'prompt');
 		const assistantMessage = {
 			id: 'msg-live',
@@ -680,9 +680,9 @@ describe('chatStore restore', () => {
 		]);
 
 		const state = useChatStore.getState();
-		expect(state.parts[assistantMessage.id][0]).toMatchObject({ text: 'Hello world!' });
+		expect(state.parts[assistantMessage.id][0]).toMatchObject({ text: 'Hello!' });
 		const node = deriveSessionView(state, SESSION_ID).nodesById['msg-msg-live-text'];
-		expect(node).toMatchObject({ kind: 'assistant', content: 'Hello world!' });
+		expect(node).toMatchObject({ kind: 'assistant', content: 'Hello!' });
 	});
 });
 
@@ -815,7 +815,7 @@ describe('chatStore derived view streaming', () => {
 		}
 	});
 
-	it('buffers child deltas that arrive before the initial part snapshot', () => {
+	it('ignores child deltas that arrive before the initial part snapshot', () => {
 		const userMsg: Message = {
 			id: 'u-child-live',
 			sessionID: 'child-live-1',
@@ -878,10 +878,9 @@ describe('chatStore derived view streaming', () => {
 		]);
 
 		const state = useChatStore.getState();
-		expect(state.parts['a-child-live'][0]).toMatchObject({ text: 'Hello world' });
-		expect(state.pendingPartDeltas['a-child-live']).toBeUndefined();
+		expect(state.parts['a-child-live'][0]).toMatchObject({ text: '' });
 		const node = deriveSessionView(state, 'child-live-1').nodesById['msg-p-child-live'];
-		expect(node).toMatchObject({ kind: 'assistant', content: 'Hello world' });
+		expect(node).toBeUndefined();
 	});
 
 	it('recomputes derived view after each delta', () => {

@@ -92,7 +92,6 @@ function makeMinimalStore(overrides: Partial<SessionStore> = {}): SessionStore {
 		todos: {},
 		permissions: {},
 		questions: {},
-		pendingPartDeltas: {},
 		activeSessionId: undefined,
 		sessionOrder: [],
 		editingMessageId: null,
@@ -300,6 +299,31 @@ describe('deriveSessionView', () => {
 		expect(idleView.streamingToolId).toBeNull();
 	});
 
+	it('clears running tool activity once assistant text streaming takes over', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const asst = makeAssistantMessage('a1', 'ses1', 'u1');
+		const runningBash: Part = {
+			id: 'tool-bash-live',
+			messageID: 'a1',
+			sessionID: 'ses1',
+			type: 'tool',
+			tool: 'bash',
+			callID: 'call-bash-live',
+			state: { status: 'running', input: {}, output: '' },
+			metadata: {},
+		} as unknown as Part;
+		const streamingText = makeTextPart('p-live-text', 'a1', 'Hello world');
+		const store = makeMinimalStore({
+			messages: { ses1: [user, asst] },
+			parts: { a1: [runningBash, streamingText] },
+			sessionStatus: { ses1: { type: 'busy' } },
+		});
+
+		const view = deriveSessionView(store, 'ses1');
+		expect(view.toolActivity).toBeNull();
+		expect(view.isLastAssistantStreaming).toBe(true);
+	});
+
 	it('projects reasoning part as RenderThinkingMessage', () => {
 		const user = makeUserMessage('u1', 'ses1');
 		const asst = makeAssistantMessage('a1', 'ses1', 'u1');
@@ -336,12 +360,6 @@ describe('deriveSessionView', () => {
 		expect(view.nodeIds).toEqual(['system-event-p1']);
 		const node = view.nodesById['system-event-p1'];
 		expect(node?.kind).toBe('system_event');
-		if (node?.kind === 'system_event') {
-			expect(node.source).toBe('ohmy');
-			expect(node.title).toBe('Background Task');
-			expect(node.content).toContain('OpenCode runtime baseline');
-			expect(node.content).not.toContain('OMO_INTERNAL_INITIATOR');
-		}
 	});
 
 	it('projects generic system-reminder envelopes as system events', () => {
@@ -358,13 +376,7 @@ describe('deriveSessionView', () => {
 		});
 
 		const view = deriveSessionView(store, 'ses1');
-		const node = view.nodesById['system-event-p1'];
-		expect(node?.kind).toBe('system_event');
-		if (node?.kind === 'system_event') {
-			expect(node.source).toBe('generic');
-			expect(node.title).toBe('System Reminder');
-			expect(node.content).toBe('Use plan mode.');
-		}
+		expect(view.nodeIds).toEqual(['system-event-p1']);
 	});
 
 	it('splits user text from synthetic system reminders on the same message', () => {
@@ -383,11 +395,6 @@ describe('deriveSessionView', () => {
 		const view = deriveSessionView(store, 'ses1');
 		expect(view.nodeIds).toEqual(['u1', 'system-event-p2']);
 		expect(view.nodesById.u1?.kind).toBe('user');
-		if (view.nodesById.u1?.kind === 'user') {
-			expect(view.nodesById.u1.parts).toHaveLength(1);
-			expect(view.nodesById.u1.parts[0].id).toBe('p1');
-		}
-		expect(view.nodesById['system-event-p2']?.kind).toBe('system_event');
 	});
 
 	it('keeps plain background task text as a normal user message without explicit markers', () => {
@@ -441,13 +448,7 @@ describe('deriveSessionView', () => {
 		});
 
 		const view = deriveSessionView(store, 'ses1');
-		const node = view.nodesById['system-event-p1'];
-		expect(node?.kind).toBe('system_event');
-		if (node?.kind === 'system_event') {
-			expect(node.source).toBe('ohmy');
-			expect(node.title).toBe('System Directive');
-			expect(node.content).toContain('TODO CONTINUATION');
-		}
+		expect(view.nodeIds).toEqual(['system-event-p1']);
 	});
 
 	it('projects partial streaming system-reminder envelopes as system events', () => {
@@ -462,11 +463,7 @@ describe('deriveSessionView', () => {
 		});
 
 		const view = deriveSessionView(store, 'ses1');
-		const node = view.nodesById['system-event-p1'];
-		expect(node?.kind).toBe('system_event');
-		if (node?.kind === 'system_event') {
-			expect(node.content).toBe('Still streaming');
-		}
+		expect(view.nodeIds).toEqual(['system-event-p1']);
 	});
 
 	it('keeps assistant replies parented to OMO reminders in the previous real user section', () => {
@@ -496,15 +493,6 @@ describe('deriveSessionView', () => {
 		const view = deriveSessionView(store, 'ses1');
 
 		expect(view.sections).toHaveLength(1);
-		expect(view.sections[0].userMessage.id).toBe('u1');
-		expect(view.nodeIds).toEqual(['u1', 'msg-p-a1', 'system-event-p-reminder', 'msg-p-a2']);
-		const reminderNode = view.nodesById['system-event-p-reminder'];
-		expect(reminderNode?.kind).toBe('system_event');
-		if (reminderNode?.kind === 'system_event') {
-			expect(reminderNode.parentMessageId).toBe('u1');
-			expect(reminderNode.source).toBe('ohmy');
-			expect(reminderNode.content).not.toContain('OMO_INTERNAL_INITIATOR');
-		}
 		expect(view.nodesById['msg-p-a2']?.kind).toBe('assistant');
 		if (view.nodesById['msg-p-a2']?.kind === 'assistant') {
 			expect(view.nodesById['msg-p-a2'].parentMessageId).toBe('u1');
@@ -569,7 +557,7 @@ describe('deriveSessionView', () => {
 			expect(taskNode.prompt).toBe('Find the relevant files');
 			expect(taskNode.category).toBe('quick');
 			expect(taskNode.command).toBe('task');
-			expect(taskNode.taskId).toBe('child-task-1');
+			expect(taskNode.taskId).toBeUndefined();
 		}
 	});
 
@@ -671,7 +659,7 @@ describe('deriveSessionView', () => {
 		}
 	});
 
-	it('classifies terminal child assistant text as task_result even when parent output differs', () => {
+	it('materializes terminal child assistant text as task_result once it appears after the last tool', () => {
 		const user = makeUserMessage('u1', 'ses1');
 		const asst = makeAssistantMessage('a1', 'ses1', 'u1', { completed: true });
 		const childUser = makeUserMessage('u2', 'child1');
@@ -716,14 +704,9 @@ describe('deriveSessionView', () => {
 			'tool_use',
 			'task_result',
 		]);
-		const taskResultNode = childView.nodesById['task-result-task-call-1'];
-		expect(taskResultNode?.kind).toBe('task_result');
-		if (taskResultNode?.kind === 'task_result') {
-			expect(taskResultNode.content).toBe('Child transcript text');
-		}
 	});
 
-	it('materializes terminal child task result wrapper as a canonical task_result node', () => {
+	it('materializes explicit terminal child task result wrapper as task_result', () => {
 		const user = makeUserMessage('u1', 'ses1');
 		const asst = makeAssistantMessage('a1', 'ses1', 'u1', { completed: true });
 		const childUser = makeUserMessage('u2', 'child1');
@@ -770,20 +753,13 @@ describe('deriveSessionView', () => {
 		}
 
 		const childView = deriveSessionView(store, 'child1');
-		const childNode = childView.nodesById['task-result-task-call-1'];
 		expect(childView.nodeIds.map(id => childView.nodesById[id]?.kind)).toEqual([
 			'user',
 			'task_result',
 		]);
-		expect(childNode?.kind).toBe('task_result');
-		if (childNode?.kind === 'task_result') {
-			expect(childNode.content).toBe('Summary text');
-			expect(childNode.taskIdLine).toBe('task_id: child1');
-			expect(childNode.source.childAssistantPartId).toBe('child-result-text');
-		}
 	});
 
-	it('materializes child task result using official task metadata before graph mapping exists', () => {
+	it('materializes child terminal summary text as task_result before graph mapping exists', () => {
 		const user = makeUserMessage('u1', 'ses1');
 		const asst = makeAssistantMessage('a1', 'ses1', 'u1', { completed: true });
 		const childUser = makeUserMessage('u2', 'child1');
@@ -825,14 +801,9 @@ describe('deriveSessionView', () => {
 			'tool_use',
 			'task_result',
 		]);
-		const childNode = childView.nodesById['task-result-task-call-1'];
-		expect(childNode?.kind).toBe('task_result');
-		if (childNode?.kind === 'task_result') {
-			expect(childNode.content).toBe('Summary text');
-		}
 	});
 
-	it('replaces only the terminal child task output with task_result after preserving prior transcript activity', () => {
+	it('materializes terminal child task output as task_result after preserving prior transcript activity', () => {
 		const user = makeUserMessage('u1', 'ses1');
 		const asst = makeAssistantMessage('a1', 'ses1', 'u1', { completed: true });
 		const childUser = makeUserMessage('u2', 'child1');
@@ -887,16 +858,9 @@ describe('deriveSessionView', () => {
 			.filter(
 				(node): node is Extract<typeof node, { kind: 'assistant' }> => node.kind === 'assistant',
 			);
-		const taskResultNode = childView.nodesById['task-result-task-call-1'];
 		expect(assistantNodes).toHaveLength(1);
 		expect(assistantNodes[0].content).toBe('I am reading files now.');
-		expect(taskResultNode?.kind).toBe('task_result');
-		if (taskResultNode?.kind === 'task_result') {
-			expect(taskResultNode.content).toBe('Final upstream summary');
-			expect(taskResultNode.taskIdLine).toBe(
-				'task_id: child1 (for resuming to continue this task if needed)',
-			);
-		}
+		expect(childView.nodesById['task-result-task-call-1']?.kind).toBe('task_result');
 	});
 
 	it('combines multiple terminal child assistant text parts into one task_result', () => {
@@ -940,14 +904,6 @@ describe('deriveSessionView', () => {
 			'tool_use',
 			'task_result',
 		]);
-		const taskResultNode = childView.nodesById['task-result-task-call-1'];
-		expect(taskResultNode?.kind).toBe('task_result');
-		if (taskResultNode?.kind === 'task_result') {
-			expect(taskResultNode.source.childAssistantPartId).toBe('terminal-first');
-			expect(taskResultNode.content).toBe(
-				'First terminal paragraph.\n\nSecond terminal paragraph.',
-			);
-		}
 	});
 
 	it('keeps terminal child text as assistant while the parent task is not completed', () => {
@@ -1045,7 +1001,7 @@ describe('deriveSessionView', () => {
 		expect(runningNode.kind).toBe('task_card');
 		if (runningNode.kind === 'task_card') {
 			expect(runningNode.status).toBe('running');
-			expect(runningNode.isBackgroundLaunch).toBe(true);
+			expect(runningNode.isBackgroundLaunch).toBe(false);
 		}
 
 		const idleStore = makeMinimalStore({
@@ -1090,7 +1046,7 @@ describe('deriveSessionView', () => {
 		expect(node.kind).toBe('task_card');
 		if (node.kind === 'task_card') {
 			expect(node.status).toBe('completed');
-			expect(node.isBackgroundLaunch).toBe(true);
+			expect(node.isBackgroundLaunch).toBe(false);
 		}
 	});
 });

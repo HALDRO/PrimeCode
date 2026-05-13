@@ -275,8 +275,17 @@ function getRunningToolMeta(
 	messages: Message[],
 	parts: Record<string, Part[]>,
 ): { toolName: string; label: string; toolUseId: string } | null {
+	let lastRunningTool: {
+		toolName: string;
+		label: string;
+		toolUseId: string;
+		messageId: string;
+		partIndex: number;
+	} | null = null;
+
 	for (let i = messages.length - 1; i >= 0; i--) {
-		const messageParts = parts[messages[i].id];
+		const message = messages[i];
+		const messageParts = parts[message.id];
 		if (!messageParts) continue;
 		for (let j = messageParts.length - 1; j >= 0; j--) {
 			const part = messageParts[j];
@@ -284,14 +293,46 @@ function getRunningToolMeta(
 			const toolPart = part as ToolPart;
 			if (toolPart.state.status !== 'running') continue;
 			const displayName = getToolDisplayName(toolPart.tool);
-			return {
+			lastRunningTool = {
 				toolName: toolPart.tool,
 				label: `Running ${displayName}...`,
 				toolUseId: toolPart.callID,
+				messageId: message.id,
+				partIndex: j,
 			};
+			break;
+		}
+		if (lastRunningTool) break;
+	}
+
+	if (!lastRunningTool) return null;
+	const toolMessageParts = parts[lastRunningTool.messageId] ?? [];
+	for (let i = lastRunningTool.partIndex + 1; i < toolMessageParts.length; i++) {
+		const part = toolMessageParts[i];
+		if (
+			part.type === 'text' &&
+			'text' in part &&
+			typeof part.text === 'string' &&
+			part.text.trim() &&
+			!(('synthetic' in part && part.synthetic) as boolean)
+		) {
+			return null;
+		}
+		if (
+			part.type === 'reasoning' &&
+			'text' in part &&
+			typeof part.text === 'string' &&
+			part.text.trim()
+		) {
+			return null;
 		}
 	}
-	return null;
+
+	return {
+		toolName: lastRunningTool.toolName,
+		label: lastRunningTool.label,
+		toolUseId: lastRunningTool.toolUseId,
+	};
 }
 
 function getLastAssistantStreaming(nodes: RenderNode[]): boolean {
@@ -399,11 +440,7 @@ function getTaskId(
 	input: Record<string, unknown>,
 	metadata: Record<string, unknown> | undefined,
 ): string | undefined {
-	const explicitTaskId = getTaskStringField(input, metadata, 'taskId', 'task_id');
-	if (explicitTaskId) return explicitTaskId;
-	const output = typeof input.output === 'string' ? input.output : undefined;
-	const outputTaskId = output?.match(/^task_id:\s*([^\r\n<]+)/m)?.[1]?.trim();
-	return outputTaskId || undefined;
+	return getTaskStringField(input, metadata, 'taskId', 'task_id');
 }
 
 function isBackgroundTaskLaunch(output: string | undefined): boolean {
@@ -430,7 +467,7 @@ function buildTaskPartIndex(parts: Record<string, Part[]>): TaskPartIndex {
 	return { byCallId, byChildSessionId };
 }
 
-function buildTerminalTaskResultProjection(
+function buildExplicitTaskResultProjection(
 	state: Pick<SessionStore, 'originatingToolCallBySessionId' | 'messages' | 'sessionStatus'>,
 	messages: Message[],
 	parts: Record<string, Part[]>,
@@ -445,48 +482,43 @@ function buildTerminalTaskResultProjection(
 	const parentTaskPart =
 		taskPartIndex.byChildSessionId.get(sessionId) ??
 		(mappedToolCallId ? taskPartIndex.byCallId.get(mappedToolCallId) : undefined);
-
 	if (!parentTaskPart || parentTaskPart.state.status !== 'completed') return projection;
 
-	// Gate: do not materialize task_result while the child session is still active.
-	// A present sessionStatus with type 'busy' or 'retry' means the child is still working.
-	// An absent entry means the session either completed and was cleaned up, or was never tracked
-	// as a child — in both cases we allow the result to render (fallback to tool part status).
 	const childStatus = state.sessionStatus[sessionId];
 	if (childStatus && childStatus.type !== 'idle') return projection;
-	const parentMessage = state.messages[parentTaskPart.sessionID]?.find(
-		message => message.id === parentTaskPart.messageID,
-	);
-	const parentTaskParentMessageId =
-		parentMessage && isAssistantMessage(parentMessage) ? parentMessage.parentID : undefined;
 
-	const orderedParts: Array<{ message: Message; part: Part; index: number }> = [];
+	const rawOutput = getTaskResultOutput(parentTaskPart);
+	if (!rawOutput || !extractCanonicalTaskResult(rawOutput).trim()) return projection;
+
+	type OrderedEntry = { message: Message; part: Part; index: number };
+	const orderedParts: OrderedEntry[] = [];
 	for (const message of messages) {
 		for (const part of parts[message.id] ?? []) {
 			orderedParts.push({ message, part, index: orderedParts.length });
 		}
 	}
 
-	let lastToolIndex = -1;
+	let boundaryIndex = -1;
 	for (const entry of orderedParts) {
-		if (entry.part.type === 'tool') lastToolIndex = entry.index;
+		if (entry.part.type === 'tool' || entry.part.type === 'reasoning') {
+			boundaryIndex = entry.index;
+		}
 	}
 
 	const terminalTextParts = orderedParts.filter(entry => {
-		if (entry.index <= lastToolIndex) return false;
+		if (entry.index <= boundaryIndex) return false;
 		if (!isAssistantMessage(entry.message)) return false;
 		if (entry.part.type !== 'text' || !('text' in entry.part)) return false;
-		const text = entry.part.text;
-		if (typeof text !== 'string' || !text.trim()) return false;
+		if (typeof entry.part.text !== 'string' || !entry.part.text.trim()) return false;
 		return !(('synthetic' in entry.part && entry.part.synthetic) as boolean);
 	});
+
 	if (terminalTextParts.length === 0) return projection;
 
 	const content = terminalTextParts
 		.map(entry =>
-			entry.part.type === 'text' ? extractTaskResultDisplayContent(entry.part.text) : '',
+			'text' in entry.part && typeof entry.part.text === 'string' ? entry.part.text.trim() : '',
 		)
-		.map(text => text.trim())
 		.filter(Boolean)
 		.join('\n\n');
 	if (!content) return projection;
@@ -495,21 +527,26 @@ function buildTerminalTaskResultProjection(
 	for (const entry of terminalTextParts) {
 		projection.consumedPartIds.add(entry.part.id);
 	}
+
 	const node = materializeTaskResultNode({
 		parentSessionId: parentTaskPart.sessionID,
-		parentMessageId: parentTaskParentMessageId,
+		parentMessageId: parentTaskPart.messageID,
 		toolCallId: parentTaskPart.callID,
 		childSessionId: sessionId,
-		timestamp: new Date((first.message as AssistantMessage).time.created).toISOString(),
-		rawOutput: getTaskResultOutput(parentTaskPart) ?? content,
+		timestamp: new Date(first.message.time.created).toISOString(),
+		rawOutput,
 		displayOutput: content,
 		parentToolPartId: parentTaskPart.id,
 		childAssistantMessageId: first.message.id,
 		childAssistantPartId: first.part.id,
 	});
-	if (node) projection.nodesByFirstPartId.set(first.part.id, node);
+	if (node) {
+		projection.nodesByFirstPartId.set(first.part.id, node);
+	}
+
 	return projection;
 }
+
 function projectMessages(
 	messages: Message[],
 	parts: Record<string, Part[]>,
@@ -701,7 +738,6 @@ function materializeTaskCards(
 		if (item.kind === 'tool_use' && item.toolName.toLowerCase() === 'task') {
 			const toolCallId = item.toolUseId;
 			let taskInput: Record<string, unknown> = {};
-			let taskOutput: string | undefined;
 			let taskMetadata: Record<string, unknown> | undefined;
 			const taskToolPart = taskPartIndex.byCallId.get(toolCallId);
 			if (taskToolPart) {
@@ -711,7 +747,6 @@ function materializeTaskCards(
 					typeof taskToolPart.state.input === 'object'
 						? (taskToolPart.state.input as Record<string, unknown>)
 						: {};
-				taskOutput = 'output' in taskToolPart.state ? getTaskResultOutput(taskToolPart) : undefined;
 				taskMetadata = getToolPartMetadata(taskToolPart);
 			}
 			const metadataSessionId =
@@ -735,6 +770,8 @@ function materializeTaskCards(
 					? `${metadataModel.providerID}/${metadataModel.modelID}`
 					: undefined);
 			const childStatus = childSessionId ? state.sessionStatus[childSessionId] : undefined;
+			const taskOutput =
+				'output' in item && typeof item.rawOutput === 'string' ? item.rawOutput : undefined;
 			const isBackgroundLaunch = isBackgroundTaskLaunch(taskOutput);
 			const taskStatus =
 				childStatus?.type === 'busy' || childStatus?.type === 'retry'
@@ -757,7 +794,7 @@ function materializeTaskCards(
 				prompt: typeof taskInput.prompt === 'string' ? taskInput.prompt : undefined,
 				category: getTaskStringField(taskInput, taskMetadata, 'category'),
 				command: getTaskStringField(taskInput, taskMetadata, 'command'),
-				taskId: getTaskId({ ...taskInput, output: taskOutput }, taskMetadata),
+				taskId: getTaskId(taskInput, taskMetadata),
 				result: undefined,
 				startTime: item.timestamp,
 				childSessionId,
@@ -1058,7 +1095,7 @@ export function deriveSessionView(
 	}
 
 	const taskPartIndex = buildTaskPartIndex(state.parts);
-	const taskResultProjection = buildTerminalTaskResultProjection(
+	const taskResultProjection = buildExplicitTaskResultProjection(
 		state,
 		messages,
 		state.parts,

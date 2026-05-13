@@ -5,7 +5,7 @@
  */
 
 import type { NormalizedEntry } from '../../../common/normalizedTypes';
-import { isMcpTool, isNonGroupableTool } from '../../constants';
+import { isNonGroupableTool } from '../../constants';
 import type { RenderNode } from '../../store';
 
 // -----------------------------------------------------------------------------
@@ -14,6 +14,7 @@ import type { RenderNode } from '../../store';
 
 const MIN_SIMPLE_TOOL_GROUP_SIZE = 3;
 const MAX_BRIDGE_MESSAGE_LENGTH = 200;
+const ASSISTANT_BRIDGE_BLOCKERS = ['<system-reminder>', '<task_result>', '```'];
 // -----------------------------------------------------------------------------
 // Live tool group tracking
 // -----------------------------------------------------------------------------
@@ -31,13 +32,14 @@ const MAX_BRIDGE_MESSAGE_LENGTH = 200;
 export interface ToolGroup extends Array<RenderNode> {
 	isLive?: boolean;
 	shouldCollapse?: boolean;
+	bridges?: RenderNode[];
 }
 
 // -----------------------------------------------------------------------------
 // Internal helpers
 // -----------------------------------------------------------------------------
 
-const isGroupableTool = (msg: RenderNode, mcpServerNames: string[]): boolean => {
+const isGroupableTool = (msg: RenderNode, _mcpServerNames: string[]): boolean => {
 	if (msg.kind !== 'tool_use') {
 		return false;
 	}
@@ -57,10 +59,6 @@ const isGroupableTool = (msg: RenderNode, mcpServerNames: string[]): boolean => 
 		return false;
 	}
 
-	if (isMcpTool(toolName, mcpServerNames)) {
-		return false;
-	}
-
 	return !isNonGroupableTool(toolName);
 };
 
@@ -76,11 +74,14 @@ const getToolUseCount = (msgs: RenderNode[]): number => {
 
 export const isBridgeMessage = (msg: RenderNode): boolean => {
 	if (msg.kind === 'thinking') return true;
-	if (msg.kind === 'assistant') {
-		const content = (msg as { content?: string }).content || '';
-		return content.length <= MAX_BRIDGE_MESSAGE_LENGTH;
-	}
-	return false;
+	if (msg.kind !== 'assistant') return false;
+	const content = (msg as { content?: string }).content?.trim() ?? '';
+	if (!content) return false;
+	if (content.length > MAX_BRIDGE_MESSAGE_LENGTH) return false;
+	if (content.includes('\n\n')) return false;
+	if (/^[-*]\s/m.test(content)) return false;
+	if (ASSISTANT_BRIDGE_BLOCKERS.some(token => content.includes(token))) return false;
+	return true;
 };
 
 const stripTrailingBridges = (group: RenderNode[]): RenderNode[] => {
@@ -118,13 +119,16 @@ export const groupToolMessages = (
 		if (currentToolGroup.length === 0) return;
 
 		const trailingBridges = stripTrailingBridges(currentToolGroup);
-		const toolUseCount = getToolUseCount(currentToolGroup);
+		const bridges = currentToolGroup.filter(isBridgeMessage);
+		const toolOnly = currentToolGroup.filter(item => !isBridgeMessage(item));
+		const toolUseCount = getToolUseCount(toolOnly);
 		const canGroup = toolUseCount >= MIN_SIMPLE_TOOL_GROUP_SIZE;
 
 		if (canGroup) {
-			const group = currentToolGroup as ToolGroup;
+			const group = toolOnly as ToolGroup;
 			group.isLive = reason === 'final' && isStreaming;
 			group.shouldCollapse = reason === 'boundary' && collapseOnFlush;
+			group.bridges = bridges;
 			result.push(group);
 		} else {
 			result.push(...currentToolGroup);

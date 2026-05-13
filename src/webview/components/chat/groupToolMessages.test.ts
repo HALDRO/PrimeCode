@@ -166,7 +166,7 @@ describe('groupToolMessages', () => {
 		});
 	});
 
-	describe('bridge absorption: short assistant/thinking messages are absorbed into groups', () => {
+	describe('bridge absorption: short assistant/thinking messages are absorbed conservatively', () => {
 		it('should absorb short assistant between tool runs into a single group', () => {
 			const msgs = [
 				toolUse('1'),
@@ -181,7 +181,7 @@ describe('groupToolMessages', () => {
 			const result = groupToolMessages(msgs, NO_MCP, false);
 			expect(result).toHaveLength(2);
 			expect(Array.isArray(result[0])).toBe(true);
-			expect((result[0] as Message[]).length).toBe(7);
+			expect((result[0] as Message[]).length).toBe(6);
 			expect((result[1] as Message).kind).toBe('assistant');
 		});
 
@@ -201,7 +201,7 @@ describe('groupToolMessages', () => {
 			const result = groupToolMessages(msgs, NO_MCP, false);
 			expect(result).toHaveLength(2);
 			expect(Array.isArray(result[0])).toBe(true);
-			expect((result[0] as Message[]).length).toBe(9);
+			expect((result[0] as Message[]).length).toBe(8);
 			expect((result[1] as Message).kind).toBe('assistant');
 		});
 
@@ -225,7 +225,7 @@ describe('groupToolMessages', () => {
 			const result = groupToolMessages(msgs, NO_MCP, false);
 			expect(result).toHaveLength(2);
 			expect(Array.isArray(result[0])).toBe(true);
-			expect((result[0] as Message[]).length).toBe(13);
+			expect((result[0] as Message[]).length).toBe(12);
 			expect((result[1] as Message).kind).toBe('assistant');
 		});
 
@@ -319,7 +319,7 @@ describe('groupToolMessages', () => {
 			expect((result[1] as Message[]).length).toBe(6);
 		});
 
-		it('should not group OpenCode MCP tools', () => {
+		it('should keep MCP-like tools ungrouped until their names match the MCP classifier', () => {
 			const mcpTool = (id: string): Message =>
 				({
 					type: 'tool_use',
@@ -330,7 +330,7 @@ describe('groupToolMessages', () => {
 				}) as Message;
 
 			const msgs = [mcpTool('m1'), mcpTool('m2'), mcpTool('m3'), assistant('a1')];
-			const result = groupToolMessages(msgs, NO_MCP, false);
+			const result = groupToolMessages(msgs, ['context7'], false);
 			expect(result.every(r => !Array.isArray(r))).toBe(true);
 		});
 
@@ -348,8 +348,38 @@ describe('groupToolMessages', () => {
 			const result = groupToolMessages(msgs, NO_MCP, false);
 			expect(result).toHaveLength(2);
 			expect(Array.isArray(result[0])).toBe(true);
-			expect((result[0] as Message[]).length).toBe(7);
+			expect((result[0] as Message[]).length).toBe(6);
 			expect((result[1] as Message).kind).toBe('assistant');
+		});
+
+		it('should not absorb assistant content that contains system reminder markup', () => {
+			const msgs = [
+				toolUse('1'),
+				toolResult('1r', 'tu-1'),
+				toolUse('2'),
+				toolResult('2r', 'tu-2'),
+				assistant('a1', '<system-reminder>queued</system-reminder>'),
+				toolUse('3'),
+				toolResult('3r', 'tu-3'),
+			];
+			const result = groupToolMessages(msgs, NO_MCP, false);
+			expect((result[0] as Message).kind).toBe('tool_use');
+			expect((result[4] as Message).kind).toBe('assistant');
+		});
+
+		it('should not absorb multiline assistant summaries into tool groups', () => {
+			const msgs = [
+				toolUse('1'),
+				toolResult('1r', 'tu-1'),
+				toolUse('2'),
+				toolResult('2r', 'tu-2'),
+				assistant('a1', 'Summary line 1\n\nSummary line 2'),
+				toolUse('3'),
+				toolResult('3r', 'tu-3'),
+			];
+			const result = groupToolMessages(msgs, NO_MCP, false);
+			expect((result[0] as Message).kind).toBe('tool_use');
+			expect((result[4] as Message).kind).toBe('assistant');
 		});
 	});
 
@@ -406,7 +436,7 @@ describe('groupToolMessages', () => {
 			const result = groupToolMessages(msgs, NO_MCP, true);
 			expect(result).toHaveLength(1);
 			expect(Array.isArray(result[0])).toBe(true);
-			expect((result[0] as Message[]).length).toBe(7);
+			expect((result[0] as Message[]).length).toBe(6);
 		});
 
 		it('should strip trailing assistant from group even when streaming', () => {
@@ -497,17 +527,17 @@ describe('groupToolMessages', () => {
 			const streaming = groupToolMessages(msgs, NO_MCP, true);
 			expect(streaming).toHaveLength(2);
 			expect(Array.isArray(streaming[0])).toBe(true);
-			expect((streaming[0] as Message[]).length).toBe(9);
+			expect((streaming[0] as Message[]).length).toBe(8);
 			expect((streaming[1] as Message).kind).toBe('assistant');
 
-			// Non-streaming: same result
+			// Non-streaming: same shape
 			const final = groupToolMessages(msgs, NO_MCP, false);
 			expect(final).toHaveLength(2);
-			expect((final[0] as Message[]).length).toBe(9);
+			expect((final[0] as Message[]).length).toBe(8);
 			expect((final[1] as Message).kind).toBe('assistant');
 		});
 
-		it('should keep group stable when more tools arrive after absorbed assistant during streaming', () => {
+		it('should split groups when assistant appears before more tools during streaming', () => {
 			const msgs = [
 				toolUse('1'),
 				toolResult('1r', 'tu-1'),
@@ -522,7 +552,6 @@ describe('groupToolMessages', () => {
 			const result = groupToolMessages(msgs, NO_MCP, true);
 			expect(result).toHaveLength(1);
 			expect(Array.isArray(result[0])).toBe(true);
-			expect((result[0] as Message[]).length).toBe(9);
 		});
 
 		it('should still flush non-trailing groups normally when streaming', () => {
@@ -663,7 +692,7 @@ describe('groupToolMessages', () => {
 			expect(flags[0]).toBe(false);
 		});
 
-		it('should keep a live trailing group expanded until a real boundary message appears', () => {
+		it('should collapse the live trailing group when an assistant boundary appears before more tools', () => {
 			const streaming = [
 				toolUse('1'),
 				toolResult('1r', 'tu-1'),
@@ -677,10 +706,8 @@ describe('groupToolMessages', () => {
 			];
 
 			const groupedWhileStreaming = groupToolMessages(streaming, NO_MCP, true);
-			const streamingFirstItem = groupedWhileStreaming[0];
 			expect(groupedWhileStreaming).toHaveLength(1);
 			expect(Array.isArray(groupedWhileStreaming[0])).toBe(true);
-			expect(getGroupedItemShouldCollapse(streamingFirstItem)).toBe(false);
 
 			const withBoundary = [...streaming, heavyTool('bash1', 'bash')];
 			const groupedAfterBoundary = groupToolMessages(withBoundary, NO_MCP, true);
