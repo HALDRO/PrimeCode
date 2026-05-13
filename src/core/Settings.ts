@@ -37,6 +37,7 @@ export interface PrimeCodeSettings {
 	'opencode.serverUrl'?: string;
 	'opencode.agent'?: string;
 	'opencode.enabledModels': string[];
+	'opencode.providerModelVisibility'?: Record<string, boolean | undefined>;
 
 	'providers.disabled': string[];
 
@@ -108,6 +109,7 @@ export class Settings implements ISettings {
 			'opencode.serverUrl': this.get('opencode.serverUrl'),
 			'opencode.agent': this.get('opencode.agent'),
 			'opencode.enabledModels': this.get('opencode.enabledModels') ?? [],
+			'opencode.providerModelVisibility': this.get('opencode.providerModelVisibility'),
 
 			'providers.disabled': this.get('providers.disabled') ?? [],
 

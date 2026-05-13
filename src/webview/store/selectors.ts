@@ -12,6 +12,7 @@ import { useCallback, useMemo, useRef } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { parseModelId } from '../../common';
 import { sumUsageValues } from '../../common/tokenStats';
+import { normalizeComparablePath, pathsReferToSameFile } from '../../utils/path';
 import {
 	getAvailableModelVariants,
 	getConfiguredAgentVariant,
@@ -29,6 +30,7 @@ import {
 import {
 	collectDescendantSessionIds,
 	computeDerivedSessionStats,
+	computeHistoricalSessionDiff,
 	deriveSessionView,
 	type MessageSection,
 } from './derived';
@@ -108,6 +110,71 @@ function summarizeSessionDiff(rawDiffs: SnapshotFileDiff[] | undefined) {
 	}
 
 	return { added, removed, files: rawDiffs.length };
+}
+
+export function computeVisibleSessionDiff(
+	state: Pick<
+		SessionStore,
+		| 'messages'
+		| 'parts'
+		| 'sessions'
+		| 'sessionStatus'
+		| 'sessionModel'
+		| 'childSessionIdsByParentId'
+		| 'originatingToolCallBySessionId'
+	>,
+	sessionId: string,
+	sessionDiff: SessionStore['sessionDiff'],
+	sessionOwnedFiles: SessionStore['sessionOwnedFiles'],
+	childSessionIdsByParentId: SessionStore['childSessionIdsByParentId'],
+	sessionStatus: SessionStore['sessionStatus'],
+) {
+	const status = sessionStatus[sessionId]?.type;
+	if (status !== 'busy' && status !== 'retry') {
+		const historical = computeHistoricalSessionDiff(state, sessionId);
+		return {
+			entries: historical.entries.length > 0 ? historical.entries : EMPTY_SESSION_DIFF_FILES,
+			summary: historical.summary ?? EMPTY_SESSION_DIFF_SUMMARY,
+		};
+	}
+
+	const rawDiffs = sessionDiff[sessionId];
+	if (!rawDiffs || rawDiffs.length === 0) {
+		return {
+			entries: EMPTY_SESSION_DIFF_FILES,
+			summary: EMPTY_SESSION_DIFF_SUMMARY,
+		};
+	}
+
+	const relevantSessionIds = new Set([
+		sessionId,
+		...collectDescendantSessionIds({ childSessionIdsByParentId }, sessionId),
+	]);
+	const relevantOwnedPaths = new Set<string>();
+	const externalOwnedPaths = new Set<string>();
+
+	for (const [ownerSessionId, ownedPaths] of Object.entries(sessionOwnedFiles)) {
+		if (!Array.isArray(ownedPaths) || ownedPaths.length === 0) continue;
+		for (const filePath of ownedPaths) {
+			const normalized = normalizeComparablePath(filePath).replace(/^\.\//, '');
+			if (relevantSessionIds.has(ownerSessionId)) relevantOwnedPaths.add(normalized);
+			else externalOwnedPaths.add(normalized);
+		}
+	}
+	const relevantOwnedPathList = [...relevantOwnedPaths];
+	const externalOwnedPathList = [...externalOwnedPaths];
+
+	const visibleDiffs = rawDiffs.filter(diff => {
+		const normalized = normalizeComparablePath(diff.file).replace(/^\.\//, '');
+		if (relevantOwnedPathList.some(path => pathsReferToSameFile(path, normalized))) return true;
+		if (externalOwnedPathList.some(path => pathsReferToSameFile(path, normalized))) return false;
+		return true;
+	});
+
+	return {
+		entries: mapSessionDiffEntries(visibleDiffs),
+		summary: summarizeSessionDiff(visibleDiffs),
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -497,20 +564,61 @@ export const useImprovingPromptRequestId = () =>
 	useChatStore((state: SessionStore) => state.improvingPromptRequestId);
 export const usePromptVersions = () => useChatStore((state: SessionStore) => state.promptVersions);
 
-export const useSessionDiffFiles = () => {
+function useVisibleSessionDiff() {
 	const activeSessionId = useChatStore((state: SessionStore) => state.activeSessionId);
-	const rawDiffs = useChatStore((state: SessionStore) =>
-		activeSessionId ? state.sessionDiff[activeSessionId] : undefined,
+	const sessionDiff = useChatStore((state: SessionStore) => state.sessionDiff);
+	const sessionOwnedFiles = useChatStore((state: SessionStore) => state.sessionOwnedFiles);
+	const sessionStatus = useChatStore((state: SessionStore) => state.sessionStatus);
+	const messages = useChatStore((state: SessionStore) => state.messages);
+	const parts = useChatStore((state: SessionStore) => state.parts);
+	const sessions = useChatStore((state: SessionStore) => state.sessions);
+	const sessionModel = useChatStore((state: SessionStore) => state.sessionModel);
+	const originatingToolCallBySessionId = useChatStore(
+		(state: SessionStore) => state.originatingToolCallBySessionId,
 	);
-	return useMemo(() => mapSessionDiffEntries(rawDiffs), [rawDiffs]);
+	const childSessionIdsByParentId = useChatStore(
+		(state: SessionStore) => state.childSessionIdsByParentId,
+	);
+	return useMemo(() => {
+		if (!activeSessionId) {
+			return { entries: EMPTY_SESSION_DIFF_FILES, summary: EMPTY_SESSION_DIFF_SUMMARY };
+		}
+		return computeVisibleSessionDiff(
+			{
+				messages,
+				parts,
+				sessions,
+				sessionStatus,
+				sessionModel,
+				childSessionIdsByParentId,
+				originatingToolCallBySessionId,
+			},
+			activeSessionId,
+			sessionDiff,
+			sessionOwnedFiles,
+			childSessionIdsByParentId,
+			sessionStatus,
+		);
+	}, [
+		activeSessionId,
+		childSessionIdsByParentId,
+		messages,
+		originatingToolCallBySessionId,
+		parts,
+		sessionDiff,
+		sessionModel,
+		sessionOwnedFiles,
+		sessionStatus,
+		sessions,
+	]);
+}
+
+export const useSessionDiffFiles = () => {
+	return useVisibleSessionDiff().entries;
 };
 
 export const useSessionDiffSummary = () => {
-	const activeSessionId = useChatStore((state: SessionStore) => state.activeSessionId);
-	const rawDiffs = useChatStore((state: SessionStore) =>
-		activeSessionId ? state.sessionDiff[activeSessionId] : undefined,
-	);
-	return useMemo(() => summarizeSessionDiff(rawDiffs), [rawDiffs]);
+	return useVisibleSessionDiff().summary;
 };
 
 export const useIsActiveChildSession = () =>

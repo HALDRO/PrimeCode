@@ -63,7 +63,15 @@ export function buildModelOptions({
 	for (const endpoint of proxyEndpoints) {
 		if (endpoint.enabledModels.length === 0 || endpoint.models.length === 0) continue;
 		const providerId = getProxyEndpointProviderIdFromName(endpoint.name, endpoint.id);
-		if (providerModelVisibility?.[providerId] === false) continue;
+		// Check visibility by endpoint.id first (canonical key), then fall back to derived providerId
+		// for backward compatibility with previously saved preferences.
+		const visibilityById = providerModelVisibility?.[endpoint.id];
+		const visibilityByProviderId = providerModelVisibility?.[providerId];
+		if (
+			visibilityById === false ||
+			(visibilityById === undefined && visibilityByProviderId === false)
+		)
+			continue;
 		const enabled = new Set(endpoint.enabledModels);
 		for (const model of endpoint.models) {
 			if (!enabled.has(model.id)) continue;

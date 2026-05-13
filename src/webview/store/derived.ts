@@ -9,6 +9,7 @@ import {
 	getTurnUsageDuration,
 	getTurnUsageTokenCount,
 } from '../../common/tokenStats';
+import { normalizeComparablePath, pathsReferToSameFile } from '../../utils/path';
 import {
 	type GroupedResponseItem,
 	groupToolMessages,
@@ -30,6 +31,7 @@ import {
 	type SessionStore,
 	type TokenUsage,
 } from './chatStore';
+import { extractOwnedFilePathsFromToolState } from './fileOwnership';
 import { computeAssistantUsage, computeAssistantUsageSummary } from './sessionUsage';
 
 export interface SectionStats {
@@ -38,6 +40,7 @@ export interface SectionStats {
 	nextUserMessageTs: number | null;
 	lastResponseTs: number | null;
 	fileChanges: { added: number; removed: number; files: number } | null;
+	diffEntries: Array<{ filePath: string; linesAdded: number; linesRemoved: number }> | null;
 	tokenCount: number | null;
 	durationMs: number | null;
 }
@@ -878,28 +881,66 @@ function groupRenderResponses(
 	return grouped;
 }
 
-function getSummaryFileChanges(message: Message): SectionStats['fileChanges'] {
+function getSummaryDiffEntries(
+	message: Message,
+	rawResponses: RenderNode[],
+): NonNullable<SectionStats['diffEntries']> {
 	const diffs = (
 		message as Message & {
 			summary?: { diffs?: Array<{ file?: unknown; additions?: unknown; deletions?: unknown }> };
 		}
 	).summary?.diffs;
-	if (!Array.isArray(diffs) || diffs.length === 0) return null;
+	if (!Array.isArray(diffs) || diffs.length === 0) return [];
 
-	let added = 0;
-	let removed = 0;
-	const files = new Set<string>();
+	const confirmedPaths = new Set<string>();
+	for (const response of rawResponses) {
+		if (response.kind !== 'tool_use' || !response.rawInput) continue;
+		for (const path of extractOwnedFilePathsFromToolState(response.toolName, response.rawInput)) {
+			confirmedPaths.add(path);
+		}
+	}
+	const confirmedPathList = [...confirmedPaths];
+
+	const byFile = new Map<string, { filePath: string; linesAdded: number; linesRemoved: number }>();
 	for (const diff of diffs) {
 		if (typeof diff.file !== 'string' || !diff.file) continue;
+		const normalizedFile = normalizeComparablePath(diff.file).replace(/^\.\//, '');
+		if (
+			confirmedPathList.length > 0 &&
+			!confirmedPathList.some(path => pathsReferToSameFile(path, normalizedFile))
+		)
+			continue;
 		const additions = typeof diff.additions === 'number' ? diff.additions : 0;
 		const deletions = typeof diff.deletions === 'number' ? diff.deletions : 0;
 		if (additions === 0 && deletions === 0) continue;
-		added += additions;
-		removed += deletions;
-		files.add(diff.file);
+		const current = byFile.get(normalizedFile) ?? {
+			filePath: normalizedFile,
+			linesAdded: 0,
+			linesRemoved: 0,
+		};
+		current.linesAdded += additions;
+		current.linesRemoved += deletions;
+		byFile.set(normalizedFile, current);
 	}
 
-	return added > 0 || removed > 0 ? { added, removed, files: files.size } : null;
+	return [...byFile.values()].filter(entry => entry.linesAdded > 0 || entry.linesRemoved > 0);
+}
+
+function getSummaryFileChanges(
+	message: Message,
+	rawResponses: RenderNode[],
+): SectionStats['fileChanges'] {
+	const entries = getSummaryDiffEntries(message, rawResponses);
+	if (entries.length === 0) return null;
+
+	let added = 0;
+	let removed = 0;
+	for (const entry of entries) {
+		added += entry.linesAdded;
+		removed += entry.linesRemoved;
+	}
+
+	return { added, removed, files: entries.length };
 }
 
 function computeSectionStats(
@@ -923,16 +964,67 @@ function computeSectionStats(
 	const realTokens = userMsgId ? turnTokens[userMsgId] : undefined;
 	const tokenCount = getTurnUsageTokenCount(realTokens);
 	const durationMs = getTurnUsageDuration(realTokens);
-	const fileChanges = getSummaryFileChanges(section.userMessage.message);
+	const diffEntries = getSummaryDiffEntries(section.userMessage.message, rawResponses);
+	const fileChanges = getSummaryFileChanges(section.userMessage.message, rawResponses);
 
 	return {
 		isFirst: false,
 		isLast,
 		nextUserMessageTs: null,
 		lastResponseTs,
+		diffEntries: diffEntries.length > 0 ? diffEntries : null,
 		fileChanges,
 		tokenCount,
 		durationMs,
+	};
+}
+
+export function computeHistoricalSessionDiff(
+	state: Pick<
+		SessionStore,
+		| 'messages'
+		| 'parts'
+		| 'sessions'
+		| 'sessionStatus'
+		| 'sessionModel'
+		| 'childSessionIdsByParentId'
+		| 'originatingToolCallBySessionId'
+	>,
+	sessionId: string,
+) {
+	const relevantSessionIds = [sessionId, ...collectDescendantSessionIds(state, sessionId)];
+	const byFile = new Map<string, { filePath: string; linesAdded: number; linesRemoved: number }>();
+
+	for (const relevantSessionId of relevantSessionIds) {
+		const view = deriveSessionView(state, relevantSessionId);
+		for (const section of view.sections) {
+			if (section.isReverted || !section.stats.diffEntries) continue;
+			for (const entry of section.stats.diffEntries) {
+				const current = byFile.get(entry.filePath) ?? {
+					filePath: entry.filePath,
+					linesAdded: 0,
+					linesRemoved: 0,
+				};
+				current.linesAdded += entry.linesAdded;
+				current.linesRemoved += entry.linesRemoved;
+				byFile.set(entry.filePath, current);
+			}
+		}
+	}
+
+	const entries = [...byFile.values()].filter(
+		entry => entry.linesAdded > 0 || entry.linesRemoved > 0,
+	);
+	let added = 0;
+	let removed = 0;
+	for (const entry of entries) {
+		added += entry.linesAdded;
+		removed += entry.linesRemoved;
+	}
+
+	return {
+		entries,
+		summary: entries.length > 0 ? { added, removed, files: entries.length } : null,
 	};
 }
 

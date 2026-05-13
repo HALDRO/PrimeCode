@@ -379,6 +379,7 @@ function closeTabState(state: SessionStore, sessionId: string): void {
 	delete state.messages[sessionId];
 	delete state.sessionStatus[sessionId];
 	delete state.sessionDiff[sessionId];
+	delete state.sessionOwnedFiles[sessionId];
 	delete state.todos[sessionId];
 	delete state.permissions[sessionId];
 	delete state.questions[sessionId];
@@ -417,6 +418,14 @@ async function collectSessionSubtree(
 	return sessions;
 }
 
+function getLastVisibleUserMessageId(messageEntries: SessionMessageEntry[]): string | undefined {
+	for (let index = messageEntries.length - 1; index >= 0; index--) {
+		const message = messageEntries[index]?.info;
+		if (message?.role === 'user') return message.id;
+	}
+	return undefined;
+}
+
 async function hydrateSession(sessionId: string, activate = true): Promise<void> {
 	const client = getClient();
 	const workspaceRoot = getWorkspaceRoot();
@@ -442,18 +451,22 @@ async function hydrateSession(sessionId: string, activate = true): Promise<void>
 	const subtreeSessions = await collectSessionSubtree(client, workspaceRoot, session);
 	const messagesBySession = await Promise.all(
 		subtreeSessions.map(async currentSession => {
-			const [messagesResult, diffResult] = await Promise.all([
-				client.session.messages({
+			const messagesResult = await client.session.messages({
+				sessionID: currentSession.id,
+				directory: workspaceRoot,
+			});
+			const messageEntries = (messagesResult.data ?? []) as SessionMessageEntry[];
+			const lastVisibleUserMessageId = getLastVisibleUserMessageId(messageEntries);
+			const diffResult = await client.session
+				.diff({
 					sessionID: currentSession.id,
 					directory: workspaceRoot,
-				}),
-				client.session
-					.diff({ sessionID: currentSession.id, directory: workspaceRoot })
-					.catch(() => ({ data: [] })),
-			]);
+					messageID: lastVisibleUserMessageId,
+				})
+				.catch(() => ({ data: [] }));
 			return {
 				session: currentSession,
-				messageEntries: (messagesResult.data ?? []) as SessionMessageEntry[],
+				messageEntries,
 				diff: ((diffResult.data ?? []) as SnapshotFileDiff[]) || [],
 			};
 		}),

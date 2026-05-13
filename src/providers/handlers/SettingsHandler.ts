@@ -342,6 +342,13 @@ export class SettingsHandler implements WebviewMessageHandler {
 				continue;
 			}
 
+			if (rawKey === 'opencode.providerModelVisibility') {
+				if (value && typeof value === 'object' && !Array.isArray(value)) {
+					await this.context.settings.set('opencode.providerModelVisibility', value);
+				}
+				continue;
+			}
+
 			if (rawKey === 'provider') {
 				if (value === 'opencode') {
 					await this.context.settings.set('provider', value);

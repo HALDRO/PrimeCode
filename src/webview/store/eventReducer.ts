@@ -32,6 +32,13 @@ import type {
 	ToolPart,
 } from '@opencode-ai/sdk/v2/client';
 import type { SessionStore } from './chatStore';
+import { extractOwnedFilePaths, rebuildSessionOwnedFiles } from './fileOwnership';
+
+function refreshSessionOwnedFiles(state: SessionStore, sessionId: string): void {
+	const owned = rebuildSessionOwnedFiles(state.messages[sessionId] ?? [], state.parts, sessionId);
+	if (owned.length > 0) state.sessionOwnedFiles[sessionId] = owned;
+	else delete state.sessionOwnedFiles[sessionId];
+}
 
 // Part types we skip — they're internal to the CLI and not useful for UI rendering.
 const SKIP_PARTS = new Set(['patch', 'step-start', 'step-finish', 'snapshot']);
@@ -290,6 +297,7 @@ export function eventReducer(state: SessionStore, event: WebviewSdkEvent): void 
 			delete state.sessionModelSource[sessionID];
 			delete state.sessionStatus[sessionID];
 			delete state.sessionDiff[sessionID];
+			delete state.sessionOwnedFiles[sessionID];
 			delete state.todos[sessionID];
 			delete state.permissions[sessionID];
 			delete state.questions[sessionID];
@@ -350,6 +358,7 @@ export function eventReducer(state: SessionStore, event: WebviewSdkEvent): void 
 			if (msgs) state.messages[sessionID] = msgs.filter(message => message.id !== messageID);
 			// Clean up parts for this message
 			if (state.parts[messageID]) delete state.parts[messageID];
+			refreshSessionOwnedFiles(state, sessionID);
 			syncSessionModelFromMessages(state, sessionID);
 			break;
 		}
@@ -380,6 +389,17 @@ export function eventReducer(state: SessionStore, event: WebviewSdkEvent): void 
 				}
 			}
 
+			if (part.type === 'tool') {
+				const ownedPaths = extractOwnedFilePaths(part as ToolPart);
+				if (ownedPaths.length > 0) {
+					const existing = new Set(state.sessionOwnedFiles[part.sessionID] ?? []);
+					for (const path of ownedPaths) {
+						existing.add(path);
+					}
+					state.sessionOwnedFiles[part.sessionID] = [...existing];
+				}
+			}
+
 			if (part.type === 'compaction') {
 				ensureCompactionParentMessage(state, part.sessionID, messageID);
 			}
@@ -387,13 +407,14 @@ export function eventReducer(state: SessionStore, event: WebviewSdkEvent): void 
 		}
 
 		case 'message.part.removed': {
-			const { messageID, partID } = event.properties;
+			const { messageID, partID, sessionID } = event.properties;
 			const parts = state.parts[messageID];
 			if (parts) {
 				const nextParts = parts.filter(part => part.id !== partID);
 				if (nextParts.length === 0) delete state.parts[messageID];
 				else state.parts[messageID] = nextParts;
 			}
+			refreshSessionOwnedFiles(state, sessionID);
 			break;
 		}
 

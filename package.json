@@ -329,6 +329,11 @@
 					"default": [],
 					"description": "List of enabled OpenCode model IDs (format: providerId/modelId) for selection in chat"
 				},
+				"primeCode.opencode.providerModelVisibility": {
+					"type": "object",
+					"default": {},
+					"description": "Provider visibility state for model dropdown. Keys are provider/endpoint IDs, values are booleans. Synced across VS Code windows."
+				},
 				"primeCode.providers.disabled": {
 					"type": "array",
 					"items": {

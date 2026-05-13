@@ -99,6 +99,7 @@ function makeMinimalStore(overrides: Partial<SessionStore> = {}): SessionStore {
 		isImprovingPrompt: false,
 		improvingPromptRequestId: null,
 		promptVersions: null,
+		sessionOwnedFiles: {},
 		childSessionIdsByParentId: {},
 		originatingToolCallBySessionId: {},
 		sessionInput: {},

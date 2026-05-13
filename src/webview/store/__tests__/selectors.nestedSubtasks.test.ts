@@ -1,7 +1,11 @@
-import type { AssistantMessage, SessionStatus } from '@opencode-ai/sdk/v2/client';
+import type { AssistantMessage, Part, SessionStatus } from '@opencode-ai/sdk/v2/client';
 import { describe, expect, it } from 'vitest';
 import type { SessionStore } from '../chatStore';
-import { collectDescendantSessionIds, computeDerivedSessionStats } from '../selectors';
+import {
+	collectDescendantSessionIds,
+	computeDerivedSessionStats,
+	computeVisibleSessionDiff,
+} from '../selectors';
 import { computeSessionTreeUsageStats } from '../sessionUsage';
 
 function assistantMessage(
@@ -56,16 +60,20 @@ function createState(overrides: Partial<SessionStore>): SessionStore {
 		editingMessageId: null,
 		editDrafts: {},
 		sessionInput: {},
-		draftAttachments: {},
-		draftAgent: {},
 		improvingPromptRequestId: null,
 		isImprovingPrompt: false,
 		promptVersions: { original: '', improved: '', showingImproved: false },
 		sessionAutoAccept: {},
 		sessionModel: {},
 		sessionAgent: {},
+		sessionModelSource: {},
+		sessionOwnedFiles: {},
 		childSessionIdsByParentId: {},
 		originatingToolCallBySessionId: {},
+		queuedMessagesBySession: {},
+		draftAttachments: {},
+		draftAgent: {},
+		lastError: null,
 		actions: {} as SessionStore['actions'],
 		...overrides,
 	} as SessionStore;
@@ -230,5 +238,120 @@ describe('selectors nested subtasks', () => {
 		});
 
 		expect(collectDescendantSessionIds(state, 'child')).toHaveLength(3);
+	});
+
+	it('hides files owned only by sibling sessions from visible diff output', () => {
+		const visible = computeVisibleSessionDiff(
+			createState({ sessionStatus: { root: { type: 'busy' } as SessionStatus } }),
+			'root',
+			{
+				root: [
+					{ file: 'src/root.ts', patch: '', additions: 4, deletions: 1, status: 'modified' },
+					{ file: 'src/sibling.ts', patch: '', additions: 7, deletions: 0, status: 'modified' },
+					{ file: 'src/unknown.ts', patch: '', additions: 1, deletions: 0, status: 'modified' },
+				],
+			},
+			{
+				root: ['src/root.ts'],
+				sibling: ['src/sibling.ts'],
+			},
+			{},
+			{ root: { type: 'busy' } as SessionStatus },
+		);
+
+		expect(visible.entries.map(entry => entry.filePath)).toEqual(['src/root.ts', 'src/unknown.ts']);
+		expect(visible.summary).toEqual({ added: 5, removed: 1, files: 2 });
+	});
+
+	it('keeps child-owned files visible for the parent subtree', () => {
+		const visible = computeVisibleSessionDiff(
+			createState({ sessionStatus: { root: { type: 'busy' } as SessionStatus } }),
+			'root',
+			{
+				root: [{ file: 'src/child.ts', patch: '', additions: 2, deletions: 3, status: 'modified' }],
+			},
+			{
+				child: ['src/child.ts'],
+			},
+			{ root: ['child'] },
+			{ root: { type: 'busy' } as SessionStatus },
+		);
+
+		expect(visible.entries.map(entry => entry.filePath)).toEqual(['src/child.ts']);
+		expect(visible.summary).toEqual({ added: 2, removed: 3, files: 1 });
+	});
+
+	it('matches normalized owned paths against normalized diff paths', () => {
+		const visible = computeVisibleSessionDiff(
+			createState({ sessionStatus: { root: { type: 'busy' } as SessionStatus } }),
+			'root',
+			{
+				root: [{ file: 'src/norm.ts', patch: '', additions: 3, deletions: 0, status: 'modified' }],
+			},
+			{
+				root: ['.\\src\\norm.ts'],
+			},
+			{},
+			{ root: { type: 'busy' } as SessionStatus },
+		);
+
+		expect(visible.entries.map(entry => entry.filePath)).toEqual(['src/norm.ts']);
+	});
+
+	it('aggregates visible section diffs for idle historical sessions', () => {
+		const state = createState({
+			sessionStatus: { root: { type: 'idle' } as SessionStatus },
+			messages: {
+				root: [
+					{
+						id: 'u1',
+						sessionID: 'root',
+						role: 'user',
+						time: { created: 1 },
+						summary: {
+							diffs: [
+								{ file: 'src/a.ts', additions: 2, deletions: 0 },
+								{ file: 'src/b.ts', additions: 0, deletions: 3 },
+							],
+						},
+					} as unknown as AssistantMessage,
+					{
+						id: 'a1',
+						sessionID: 'root',
+						role: 'assistant',
+						parentID: 'u1',
+						tokens: {
+							input: 0,
+							output: 0,
+							reasoning: 0,
+							total: 0,
+							cache: { read: 0, write: 0 },
+						},
+						cost: 0,
+						time: { created: 2, completed: 3 },
+					} as unknown as AssistantMessage,
+				],
+			},
+			parts: {
+				a1: [
+					{
+						id: 'a1-text',
+						messageID: 'a1',
+						sessionID: 'root',
+						type: 'text',
+						text: 'done',
+					} as Part,
+				],
+			},
+			sessions: [{ id: 'root' } as never],
+		});
+
+		const visible = computeVisibleSessionDiff(state, 'root', {}, {}, {}, state.sessionStatus);
+
+		expect(visible.entries).toEqual([
+			{ filePath: 'src/a.ts', linesAdded: 2, linesRemoved: 0 },
+			{ filePath: 'src/b.ts', linesAdded: 0, linesRemoved: 3 },
+		]);
+		expect(visible.summary).toEqual({ added: 2, removed: 3, files: 2 });
 	});
 });

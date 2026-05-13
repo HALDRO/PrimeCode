@@ -19,6 +19,7 @@ import { create } from 'zustand';
 import type { NormalizedEntry } from '../../common/normalizedTypes';
 import type { SessionMessageEntry } from '../services/opencodeRuntime';
 import { eventReducer, reconcileSessionGraph, type WebviewSdkEvent } from './eventReducer';
+import { rebuildSessionOwnedFiles } from './fileOwnership';
 import { useSettingsStore } from './settingsStore';
 import { useUIStore } from './uiStore';
 
@@ -28,6 +29,7 @@ function createMessageDomainState() {
 		parts: {},
 		sessionStatus: {},
 		sessionDiff: {},
+		sessionOwnedFiles: {},
 		todos: {},
 		permissions: {},
 		questions: {},
@@ -333,6 +335,7 @@ export interface SessionStore {
 	sessions: Session[];
 	sessionStatus: Record<string, SessionStatus>;
 	sessionDiff: Record<string, SnapshotFileDiff[]>;
+	sessionOwnedFiles: Record<string, string[]>;
 	messages: Record<string, Message[]>;
 	parts: Record<string, Part[]>;
 	todos: Record<string, Todo[]>;
@@ -590,6 +593,7 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 							delete state.draftAgent[sessionId];
 							delete state.childSessionIdsByParentId[sessionId];
 							delete state.originatingToolCallBySessionId[sessionId];
+							delete state.sessionOwnedFiles[sessionId];
 						}
 					}
 					if (autoAcceptBySession) {
@@ -713,6 +717,13 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 					for (const removed of removedMessages) {
 						delete state.parts[removed.id];
 					}
+					const owned = rebuildSessionOwnedFiles(
+						state.messages[sessionId] ?? [],
+						state.parts,
+						sessionId,
+					);
+					if (owned.length > 0) state.sessionOwnedFiles[sessionId] = owned;
+					else delete state.sessionOwnedFiles[sessionId];
 					syncSessionModelFromMessages(state, sessionId);
 				}),
 			);
@@ -913,6 +924,7 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 
 						state.todos[session.id] = todos;
 						state.sessionDiff[session.id] = diff;
+						delete state.sessionOwnedFiles[session.id];
 						state.sessionModel[session.id] ??= getNewSessionSeedModel(state);
 
 						const previousMessages = state.messages[session.id] ?? [];

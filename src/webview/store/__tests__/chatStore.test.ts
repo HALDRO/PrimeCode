@@ -598,6 +598,66 @@ describe('chatStore restore', () => {
 		expect(useChatStore.getState().sessionModel[SESSION_ID]).toBeUndefined();
 	});
 
+	it('stores idle session diff events even though idle panel no longer relies on them', () => {
+		useChatStore.setState(state => ({
+			...state,
+			sessionStatus: { ...state.sessionStatus, [SESSION_ID]: { type: 'idle' } },
+			sessionDiff: { ...state.sessionDiff, [SESSION_ID]: [] },
+		}));
+
+		restoreFromEvents([
+			{
+				type: 'session.diff',
+				properties: {
+					sessionID: SESSION_ID,
+					diff: [
+						{
+							file: 'config.yaml',
+							patch: '',
+							additions: 239,
+							deletions: 143,
+							status: 'modified',
+						} satisfies SnapshotFileDiff,
+					],
+				},
+			} as never,
+		]);
+
+		expect(useChatStore.getState().sessionDiff[SESSION_ID]).toEqual([
+			expect.objectContaining({ file: 'config.yaml', additions: 239, deletions: 143 }),
+		]);
+	});
+
+	it('updates session diff from live events while the session is busy', () => {
+		useChatStore.setState(state => ({
+			...state,
+			sessionStatus: { ...state.sessionStatus, [SESSION_ID]: { type: 'busy' } },
+			sessionDiff: { ...state.sessionDiff, [SESSION_ID]: [] },
+		}));
+
+		restoreFromEvents([
+			{
+				type: 'session.diff',
+				properties: {
+					sessionID: SESSION_ID,
+					diff: [
+						{
+							file: 'src/gui_web/static/app.js',
+							patch: '',
+							additions: 5,
+							deletions: 0,
+							status: 'modified',
+						} satisfies SnapshotFileDiff,
+					],
+				},
+			} as never,
+		]);
+
+		expect(useChatStore.getState().sessionDiff[SESSION_ID]).toEqual([
+			expect.objectContaining({ file: 'src/gui_web/static/app.js', additions: 5, deletions: 0 }),
+		]);
+	});
+
 	it('keeps only deltas that arrive after the current part snapshot', () => {
 		const userMessage = createUserMessage('msg-live-user', 'prompt');
 		const assistantMessage = {
@@ -1459,6 +1519,145 @@ describe('chatStore derived view streaming', () => {
 		expect(state.childSessionIdsByParentId[SESSION_ID]).toContain('child-hydrated-1');
 		expect(state.messages['child-hydrated-1']).toEqual([childUser]);
 		expect(state.parts['child-u1']).toEqual([childTextPart]);
+	});
+
+	it('tracks owned files from mutating tool parts per session', () => {
+		const user: Message = {
+			id: 'msg-owned-u1',
+			sessionID: SESSION_ID,
+			role: 'user',
+			time: { created: Date.now() },
+		} as Message;
+		const toolPart: Part = {
+			id: 'msg-owned-tool-1',
+			messageID: 'msg-owned-u1',
+			sessionID: SESSION_ID,
+			type: 'tool',
+			tool: 'write',
+			callID: 'msg-owned-call-1',
+			state: {
+				status: 'completed',
+				input: { path: 'src/owned.ts', content: 'export const owned = true;' },
+				output: 'done',
+			},
+		} as unknown as Part;
+
+		restoreFromEvents([
+			{
+				type: 'message.updated',
+				properties: {
+					sessionID: SESSION_ID,
+					info: user,
+				},
+			} as never,
+			{
+				type: 'message.part.updated',
+				properties: {
+					part: toolPart,
+				},
+			} as never,
+		]);
+
+		expect(useChatStore.getState().sessionOwnedFiles[SESSION_ID]).toEqual(['src/owned.ts']);
+	});
+
+	it('cleans owned file state when session is deleted', () => {
+		useChatStore.setState(state => ({
+			...state,
+			sessions: [{ id: SESSION_ID } as never],
+			messages: { [SESSION_ID]: [] },
+			sessionOwnedFiles: { [SESSION_ID]: ['src/owned.ts'] },
+		}));
+
+		restoreFromEvents([
+			{
+				type: 'session.deleted',
+				properties: {
+					sessionID: SESSION_ID,
+					info: { id: SESSION_ID } as never,
+				},
+			} as never,
+		]);
+
+		expect(useChatStore.getState().sessionOwnedFiles[SESSION_ID]).toBeUndefined();
+	});
+
+	it('revokes owned files after truncating away the mutating message', () => {
+		const oldUser: Message = {
+			id: 'msg-old-u1',
+			sessionID: SESSION_ID,
+			role: 'user',
+			time: { created: Date.now() },
+		} as Message;
+		const editUser: Message = {
+			id: 'msg-edit-u1',
+			sessionID: SESSION_ID,
+			role: 'user',
+			time: { created: Date.now() + 1 },
+		} as Message;
+		const editPart: Part = {
+			id: 'msg-edit-tool-1',
+			messageID: 'msg-edit-u1',
+			sessionID: SESSION_ID,
+			type: 'tool',
+			tool: 'edit',
+			callID: 'msg-edit-call-1',
+			state: {
+				status: 'completed',
+				input: { path: 'src/revert.ts', old_string: 'a', new_string: 'b' },
+				output: 'done',
+			},
+		} as unknown as Part;
+
+		restoreFromEvents([
+			{ type: 'message.updated', properties: { sessionID: SESSION_ID, info: oldUser } } as never,
+			{ type: 'message.updated', properties: { sessionID: SESSION_ID, info: editUser } } as never,
+			{ type: 'message.part.updated', properties: { part: editPart } } as never,
+		]);
+
+		useChatStore.getState().actions.truncateSessionMessages(SESSION_ID, 'msg-old-u1');
+
+		expect(useChatStore.getState().sessionOwnedFiles[SESSION_ID]).toBeUndefined();
+	});
+
+	it('revokes owned files after removing the tool part', () => {
+		const user: Message = {
+			id: 'msg-remove-u1',
+			sessionID: SESSION_ID,
+			role: 'user',
+			time: { created: Date.now() },
+		} as Message;
+		const toolPart: Part = {
+			id: 'msg-remove-tool-1',
+			messageID: 'msg-remove-u1',
+			sessionID: SESSION_ID,
+			type: 'tool',
+			tool: 'write',
+			callID: 'msg-remove-call-1',
+			state: {
+				status: 'completed',
+				input: { path: 'src/remove.ts', content: 'x' },
+				output: 'done',
+			},
+		} as unknown as Part;
+
+		restoreFromEvents([
+			{ type: 'message.updated', properties: { sessionID: SESSION_ID, info: user } } as never,
+			{ type: 'message.part.updated', properties: { part: toolPart } } as never,
+		]);
+
+		restoreFromEvents([
+			{
+				type: 'message.part.removed',
+				properties: {
+					sessionID: SESSION_ID,
+					messageID: 'msg-remove-u1',
+					partID: 'msg-remove-tool-1',
+				},
+			} as never,
+		]);
+
+		expect(useChatStore.getState().sessionOwnedFiles[SESSION_ID]).toBeUndefined();
 	});
 });
 

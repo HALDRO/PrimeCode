@@ -83,7 +83,9 @@ function getReadableModelLabel(childModelId: string | undefined): string | undef
 	if (!childModelId) return undefined;
 	const trimmed = childModelId.trim();
 	if (!trimmed) return undefined;
-	const slashIndex = trimmed.lastIndexOf('/');
+	// Strip only the provider prefix (part before the FIRST slash), preserving
+	// any namespace segments in the model name (e.g. "kiro/claude-opus-4-6").
+	const slashIndex = trimmed.indexOf('/');
 	return slashIndex >= 0 ? trimmed.slice(slashIndex + 1) : trimmed;
 }
 

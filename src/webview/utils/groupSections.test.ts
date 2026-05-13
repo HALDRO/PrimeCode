@@ -557,7 +557,7 @@ describe('groupMessagesIntoSections', () => {
 			expect(result[1].stats.fileChanges).toBeNull();
 		});
 
-		it('should use summary diffs without inferring from tool metadata', () => {
+		it('should keep summary diffs when a turn has no confirmed mutating tool inputs', () => {
 			const msg = {
 				kind: 'user',
 				id: 'u1',
@@ -601,6 +601,40 @@ describe('groupMessagesIntoSections', () => {
 			const result = groupMessagesIntoSections([msg, tool, assistantMsg('a1')], [], null);
 
 			expect(result[0].stats.fileChanges).toEqual({ added: 395, removed: 259, files: 1 });
+		});
+
+		it('should filter summary diffs to files confirmed by mutating tool inputs in the same turn', () => {
+			const msg = {
+				kind: 'user',
+				id: 'u1',
+				message: {
+					time: { created: Date.now() },
+					summary: {
+						diffs: [
+							{ file: 'src/confirmed.ts', additions: 3, deletions: 1 },
+							{ file: 'src/noise.html', additions: 395, deletions: 259 },
+						],
+					},
+				},
+				parts: [],
+			} as unknown as Message;
+			const tool = {
+				kind: 'tool_use',
+				type: 'tool_use',
+				id: 't1',
+				timestamp: new Date().toISOString(),
+				toolName: 'edit',
+				toolUseId: 'tu-1',
+				toolInput: '{}',
+				rawInput: {
+					path: '.\\src\\confirmed.ts',
+					old_string: 'before',
+					new_string: 'after',
+				},
+			} as unknown as Message;
+			const result = groupMessagesIntoSections([msg, tool, assistantMsg('a1')], [], null);
+
+			expect(result[0].stats.fileChanges).toEqual({ added: 3, removed: 1, files: 1 });
 		});
 
 		it('should use real turnTokens for tokenCount', () => {

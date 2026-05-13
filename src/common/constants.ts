@@ -118,23 +118,23 @@ export const resolveModelDisplayName = (
 		// No slash — check proxy models by raw ID
 		if (proxyModels) {
 			const pm = proxyModels.find(m => m.id === compositeId);
-			if (pm) return pm.name;
+			if (pm) return pm.name || compositeId;
 		}
 		return compositeId;
 	}
 
-	// Check proxy models for OpenAI-compatible provider prefixes, including
-	// project-scoped proxy endpoint IDs like "oai-<endpointId>".
+	// For proxy/oai providers: use the modelId directly as display name.
+	// The modelId is what the server returned and may contain meaningful
+	// namespace prefixes (e.g. "kiro/opus 4.5", "[Kiro] claude-opus-4-6").
 	if (
-		proxyModels &&
-		(parsed.providerId === 'proxy' ||
-			parsed.providerId === 'oai' ||
-			isProxyEndpointProviderId(parsed.providerId))
+		parsed.providerId === 'proxy' ||
+		parsed.providerId === 'oai' ||
+		isProxyEndpointProviderId(parsed.providerId)
 	) {
-		const pm = proxyModels.find(m => m.id === parsed.modelId);
-		if (pm) return pm.name;
+		return parsed.modelId;
 	}
 
+	// For system providers: look up human-readable name, fall back to modelId.
 	const provider = providers.find(p => p.id === parsed.providerId);
 	const model = provider?.models.find(m => m.id === parsed.modelId);
 	return model?.name || parsed.modelId;

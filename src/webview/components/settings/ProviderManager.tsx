@@ -414,7 +414,13 @@ export const ProviderManager: React.FC = () => {
 	};
 
 	const handleToggleOpenCodeProviderModels = (provider: ProviderItemData) => {
-		setProviderModelVisibility(provider.id, providerModelVisibility[provider.id] === false);
+		const newVisible = providerModelVisibility[provider.id] === false;
+		setProviderModelVisibility(provider.id, newVisible);
+		const nextVisibility = { ...providerModelVisibility, [provider.id]: newVisible };
+		postMessage({
+			type: 'updateSettings',
+			settings: { 'opencode.providerModelVisibility': nextVisibility },
+		});
 	};
 
 	const getEnabledCountForProvider = (providerId: string) =>
@@ -614,14 +620,25 @@ export const ProviderManager: React.FC = () => {
 								last={idx === proxyEndpoints.length - 1}
 							>
 								<CustomEndpointConfig
-									enabled={providerModelVisibility[endpointProviderId] !== false}
-									endpoint={endpoint}
-									onToggle={() =>
-										setProviderModelVisibility(
-											endpointProviderId,
-											providerModelVisibility[endpointProviderId] === false,
-										)
+									enabled={
+										providerModelVisibility[endpoint.id] !== false &&
+										providerModelVisibility[endpointProviderId] !== false
 									}
+									endpoint={endpoint}
+									onToggle={() => {
+										const currentlyVisible =
+											providerModelVisibility[endpoint.id] !== false &&
+											providerModelVisibility[endpointProviderId] !== false;
+										setProviderModelVisibility(endpoint.id, !currentlyVisible);
+										const nextVisibility = {
+											...providerModelVisibility,
+											[endpoint.id]: !currentlyVisible,
+										};
+										postMessage({
+											type: 'updateSettings',
+											settings: { 'opencode.providerModelVisibility': nextVisibility },
+										});
+									}}
 									onFieldChange={(field, value) =>
 										handleUpdateEndpointField(endpoint.id, field, value)
 									}
