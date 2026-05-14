@@ -1,22 +1,33 @@
 /**
  * @file GenerationStatus - animated status indicator during model generation
- * @description Premium visual indicator showing current model activity status.
- *              Normalizes incoming status text (removes trailing dots/ellipsis) and
- *              renders animated typing dots to avoid duplicate static punctuation.
- *              Displays pulsing glow effects and status text.
- *              Shows tool-specific activity (e.g. "Writing file: foo.ts") even during
- *              active streaming, so the user always knows what's happening.
- *              Uses CSS animations for smooth, performant visual feedback without layout shifts.
+ * @description Premium visual indicator showing current model activity status with smooth
+ *              crossfade transitions between status texts. Uses a minimum display duration
+ *              per status (STATUS_MIN_DISPLAY_MS) to prevent rapid flickering during fast
+ *              tool transitions. All ref mutations happen inside useEffect (never during render)
+ *              to prevent React error #185 (maximum update depth exceeded). The component
+ *              stays visible throughout the entire processing window regardless of whether
+ *              text or tool output is actively streaming.
  */
 
 import type React from 'react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '../../lib/cn';
 import { useGenerationStatusSnapshot } from '../../store';
 
-/**
- * Animated typing dots indicator
- */
+// ─── Configuration ───────────────────────────────────────────────────────────
+
+/** Small delay before showing to prevent micro-flicker on fast transitions. */
+const SHOW_DELAY_MS = 100;
+/** Minimum time the indicator stays visible after processing ends. */
+const SHOW_GRACE_PERIOD_MS = 600;
+/** Delay before hiding after processing ends (respects grace period). */
+const HIDE_DELAY_MS = 300;
+/** Duration of the crossfade animation between status texts. */
+const CROSSFADE_DURATION_MS = 200;
+
+// ─── Sub-components ──────────────────────────────────────────────────────────
+
+/** Animated typing dots indicator */
 const TypingDots: React.FC = () => (
 	<span className="inline-flex items-center gap-1 ml-2">
 		<span
@@ -34,9 +45,7 @@ const TypingDots: React.FC = () => (
 	</span>
 );
 
-/**
- * Pulsing glow ring animation
- */
+/** Pulsing glow ring animation */
 const PulseRing: React.FC<{ color: string }> = ({ color }) => (
 	<span
 		className="absolute inset-0 rounded-full animate-ping opacity-30"
@@ -44,9 +53,7 @@ const PulseRing: React.FC<{ color: string }> = ({ color }) => (
 	/>
 );
 
-/**
- * Status icon with glow effect
- */
+/** Status icon with glow effect */
 const StatusIcon: React.FC<{ isThinking: boolean }> = ({ isThinking }) => {
 	const color = isThinking ? 'var(--color-thinking)' : 'var(--color-accent)';
 	const glowColor = isThinking ? 'var(--glow-thinking)' : 'var(--glow-accent)';
@@ -65,25 +72,19 @@ const StatusIcon: React.FC<{ isThinking: boolean }> = ({ isThinking }) => {
 	);
 };
 
-/**
- * Format status text for display
- */
+// ─── Utilities ───────────────────────────────────────────────────────────────
+
+/** Format status text for display — strips trailing dots, capitalizes. */
 const formatStatus = (status: string): string => {
 	if (!status || status === 'Ready') return '';
-
 	const cleaned = status.trim();
 	if (!cleaned) return '';
-
-	// Remove trailing dot punctuation. We render animated dots separately.
 	const withoutTrailingDots = cleaned.replace(/[.\u2026]+\s*$/, '').trim();
 	if (!withoutTrailingDots) return '';
-
 	return withoutTrailingDots.charAt(0).toUpperCase() + withoutTrailingDots.slice(1);
 };
 
-/**
- * Determine if status indicates thinking/reasoning
- */
+/** Determine if status indicates thinking/reasoning */
 const isThinkingStatus = (status: string): boolean => {
 	const lower = status.toLowerCase();
 	return (
@@ -121,6 +122,64 @@ const shimmerStyle = {
 } as const;
 
 // ---------------------------------------------------------------------------
+// useAggregatedStatus — immediate status updates with crossfade animation.
+// Deduplicates identical consecutive statuses to prevent re-render flicker
+// when the same tool is invoked multiple times (e.g. two consecutive reads).
+// ---------------------------------------------------------------------------
+
+interface AggregatedStatusState {
+	/** Currently displayed text */
+	text: string;
+	/** Whether the text is fading in (for crossfade) */
+	isFadingIn: boolean;
+}
+
+function useAggregatedStatus(rawText: string, isActive: boolean): AggregatedStatusState {
+	const [state, setState] = useState<AggregatedStatusState>({ text: '', isFadingIn: false });
+	const currentTextRef = useRef('');
+	const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+	useEffect(() => {
+		if (!isActive) {
+			// Reset when not active
+			currentTextRef.current = '';
+			setState({ text: '', isFadingIn: false });
+			if (fadeTimerRef.current) {
+				clearTimeout(fadeTimerRef.current);
+				fadeTimerRef.current = null;
+			}
+			return;
+		}
+
+		const target = rawText || 'Generating';
+
+		// Deduplicate — same text means same tool invoked again, skip animation
+		if (target === currentTextRef.current) return;
+
+		currentTextRef.current = target;
+
+		// Commit with fade-in animation
+		setState({ text: target, isFadingIn: true });
+
+		// Clear previous fade timer
+		if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current);
+		fadeTimerRef.current = setTimeout(() => {
+			fadeTimerRef.current = null;
+			setState(prev => (prev.text === target ? { ...prev, isFadingIn: false } : prev));
+		}, CROSSFADE_DURATION_MS);
+	}, [rawText, isActive]);
+
+	// Cleanup on unmount
+	useEffect(() => {
+		return () => {
+			if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current);
+		};
+	}, []);
+
+	return state;
+}
+
+// ---------------------------------------------------------------------------
 // SubtaskGenerationStatus — props-driven variant for subtask cards.
 // Reads status from the subtask message instead of the global session store.
 // ---------------------------------------------------------------------------
@@ -137,34 +196,23 @@ export const SubtaskGenerationStatus: React.FC<SubtaskGenerationStatusProps> = (
 	retryMessage,
 }) => {
 	const [visible, setVisible] = useState(false);
-	const [displayStatus, setDisplayStatus] = useState('');
-	const prevStatusRef = useRef('');
 
 	useEffect(() => {
 		if (isRunning) {
-			const timer = setTimeout(() => setVisible(true), 100);
+			const timer = setTimeout(() => setVisible(true), SHOW_DELAY_MS);
 			return () => clearTimeout(timer);
 		}
-		const timer = setTimeout(() => setVisible(false), 300);
+		const timer = setTimeout(() => setVisible(false), HIDE_DELAY_MS);
 		return () => clearTimeout(timer);
 	}, [isRunning]);
 
-	useEffect(() => {
+	const rawStatusText = useMemo(() => {
 		const raw = retryMessage || status || '';
-		if (raw && raw !== 'Ready') {
-			const formatted = formatStatus(raw);
-			if (formatted === prevStatusRef.current) return undefined;
-			const delay = prevStatusRef.current ? 120 : 50;
-			const timer = setTimeout(() => {
-				prevStatusRef.current = formatted;
-				setDisplayStatus(formatted);
-			}, delay);
-			return () => clearTimeout(timer);
-		}
-		prevStatusRef.current = '';
-		setDisplayStatus('');
-		return undefined;
+		if (!raw || raw === 'Ready') return '';
+		return formatStatus(raw);
 	}, [status, retryMessage]);
+
+	const { text: displayStatus, isFadingIn } = useAggregatedStatus(rawStatusText, isRunning);
 
 	if (!visible || !isRunning) return null;
 
@@ -182,7 +230,11 @@ export const SubtaskGenerationStatus: React.FC<SubtaskGenerationStatusProps> = (
 		>
 			<StatusIcon isThinking={isThinking} />
 			<span
-				className={cn('text-xs relative inline-block', isRetrying && 'text-warning')}
+				className={cn(
+					'text-xs relative inline-block',
+					isRetrying && 'text-warning',
+					isFadingIn && 'animate-[statusFadeIn_200ms_ease-out]',
+				)}
 				style={isRetrying ? undefined : shimmerStyle}
 			>
 				{showStatus}
@@ -197,33 +249,29 @@ export const GenerationStatus: React.FC<{ sessionId?: string }> = ({ sessionId }
 	const { isProcessing, status, streamingToolId, isTextStreaming, toolActivity } =
 		useGenerationStatusSnapshot(sessionId);
 	const [visible, setVisible] = useState(false);
-	const [displayStatus, setDisplayStatus] = useState('');
-	const prevStatusRef = useRef('');
-	const lastToolActivityRef = useRef<typeof toolActivity>(null);
-
-	// Active stream means tool output or text is being streamed to the user.
-	const hasActiveStream = !!streamingToolId || isTextStreaming;
-	if (toolActivity) {
-		lastToolActivityRef.current = toolActivity;
-	}
-	if (isTextStreaming && !streamingToolId) {
-		lastToolActivityRef.current = null;
-	}
-	const stableToolActivity = isProcessing ? (toolActivity ?? lastToolActivityRef.current) : null;
-
-	// Keep the status visible for the whole processing window.
-	// Tool activity refines the label, but should not control visibility,
-	// otherwise tool->text and text->tool transitions cause flicker/disappearance.
-	const shouldShow = isProcessing;
-
-	// Grace period: once shown, keep visible for a minimum duration to prevent
-	// rapid show→hide→show flickering during tool→text transitions.
-	// The ref tracks when we last transitioned to "shown" state.
 	const showTimestampRef = useRef(0);
-	const SHOW_GRACE_PERIOD_MS = 600;
-	const SHOW_DELAY_MS = 100;
-	const HIDE_DELAY_MS = 300;
 
+	// ── Stabilize tool activity via useEffect (NEVER mutate refs during render) ──
+	const lastToolActivityRef = useRef<typeof toolActivity>(null);
+	useEffect(() => {
+		if (toolActivity) {
+			lastToolActivityRef.current = toolActivity;
+		} else if (isTextStreaming && !streamingToolId) {
+			lastToolActivityRef.current = null;
+		}
+	}, [toolActivity, isTextStreaming, streamingToolId]);
+
+	// Derive stable tool activity — use current or last known during processing
+	const stableToolActivity = useMemo(() => {
+		if (!isProcessing) return null;
+		return toolActivity ?? lastToolActivityRef.current;
+	}, [isProcessing, toolActivity]);
+
+	// Hide during pure text streaming — the model is just typing, no status needed.
+	// Show only when: processing AND (not text-streaming OR has active tool).
+	const shouldShow = isProcessing && (!isTextStreaming || !!streamingToolId);
+
+	// ── Visibility with grace period ─────────────────────────────────────────
 	useEffect(() => {
 		if (shouldShow) {
 			const timer = setTimeout(() => {
@@ -232,8 +280,6 @@ export const GenerationStatus: React.FC<{ sessionId?: string }> = ({ sessionId }
 			}, SHOW_DELAY_MS);
 			return () => clearTimeout(timer);
 		}
-		// When hiding, respect the grace period — ensure the status was visible
-		// for at least SHOW_GRACE_PERIOD_MS before allowing it to hide.
 		const elapsed = Date.now() - showTimestampRef.current;
 		const remainingGrace = Math.max(0, SHOW_GRACE_PERIOD_MS - elapsed);
 		const hideDelay = Math.max(HIDE_DELAY_MS, remainingGrace);
@@ -241,45 +287,23 @@ export const GenerationStatus: React.FC<{ sessionId?: string }> = ({ sessionId }
 		return () => clearTimeout(timer);
 	}, [shouldShow]);
 
-	// Update display status — tool activity takes priority over generic session status.
-	// Debounce rapid status transitions to avoid visual flickering.
-	useEffect(() => {
-		const text = deriveStatusText(stableToolActivity, status);
-		if (text) {
-			// If status text is the same, skip the update to avoid unnecessary re-renders.
-			if (text === prevStatusRef.current) return undefined;
-			const delay = prevStatusRef.current ? 120 : 50;
-			const timer = setTimeout(() => {
-				prevStatusRef.current = text;
-				setDisplayStatus(text);
-			}, delay);
-			return () => clearTimeout(timer);
-		}
-		prevStatusRef.current = '';
-		setDisplayStatus('');
-		if (!isProcessing) {
-			lastToolActivityRef.current = null;
-		}
-		return undefined;
-	}, [stableToolActivity, status, isProcessing]);
+	// ── Aggregated status text with minimum display duration ──────────────────
+	const rawStatusText = useMemo(
+		() => deriveStatusText(stableToolActivity, status),
+		[stableToolActivity, status],
+	);
+	const { text: displayStatus, isFadingIn } = useAggregatedStatus(rawStatusText, shouldShow);
 
-	const isActive = visible && isProcessing;
+	const isActive = visible && shouldShow;
 	const isThinking = isThinkingStatus(displayStatus || status);
 	const showStatus = displayStatus || (isProcessing ? 'Generating' : '');
 
-	// When there's an active stream but we have tool activity, show a compact inline indicator
-	const isCompact = hasActiveStream && !!stableToolActivity;
-
-	// Always render the container to reserve layout space and prevent layout
-	// shifts when the status appears/disappears. Use opacity + visibility to
-	// hide without removing from the flow.
 	return (
 		<div
 			className={cn(
-				'flex items-center justify-start gap-1.5 py-2',
+				'flex items-center justify-start gap-1.5',
 				'transition-all duration-300 ease-out',
 				isActive ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-1 pointer-events-none',
-				isActive && isCompact && 'opacity-70',
 			)}
 			style={{ visibility: isActive ? 'visible' : 'hidden' }}
 			aria-hidden={!isActive}
@@ -287,8 +311,8 @@ export const GenerationStatus: React.FC<{ sessionId?: string }> = ({ sessionId }
 			<StatusIcon isThinking={isThinking} />
 			<span
 				className={cn(
-					'text-xs relative inline-block transition-opacity duration-200 ease-out',
-					isCompact && 'text-[10px]',
+					'text-xs relative inline-block',
+					isFadingIn && 'animate-[statusFadeIn_200ms_ease-out]',
 				)}
 				style={shimmerStyle}
 			>
@@ -300,6 +324,10 @@ export const GenerationStatus: React.FC<{ sessionId?: string }> = ({ sessionId }
 					@keyframes shimmer {
 						0% { background-position: 200% 0; }
 						100% { background-position: -200% 0; }
+					}
+					@keyframes statusFadeIn {
+						from { opacity: 0; transform: translateY(2px); }
+						to { opacity: 1; transform: translateY(0); }
 					}
 				`}
 			</style>

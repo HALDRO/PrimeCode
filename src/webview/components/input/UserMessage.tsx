@@ -560,7 +560,9 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 						mode: shouldRestore ? 'restore_and_send' : 'replace_history',
 						isAlreadyReverted: isRevertPoint,
 						model: sessionModel,
-						agent: message.message.agent,
+						agent: agentResources.some(a => a.name === message.message.agent)
+							? message.message.agent
+							: undefined,
 						variant: userMessageModel?.variant,
 						attachments: hasAttachments ? editAttachments : undefined,
 					});
@@ -581,6 +583,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 				message.message.sessionID,
 				message.message.agent,
 				userMessageModel?.variant,
+				agentResources.some,
 			],
 		);
 

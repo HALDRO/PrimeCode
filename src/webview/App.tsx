@@ -127,12 +127,17 @@ const MessageSectionComponent = React.memo<MessageSectionProps>(
 							/>
 						);
 					})}
+				<div className="flex items-center mt-0.5 pr-2 min-h-5">
 					{isLastSection && <GenerationStatus sessionId={sessionId} />}
 					{!section.isReverted && section.responses.length > 0 && (
-						<div className="flex items-center justify-end mt-0.5 pr-2">
-							<SectionCopyButton responses={section.responses} userMessage={section.userMessage} />
+						<div className="flex items-center justify-end flex-1">
+							<SectionCopyButton
+								responses={section.responses}
+								userMessage={section.userMessage}
+							/>
 						</div>
 					)}
+				</div>
 				</div>
 			</section>
 		);

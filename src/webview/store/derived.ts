@@ -97,6 +97,24 @@ const SYSTEM_REMINDER_OPEN_PATTERN = /<system-reminder>/i;
 const SYSTEM_REMINDER_BLOCK_PATTERN = /<system-reminder>([\s\S]*?)(?:<\/system-reminder>|$)/i;
 const OHMY_SYSTEM_DIRECTIVE_PATTERN = /\[SYSTEM DIRECTIVE:\s*OH-MY-OPENCODE[^\]\r\n]*(?:\]|$)/i;
 
+/**
+ * Tools that do not produce meaningful work output and should not act as
+ * boundary markers when determining the task result content. If these tools
+ * appear at the tail of a child session (after the last "real" tool), the
+ * text preceding them is still considered the task result.
+ */
+const NON_BOUNDARY_TOOLS: ReadonlySet<string> = new Set([
+	'todowrite',
+	'todo_write',
+	'todoread',
+	'todo_read',
+	'skill',
+]);
+
+function isNonBoundaryTool(toolName: string): boolean {
+	return NON_BOUNDARY_TOOLS.has(toolName.toLowerCase());
+}
+
 export function clearSessionViewCache(sessionId: string): void {
 	for (const key of sessionViewCache.keys()) {
 		if (key === sessionId || key.startsWith(`${sessionId}::`)) {
@@ -505,11 +523,32 @@ function buildExplicitTaskResultProjection(
 		}
 	}
 
+	// Find the last meaningful boundary — a tool or reasoning part that represents
+	// actual work output. Trailing "housekeeping" tools (todowrite, todoread, skill)
+	// and reasoning parts that follow the last meaningful tool should NOT push the
+	// boundary forward, because text after them is still the task result.
 	let boundaryIndex = -1;
+	let lastMeaningfulBoundary = -1;
 	for (const entry of orderedParts) {
-		if (entry.part.type === 'tool' || entry.part.type === 'reasoning') {
+		if (entry.part.type === 'tool') {
+			const toolPart = entry.part as ToolPart;
+			if (isNonBoundaryTool(toolPart.tool)) {
+				// Non-boundary tool: only update boundaryIndex tentatively
+				boundaryIndex = entry.index;
+			} else {
+				// Meaningful tool: this is a real boundary
+				boundaryIndex = entry.index;
+				lastMeaningfulBoundary = entry.index;
+			}
+		} else if (entry.part.type === 'reasoning') {
 			boundaryIndex = entry.index;
 		}
+	}
+	// If the tail consists only of non-boundary tools/reasoning after the last
+	// meaningful tool, use the meaningful boundary so that text between them
+	// and the end is captured as the task result.
+	if (lastMeaningfulBoundary >= 0 && lastMeaningfulBoundary < boundaryIndex) {
+		boundaryIndex = lastMeaningfulBoundary;
 	}
 
 	const terminalTextParts = orderedParts.filter(entry => {
