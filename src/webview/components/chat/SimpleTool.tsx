@@ -429,7 +429,14 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 
 			const resolvedSkillPath =
 				skillPath ||
-				(skillName ? availableSkills.find(skill => skill.name === skillName)?.path : undefined);
+				(skillName
+					? (
+							availableSkills.find(skill => skill.name === skillName) ||
+							availableSkills.find(
+								skill => skillName.includes(':') && skill.name === skillName.split(':').pop(),
+							)
+						)?.path
+					: undefined);
 
 			return {
 				label,
@@ -460,9 +467,7 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 						path={skillTargetPath}
 						label={displayName}
 						iconName={skillPath || `${displayName}.md`}
-						onClick={
-							skillPath ? () => postMessage({ type: 'openFile', filePath: skillPath }) : undefined
-						}
+						onClick={() => postMessage({ type: 'openFile', filePath: skillTargetPath })}
 						title={skillPath || skillName || meta}
 						className="max-w-full min-w-0 shrink animate-content-reveal"
 					/>

@@ -51,6 +51,7 @@ interface ChatVirtuosoContext {
 interface MessageSectionProps {
 	section: MessageSection;
 	isLastSection: boolean;
+	isStreaming: boolean;
 	sessionId: string;
 }
 
@@ -69,7 +70,7 @@ const HiddenNativeScroller = React.forwardRef<
 HiddenNativeScroller.displayName = 'HiddenNativeScroller';
 
 const MessageSectionComponent = React.memo<MessageSectionProps>(
-	({ section, isLastSection, sessionId }) => {
+	({ section, isLastSection, isStreaming, sessionId }) => {
 		const messageItemCtx = useMemo(() => buildMessageItemCtx(sessionId), [sessionId]);
 
 		return (
@@ -127,23 +128,27 @@ const MessageSectionComponent = React.memo<MessageSectionProps>(
 							/>
 						);
 					})}
-				<div className="flex items-center mt-0.5 pr-2 min-h-5">
-					{isLastSection && <GenerationStatus sessionId={sessionId} />}
-					{!section.isReverted && section.responses.length > 0 && (
-						<div className="flex items-center justify-end flex-1">
-							<SectionCopyButton
-								responses={section.responses}
-								userMessage={section.userMessage}
-							/>
-						</div>
-					)}
-				</div>
+					<div className="flex items-center mt-0.5 pr-2 min-h-5">
+						{isLastSection && <GenerationStatus sessionId={sessionId} />}
+						{!isStreaming && !section.isReverted && section.responses.length > 0 && (
+							<div className="flex items-center justify-end flex-1">
+								<SectionCopyButton
+									responses={section.responses}
+									userMessage={section.userMessage}
+								/>
+							</div>
+						)}
+					</div>
 				</div>
 			</section>
 		);
 	},
 	(prev, next) => {
-		return prev.section === next.section && prev.isLastSection === next.isLastSection;
+		return (
+			prev.section === next.section &&
+			prev.isLastSection === next.isLastSection &&
+			prev.isStreaming === next.isStreaming
+		);
 	},
 );
 MessageSectionComponent.displayName = 'MessageSectionComponent';
@@ -357,6 +362,7 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 				<MessageSectionComponent
 					section={section}
 					isLastSection={isLast}
+					isStreaming={isLast && context.isProcessing}
 					sessionId={activeSessionId}
 				/>
 			);
