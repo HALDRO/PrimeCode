@@ -49,24 +49,37 @@ export class AgentResourceService {
 		const runtimeByName = new Map(runtimeAgents.map(agent => [agent.name, agent]));
 		const projectByName = new Map(projectAgents.map(agent => [agent.name, agent]));
 		const globalByName = new Map(globalAgents.map(agent => [agent.name, agent]));
-		const names = new Set([
-			...runtimeByName.keys(),
+
+		// Preserve runtime order (OpenCode API returns default_agent first).
+		// Append project/global/override-only agents that aren't in runtime at the end.
+		const orderedNames: string[] = [];
+		const seen = new Set<string>();
+		for (const agent of runtimeAgents) {
+			if (!seen.has(agent.name)) {
+				orderedNames.push(agent.name);
+				seen.add(agent.name);
+			}
+		}
+		for (const name of [
 			...projectByName.keys(),
 			...globalByName.keys(),
 			...Object.keys(disabledOverrides),
-		]);
+		]) {
+			if (!seen.has(name)) {
+				orderedNames.push(name);
+				seen.add(name);
+			}
+		}
 
-		return [...names]
-			.sort((a, b) => a.localeCompare(b))
-			.map(name =>
-				toAgentResource(
-					name,
-					runtimeByName.get(name),
-					projectByName.get(name),
-					globalByName.get(name),
-					disabledOverrides,
-				),
-			);
+		return orderedNames.map(name =>
+			toAgentResource(
+				name,
+				runtimeByName.get(name),
+				projectByName.get(name),
+				globalByName.get(name),
+				disabledOverrides,
+			),
+		);
 	}
 }
 

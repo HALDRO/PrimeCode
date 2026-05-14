@@ -31,8 +31,7 @@ interface SubtaskTimerProps {
  */
 export const SubtaskTimer = React.memo<SubtaskTimerProps>(
 	({ isRunning, startTime, fallbackMs }) => {
-		const liveElapsed = useElapsedTimer(isRunning, startTime);
-		const displayDuration = isRunning ? liveElapsed : fallbackMs;
+		const displayDuration = useElapsedTimer(isRunning, startTime, fallbackMs);
 
 		if (displayDuration <= 0) return null;
 
@@ -68,7 +67,11 @@ export const LiveMessageStats = React.memo<LiveMessageStatsProps>(
 	({ messageId, isProcessing, stats, messageTimestamp }) => {
 		// Live subscriptions — isolated here
 		const liveTurnTokens = useMessageTurnTokens(messageId);
-		const liveElapsed = useElapsedTimer(isProcessing, messageTimestamp);
+		const liveElapsed = useElapsedTimer(
+			isProcessing,
+			messageTimestamp,
+			stats.durationMs ?? undefined,
+		);
 
 		// Simple token display: live total if available, otherwise static (pre-computed from store).
 		// No refs, no caching, no complex fallback chains.

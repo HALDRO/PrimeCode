@@ -6,6 +6,7 @@
 import type React from 'react';
 import { useState } from 'react';
 import { cn } from '../../lib/cn';
+import { useSettingsStore } from '../../store';
 import { useVSCode } from '../../utils/vscode';
 import { ImprovePromptIcon, LoaderIcon, PlusIcon } from '../icons';
 import { Button, IconButton } from '../ui';
@@ -44,6 +45,15 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({
 	onModelClose,
 }) => {
 	const { postMessage } = useVSCode();
+	const effectiveAgent = useSettingsStore(s => {
+		if (selectedAgent) return selectedAgent;
+		const configured = s.opencodeAgent;
+		if (configured) return configured;
+		const primary = s.resources.agent.items.find(
+			a => !a.disabled && !a.hidden && (a.mode === 'primary' || a.mode === undefined),
+		);
+		return primary?.name || undefined;
+	});
 	const [showAgentDropdown, setShowAgentDropdown] = useState(false);
 	const [agentButtonAnchorElement, setAgentButtonAnchorElement] = useState<HTMLElement | null>(
 		null,
@@ -68,8 +78,8 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({
 							showAgentDropdown && 'opacity-100 bg-white/10',
 						)}
 					>
-						<AgentButtonIcon agentId={selectedAgent} size={14} />
-						<span>{getAgentLabel(selectedAgent)}</span>
+						<AgentButtonIcon agentId={effectiveAgent} size={14} />
+						<span>{getAgentLabel(effectiveAgent)}</span>
 					</Button>
 					{showAgentDropdown && (
 						<AgentDropdown

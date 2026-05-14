@@ -35,6 +35,7 @@ import { formatDuration, formatToolName } from '../../utils/format';
 import { useVSCode } from '../../utils/vscode';
 import {
 	AlertCircleIcon,
+	CheckIcon,
 	ChevronDownIcon,
 	CopyIcon,
 	GlobeIcon,
@@ -50,6 +51,31 @@ import { QuestionCard } from './QuestionCard';
 import type { ResolvedFileChange } from './SimpleDiff';
 import { getDiffContentHeight, resolveFileChanges, SimpleDiff } from './SimpleDiff';
 import { InlineToolLine, SimpleTool } from './SimpleTool';
+
+/** Copy button with visual feedback (icon switches to checkmark briefly) */
+export const CopyButton: React.FC<{
+	text: string;
+	title?: string;
+	size?: number;
+}> = ({ text, title = 'Copy', size = 20 }) => {
+	const [copied, setCopied] = useState(false);
+	const handleCopy = (e: React.MouseEvent) => {
+		e.stopPropagation();
+		void copyTextToClipboard(text).then(() => {
+			setCopied(true);
+			setTimeout(() => setCopied(false), 1500);
+		});
+	};
+	return (
+		<IconButton
+			icon={copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+			onClick={handleCopy}
+			title={copied ? 'Copied!' : title}
+			size={size}
+			className={cn(copied && 'text-success')}
+		/>
+	);
+};
 
 const TOOL_CARD_CLASSES = 'bg-(--tool-bg-header) border border-(--tool-border-color) rounded-lg';
 
@@ -625,7 +651,18 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 			isRunning,
 			canRenderDiffCard,
 		);
-		const liveElapsed = useElapsedTimer(isRunning, toolUse.timestamp);
+		// Compute fallback duration from ToolState.time for completed/error states (restore scenario).
+		// ToolStateCompleted/Error have time: { start, end } — use them when liveElapsed is 0.
+		const toolStateDurationMs = useMemo(() => {
+			if (!toolPart) return 0;
+			const state = toolPart.state as { time?: { start?: number; end?: number } };
+			if (state.time?.start && state.time?.end) {
+				return state.time.end - state.time.start;
+			}
+			return 0;
+		}, [toolPart]);
+		const liveElapsed = useElapsedTimer(isRunning, toolUse.timestamp, toolStateDurationMs);
+		const displayDuration = isRunning ? liveElapsed : liveElapsed || toolStateDurationMs;
 		const [expanded, setExpanded] = useState(defaultExpanded ?? false);
 		const [expandedDiffKeys, setExpandedDiffKeys] = useState<Set<string>>(() => new Set());
 
@@ -643,7 +680,12 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 
 		const fallbackRawOutput =
 			typeof toolUse.rawOutput === 'string' && toolUse.rawOutput.trim() ? toolUse.rawOutput : '';
-		const fullText = content || liveToolOutput || fallbackRawOutput || '';
+		// During execution, bash streams output via state.metadata.output (ToolStateRunning has no .output field).
+		// After completion, output moves to state.output (ToolStateCompleted).
+		const streamingMetadataOutput =
+			isRunning && typeof liveToolMetadata?.output === 'string' ? liveToolMetadata.output : '';
+		const fullText =
+			content || liveToolOutput || streamingMetadataOutput || fallbackRawOutput || '';
 		const hasBody = fullText.trim().length > 0;
 		const lineCount = useMemo(
 			() => (hasBody ? fullText.split('\n').length : 0),
@@ -719,6 +761,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 									diagnostics,
 								})}
 								postMessage={postMessage}
+								isRunning={isRunning}
 							/>
 						);
 					})}
@@ -774,6 +817,10 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		// scrollable body. Diff/file-change cards keep their dedicated preview mode.
 		const alwaysCollapsible = hasBody;
 
+		// Show body when: user expanded manually, OR tool is running with streaming output.
+		// This ensures command/MCP output streams live during execution.
+		const showBody = expanded || (isRunning && hasBody);
+
 		return (
 			<ToolCard
 				headerLeft={
@@ -795,20 +842,23 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 							</span>
 						)}
 						{meta && (
-							<Tooltip content={meta} position="top" delay={300} maxWidth={400}>
-								<span className="text-sm text-vscode-foreground opacity-70 truncate">{meta}</span>
+							<Tooltip
+								content={meta}
+								position="top"
+								delay={300}
+								maxWidth={400}
+								display="inline-block"
+								className="min-w-0 overflow-hidden max-w-full"
+							>
+								<span className="text-sm text-vscode-foreground opacity-70 truncate block">
+									{meta}
+								</span>
 							</Tooltip>
 						)}
 					</>
 				}
 				headerRight={
 					<div className="flex items-center gap-2">
-						{isRunning && liveElapsed > 0 && (
-							<span className="flex items-center gap-1 text-xs text-vscode-descriptionForeground shrink-0">
-								<TimerIcon size={11} />
-								{formatDuration(liveElapsed)}
-							</span>
-						)}
 						{meta && (
 							<div
 								className={cn(
@@ -816,28 +866,28 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 									'group-hover:opacity-100',
 								)}
 							>
-								<IconButton
-									icon={<CopyIcon size={14} />}
-									onClick={e => {
-										e.stopPropagation();
-										void copyTextToClipboard(meta);
-									}}
-									title="Copy request"
-									size={20}
-								/>
+								<CopyButton text={meta} title="Copy request" />
 							</div>
+						)}
+						{displayDuration > 0 && (
+							<span className="flex items-center gap-1 text-xs text-vscode-descriptionForeground shrink-0 tabular-nums">
+								<TimerIcon size={11} />
+								{formatDuration(displayDuration)}
+							</span>
 						)}
 					</div>
 				}
 				isCollapsible={alwaysCollapsible || (needsExpand && hasBody) || Boolean(showAccessGate)}
-				expanded={expanded}
+				expanded={expanded || (isRunning && hasBody)}
 				onToggle={() => setExpanded(prev => !prev)}
 				body={
-					hasBody && expanded ? (
+					showBody && hasBody ? (
 						<div className="relative">
 							<OverlayScrollbarsComponent
 								style={{
-									maxHeight: TOOL_CARD_EXPANDED_MAX_HEIGHT,
+									maxHeight: expanded
+										? TOOL_CARD_EXPANDED_MAX_HEIGHT
+										: TOOL_CARD_PREVIEW_MAX_HEIGHT,
 								}}
 								className="bg-(--tool-bg-header)"
 								options={OVERLAY_SCROLLBAR_OPTIONS}
@@ -862,15 +912,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 									'group-hover:opacity-100',
 								)}
 							>
-								<IconButton
-									icon={<CopyIcon size={14} />}
-									onClick={e => {
-										e.stopPropagation();
-										void copyTextToClipboard(fullText);
-									}}
-									title="Copy"
-									size={20}
-								/>
+								<CopyButton text={fullText} title="Copy" />
 							</div>
 						</div>
 					) : undefined

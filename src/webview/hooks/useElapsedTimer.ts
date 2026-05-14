@@ -10,11 +10,19 @@ const ELAPSED_TIMER_INTERVAL_MS = 100;
  * When `startTime` is provided and the timer activates for the first time,
  * the accumulated base is initialized to `Date.now() - startTime` so that
  * restored sessions show the real elapsed time instead of starting from 0.
+ *
+ * When `fallbackMs` is provided and the timer was never activated (e.g. restore
+ * of a completed tool), returns `fallbackMs` instead of 0.
  */
-export const useElapsedTimer = (isActive: boolean, startTime?: string | number): number => {
+export const useElapsedTimer = (
+	isActive: boolean,
+	startTime?: string | number,
+	fallbackMs?: number,
+): number => {
 	const segmentStartRef = useRef(0);
 	const accumulatedRef = useRef(0);
 	const wasActiveRef = useRef(false);
+	const wasEverActiveRef = useRef(false);
 	const initializedRef = useRef(false);
 	const [elapsed, setElapsed] = useState(0);
 
@@ -23,6 +31,7 @@ export const useElapsedTimer = (isActive: boolean, startTime?: string | number):
 			if (!wasActiveRef.current) {
 				// Transitioning from inactive → active: start a new segment
 				segmentStartRef.current = Date.now();
+				wasEverActiveRef.current = true;
 
 				// On first activation, seed accumulated time from startTime
 				// so restored running subtasks show real elapsed time
@@ -46,10 +55,16 @@ export const useElapsedTimer = (isActive: boolean, startTime?: string | number):
 		if (wasActiveRef.current) {
 			accumulatedRef.current += Date.now() - segmentStartRef.current;
 			wasActiveRef.current = false;
+			wasEverActiveRef.current = true;
 			setElapsed(accumulatedRef.current);
 		}
 		return undefined;
 	}, [isActive, startTime]);
+
+	// If the timer was never activated (restore scenario), use fallbackMs
+	if (!wasEverActiveRef.current && elapsed === 0 && fallbackMs && fallbackMs > 0) {
+		return fallbackMs;
+	}
 
 	return elapsed;
 };

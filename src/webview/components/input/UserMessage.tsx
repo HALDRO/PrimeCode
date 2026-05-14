@@ -217,7 +217,11 @@ const MessageStats = React.memo<{
 		modelName,
 	}) => {
 		const liveTurnTokens = useMessageTurnTokens(messageId);
-		const liveElapsed = useElapsedTimer(isProcessing, timestamp);
+		const liveElapsed = useElapsedTimer(
+			isProcessing,
+			timestamp,
+			processingTimeFallbackMs ?? undefined,
+		);
 
 		// Simple token display: live total if available, otherwise static (pre-computed from store).
 		// No refs, no caching, no complex fallback chains.

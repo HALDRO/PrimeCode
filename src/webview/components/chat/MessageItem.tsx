@@ -9,6 +9,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { extractCanonicalTaskResult } from '../../../common';
 import { useContainerAutoScroll } from '../../hooks/useContainerAutoScroll';
+import { cn } from '../../lib/cn';
 import {
 	type RenderAssistantMessage,
 	type RenderNode,
@@ -50,7 +51,7 @@ import {
 	ThinkingMessage,
 	type ToolGroup,
 } from './SimpleTool';
-import { ToolCard, ToolCardMessage } from './ToolCard';
+import { CopyButton, ToolCard, ToolCardMessage } from './ToolCard';
 import { type GroupedResponseItem, groupToolMessages } from './toolGrouping';
 
 interface MessageItemContext {
@@ -358,6 +359,15 @@ const TaskCardItem = React.memo<{
 			</div>
 		) : null;
 
+	const taskResultCopyText = useMemo(
+		() =>
+			taskResultItems
+				.map(item => extractCanonicalTaskResult(item.content).trim())
+				.filter(Boolean)
+				.join('\n\n'),
+		[taskResultItems],
+	);
+
 	return (
 		<ToolCard
 			headerLeft={
@@ -377,6 +387,16 @@ const TaskCardItem = React.memo<{
 			}
 			headerRight={
 				<span className="flex items-center gap-3 text-sm text-vscode-descriptionForeground group-hover/subtask:opacity-100">
+					{taskResultItems.length > 0 && (
+						<div
+							className={cn(
+								'opacity-0 transition-opacity duration-150 ease-out',
+								'group-hover/subtask:opacity-100',
+							)}
+						>
+							<CopyButton text={taskResultCopyText} title="Copy task result" />
+						</div>
+					)}
 					{childTokens && (
 						<span
 							className="flex items-center gap-1"
@@ -704,19 +724,11 @@ export const MessageItem = React.memo<{
 				if (item.agent === 'compaction') return null;
 				const assistantContent = (item as RenderAssistantMessage).content || '';
 				if (!assistantContent.trim()) return null;
-				const assistantAgent = item.agent;
-				const agentBadge =
-					!ctx.isNestedSubtaskThread && assistantAgent && assistantAgent !== 'build' ? (
-						<span className="inline-flex items-center text-xs font-medium px-1.5 py-0.5 rounded-sm bg-vscode-badge-background text-vscode-badge-foreground mb-1">
-							{assistantAgent.charAt(0).toUpperCase() + assistantAgent.slice(1)}
-						</span>
-					) : null;
 				return (
 					<div
 						className="bg-transparent py-(--message-padding-y) mb-(--message-gap) text-(length:--font-size-base) leading-(--line-height-base) font-(family-name:--font-family-base)"
 						style={{ color: 'var(--input-text-color)' }}
 					>
-						{agentBadge}
 						<Markdown
 							content={assistantContent}
 							isStreaming={(item as RenderAssistantMessage).isStreaming}

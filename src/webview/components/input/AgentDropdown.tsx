@@ -38,6 +38,10 @@ function getAgentIcon(agentId: string, size = 14) {
 /** Resolve display label for a given agent id (supports hyphenated names like 'custom-agent'). */
 function getAgentLabel(agentId: string | undefined): string {
 	if (!agentId || agentId === 'build') return 'Build';
+	// If the name already contains spaces (e.g. "Sisyphus - Ultraworker"), use as-is with title case on first char.
+	if (agentId.includes(' ')) {
+		return agentId.charAt(0).toUpperCase() + agentId.slice(1);
+	}
 	return agentId
 		.split('-')
 		.map(word => word.charAt(0).toUpperCase() + word.slice(1))

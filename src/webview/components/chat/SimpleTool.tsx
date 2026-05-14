@@ -182,7 +182,7 @@ export const ThinkingMessage = React.memo<ThinkingMessageProps>(
 		const [expanded, setExpanded] = useState(defaultExpanded ?? isStreaming ?? false);
 		const wasStreamingRef = useRef(isStreaming);
 		const autoExpandedRef = useRef(Boolean(defaultExpanded ?? isStreaming));
-		const liveElapsed = useElapsedTimer(isStreaming ?? false, startTime);
+		const liveElapsed = useElapsedTimer(isStreaming ?? false, startTime, durationMs);
 
 		useEffect(() => {
 			if (isStreaming) {
@@ -203,10 +203,7 @@ export const ThinkingMessage = React.memo<ThinkingMessageProps>(
 			wasStreamingRef.current = isStreaming;
 		}, [isStreaming]);
 
-		// Use durationMs when available (final value from store), otherwise
-		// fall back to liveElapsed which keeps the frozen value after streaming stops.
-		// This prevents the timer from disappearing when durationMs is not yet computed.
-		const displayDuration = isStreaming ? liveElapsed : (durationMs ?? liveElapsed);
+		const displayDuration = liveElapsed;
 
 		// Keep the header minimal: just the timer next to the Thinking label.
 		const combinedMeta = (
