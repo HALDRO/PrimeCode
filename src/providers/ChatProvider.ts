@@ -53,6 +53,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private backendStatusAbort: AbortController | null = null;
 	private backendStatusRun: Promise<void> | null = null;
 	private backendStatusKey: string | null = null;
+	private backendStatusConnected = false;
+	private backendStatusWaiters: Array<() => void> = [];
 	private healthMonitorTimer: ReturnType<typeof setInterval> | null = null;
 	private healthConsecutiveFailures = 0;
 
@@ -112,6 +114,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			clearSessionAutoAccept: (sessionId: string) =>
 				this.toolHandler.clearSessionAutoAccept(sessionId),
 			refreshAfterServerRestart: async () => {
+				this.startBackendStatusBridge();
+				await this.waitForSseBridgeConnected(5000);
 				this.sendServerInfo(true);
 				this.hasSynced = false;
 				await this.syncAllOrDefer('manual-server-restart');
@@ -295,9 +299,12 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			await this.cli.ensureServer(config);
 			await this.reloadOpenCodeRuntimeOnStartup();
 
-			// Notify webview of server URL so it can establish SSE health polling
-			this.sendServerInfo(true);
 			this.startBackendStatusBridge();
+			await this.waitForSseBridgeConnected(5000);
+
+			// Notify webview only after the backend event bridge is ready.
+			// This prevents bootstrap/hydration from racing ahead of live session events.
+			this.sendServerInfo(true);
 			this.startHealthMonitor();
 
 			// Hydrate all UI-visible state after server connection (providers, proxy models, MCP, etc.)
@@ -468,9 +475,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		logger.debug('[ChatProvider] syncAll started');
 		const startedAt = Date.now();
 
-		// Send server URL first so webview can establish SSE health polling immediately
-		this.sendServerInfo();
 		this.startBackendStatusBridge();
+		await this.waitForSseBridgeConnected(5000);
+		this.sendServerInfo();
 
 		await this.providerHandler.handleMessage({ type: 'reloadAllProviders' });
 
@@ -787,23 +794,54 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 		this.stopBackendStatusBridge();
 		this.backendStatusKey = nextKey;
+		this.backendStatusConnected = false;
 		this.backendStatusAbort = new AbortController();
 		this.backendStatusRun = this.runBackendStatusBridge(
 			admin.baseUrl,
 			admin.directory,
 			this.backendStatusAbort.signal,
 		).finally(() => {
+			this.resolveBackendStatusWaiters();
 			this.backendStatusRun = null;
 			this.backendStatusAbort = null;
 			this.backendStatusKey = null;
+			this.backendStatusConnected = false;
 		});
 	}
 
 	private stopBackendStatusBridge(): void {
 		this.backendStatusAbort?.abort();
+		this.resolveBackendStatusWaiters();
 		this.backendStatusAbort = null;
 		this.backendStatusRun = null;
 		this.backendStatusKey = null;
+		this.backendStatusConnected = false;
+	}
+
+	private resolveBackendStatusWaiters(): void {
+		const waiters = this.backendStatusWaiters.splice(0);
+		for (const resolve of waiters) resolve();
+	}
+
+	private async waitForSseBridgeConnected(timeoutMs: number): Promise<void> {
+		if (this.backendStatusConnected || !this.backendStatusRun) {
+			return;
+		}
+
+		await new Promise<void>(resolve => {
+			const timer = setTimeout(() => {
+				const index = this.backendStatusWaiters.indexOf(onReady);
+				if (index >= 0) this.backendStatusWaiters.splice(index, 1);
+				resolve();
+			}, timeoutMs);
+
+			const onReady = () => {
+				clearTimeout(timer);
+				resolve();
+			};
+
+			this.backendStatusWaiters.push(onReady);
+		});
 	}
 
 	// ─── Server Health Monitor & Reconnect ──────────────────────────────
@@ -879,6 +917,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 						// Webview owns connection chrome; this bridge is only for backend-owned session status.
 					},
 				});
+				this.backendStatusConnected = true;
+				this.resolveBackendStatusWaiters();
 
 				for await (const event of subscription.stream as AsyncGenerator<unknown>) {
 					if (signal.aborted) break;

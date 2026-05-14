@@ -13,7 +13,12 @@ import {
 import { produce } from 'immer';
 import { type ConversationIndexEntry, generateId, parseModelId } from '../../common';
 import { IMPROVE_PROMPT_DEFAULT_TEMPLATE } from '../../common/promptImprover';
-import { type SessionStore, useChatStore } from '../store/chatStore';
+import {
+	getProcessingSessionIds,
+	getSessionRuntimeStatus,
+	type SessionStore,
+	useChatStore,
+} from '../store/chatStore';
 import { clearSessionViewCache } from '../store/derived';
 import { useSettingsStore } from '../store/settingsStore';
 import { useUIStore } from '../store/uiStore';
@@ -40,6 +45,7 @@ let cachedRoot = '';
 let cachedClient: OpencodeClient | null = null;
 let improvePromptController: AbortController | null = null;
 let improvePromptRequestId: string | null = null;
+const pendingStatusRechecks = new Map<string, number>();
 
 function normalizeDriveLetter(dir: string): string {
 	return dir.length >= 2 && dir[1] === ':' ? dir[0].toUpperCase() + dir.slice(1) : dir;
@@ -108,13 +114,17 @@ function getNextUserMessageId(sessionId: string, messageId: string): string | nu
 }
 
 async function haltSessionIfBusy(sessionId: string): Promise<void> {
-	const status = useChatStore.getState().sessionStatus[sessionId];
-	if (status?.type !== 'busy' && status?.type !== 'retry') return;
-	await getClient()
-		.session.abort({ sessionID: sessionId, directory: getWorkspaceRoot() })
-		.catch(() => {
-			// Best effort only. Revert/restore should still continue even if abort fails.
-		});
+	const processingSessionIds = getProcessingSessionIds(useChatStore.getState(), sessionId);
+	if (processingSessionIds.length === 0) return;
+	await Promise.all(
+		processingSessionIds.map(async processingSessionId => {
+			await getClient()
+				.session.abort({ sessionID: processingSessionId, directory: getWorkspaceRoot() })
+				.catch(() => {
+					// Best effort only. Revert/restore should still continue even if abort fails.
+				});
+		}),
+	);
 }
 
 function applyLocalRevertState(sessionId: string, revert: { messageID: string } | undefined): void {
@@ -153,7 +163,7 @@ type RuntimeSendParams = {
 };
 
 function isSessionActive(sessionId: string): boolean {
-	const status = useChatStore.getState().sessionStatus[sessionId];
+	const status = getSessionRuntimeStatus(useChatStore.getState(), sessionId);
 	return status?.type === 'busy' || status?.type === 'retry';
 }
 
@@ -187,6 +197,29 @@ async function flushQueuedMessages(sessionId: string): Promise<void> {
 	} catch (error) {
 		useChatStore.getState().actions.prependQueuedMessage(sessionId, entry);
 		throw error;
+	}
+}
+
+function scheduleBusyStatusRecheck(sessionIds: string[], delayMs: number): void {
+	for (const sessionId of sessionIds) {
+		const status = getSessionRuntimeStatus(useChatStore.getState(), sessionId);
+		if (status?.type !== 'busy' && status?.type !== 'retry') continue;
+
+		const existing = pendingStatusRechecks.get(sessionId);
+		if (existing !== undefined) {
+			window.clearTimeout(existing);
+		}
+
+		const timeout = window.setTimeout(() => {
+			pendingStatusRechecks.delete(sessionId);
+			const currentStatus = getSessionRuntimeStatus(useChatStore.getState(), sessionId);
+			if (currentStatus?.type !== 'busy' && currentStatus?.type !== 'retry') return;
+			void openCodeRuntime.refreshRuntimeState(sessionId).catch(() => {
+				// Best-effort resync only. Normal live events remain the primary source of truth.
+			});
+		}, delayMs);
+
+		pendingStatusRechecks.set(sessionId, timeout);
 	}
 }
 
@@ -487,6 +520,10 @@ async function hydrateSession(sessionId: string, activate = true): Promise<void>
 	await openCodeRuntime.refreshRuntimeState(
 		session.id,
 		subtreeSessions.map(currentSession => currentSession.id),
+	);
+	scheduleBusyStatusRecheck(
+		subtreeSessions.map(currentSession => currentSession.id),
+		3000,
 	);
 }
 
@@ -847,7 +884,14 @@ export const openCodeRuntime = {
 	},
 
 	async abortSession(sessionId: string): Promise<void> {
-		await getClient().session.abort({ sessionID: sessionId, directory: getWorkspaceRoot() });
+		const processingSessionIds = getProcessingSessionIds(useChatStore.getState(), sessionId);
+		const sessionIds = processingSessionIds.length > 0 ? processingSessionIds : [sessionId];
+		await Promise.all(
+			sessionIds.map(currentSessionId =>
+				getClient().session.abort({ sessionID: currentSessionId, directory: getWorkspaceRoot() }),
+			),
+		);
+		scheduleBusyStatusRecheck(sessionIds, 2000);
 	},
 
 	async restoreMessage(sessionId: string, messageId: string): Promise<void> {

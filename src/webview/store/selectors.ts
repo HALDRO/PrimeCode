@@ -19,6 +19,7 @@ import {
 	resolveEffectiveVariant,
 } from '../lib/modelVariants';
 import {
+	getSessionRuntimeStatus,
 	isSessionProcessing,
 	type RenderCompactionMessage,
 	type RenderNode,
@@ -129,7 +130,10 @@ export function computeVisibleSessionDiff(
 	childSessionIdsByParentId: SessionStore['childSessionIdsByParentId'],
 	sessionStatus: SessionStore['sessionStatus'],
 ) {
-	const status = sessionStatus[sessionId]?.type;
+	const status = getSessionRuntimeStatus(
+		{ sessionStatus, childSessionIdsByParentId },
+		sessionId,
+	)?.type;
 	if (status !== 'busy' && status !== 'retry') {
 		const historical = computeHistoricalSessionDiff(state, sessionId);
 		return {
@@ -221,7 +225,7 @@ export const useMaterializedVersion = (sessionId: string | undefined) =>
 	useChatStore((state: SessionStore) => {
 		if (!sessionId) return 0;
 		const messages = state.messages[sessionId]?.length ?? 0;
-		const status = state.sessionStatus[sessionId]?.type ?? 'idle';
+		const status = getSessionRuntimeStatus(state, sessionId)?.type ?? 'idle';
 		return `${messages}:${status}:${Object.keys(state.parts).length}`.length;
 	});
 
@@ -334,7 +338,7 @@ export const useChildSessionSummary = (childSessionId: string | undefined) => {
 		return state.sessions.find(s => s.id === childSessionId);
 	});
 	const status = useChatStore((state: SessionStore) =>
-		childSessionId ? state.sessionStatus[childSessionId] : undefined,
+		childSessionId ? getSessionRuntimeStatus(state, childSessionId) : undefined,
 	);
 	const messages = useChatStore((state: SessionStore) =>
 		childSessionId ? (state.messages[childSessionId] ?? EMPTY_SDK_MESSAGES) : EMPTY_SDK_MESSAGES,
@@ -380,7 +384,7 @@ export const useIsAutoRetrying = () =>
 	useChatStore((state: SessionStore) => {
 		const sid = state.activeSessionId;
 		if (!sid) return false;
-		return state.sessionStatus[sid]?.type === 'retry';
+		return getSessionRuntimeStatus(state, sid)?.type === 'retry';
 	});
 
 export const useRetryInfo = () =>
@@ -388,7 +392,7 @@ export const useRetryInfo = () =>
 		useShallow((state: SessionStore) => {
 			const sid = state.activeSessionId;
 			if (!sid) return null;
-			const status = state.sessionStatus[sid];
+			const status = getSessionRuntimeStatus(state, sid);
 			if (status?.type !== 'retry') return null;
 			return { attempt: status.attempt, message: status.message, nextRetryAt: String(status.next) };
 		}),
@@ -403,7 +407,7 @@ export const useGenerationStatusSnapshot = (sessionId?: string) =>
 			const sid = sessionId ?? state.activeSessionId;
 			if (!sid) return EMPTY_GENERATION_STATUS_SNAPSHOT;
 
-			const sessionRuntimeStatus = state.sessionStatus[sid];
+			const sessionRuntimeStatus = getSessionRuntimeStatus(state, sid);
 			const derivedView = deriveSessionView(state, sid);
 			return {
 				isProcessing: isSessionProcessing(state, sid),

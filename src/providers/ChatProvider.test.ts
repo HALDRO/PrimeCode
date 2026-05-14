@@ -188,4 +188,44 @@ describe('ChatProvider send pipeline', () => {
 		expect(dispose).not.toHaveBeenCalled();
 		expect(clearAgentsCache).toHaveBeenCalledTimes(1);
 	});
+
+	it('waits for backend status bridge before notifying webview on startup', async () => {
+		const { provider } = createProvider();
+		provider.services = { setWorkspaceRoot: vi.fn() };
+		provider.settings = {
+			get: vi.fn((key: string) => {
+				if (key === 'opencode.agent') return undefined;
+				if (key === 'opencode.serverTimeout') return undefined;
+				if (key === 'opencode.serverUrl') return undefined;
+				if (key === 'access.autoApprove') return false;
+				return undefined;
+			}),
+		};
+		provider.toolHandler = {
+			getPermissionPoliciesAsync: vi.fn(async () => ({})),
+		};
+		provider.cli.getAdminInfo = vi.fn().mockReturnValueOnce(null).mockReturnValue({
+			baseUrl: 'http://127.0.0.1:4096',
+			directory: 'C:\\repo',
+		});
+		provider.cli.ensureServer = vi.fn(async () => {});
+		provider.reloadOpenCodeRuntimeOnStartup = vi.fn(async () => {});
+		provider.startBackendStatusBridge = vi.fn();
+		provider.waitForSseBridgeConnected = vi.fn(async () => {});
+		provider.sendServerInfo = vi.fn();
+		provider.startHealthMonitor = vi.fn();
+		provider.syncAllOrDefer = vi.fn(async () => {});
+
+		await provider.doStartOpenCode('C:\\repo');
+
+		expect(provider.startBackendStatusBridge).toHaveBeenCalledTimes(1);
+		expect(provider.waitForSseBridgeConnected).toHaveBeenCalledWith(5000);
+		expect(provider.sendServerInfo).toHaveBeenCalledWith(true);
+		expect(provider.startBackendStatusBridge.mock.invocationCallOrder[0]).toBeLessThan(
+			provider.waitForSseBridgeConnected.mock.invocationCallOrder[0],
+		);
+		expect(provider.waitForSseBridgeConnected.mock.invocationCallOrder[0]).toBeLessThan(
+			provider.sendServerInfo.mock.invocationCallOrder[0],
+		);
+	});
 });

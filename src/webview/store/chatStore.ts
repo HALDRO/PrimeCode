@@ -485,12 +485,77 @@ function resolveSessionId(state: SessionStore, sessionId?: string): string | und
 	return sessionId || state.activeSessionId;
 }
 
+function isProcessingStatus(status: SessionStatus | undefined): boolean {
+	return status?.type === 'busy' || status?.type === 'retry';
+}
+
+function collectSessionSubtreeIds(
+	state: Pick<SessionStore, 'childSessionIdsByParentId'>,
+	sessionId: string,
+): string[] {
+	const queue = [sessionId];
+	const visited = new Set<string>();
+	const sessionIds: string[] = [];
+	let head = 0;
+
+	while (head < queue.length) {
+		const current = queue[head++];
+		if (!current || visited.has(current)) continue;
+		visited.add(current);
+		sessionIds.push(current);
+		queue.push(...(state.childSessionIdsByParentId[current] ?? []));
+	}
+
+	return sessionIds;
+}
+
+export function collectSessionLineageIds(
+	state: Pick<SessionStore, 'sessions'>,
+	sessionId: string,
+): string[] {
+	const lineage: string[] = [];
+	const visited = new Set<string>();
+	let currentSessionId: string | undefined = sessionId;
+
+	while (currentSessionId && !visited.has(currentSessionId)) {
+		visited.add(currentSessionId);
+		lineage.push(currentSessionId);
+		currentSessionId = state.sessions.find(session => session.id === currentSessionId)?.parentID;
+	}
+
+	return lineage;
+}
+
+export function getProcessingSessionIds(
+	state: Pick<SessionStore, 'sessionStatus' | 'childSessionIdsByParentId'>,
+	sessionId: string,
+): string[] {
+	return collectSessionSubtreeIds(state, sessionId).filter(currentSessionId =>
+		isProcessingStatus(state.sessionStatus[currentSessionId]),
+	);
+}
+
+export function getSessionRuntimeStatus(
+	state: Pick<SessionStore, 'sessionStatus' | 'childSessionIdsByParentId'>,
+	sessionId: string,
+): SessionStatus | undefined {
+	const processingSessionIds = getProcessingSessionIds(state, sessionId);
+	if (processingSessionIds.length > 0) {
+		const retryStatus = processingSessionIds
+			.map(currentSessionId => state.sessionStatus[currentSessionId])
+			.find(status => status?.type === 'retry');
+		if (retryStatus) return retryStatus;
+		return { type: 'busy' };
+	}
+
+	return state.sessionStatus[sessionId];
+}
+
 export function isSessionProcessing(
-	state: Pick<SessionStore, 'sessionStatus'>,
+	state: Pick<SessionStore, 'sessionStatus' | 'childSessionIdsByParentId'>,
 	sessionId: string,
 ): boolean {
-	const status = state.sessionStatus[sessionId];
-	return status?.type === 'busy' || status?.type === 'retry';
+	return getProcessingSessionIds(state, sessionId).length > 0;
 }
 
 export const useChatStore = create<SessionStore>()((set, get) => ({

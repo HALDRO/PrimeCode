@@ -1,5 +1,5 @@
 import type { ExtensionMessage } from '../../common';
-import { useChatStore } from '../store';
+import { collectSessionLineageIds, useChatStore } from '../store';
 import type { WebviewSdkEvent } from '../store/eventReducer';
 import { useSettingsStore } from '../store/settingsStore';
 import { useUIStore } from '../store/uiStore';
@@ -56,11 +56,21 @@ function flushQueuedEvents(): void {
 			const completedSessionIds = new Set<string>();
 			for (const event of events) {
 				if (event.type === 'session.idle') {
-					completedSessionIds.add(event.properties.sessionID);
+					for (const sessionId of collectSessionLineageIds(
+						useChatStore.getState(),
+						event.properties.sessionID,
+					)) {
+						completedSessionIds.add(sessionId);
+					}
 					continue;
 				}
 				if (event.type === 'session.status' && event.properties.status.type === 'idle') {
-					completedSessionIds.add(event.properties.sessionID);
+					for (const sessionId of collectSessionLineageIds(
+						useChatStore.getState(),
+						event.properties.sessionID,
+					)) {
+						completedSessionIds.add(sessionId);
+					}
 				}
 			}
 			for (const sessionId of completedSessionIds) {

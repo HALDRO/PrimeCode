@@ -539,6 +539,38 @@ describe('chatStore restore', () => {
 		expect(isSessionProcessing(useChatStore.getState(), SESSION_ID)).toBe(false);
 	});
 
+	it('treats parent session as processing when a descendant session is busy', () => {
+		useChatStore.setState(state => ({
+			...state,
+			sessionStatus: {
+				...state.sessionStatus,
+				child: { type: 'busy' },
+			},
+			childSessionIdsByParentId: {
+				...state.childSessionIdsByParentId,
+				[SESSION_ID]: ['child'],
+			},
+		}));
+
+		expect(isSessionProcessing(useChatStore.getState(), SESSION_ID)).toBe(true);
+	});
+
+	it('treats parent session as retrying when a descendant session is retrying', () => {
+		useChatStore.setState(state => ({
+			...state,
+			sessionStatus: {
+				...state.sessionStatus,
+				child: { type: 'retry', attempt: 2, message: 'later', next: 12345 },
+			},
+			childSessionIdsByParentId: {
+				...state.childSessionIdsByParentId,
+				[SESSION_ID]: ['child'],
+			},
+		}));
+
+		expect(isSessionProcessing(useChatStore.getState(), SESSION_ID)).toBe(true);
+	});
+
 	it('optimistically truncates stale tail messages during edit flow', () => {
 		const first = createUserMessage('msg-1', 'first');
 		const second = createUserMessage('msg-2', 'second');

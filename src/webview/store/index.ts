@@ -7,6 +7,7 @@
 // Base stores (use sparingly - prefer selectors)
 export {
 	type ChangedFile,
+	collectSessionLineageIds,
 	isSessionProcessing,
 	type Message,
 	type Part,

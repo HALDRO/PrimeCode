@@ -241,6 +241,32 @@ describe('eventRuntime', () => {
 			expect(appliedBatches[0]).toEqual([event]);
 			expect(flushQueuedMessagesMock).toHaveBeenCalledWith('ses-1');
 		});
+
+		it('flushes queued messages for the full parent lineage when a child session becomes idle', () => {
+			useChatStore.setState(state => ({
+				...state,
+				sessions: [
+					{ id: 'root' } as never,
+					{ id: 'child', parentID: 'root' } as never,
+					{ id: 'grandchild', parentID: 'child' } as never,
+				],
+			}));
+
+			const event = {
+				type: 'session.idle',
+				properties: { sessionID: 'grandchild' },
+			};
+
+			eventRuntime.handleExtensionMessage({
+				type: 'opencodeEvent',
+				data: { payload: event },
+			});
+			flushRaf();
+
+			expect(flushQueuedMessagesMock).toHaveBeenCalledWith('grandchild');
+			expect(flushQueuedMessagesMock).toHaveBeenCalledWith('child');
+			expect(flushQueuedMessagesMock).toHaveBeenCalledWith('root');
+		});
 	});
 
 	describe('event coalescing', () => {

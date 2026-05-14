@@ -18,6 +18,7 @@ import {
 	type ToolGroup,
 } from '../components/chat/toolGrouping';
 import {
+	getSessionRuntimeStatus,
 	isSessionProcessing,
 	type RenderAssistantMessage,
 	type RenderCompactionMessage,
@@ -471,7 +472,10 @@ function buildTaskPartIndex(parts: Record<string, Part[]>): TaskPartIndex {
 }
 
 function buildExplicitTaskResultProjection(
-	state: Pick<SessionStore, 'originatingToolCallBySessionId' | 'messages' | 'sessionStatus'>,
+	state: Pick<
+		SessionStore,
+		'originatingToolCallBySessionId' | 'messages' | 'sessionStatus' | 'childSessionIdsByParentId'
+	>,
 	messages: Message[],
 	parts: Record<string, Part[]>,
 	sessionId: string,
@@ -487,7 +491,7 @@ function buildExplicitTaskResultProjection(
 		(mappedToolCallId ? taskPartIndex.byCallId.get(mappedToolCallId) : undefined);
 	if (!parentTaskPart || parentTaskPart.state.status !== 'completed') return projection;
 
-	const childStatus = state.sessionStatus[sessionId];
+	const childStatus = getSessionRuntimeStatus(state, sessionId);
 	if (childStatus && childStatus.type !== 'idle') return projection;
 
 	const rawOutput = getTaskResultOutput(parentTaskPart);
@@ -772,7 +776,9 @@ function materializeTaskCards(
 				(metadataModel?.providerID && metadataModel?.modelID
 					? `${metadataModel.providerID}/${metadataModel.modelID}`
 					: undefined);
-			const childStatus = childSessionId ? state.sessionStatus[childSessionId] : undefined;
+			const childStatus = childSessionId
+				? getSessionRuntimeStatus(state, childSessionId)
+				: undefined;
 			const taskOutput =
 				'output' in item && typeof item.rawOutput === 'string' ? item.rawOutput : undefined;
 			const isBackgroundLaunch = isBackgroundTaskLaunch(taskOutput);
