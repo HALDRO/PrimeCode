@@ -214,6 +214,7 @@ export class ToolHandler implements WebviewMessageHandler {
 	 * Persist current permission policies into the project's `opencode.json`.
 	 *
 	 * Uses OpenCodeConfigService so project opencode.json writes stay centralized.
+	 * After writing, disposes the OpenCode instance so the server re-reads permissions.
 	 */
 	private async syncPoliciesToServer(): Promise<void> {
 		const serverPermission = policiesToServerFormat(this.policies);
@@ -223,6 +224,7 @@ export class ToolHandler implements WebviewMessageHandler {
 				serverPermission,
 			);
 			this.context.services.mcpConfigWatcher.notifyUiSave(result.contentHash);
+			await this.context.reloadOpenCodeRuntime?.('permissions:sync');
 			logger.info('[ToolHandler] Policies written to opencode.json', serverPermission);
 		} catch (e) {
 			logger.warn('[ToolHandler] Failed to write opencode.json:', e);

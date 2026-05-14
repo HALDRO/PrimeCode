@@ -54,7 +54,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	private readonly _commandsCache = new TtlCache<Array<{ name: string; description?: string }>>(
 		5 * 60 * 1000,
 	);
-	private readonly _providersCache = new TtlCache<unknown>(5 * 60 * 1000);
 	private readonly _agentsCache = new TtlCache<unknown>(5 * 60 * 1000);
 	private readonly _skillsCache = new TtlCache<
 		Array<{ name: string; description: string; location?: string; content?: string }>
@@ -68,8 +67,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 	/** Give a just-starting server a brief chance to become healthy before killing processes. */
 	private static readonly EXISTING_SERVER_GRACE_MS = 1500;
-	/** Stashed config from the last successful ensureServer — needed for reconnect. */
-	private lastConfig: CLIConfig | null = null;
 	/** Timestamp when this window started the currently owned server instance. */
 	private serverStartedAt: number | null = null;
 	private static readonly LOCAL_SERVER_HOST = '127.0.0.1';
@@ -101,7 +98,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 	async ensureServer(config: CLIConfig): Promise<void> {
 		if (this.serverUrl) {
-			this.lastConfig = config;
 			return;
 		}
 
@@ -114,7 +110,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		this.ensureServerPromise = this.doEnsureServer(config);
 		try {
 			await this.ensureServerPromise;
-			this.lastConfig = config;
 		} finally {
 			this.ensureServerPromise = null;
 		}
@@ -134,9 +129,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (await this.tryConnectToExistingServer(config)) return;
 		if (await this.tryConnectToExistingServerWithGrace(config)) return;
 
-		// No live server found — kill any zombie opencode processes holding ports,
-		// then spawn a fresh one.
-		await this.killZombieOpenCodeProcesses();
+		// No live server found — spawn a fresh one.
 		await this.spawnServer(config.workspaceRoot, config);
 	}
 
@@ -286,38 +279,10 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	}
 
 	/**
-	 * Kill zombie opencode processes that are holding ports but not responding
-	 * to health checks.  Best-effort — if we can't kill them, we proceed anyway
-	 * and let the CLI's tryServe(4096) ?? tryServe(0) handle port conflicts.
+	 * Kill zombie opencode processes — REMOVED.
+	 * This was destructive and could kill servers used by other VS Code windows.
+	 * The server now relies on tryConnectToExistingServer discovery instead.
 	 */
-	private async killZombieOpenCodeProcesses(): Promise<void> {
-		const { execFile } = await import('node:child_process');
-		const { promisify } = await import('node:util');
-		const execFileAsync = promisify(execFile);
-
-		try {
-			if (process.platform === 'win32') {
-				const pids = await this.getWindowsOpencodePids();
-				for (const pid of pids) {
-					try {
-						await execFileAsync('taskkill', ['/PID', pid, '/F'], { timeout: 5000 });
-						logger.info(`[OpenCode] Killed zombie opencode process PID ${pid}`);
-					} catch {
-						logger.warn(`[OpenCode] Failed to kill opencode PID ${pid}`);
-					}
-				}
-			} else {
-				try {
-					await execFileAsync('pkill', ['-f', 'opencode.*serve'], { timeout: 5000 });
-					logger.info('[OpenCode] Killed zombie opencode serve processes');
-				} catch {
-					// pkill returns non-zero if no processes matched — that's fine
-				}
-			}
-		} catch (error) {
-			logger.warn('[OpenCode] Failed to kill zombie processes', { error: String(error) });
-		}
-	}
 
 	private async getWindowsOpencodePids(): Promise<string[]> {
 		const { execFile } = await import('node:child_process');
@@ -489,28 +454,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 	}
 
-	private resetServerState(): void {
-		logger.info('[OpenCode] Resetting server state for reconnection...');
-		this.clearScheduledEventRestart();
-
-		if (this.serverInstance) {
-			try {
-				this.serverInstance.close();
-			} catch {}
-			this.serverInstance = null;
-		}
-		this.serverUrl = null;
-		this.directory = null;
-		this.sdkClient = null;
-		this.isServerOwner = false;
-		this.serverStartedAt = null;
-		this._commandsCache.clear();
-		this._providersCache.clear();
-		this._agentsCache.clear();
-		this._skillsCache.clear();
-		this._mcpCache.clear();
-	}
-
 	private clearScheduledEventRestart(): void {
 		if (this.eventRestartTimer) {
 			clearTimeout(this.eventRestartTimer);
@@ -640,10 +583,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		return 'opencode';
 	}
 
-	// =========================================================================
-	// Connection Status & Restart
-	// =========================================================================
-
 	/**
 	 * Returns connection details for the status UI.
 	 */
@@ -668,44 +607,5 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 					? Math.max(0, Date.now() - this.serverStartedAt)
 					: null,
 		};
-	}
-
-	/**
-	 * Fully restart the OpenCode server process.
-	 * Kills the existing server, resets state,
-	 * then re-starts using the last known config.
-	 * Returns true on success, false if no config is available.
-	 */
-	async restartServer(): Promise<boolean> {
-		if (!this.lastConfig) {
-			logger.warn('[OpenCode] Cannot restart: no previous config available');
-			return false;
-		}
-
-		if (!this.isServerOwner) {
-			logger.warn('[OpenCode] Cannot restart shared server from a non-owner window');
-			return false;
-		}
-
-		logger.info('[OpenCode] Restarting server...');
-		this.clearScheduledEventRestart();
-
-		// Reset server state (kills process if owner)
-		this.resetServerState();
-
-		const config = this.lastConfig;
-
-		try {
-			await this.ensureServer(config);
-
-			if (this.serverUrl) {
-				logger.info('[OpenCode] Server restarted successfully');
-				return true;
-			}
-		} catch (error) {
-			logger.error('[OpenCode] Server restart failed:', error);
-		}
-
-		return false;
 	}
 }

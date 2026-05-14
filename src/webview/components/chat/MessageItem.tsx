@@ -588,9 +588,16 @@ const SimpleToolGroup = React.memo<{
 		return order.map(name => `${name} x${counts.get(name) ?? 0}`).join(', ');
 	}, [toolUseMessages]);
 
-	/** Ordered list of renderable items: tool_use messages and bridge messages (assistant/thinking) */
+	/** Ordered list of renderable items: tool_use, task_result, and bridge messages (assistant/thinking) */
 	const renderItems = useMemo(
-		() => messages.filter(m => m.kind === 'tool_use' || m.kind === 'task_result'),
+		() =>
+			messages.filter(
+				m =>
+					m.kind === 'tool_use' ||
+					m.kind === 'task_result' ||
+					m.kind === 'assistant' ||
+					m.kind === 'thinking',
+			),
 		[messages],
 	);
 
@@ -648,6 +655,29 @@ const SimpleToolGroup = React.memo<{
 						if (msg.kind === 'task_result') {
 							return <TaskResultLine key={msg.id} message={msg as RenderTaskResultNode} />;
 						}
+						if (msg.kind === 'assistant') {
+							const content = (msg as RenderAssistantMessage).content || '';
+							if (!content.trim()) return null;
+							return (
+								<div
+									key={msg.id}
+									className="py-1 text-xs text-vscode-descriptionForeground opacity-80 italic pl-2"
+								>
+									{content}
+								</div>
+							);
+						}
+						if (msg.kind === 'thinking') {
+							return (
+								<ThinkingMessage
+									key={msg.id}
+									content={(msg as RenderThinkingMessage).content || ''}
+									durationMs={(msg as RenderThinkingMessage).durationMs}
+									isStreaming={(msg as RenderThinkingMessage).isStreaming}
+									startTime={(msg as RenderThinkingMessage).startTime}
+								/>
+							);
+						}
 						// tool_use
 						const toolMsg = msg as RenderToolUseMessage;
 						return <ToolCardMessage key={toolMsg.id} toolUse={toolMsg} sessionId={sessionId} />;
@@ -691,18 +721,12 @@ export const MessageItem = React.memo<{
 }>(
 	({ item, ctx, collapseGroupedTools = false }) => {
 		if (Array.isArray(item)) {
-			const bridges = (item as ToolGroup).bridges ?? [];
 			return (
-				<>
-					<SimpleToolGroup
-						messages={item as RenderNode[]}
-						shouldCollapse={collapseGroupedTools || getGroupedItemShouldCollapse(item)}
-						sessionId={ctx.sessionId}
-					/>
-					{bridges.map(bridge => (
-						<MessageItem key={bridge.id} item={bridge} ctx={ctx} collapseGroupedTools={false} />
-					))}
-				</>
+				<SimpleToolGroup
+					messages={item as RenderNode[]}
+					shouldCollapse={collapseGroupedTools || getGroupedItemShouldCollapse(item)}
+					sessionId={ctx.sessionId}
+				/>
 			);
 		}
 

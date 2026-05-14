@@ -338,8 +338,8 @@ export class UtilityHandler implements WebviewMessageHandler {
 	// ─── Connection Status ─────────────────────────────────────────────
 
 	private async handleRestartOpenCode(): Promise<void> {
-		logger.info('[UtilityHandler] Reloading OpenCode runtime...');
-		await this.context.reloadOpenCodeRuntime?.('manual-header');
+		logger.info('[UtilityHandler] Reloading OpenCode runtime via instance.dispose()...');
+		await this.context.reloadOpenCodeRuntime?.('manual-reload');
 		await this.context.refreshAfterServerRestart?.();
 	}
 

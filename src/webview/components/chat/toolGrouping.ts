@@ -119,21 +119,21 @@ export const groupToolMessages = (
 		if (currentToolGroup.length === 0) return;
 
 		const trailingBridges = stripTrailingBridges(currentToolGroup);
-		const bridges = currentToolGroup.filter(isBridgeMessage);
-		const toolOnly = currentToolGroup.filter(item => !isBridgeMessage(item));
-		const toolUseCount = getToolUseCount(toolOnly);
+		const toolUseCount = getToolUseCount(currentToolGroup);
 		const canGroup = toolUseCount >= MIN_SIMPLE_TOOL_GROUP_SIZE;
 
 		if (canGroup) {
-			const group = toolOnly as ToolGroup;
+			// Keep bridges inside the group — they render inline between tools
+			// when the group is expanded, and are hidden when collapsed.
+			const group = [...currentToolGroup] as ToolGroup;
 			group.isLive = reason === 'final' && isStreaming;
 			group.shouldCollapse = reason === 'boundary' && collapseOnFlush;
-			group.bridges = bridges;
 			result.push(group);
 		} else {
 			result.push(...currentToolGroup);
 		}
 
+		// Trailing bridges always render outside (they follow the group boundary)
 		result.push(...trailingBridges);
 
 		currentToolGroup = [];

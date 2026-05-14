@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const flushQueuedMessagesMock = vi.fn(async () => {});
-const showRuntimeErrorMock = vi.fn();
+const { flushQueuedMessagesMock, showRuntimeErrorMock } = vi.hoisted(() => {
+	const flushQueuedMessagesMock = vi.fn(async () => {});
+	const showRuntimeErrorMock = vi.fn();
+	return { flushQueuedMessagesMock, showRuntimeErrorMock };
+});
 
 vi.mock('../opencodeRuntime', () => ({
 	openCodeRuntime: {

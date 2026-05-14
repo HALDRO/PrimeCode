@@ -181,7 +181,7 @@ describe('groupToolMessages', () => {
 			const result = groupToolMessages(msgs, NO_MCP, false);
 			expect(result).toHaveLength(2);
 			expect(Array.isArray(result[0])).toBe(true);
-			expect((result[0] as Message[]).length).toBe(6);
+			expect((result[0] as Message[]).length).toBe(7);
 			expect((result[1] as Message).kind).toBe('assistant');
 		});
 
@@ -201,7 +201,7 @@ describe('groupToolMessages', () => {
 			const result = groupToolMessages(msgs, NO_MCP, false);
 			expect(result).toHaveLength(2);
 			expect(Array.isArray(result[0])).toBe(true);
-			expect((result[0] as Message[]).length).toBe(8);
+			expect((result[0] as Message[]).length).toBe(9);
 			expect((result[1] as Message).kind).toBe('assistant');
 		});
 
@@ -225,7 +225,7 @@ describe('groupToolMessages', () => {
 			const result = groupToolMessages(msgs, NO_MCP, false);
 			expect(result).toHaveLength(2);
 			expect(Array.isArray(result[0])).toBe(true);
-			expect((result[0] as Message[]).length).toBe(12);
+			expect((result[0] as Message[]).length).toBe(13);
 			expect((result[1] as Message).kind).toBe('assistant');
 		});
 
@@ -348,7 +348,7 @@ describe('groupToolMessages', () => {
 			const result = groupToolMessages(msgs, NO_MCP, false);
 			expect(result).toHaveLength(2);
 			expect(Array.isArray(result[0])).toBe(true);
-			expect((result[0] as Message[]).length).toBe(6);
+			expect((result[0] as Message[]).length).toBe(7);
 			expect((result[1] as Message).kind).toBe('assistant');
 		});
 
@@ -436,7 +436,7 @@ describe('groupToolMessages', () => {
 			const result = groupToolMessages(msgs, NO_MCP, true);
 			expect(result).toHaveLength(1);
 			expect(Array.isArray(result[0])).toBe(true);
-			expect((result[0] as Message[]).length).toBe(6);
+			expect((result[0] as Message[]).length).toBe(7);
 		});
 
 		it('should strip trailing assistant from group even when streaming', () => {
@@ -527,13 +527,13 @@ describe('groupToolMessages', () => {
 			const streaming = groupToolMessages(msgs, NO_MCP, true);
 			expect(streaming).toHaveLength(2);
 			expect(Array.isArray(streaming[0])).toBe(true);
-			expect((streaming[0] as Message[]).length).toBe(8);
+			expect((streaming[0] as Message[]).length).toBe(9);
 			expect((streaming[1] as Message).kind).toBe('assistant');
 
 			// Non-streaming: same shape
 			const final = groupToolMessages(msgs, NO_MCP, false);
 			expect(final).toHaveLength(2);
-			expect((final[0] as Message[]).length).toBe(8);
+			expect((final[0] as Message[]).length).toBe(9);
 			expect((final[1] as Message).kind).toBe('assistant');
 		});
 

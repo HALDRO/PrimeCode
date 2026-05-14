@@ -189,7 +189,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 			}
 
 			await this.context.services.openCodeClient.setProviderAuth(sdkClient, providerId, apiKey);
-			await this.context.reloadOpenCodeRuntime?.('provider:auth');
+			await this.disposeOpenCodeInstance();
 
 			this.context.bridge.data('openCodeAuthResult', { success: true, providerId });
 			await this.onReloadAllProviders();

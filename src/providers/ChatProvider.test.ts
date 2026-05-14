@@ -160,26 +160,26 @@ describe('ChatProvider send pipeline', () => {
 		expect(provider.syncAllOrDefer).toHaveBeenCalledWith('manual-server-restart');
 	});
 
-	it('reloadOpenCodeRuntime only invalidates caches while backend status bridge is active', async () => {
+	it('reloadOpenCodeRuntime calls instance.dispose() when SDK client is available', async () => {
 		const { provider, dispose, clearAgentsCache } = createProvider();
 		provider.backendStatusRun = Promise.resolve();
 
 		await provider.reloadOpenCodeRuntime('opencode-config:manual');
 
-		expect(dispose).not.toHaveBeenCalled();
+		expect(dispose).toHaveBeenCalledTimes(1);
 		expect(clearAgentsCache).toHaveBeenCalledTimes(1);
 	});
 
-	it('reloadOpenCodeRuntime only invalidates caches when no sessions are active', async () => {
+	it('reloadOpenCodeRuntime calls instance.dispose() regardless of bridge state', async () => {
 		const { provider, dispose, clearAgentsCache } = createProvider();
 
 		await provider.reloadOpenCodeRuntime('opencode-config:manual');
 
-		expect(dispose).not.toHaveBeenCalled();
+		expect(dispose).toHaveBeenCalledTimes(1);
 		expect(clearAgentsCache).toHaveBeenCalledTimes(1);
 	});
 
-	it('clears runtime caches when SDK client is unavailable', async () => {
+	it('skips instance.dispose() when SDK client is unavailable', async () => {
 		const { provider, dispose, clearAgentsCache } = createProvider();
 		provider.cli.getSdkClient.mockReturnValue(null);
 

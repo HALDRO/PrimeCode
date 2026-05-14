@@ -1,15 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const abortMock = vi.fn(async () => {});
-const statusMock = vi.fn(async () => ({ data: {} }));
-const createClientMock = vi.fn(() => ({
-	session: {
-		abort: abortMock,
-		status: statusMock,
-	},
-}));
-
-const postMessageMock = vi.fn();
+const { abortMock, statusMock, createClientMock, postMessageMock } = vi.hoisted(() => {
+	const abortMock = vi.fn(async () => {});
+	const statusMock = vi.fn(async () => ({ data: {} }));
+	const createClientMock = vi.fn(() => ({
+		session: {
+			abort: abortMock,
+			status: statusMock,
+		},
+	}));
+	const postMessageMock = vi.fn();
+	return { abortMock, statusMock, createClientMock, postMessageMock };
+});
 
 vi.mock('@opencode-ai/sdk/v2/client', () => ({
 	createOpencodeClient: createClientMock,
@@ -20,6 +22,11 @@ vi.mock('../utils/vscode', () => ({
 		postMessage: postMessageMock,
 	},
 }));
+
+// Provide window global for Node test environment
+if (typeof globalThis.window === 'undefined') {
+	(globalThis as unknown as Record<string, unknown>).window = globalThis;
+}
 
 import { useChatStore } from '../../store/chatStore';
 import { useUIStore } from '../../store/uiStore';

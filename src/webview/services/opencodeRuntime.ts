@@ -884,11 +884,17 @@ export const openCodeRuntime = {
 	},
 
 	async abortSession(sessionId: string): Promise<void> {
-		const processingSessionIds = getProcessingSessionIds(useChatStore.getState(), sessionId);
-		const sessionIds = processingSessionIds.length > 0 ? processingSessionIds : [sessionId];
+		// Always abort the requested session — the server handles child propagation.
+		// Additionally abort any known processing children for faster cancellation.
+		const processingChildren = getProcessingSessionIds(useChatStore.getState(), sessionId).filter(
+			id => id !== sessionId,
+		);
+		const sessionIds = [sessionId, ...processingChildren];
 		await Promise.all(
 			sessionIds.map(currentSessionId =>
-				getClient().session.abort({ sessionID: currentSessionId, directory: getWorkspaceRoot() }),
+				getClient()
+					.session.abort({ sessionID: currentSessionId, directory: getWorkspaceRoot() })
+					.catch(() => {}),
 			),
 		);
 		scheduleBusyStatusRecheck(sessionIds, 2000);

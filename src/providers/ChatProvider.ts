@@ -152,12 +152,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			}),
 		);
 
-		this.services.mcpConfigWatcher.start(async source => {
-			this.hasSynced = false;
-			await this.reloadOpenCodeRuntime(`opencode-config:${source}`);
-			await this.mcpHandler.handleMessage({ type: 'loadMCPServers' });
-			await this.syncAllOrDefer(`opencode-config-${source}`);
-		});
+		this.services.mcpConfigWatcher.start(source => this.handleConfigFileChange(source));
 
 		this.services.resourceWatcher.start(resourceType => this.handleResourceChange(resourceType));
 
@@ -176,21 +171,41 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private restartWorkspaceWatchers(): void {
 		this.services.mcpConfigWatcher.dispose();
 		this.services.resourceWatcher.dispose();
-		this.services.mcpConfigWatcher.start(async source => {
-			this.hasSynced = false;
-			await this.reloadOpenCodeRuntime(`opencode-config:${source}`);
-			await this.mcpHandler.handleMessage({ type: 'loadMCPServers' });
-			await this.syncAllOrDefer(`opencode-config-${source}`);
-		});
+		this.services.mcpConfigWatcher.start(source => this.handleConfigFileChange(source));
 		this.services.resourceWatcher.start(resourceType => this.handleResourceChange(resourceType));
 	}
 
-	private async reloadOpenCodeRuntime(source: string): Promise<void> {
-		logger.debug('[ChatProvider] Invalidating OpenCode runtime caches', { source });
-		this.clearOpenCodeRuntimeCaches();
+	/**
+	 * Handle opencode.json file change detected by the watcher.
+	 * Uses a soft reload (cache clear + UI resync) to avoid disrupting active sessions.
+	 * Full instance.dispose() only happens on explicit user actions (Reload button, UI saves).
+	 */
+	private async handleConfigFileChange(source: 'file-watcher' | 'manual'): Promise<void> {
+		this.hasSynced = false;
+		this.clearLocalCaches();
+		await this.mcpHandler.handleMessage({ type: 'loadMCPServers' });
+		await this.syncAllOrDefer(`opencode-config-${source}`);
 	}
 
-	private clearOpenCodeRuntimeCaches(): void {
+	/**
+	 * Dispose the OpenCode server instance so it re-reads config from disk
+	 * on the next request. This is the canonical way to reload runtime state
+	 * (MCP servers, providers, agents, skills, permissions, plugins).
+	 */
+	private async reloadOpenCodeRuntime(source: string): Promise<void> {
+		logger.debug('[ChatProvider] Disposing OpenCode instance for reload', { source });
+		this.clearLocalCaches();
+		const sdkClient = this.cli.getSdkClient();
+		if (!sdkClient) return;
+		try {
+			await sdkClient.instance.dispose();
+		} catch (err) {
+			logger.warn('[ChatProvider] instance.dispose() failed during reload', { source, err });
+		}
+	}
+
+	/** Clear local TTL caches so next fetch hits the server. */
+	private clearLocalCaches(): void {
 		this.cli.clearAgentsCache?.();
 		this.cli.clearCommandsCache?.();
 		this.cli.clearSkillsCache?.();
@@ -201,11 +216,16 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		resourceType: 'commands' | 'skills' | 'subagents' | 'plugins' | 'rules',
 	): Promise<void> {
 		try {
-			await this.reloadOpenCodeRuntime(`resource:${resourceType}`);
+			// Rules are read per-session from disk, no instance dispose needed
 			if (resourceType === 'rules') {
+				this.clearLocalCaches();
 				await this.settingsHandler.handleMessage({ type: 'getRules' });
 				return;
 			}
+
+			// All other resource types require instance dispose so the server
+			// re-reads config and rebuilds its InstanceState
+			await this.reloadOpenCodeRuntime(`resource:${resourceType}`);
 
 			switch (resourceType) {
 				case 'commands':
@@ -229,7 +249,12 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private async reloadOpenCodeRuntimeOnStartup(): Promise<void> {
 		if (this.didStartupRuntimeReload) return;
 		this.didStartupRuntimeReload = true;
-		await this.reloadOpenCodeRuntime('startup');
+		// Do NOT call instance.dispose() on startup. The server is already running
+		// with its config loaded. Disposing kills all active sessions (including
+		// child sessions). Config reloads are handled by handleConfigFileChange()
+		// and handleResourceChange() when the user explicitly changes settings.
+		// Only clear local caches so the extension fetches fresh data from server.
+		this.clearLocalCaches();
 	}
 
 	/**

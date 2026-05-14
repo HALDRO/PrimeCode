@@ -348,17 +348,6 @@ export function eventReducer(state: SessionStore, event: WebviewSdkEvent): void 
 			}
 			if (info.role === 'assistant') {
 				syncCompactionParentFromAssistant(state, sessionID, info as AssistantMessage);
-				// Sync sessionAgent from the first assistant message's agent field
-				// so the toolbar button reflects the actual runtime agent.
-				const assistantAgent = (info as AssistantMessage).agent;
-				if (
-					assistantAgent &&
-					assistantAgent !== 'build' &&
-					assistantAgent !== 'compaction' &&
-					!state.sessionAgent[sessionID]
-				) {
-					state.sessionAgent[sessionID] = assistantAgent;
-				}
 			}
 			break;
 		}

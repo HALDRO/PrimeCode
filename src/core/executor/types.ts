@@ -47,8 +47,6 @@ export interface CLIExecutor extends EventEmitter {
 		port: number | null;
 		uptime: number | null;
 	};
-	/** Restart the local OpenCode server, if this window owns it. */
-	restartServer?(): Promise<boolean>;
 	/** Invalidate the skills cache so the next listSkills() call fetches fresh data. */
 	clearSkillsCache?(): void;
 	/** Invalidate the commands cache so the next fetch fetches fresh data. */

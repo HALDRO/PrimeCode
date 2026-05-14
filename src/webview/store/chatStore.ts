@@ -489,6 +489,9 @@ function isProcessingStatus(status: SessionStatus | undefined): boolean {
 	return status?.type === 'busy' || status?.type === 'retry';
 }
 
+// Stable reference to avoid creating new objects in selectors (prevents infinite re-renders).
+const BUSY_STATUS: SessionStatus = { type: 'busy' };
+
 function collectSessionSubtreeIds(
 	state: Pick<SessionStore, 'childSessionIdsByParentId'>,
 	sessionId: string,
@@ -545,7 +548,7 @@ export function getSessionRuntimeStatus(
 			.map(currentSessionId => state.sessionStatus[currentSessionId])
 			.find(status => status?.type === 'retry');
 		if (retryStatus) return retryStatus;
-		return { type: 'busy' };
+		return BUSY_STATUS;
 	}
 
 	return state.sessionStatus[sessionId];

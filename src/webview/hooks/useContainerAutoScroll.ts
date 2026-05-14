@@ -45,6 +45,7 @@ export function useContainerAutoScroll({
 }: UseContainerAutoScrollOptions): UseContainerAutoScrollReturn {
 	const scrollerRef = useRef<HTMLDivElement | null>(null);
 	const userDetachedRef = useRef(false);
+	const programmaticScrollRef = useRef(false);
 	const [showScrollToBottom, setShowScrollToBottom] = useState(false);
 
 	// Reset detach flag when streaming starts
@@ -64,6 +65,12 @@ export function useContainerAutoScroll({
 		let lastScrollTop = el.scrollTop;
 
 		const onScroll = () => {
+			// Skip scroll events triggered by programmatic auto-scroll
+			if (programmaticScrollRef.current) {
+				programmaticScrollRef.current = false;
+				return;
+			}
+
 			const currentScrollTop = el.scrollTop;
 			const distance = el.scrollHeight - currentScrollTop - el.clientHeight;
 
@@ -81,7 +88,10 @@ export function useContainerAutoScroll({
 			rafId = requestAnimationFrame(() => {
 				rafId = null;
 				const d = el.scrollHeight - el.scrollTop - el.clientHeight;
-				setShowScrollToBottom(d > buttonThreshold);
+				setShowScrollToBottom(prev => {
+					const next = d > buttonThreshold;
+					return prev === next ? prev : next;
+				});
 			});
 		};
 
@@ -96,6 +106,7 @@ export function useContainerAutoScroll({
 	}, [active, buttonThreshold, detachThreshold]);
 
 	// ── MutationObserver: auto-scroll when content changes ─────────
+
 	useEffect(() => {
 		const el = scrollerRef.current;
 		if (!active || !el) return;
@@ -108,6 +119,7 @@ export function useContainerAutoScroll({
 				rafId = null;
 				const scroller = scrollerRef.current;
 				if (!scroller || userDetachedRef.current) return;
+				programmaticScrollRef.current = true;
 				scroller.scrollTop = scroller.scrollHeight;
 			});
 		};
