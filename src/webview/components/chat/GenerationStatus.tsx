@@ -24,53 +24,10 @@ const SHOW_GRACE_PERIOD_MS = 600;
 const HIDE_DELAY_MS = 300;
 /** Duration of the crossfade animation between status texts. */
 const CROSSFADE_DURATION_MS = 200;
+/** Small debounce before committing a new status to avoid flicker between rapid tool phases. */
+const STATUS_COMMIT_DELAY_MS = 200;
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
-
-/** Animated typing dots indicator */
-const TypingDots: React.FC = () => (
-	<span className="inline-flex items-center gap-1 ml-2">
-		<span
-			className="w-1 h-1 rounded-full bg-current animate-bounce"
-			style={{ animationDelay: '0ms', animationDuration: '600ms' }}
-		/>
-		<span
-			className="w-1 h-1 rounded-full bg-current animate-bounce"
-			style={{ animationDelay: '150ms', animationDuration: '600ms' }}
-		/>
-		<span
-			className="w-1 h-1 rounded-full bg-current animate-bounce"
-			style={{ animationDelay: '300ms', animationDuration: '600ms' }}
-		/>
-	</span>
-);
-
-/** Pulsing glow ring animation */
-const PulseRing: React.FC<{ color: string }> = ({ color }) => (
-	<span
-		className="absolute inset-0 rounded-full animate-ping opacity-30"
-		style={{ backgroundColor: color }}
-	/>
-);
-
-/** Status icon with glow effect */
-const StatusIcon: React.FC<{ isThinking: boolean }> = ({ isThinking }) => {
-	const color = isThinking ? 'var(--color-thinking)' : 'var(--color-accent)';
-	const glowColor = isThinking ? 'var(--glow-thinking)' : 'var(--glow-accent)';
-
-	return (
-		<span className="relative inline-flex items-center justify-center w-2.5 h-2.5">
-			<PulseRing color={glowColor} />
-			<span
-				className="relative w-1.5 h-1.5 rounded-full z-10"
-				style={{
-					backgroundColor: color,
-					boxShadow: `0 0 6px ${glowColor}, 0 0 12px ${glowColor}`,
-				}}
-			/>
-		</span>
-	);
-};
 
 // ─── Utilities ───────────────────────────────────────────────────────────────
 
@@ -82,17 +39,6 @@ const formatStatus = (status: string): string => {
 	const withoutTrailingDots = cleaned.replace(/[.\u2026]+\s*$/, '').trim();
 	if (!withoutTrailingDots) return '';
 	return withoutTrailingDots.charAt(0).toUpperCase() + withoutTrailingDots.slice(1);
-};
-
-/** Determine if status indicates thinking/reasoning */
-const isThinkingStatus = (status: string): boolean => {
-	const lower = status.toLowerCase();
-	return (
-		lower.includes('think') ||
-		lower.includes('reason') ||
-		lower.includes('analyz') ||
-		lower.includes('process')
-	);
 };
 
 /**
@@ -107,19 +53,47 @@ function deriveStatusText(
 		return formatStatus(toolActivity.label);
 	}
 	const formatted = formatStatus(status);
-	return formatted || 'Generating';
+	return formatted;
 }
 
-// Shared shimmer style
-const shimmerStyle = {
-	background:
-		'linear-gradient(90deg, var(--vscode-descriptionForeground) 0%, var(--vscode-foreground) 50%, var(--vscode-descriptionForeground) 100%)',
-	backgroundSize: '200% 100%',
-	backgroundClip: 'text',
-	WebkitBackgroundClip: 'text',
-	color: 'transparent',
-	animation: 'shimmer 3s linear infinite',
+const statusTextBaseStyle = {
+	color: 'var(--vscode-descriptionForeground)',
+	filter: 'saturate(0.92)',
 } as const;
+
+const CharacterWaveText: React.FC<{ text: string; isRetrying?: boolean }> = ({
+	text,
+	isRetrying = false,
+}) => {
+	const occurrenceByChar = new Map<string, number>();
+	return (
+		<>
+			{Array.from(text).map((char, index) => {
+				const nextOccurrence = (occurrenceByChar.get(char) ?? 0) + 1;
+				occurrenceByChar.set(char, nextOccurrence);
+				return (
+					<span
+						key={`${char}-${nextOccurrence}`}
+						className={cn(
+							'relative inline-block whitespace-pre',
+							!isRetrying && 'animate-[statusCharWave_1.95s_ease-in-out_infinite]',
+						)}
+						style={
+							isRetrying
+								? undefined
+								: {
+										animationDelay: `${index * 90}ms`,
+										willChange: 'color, opacity, text-shadow',
+									}
+						}
+					>
+						{char}
+					</span>
+				);
+			})}
+		</>
+	);
+};
 
 // ---------------------------------------------------------------------------
 // useAggregatedStatus — immediate status updates with crossfade animation.
@@ -132,47 +106,72 @@ interface AggregatedStatusState {
 	text: string;
 	/** Whether the text is fading in (for crossfade) */
 	isFadingIn: boolean;
+	/** Monotonic version used to remount animated text consistently on committed changes. */
+	version: number;
 }
 
 function useAggregatedStatus(rawText: string, isActive: boolean): AggregatedStatusState {
-	const [state, setState] = useState<AggregatedStatusState>({ text: '', isFadingIn: false });
+	const [state, setState] = useState<AggregatedStatusState>({
+		text: '',
+		isFadingIn: false,
+		version: 0,
+	});
 	const currentTextRef = useRef('');
 	const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const commitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const versionRef = useRef(0);
 
 	useEffect(() => {
 		if (!isActive) {
 			// Reset when not active
 			currentTextRef.current = '';
-			setState({ text: '', isFadingIn: false });
+			setState(prev => ({ ...prev, text: '', isFadingIn: false }));
 			if (fadeTimerRef.current) {
 				clearTimeout(fadeTimerRef.current);
 				fadeTimerRef.current = null;
 			}
+			if (commitTimerRef.current) {
+				clearTimeout(commitTimerRef.current);
+				commitTimerRef.current = null;
+			}
 			return;
 		}
 
-		const target = rawText || 'Generating';
+		const target = rawText.trim();
+		if (!target) {
+			if (commitTimerRef.current) {
+				clearTimeout(commitTimerRef.current);
+				commitTimerRef.current = null;
+			}
+			return;
+		}
 
 		// Deduplicate — same text means same tool invoked again, skip animation
 		if (target === currentTextRef.current) return;
 
-		currentTextRef.current = target;
+		if (commitTimerRef.current) clearTimeout(commitTimerRef.current);
+		commitTimerRef.current = setTimeout(() => {
+			commitTimerRef.current = null;
+			currentTextRef.current = target;
+			versionRef.current += 1;
 
-		// Commit with fade-in animation
-		setState({ text: target, isFadingIn: true });
+			// Commit with fade-in animation and bumped version to force text remount.
+			setState({ text: target, isFadingIn: true, version: versionRef.current });
 
-		// Clear previous fade timer
-		if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current);
-		fadeTimerRef.current = setTimeout(() => {
-			fadeTimerRef.current = null;
-			setState(prev => (prev.text === target ? { ...prev, isFadingIn: false } : prev));
-		}, CROSSFADE_DURATION_MS);
+			// Clear previous fade timer
+			if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current);
+			fadeTimerRef.current = setTimeout(() => {
+				fadeTimerRef.current = null;
+				setState(prev => (prev.text === target ? { ...prev, isFadingIn: false } : prev));
+			}, CROSSFADE_DURATION_MS);
+		}, STATUS_COMMIT_DELAY_MS);
 	}, [rawText, isActive]);
 
 	// Cleanup on unmount
 	useEffect(() => {
 		return () => {
 			if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current);
+			if (commitTimerRef.current) clearTimeout(commitTimerRef.current);
 		};
 	}, []);
 
@@ -212,50 +211,74 @@ export const SubtaskGenerationStatus: React.FC<SubtaskGenerationStatusProps> = (
 		return formatStatus(raw);
 	}, [status, retryMessage]);
 
-	const { text: displayStatus, isFadingIn } = useAggregatedStatus(rawStatusText, isRunning);
+	const {
+		text: displayStatus,
+		isFadingIn,
+		version,
+	} = useAggregatedStatus(rawStatusText, isRunning);
 
 	if (!visible || !isRunning) return null;
 
 	const isRetrying = !!retryMessage;
-	const isThinking = !isRetrying && isThinkingStatus(displayStatus || status || '');
 	const showStatus = displayStatus || 'Generating';
 
 	return (
 		<div
 			className={cn(
-				'flex items-center justify-start gap-1.5 py-2',
+				'flex items-center justify-start gap-2 py-2 mt-[16px]',
 				'transition-all duration-300 ease-out',
 				visible && isRunning ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-1',
 			)}
 		>
-			<StatusIcon isThinking={isThinking} />
 			<span
 				className={cn(
-					'text-xs relative inline-block',
+					'text-sm font-medium relative inline-flex items-center leading-none',
 					isRetrying && 'text-warning',
 					isFadingIn && 'animate-[statusFadeIn_200ms_ease-out]',
 				)}
-				style={isRetrying ? undefined : shimmerStyle}
+				style={isRetrying ? undefined : statusTextBaseStyle}
 			>
-				{showStatus}
-				<TypingDots />
+				<CharacterWaveText
+					key={`${showStatus}:${version}`}
+					text={showStatus}
+					isRetrying={isRetrying}
+				/>
 			</span>
 		</div>
 	);
 };
 SubtaskGenerationStatus.displayName = 'SubtaskGenerationStatus';
 
-export const GenerationStatus: React.FC<{ sessionId?: string }> = ({ sessionId }) => {
+export const GenerationStatus: React.FC<{
+	sessionId?: string;
+	preserveDuringLiveTools?: boolean;
+}> = ({ sessionId, preserveDuringLiveTools = false }) => {
 	const { isProcessing, status, streamingToolId, isTextStreaming, toolActivity } =
 		useGenerationStatusSnapshot(sessionId);
 	const [visible, setVisible] = useState(false);
 	const showTimestampRef = useRef(0);
+	const wasProcessingRef = useRef(false);
+	const processingEpochRef = useRef(0);
 
 	// ── Stabilize tool activity via useEffect (NEVER mutate refs during render) ──
 	const lastToolActivityRef = useRef<typeof toolActivity>(null);
+	const lastToolActivityEpochRef = useRef(0);
+	useEffect(() => {
+		if (isProcessing && !wasProcessingRef.current) {
+			processingEpochRef.current += 1;
+			lastToolActivityRef.current = null;
+			lastToolActivityEpochRef.current = processingEpochRef.current;
+		}
+		if (!isProcessing && wasProcessingRef.current) {
+			lastToolActivityRef.current = null;
+		}
+		wasProcessingRef.current = isProcessing;
+	}, [isProcessing]);
+
 	useEffect(() => {
 		if (toolActivity) {
 			lastToolActivityRef.current = toolActivity;
+			lastToolActivityEpochRef.current = processingEpochRef.current;
 		} else if (isTextStreaming && !streamingToolId) {
 			lastToolActivityRef.current = null;
 		}
@@ -264,12 +287,16 @@ export const GenerationStatus: React.FC<{ sessionId?: string }> = ({ sessionId }
 	// Derive stable tool activity — use current or last known during processing
 	const stableToolActivity = useMemo(() => {
 		if (!isProcessing) return null;
-		return toolActivity ?? lastToolActivityRef.current;
+		if (toolActivity) return toolActivity;
+		if (lastToolActivityEpochRef.current !== processingEpochRef.current) return null;
+		return lastToolActivityRef.current;
 	}, [isProcessing, toolActivity]);
 
-	// Hide during pure text streaming — the model is just typing, no status needed.
-	// Show only when: processing AND (not text-streaming OR has active tool).
-	const shouldShow = isProcessing && (!isTextStreaming || !!streamingToolId);
+	// Hide during pure text streaming unless the trailing grouped-tool block is still live.
+	// When a live tool group remains active, keep the generation status visible so the
+	// UI does not appear to "finish" while grouped tool work is still visually in progress.
+	const shouldShow =
+		isProcessing && (!isTextStreaming || !!streamingToolId || preserveDuringLiveTools);
 
 	// ── Visibility with grace period ─────────────────────────────────────────
 	useEffect(() => {
@@ -292,41 +319,60 @@ export const GenerationStatus: React.FC<{ sessionId?: string }> = ({ sessionId }
 		() => deriveStatusText(stableToolActivity, status),
 		[stableToolActivity, status],
 	);
-	const { text: displayStatus, isFadingIn } = useAggregatedStatus(rawStatusText, shouldShow);
+	const {
+		text: displayStatus,
+		isFadingIn,
+		version,
+	} = useAggregatedStatus(rawStatusText, shouldShow);
 
 	const isActive = visible && shouldShow;
-	const isThinking = isThinkingStatus(displayStatus || status);
-	const showStatus = displayStatus || (isProcessing ? 'Generating' : '');
+	const showStatus = displayStatus || rawStatusText || formatStatus(status);
 
 	return (
 		<div
 			className={cn(
-				'flex items-center justify-start gap-1.5',
+				'flex items-center justify-start gap-2 mt-[16px]',
 				'transition-all duration-300 ease-out',
 				isActive ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-1 pointer-events-none',
 			)}
 			style={{ visibility: isActive ? 'visible' : 'hidden' }}
 			aria-hidden={!isActive}
 		>
-			<StatusIcon isThinking={isThinking} />
 			<span
 				className={cn(
-					'text-xs relative inline-block',
+					'text-sm font-medium relative inline-flex items-center leading-none',
 					isFadingIn && 'animate-[statusFadeIn_200ms_ease-out]',
 				)}
-				style={shimmerStyle}
+				style={statusTextBaseStyle}
 			>
-				{showStatus}
-				<TypingDots />
+				<CharacterWaveText key={`${showStatus}:${version}`} text={showStatus} />
 			</span>
 			<style>
 				{`
-					@keyframes shimmer {
-						0% { background-position: 200% 0; }
-						100% { background-position: -200% 0; }
+					@keyframes statusCharWave {
+						0%, 18%, 100% {
+							color: var(--vscode-descriptionForeground);
+							opacity: 0.88;
+							text-shadow: none;
+						}
+						32% {
+							color: color-mix(in srgb, var(--vscode-foreground) 50%, var(--vscode-descriptionForeground) 50%);
+							opacity: 1;
+							text-shadow: 0 0 8px color-mix(in srgb, var(--vscode-foreground) 12%, transparent 88%);
+						}
+						48% {
+							color: color-mix(in srgb, var(--vscode-foreground) 24%, var(--vscode-descriptionForeground) 76%);
+							opacity: 0.96;
+							text-shadow: 0 0 4px color-mix(in srgb, var(--vscode-foreground) 8%, transparent 92%);
+						}
+						62%, 82% {
+							color: var(--vscode-descriptionForeground);
+							opacity: 0.88;
+							text-shadow: none;
+						}
 					}
 					@keyframes statusFadeIn {
-						from { opacity: 0; transform: translateY(2px); }
+						from { opacity: 0; transform: translateY(1px); }
 						to { opacity: 1; transform: translateY(0); }
 					}
 				`}

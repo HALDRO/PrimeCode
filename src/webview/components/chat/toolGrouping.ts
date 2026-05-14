@@ -12,7 +12,7 @@ import type { RenderNode } from '../../store';
 // Constants
 // -----------------------------------------------------------------------------
 
-const MIN_SIMPLE_TOOL_GROUP_SIZE = 3;
+const MIN_SIMPLE_TOOL_GROUP_SIZE = 2;
 const MAX_BRIDGE_MESSAGE_LENGTH = 200;
 const ASSISTANT_BRIDGE_BLOCKERS = ['<system-reminder>', '<task_result>', '```'];
 // -----------------------------------------------------------------------------

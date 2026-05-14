@@ -108,17 +108,17 @@ const NO_MCP: string[] = [];
 // --- Tests ---
 
 describe('groupToolMessages', () => {
-	describe('basic grouping (unchanged behavior)', () => {
+	describe('basic grouping', () => {
 		it('should return empty array for no messages', () => {
 			expect(groupToolMessages([], NO_MCP, false)).toEqual([]);
 		});
 
-		it('should not group fewer than 3 tool_use messages', () => {
+		it('should group 2 consecutive tool_use messages when followed by boundary', () => {
 			const msgs = [toolUse('1'), toolResult('1r', 'tu-1'), toolUse('2'), toolResult('2r', 'tu-2')];
 			const result = groupToolMessages(msgs, NO_MCP, false);
-			// All individual — no arrays
-			expect(result.every(r => !Array.isArray(r))).toBe(true);
-			expect(result).toHaveLength(4);
+			expect(result).toHaveLength(1);
+			expect(Array.isArray(result[0])).toBe(true);
+			expect((result[0] as Message[]).length).toBe(4);
 		});
 
 		it('should group 3+ consecutive tool_use messages when followed by boundary', () => {
@@ -363,8 +363,10 @@ describe('groupToolMessages', () => {
 				toolResult('3r', 'tu-3'),
 			];
 			const result = groupToolMessages(msgs, NO_MCP, false);
-			expect((result[0] as Message).kind).toBe('tool_use');
-			expect((result[4] as Message).kind).toBe('assistant');
+			expect(Array.isArray(result[0])).toBe(true);
+			expect((result[0] as Message[]).map(item => item.id)).toEqual(['1', '1r', '2', '2r']);
+			expect((result[1] as Message).kind).toBe('assistant');
+			expect((result[2] as Message).kind).toBe('tool_use');
 		});
 
 		it('should not absorb multiline assistant summaries into tool groups', () => {
@@ -378,8 +380,10 @@ describe('groupToolMessages', () => {
 				toolResult('3r', 'tu-3'),
 			];
 			const result = groupToolMessages(msgs, NO_MCP, false);
-			expect((result[0] as Message).kind).toBe('tool_use');
-			expect((result[4] as Message).kind).toBe('assistant');
+			expect(Array.isArray(result[0])).toBe(true);
+			expect((result[0] as Message[]).map(item => item.id)).toEqual(['1', '1r', '2', '2r']);
+			expect((result[1] as Message).kind).toBe('assistant');
+			expect((result[2] as Message).kind).toBe('tool_use');
 		});
 	});
 
@@ -416,11 +420,12 @@ describe('groupToolMessages', () => {
 			expect((result[0] as Message[]).length).toBe(6);
 		});
 
-		it('should NOT group trailing tools below threshold even when streaming', () => {
+		it('should group trailing tools once the second tool is present, even when streaming', () => {
 			const msgs = [toolUse('1'), toolResult('1r', 'tu-1'), toolUse('2'), toolResult('2r', 'tu-2')];
 			const result = groupToolMessages(msgs, NO_MCP, true);
-			// Only 2 tool_use — below MIN_SIMPLE_TOOL_GROUP_SIZE
-			expect(result.every(r => !Array.isArray(r))).toBe(true);
+			expect(result).toHaveLength(1);
+			expect(Array.isArray(result[0])).toBe(true);
+			expect((result[0] as Message[]).length).toBe(4);
 		});
 
 		it('should absorb short assistant bridge when streaming and group trailing tools', () => {

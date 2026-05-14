@@ -14,6 +14,7 @@ import { NotificationOverlay } from './components/chat/NotificationOverlay.tsx';
 import { QueuedMessageBanner } from './components/chat/QueuedMessageBanner';
 import { SessionStatisticsPanel } from './components/chat/SessionStatisticsPanel';
 import { getGroupedItemShouldCollapse } from './components/chat/SimpleTool';
+import type { ToolGroup } from './components/chat/toolGrouping';
 import { SectionCopyButton } from './components/header/CopyActions';
 import { Header } from './components/header/Header';
 import { ChevronDownIcon } from './components/icons';
@@ -72,6 +73,14 @@ HiddenNativeScroller.displayName = 'HiddenNativeScroller';
 const MessageSectionComponent = React.memo<MessageSectionProps>(
 	({ section, isLastSection, isStreaming, sessionId }) => {
 		const messageItemCtx = useMemo(() => buildMessageItemCtx(sessionId), [sessionId]);
+		const preserveStatusDuringLiveTools = useMemo(
+			() =>
+				section.responses.some(
+					responseItem =>
+						Array.isArray(responseItem) && Boolean((responseItem as ToolGroup).isLive),
+				),
+			[section.responses],
+		);
 
 		return (
 			<section className="relative pb-(--message-gap)">
@@ -129,7 +138,12 @@ const MessageSectionComponent = React.memo<MessageSectionProps>(
 						);
 					})}
 					<div className="flex items-center mt-0.5 pr-2 min-h-5">
-						{isLastSection && <GenerationStatus sessionId={sessionId} />}
+						{isLastSection && (
+							<GenerationStatus
+								sessionId={sessionId}
+								preserveDuringLiveTools={preserveStatusDuringLiveTools}
+							/>
+						)}
 						{!isStreaming && !section.isReverted && section.responses.length > 0 && (
 							<div className="flex items-center justify-end flex-1">
 								<SectionCopyButton
