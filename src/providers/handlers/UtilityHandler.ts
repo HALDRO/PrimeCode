@@ -144,29 +144,30 @@ export class UtilityHandler implements WebviewMessageHandler {
 			});
 		} catch (error) {
 			if (timer) clearTimeout(timer);
+			const errorMessage = this.serializeProxyFetchError(error);
 			if ((error as Error).name === 'AbortError') {
 				logger.debug('[UtilityHandler] proxyFetch timed out or aborted', { id, url });
 			} else {
-				logger.error('[UtilityHandler] proxyFetch failed:', { id, url, error });
+				logger.error('[UtilityHandler] proxyFetch failed:', { id, url, error: errorMessage });
 			}
 			this.context.bridge.send({
 				type: 'proxyFetchResult',
 				id,
 				ok: false,
-				error: String(error),
+				error: errorMessage,
 			});
 			if (isEventStreamRequest) {
 				this.context.bridge.send({
 					type: 'proxyFetchStreamError',
 					id,
-					error: String(error),
+					error: errorMessage,
 				});
 			}
 			if (isTrackedOpencodeRequest) {
 				logger.error('[UtilityHandler] proxyFetch tracked request failed', {
 					id,
 					url,
-					error,
+					error: errorMessage,
 				});
 			}
 		} finally {
@@ -182,6 +183,23 @@ export class UtilityHandler implements WebviewMessageHandler {
 			controller.abort();
 			this.activeRequests.delete(id);
 		}
+	}
+
+	/**
+	 * Serialize fetch errors including nested cause chain (ECONNREFUSED, etc.).
+	 * Standard `String(error)` loses the cause, producing empty `{}` in logs.
+	 */
+	private serializeProxyFetchError(error: unknown): string {
+		if (!(error instanceof Error)) return String(error);
+		const parts: string[] = [error.message || error.name];
+		let current: unknown = (error as { cause?: unknown }).cause;
+		while (current instanceof Error) {
+			const code = (current as { code?: string }).code;
+			const detail = code ? `${current.message} [${code}]` : current.message;
+			parts.push(detail);
+			current = (current as { cause?: unknown }).cause;
+		}
+		return parts.join(' → ');
 	}
 
 	// ─── Agent Resource Files ───────────────────────────────────────────

@@ -584,6 +584,53 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	}
 
 	/**
+	 * Attempt to rediscover a live OpenCode server via process scan.
+	 * Does NOT spawn a new server — only reconnects to an existing one.
+	 * Returns true if a live server was found and the client was reinitialized.
+	 */
+	async tryReconnect(workspaceRoot?: string): Promise<boolean> {
+		const directory = workspaceRoot
+			? OpenCodeExecutor.normalizeDriveLetter(workspaceRoot)
+			: this.directory;
+		if (!directory) return false;
+
+		// First check if the current URL is actually alive (transient failure recovery)
+		if (this.serverUrl && (await this.isOpenCodeServer(this.serverUrl))) {
+			return true;
+		}
+
+		// Probe canonical port
+		const canonicalUrl = this.getLocalServerUrl();
+		if (await this.isOpenCodeServer(canonicalUrl)) {
+			this.serverUrl = canonicalUrl;
+			this.directory = directory;
+			this.isServerOwner = false;
+			this.serverStartedAt = null;
+			this.initSdkClient();
+			logger.info('[OpenCode] Reconnected to server at canonical port', { url: canonicalUrl });
+			return true;
+		}
+
+		// Process scan for non-canonical ports
+		const ports = await this.discoverOpenCodePorts();
+		for (const port of ports) {
+			if (port === OpenCodeExecutor.LOCAL_SERVER_PORT) continue;
+			const url = `http://${OpenCodeExecutor.LOCAL_SERVER_HOST}:${port}`;
+			if (await this.isOpenCodeServer(url)) {
+				this.serverUrl = url;
+				this.directory = directory;
+				this.isServerOwner = false;
+				this.serverStartedAt = null;
+				this.initSdkClient();
+				logger.info('[OpenCode] Reconnected to server via process scan', { url, port });
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
 	 * Returns connection details for the status UI.
 	 */
 	getConnectionDetails(): {

@@ -873,6 +873,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 	private static readonly HEALTH_POLL_MS = 15_000;
 	private static readonly HEALTH_RECONNECT_THRESHOLD = 3;
+	/** Prevents concurrent reconnect attempts. */
+	private isReconnecting = false;
 
 	private startHealthMonitor(): void {
 		this.stopHealthMonitor();
@@ -893,26 +895,85 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		const admin = this.cli.getAdminInfo();
 		if (!admin?.baseUrl) return;
 
-		try {
-			const res = await fetch(`${admin.baseUrl}/global/health`, {
-				signal: AbortSignal.timeout(5000),
-			});
-			if (res.ok) {
-				this.healthConsecutiveFailures = 0;
-				return;
-			}
-		} catch {
-			// Network error or timeout
+		const healthy = await this.probeHealth(admin.baseUrl);
+		if (healthy) {
+			this.healthConsecutiveFailures = 0;
+			return;
 		}
 
 		this.healthConsecutiveFailures++;
+		logger.warn('[ChatProvider] Server health check failing', {
+			failures: this.healthConsecutiveFailures,
+		});
+
 		if (this.healthConsecutiveFailures >= ChatProvider.HEALTH_RECONNECT_THRESHOLD) {
-			logger.warn('[ChatProvider] Server health check failing', {
-				failures: this.healthConsecutiveFailures,
-			});
-			// Do NOT auto-reconnect: killing the SSE stream mid-conversation is destructive.
-			// The backend status bridge has its own reconnect logic with exponential backoff.
-			// Health monitor only tracks status for diagnostics.
+			await this.attemptServerRediscovery();
+		}
+	}
+
+	/**
+	 * Health probe with retry, modeled after official OpenCode's server-health.ts.
+	 * Retries up to 2 times with 100ms delay for transient network errors.
+	 */
+	private async probeHealth(baseUrl: string, retries = 2, delayMs = 100): Promise<boolean> {
+		for (let attempt = 0; attempt <= retries; attempt++) {
+			try {
+				const res = await fetch(`${baseUrl}/global/health`, {
+					signal: AbortSignal.timeout(3000),
+				});
+				if (res.ok) return true;
+			} catch (error) {
+				// Only retry on transient network errors (not timeouts or aborts)
+				const isRetryable =
+					error instanceof TypeError ||
+					(error instanceof Error && /network|fetch|econnreset|econnrefused/i.test(error.message));
+				if (!isRetryable || attempt >= retries) return false;
+				await new Promise(resolve => setTimeout(resolve, delayMs * (attempt + 1)));
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Attempt to rediscover a live OpenCode server after health failures.
+	 * Uses process scan to find servers on non-canonical ports.
+	 * Does NOT spawn a new server to avoid duplicates.
+	 */
+	private async attemptServerRediscovery(): Promise<void> {
+		if (this.isReconnecting) return;
+		this.isReconnecting = true;
+
+		try {
+			logger.info('[ChatProvider] Attempting server rediscovery...');
+			const reconnected = await this.cli.tryReconnect();
+
+			if (reconnected) {
+				logger.info('[ChatProvider] Server rediscovered, reinitializing connections');
+				this.healthConsecutiveFailures = 0;
+				this.stopBackendStatusBridge();
+				this.startBackendStatusBridge();
+				await this.waitForSseBridgeConnected(5000);
+				this.sendServerInfo(true);
+				this.hasSynced = false;
+				await this.syncAllOrDefer('health-reconnect');
+			} else {
+				logger.warn('[ChatProvider] Server rediscovery failed, no live server found');
+				this.bridge.showNotification({
+					notification: {
+						id: `server_lost-${Date.now()}`,
+						type: 'system_notice',
+						content:
+							'OpenCode server is unreachable. Use the Reload button or restart OpenCode manually.',
+						timestamp: new Date().toISOString(),
+					},
+				});
+				// Stop polling to avoid spamming logs — user must reload manually
+				this.stopHealthMonitor();
+			}
+		} catch (error) {
+			logger.error('[ChatProvider] Server rediscovery error:', error);
+		} finally {
+			this.isReconnecting = false;
 		}
 	}
 
@@ -922,17 +983,31 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		signal: AbortSignal,
 	): Promise<void> {
 		const client = createOpencodeClient({ baseUrl, directory });
-		const BASE_RETRY_MS = 250;
+		const RECONNECT_DELAY_MS = 250;
 		const MAX_RETRY_MS = 30_000;
+		const HEARTBEAT_TIMEOUT_MS = 15_000;
 		let consecutiveFailures = 0;
 
 		while (!signal.aborted) {
 			// Child controller per iteration prevents abort-listener accumulation on the parent signal.
-			// SDK internally calls signal.addEventListener('abort', ...) without cleanup on stream end,
-			// so reusing the same signal across iterations leaks listeners indefinitely.
 			const iterationController = new AbortController();
 			const onParentAbort = () => iterationController.abort();
 			signal.addEventListener('abort', onParentAbort);
+
+			// Heartbeat: abort stream if no events received within timeout
+			let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
+			const resetHeartbeat = () => {
+				if (heartbeatTimer) clearTimeout(heartbeatTimer);
+				heartbeatTimer = setTimeout(() => {
+					iterationController.abort();
+				}, HEARTBEAT_TIMEOUT_MS);
+			};
+			const clearHeartbeat = () => {
+				if (heartbeatTimer) {
+					clearTimeout(heartbeatTimer);
+					heartbeatTimer = null;
+				}
+			};
 
 			try {
 				logger.info('[ChatProvider] SSE bridge: subscribing to global events...', { baseUrl });
@@ -944,10 +1019,12 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				});
 				this.backendStatusConnected = true;
 				this.resolveBackendStatusWaiters();
+				resetHeartbeat();
 
 				for await (const event of subscription.stream as AsyncGenerator<unknown>) {
 					if (signal.aborted) break;
 					consecutiveFailures = 0;
+					resetHeartbeat();
 					this.forwardBackendStatusEvent(event);
 				}
 			} catch (error) {
@@ -960,11 +1037,16 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				});
 			} finally {
 				signal.removeEventListener('abort', onParentAbort);
+				clearHeartbeat();
 				iterationController.abort();
 			}
 
 			if (signal.aborted) break;
-			const backoff = Math.min(BASE_RETRY_MS * 2 ** (consecutiveFailures - 1), MAX_RETRY_MS);
+			// Fast reconnect on first failure (250ms), exponential backoff after
+			const backoff =
+				consecutiveFailures <= 1
+					? RECONNECT_DELAY_MS
+					: Math.min(RECONNECT_DELAY_MS * 2 ** (consecutiveFailures - 1), MAX_RETRY_MS);
 			await new Promise(resolve => setTimeout(resolve, backoff));
 		}
 	}
