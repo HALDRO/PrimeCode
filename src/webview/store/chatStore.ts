@@ -492,7 +492,7 @@ function isProcessingStatus(status: SessionStatus | undefined): boolean {
 // Stable reference to avoid creating new objects in selectors (prevents infinite re-renders).
 const BUSY_STATUS: SessionStatus = { type: 'busy' };
 
-function collectSessionSubtreeIds(
+export function collectSessionSubtreeIds(
 	state: Pick<SessionStore, 'childSessionIdsByParentId'>,
 	sessionId: string,
 ): string[] {

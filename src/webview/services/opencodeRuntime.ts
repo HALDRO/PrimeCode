@@ -14,6 +14,7 @@ import { produce } from 'immer';
 import { type ConversationIndexEntry, generateId, parseModelId } from '../../common';
 import { IMPROVE_PROMPT_DEFAULT_TEMPLATE } from '../../common/promptImprover';
 import {
+	collectSessionSubtreeIds,
 	getProcessingSessionIds,
 	getSessionRuntimeStatus,
 	type SessionStore,
@@ -203,7 +204,9 @@ async function flushQueuedMessages(sessionId: string): Promise<void> {
 function scheduleBusyStatusRecheck(sessionIds: string[], delayMs: number): void {
 	for (const sessionId of sessionIds) {
 		const status = getSessionRuntimeStatus(useChatStore.getState(), sessionId);
-		if (status?.type !== 'busy' && status?.type !== 'retry') continue;
+		// Skip sessions already confirmed idle — no need to recheck them.
+		// Sessions with busy/retry OR undefined status (not yet confirmed) get rechecked.
+		if (status?.type === 'idle') continue;
 
 		const existing = pendingStatusRechecks.get(sessionId);
 		if (existing !== undefined) {
@@ -668,9 +671,10 @@ export const openCodeRuntime = {
 						state.sessionStatus[targetSessionId] = status;
 						continue;
 					}
-					if (!(targetSessionId in state.sessionStatus)) {
-						state.sessionStatus[targetSessionId] = { type: 'idle' };
-					}
+					// Server omits idle sessions from the status map (they are deleted on transition to idle).
+					// Always reset to idle here — the old guard `if (!(id in state.sessionStatus))` caused
+					// stale "busy" status to persist indefinitely after reconnect or abort.
+					state.sessionStatus[targetSessionId] = { type: 'idle' };
 				}
 				state.permissions[sessionId] = [...(permissionResult?.data ?? [])];
 				state.questions[sessionId] = [...(questionResult?.data ?? [])];
@@ -884,20 +888,25 @@ export const openCodeRuntime = {
 	},
 
 	async abortSession(sessionId: string): Promise<void> {
-		// Always abort the requested session — the server handles child propagation.
+		// Always abort the requested session — the server handles child propagation via task tool abort listeners.
 		// Additionally abort any known processing children for faster cancellation.
-		const processingChildren = getProcessingSessionIds(useChatStore.getState(), sessionId).filter(
+		const state = useChatStore.getState();
+		const processingChildren = getProcessingSessionIds(state, sessionId).filter(
 			id => id !== sessionId,
 		);
-		const sessionIds = [sessionId, ...processingChildren];
+		const abortTargets = [sessionId, ...processingChildren];
 		await Promise.all(
-			sessionIds.map(currentSessionId =>
+			abortTargets.map(currentSessionId =>
 				getClient()
 					.session.abort({ sessionID: currentSessionId, directory: getWorkspaceRoot() })
 					.catch(() => {}),
 			),
 		);
-		scheduleBusyStatusRecheck(sessionIds, 2000);
+		// Schedule status recheck for the ENTIRE subtree — not just currently-busy children.
+		// After reconnect/hydration, children may have stale "busy" status that the server
+		// has already cleared. The recheck will reconcile UI state with the server.
+		const allSubtreeIds = collectSessionSubtreeIds(state, sessionId);
+		scheduleBusyStatusRecheck(allSubtreeIds, 2000);
 	},
 
 	async restoreMessage(sessionId: string, messageId: string): Promise<void> {
