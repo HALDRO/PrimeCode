@@ -1,9 +1,12 @@
 /**
  * @file Format utilities - centralized formatting functions for the webview
  * @description Provides consistent formatting for numbers, tokens, durations, costs,
- * relative time, and tool names across all webview components.
+ * relative time, and tool names across all webview components. Tool labels reuse
+ * the shared registry formatter so known tools preserve canonical casing while
+ * unknown tools get the same fallback normalization everywhere in the UI.
  */
 
+import { getToolDisplayName } from '../../common/toolRegistry';
 import { getPathBaseName } from '../../utils/path';
 
 /**
@@ -88,16 +91,9 @@ export const formatNumber = (num: number): string => {
 export const formatTokens = (tokens: number): string => formatNumber(tokens);
 
 /**
- * Format tool name for display — always capitalizes first letter of each word
+ * Format tool name for display using the shared tool registry rules.
  */
-export const formatToolName = (name: string): string => {
-	const spaced = name.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2');
-	// Capitalize first letter of each word
-	return spaced
-		.split(' ')
-		.map(w => w.charAt(0).toUpperCase() + w.slice(1))
-		.join(' ');
-};
+export const formatToolName = (name: string): string => getToolDisplayName(name);
 
 /**
  * Format cost in dollars

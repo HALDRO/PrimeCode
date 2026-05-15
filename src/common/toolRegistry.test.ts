@@ -45,8 +45,13 @@ describe('getToolDisplayName fallback normalization', () => {
 		expect(getToolDisplayName('CustomToolName')).toBe('Custom Tool Name');
 	});
 
+	it('normalizes mixed underscore and casing for unknown tool names', () => {
+		expect(getToolDisplayName('Lsp_diagnostics')).toBe('Lsp Diagnostics');
+	});
+
 	it('preserves canonical registry names for known tools', () => {
 		expect(getToolDisplayName('bash')).toBe('Bash');
 		expect(getToolDisplayName('apply_patch')).toBe('Apply Patch');
+		expect(getToolDisplayName('lsp')).toBe('LSP');
 	});
 });
