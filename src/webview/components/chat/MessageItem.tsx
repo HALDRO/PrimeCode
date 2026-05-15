@@ -2,7 +2,8 @@
  * @file MessageItem - unified renderer for message rows
  * @description Provides a single component responsible for rendering one chat “item” in the UI.
  * Supports grouped tool messages, tool cards, thinking blocks, access requests, subtasks (with nested
- * rendering), and notification messages. This keeps the `App` message list implementation small and
+ * rendering), and notification messages. Generation status is rendered in the footer layer, not inline,
+ * which keeps the `App` message list implementation small and
  * centralizes per-message branching in one place.
  */
 
@@ -44,7 +45,6 @@ import {
 } from '../icons';
 import { ScrollThumb } from '../ui/ScrollContainer';
 import { AccessGate } from './AccessGate';
-import { SubtaskGenerationStatus } from './GenerationStatus';
 import { SubtaskTimer } from './LiveStats';
 import {
 	getGroupedItemShouldCollapse,
@@ -277,7 +277,6 @@ const TaskCardItem = React.memo<{
 	const shouldRenderTranscript = expandState === 'expanded' || isRunning;
 	const groupedChildren = useGroupedTranscript(rawChildItems, mcpServerNames, isRunning);
 	const toolSummary = useMemo(() => summarizePreviewTools(groupedChildren), [groupedChildren]);
-	const retryInfo = message.retryInfo;
 
 	const headerTitle = useMemo(
 		() =>
@@ -483,13 +482,6 @@ const TaskCardItem = React.memo<{
 									</>
 								) : (
 									childTranscriptBlock
-								)}
-								{isRunning && (
-									<SubtaskGenerationStatus
-										isRunning={isRunning}
-										status={effectiveStatus}
-										retryMessage={retryInfo?.message}
-									/>
 								)}
 								{shouldRenderTranscript && pendingAccess && (
 									<AccessGate

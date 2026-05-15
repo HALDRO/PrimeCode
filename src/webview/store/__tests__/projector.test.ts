@@ -323,6 +323,96 @@ describe('deriveSessionView', () => {
 		const view = deriveSessionView(store, 'ses1');
 		expect(view.toolActivity).toBeNull();
 		expect(view.isLastAssistantStreaming).toBe(true);
+		expect(view.generationStatus.phase).toBe('responding');
+	});
+
+	it('switches generation status from tool to thinking when reasoning starts', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const asst = makeAssistantMessage('a1', 'ses1', 'u1');
+		const completedRead = {
+			id: 'tool-read-completed',
+			messageID: 'a1',
+			sessionID: 'ses1',
+			type: 'tool',
+			tool: 'read',
+			callID: 'call-read-completed',
+			state: { status: 'completed', input: {}, output: 'done' },
+			metadata: {},
+		} as unknown as Part;
+		const reasoning = {
+			id: 'thinking-live',
+			messageID: 'a1',
+			sessionID: 'ses1',
+			type: 'reasoning',
+			text: 'thinking...',
+			time: { start: Date.now() },
+		} as unknown as Part;
+		const store = makeMinimalStore({
+			messages: { ses1: [user, asst] },
+			parts: { a1: [completedRead, reasoning] },
+			sessionStatus: { ses1: { type: 'busy' } },
+		});
+
+		const view = deriveSessionView(store, 'ses1');
+		expect(view.toolActivity).toBeNull();
+		expect(view.generationStatus.phase).toBe('thinking');
+		expect(view.generationStatus.label).toBe('Thinking…');
+	});
+
+	it('falls back to working after tool completion before any reasoning or text appears', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const asst = makeAssistantMessage('a1', 'ses1', 'u1');
+		const completedBash = {
+			id: 'tool-bash-completed',
+			messageID: 'a1',
+			sessionID: 'ses1',
+			type: 'tool',
+			tool: 'bash',
+			callID: 'call-bash-completed',
+			state: { status: 'completed', input: {}, output: 'done' },
+			metadata: {},
+		} as unknown as Part;
+		const store = makeMinimalStore({
+			messages: { ses1: [user, asst] },
+			parts: { a1: [completedBash] },
+			sessionStatus: { ses1: { type: 'busy' } },
+		});
+
+		const view = deriveSessionView(store, 'ses1');
+		expect(view.toolActivity).toBeNull();
+		expect(view.generationStatus.phase).toBe('working');
+		expect(view.generationStatus.label).toBe('Working…');
+	});
+
+	it('keeps retry as the strongest generation status', () => {
+		const user = makeUserMessage('u1', 'ses1');
+		const asst = makeAssistantMessage('a1', 'ses1', 'u1');
+		const runningBash = {
+			id: 'tool-bash-retry',
+			messageID: 'a1',
+			sessionID: 'ses1',
+			type: 'tool',
+			tool: 'bash',
+			callID: 'call-bash-retry',
+			state: { status: 'running', input: {}, output: '' },
+			metadata: {},
+		} as unknown as Part;
+		const store = makeMinimalStore({
+			messages: { ses1: [user, asst] },
+			parts: { a1: [runningBash] },
+			sessionStatus: {
+				ses1: { type: 'retry', attempt: 1, message: 'Rate limited', next: Date.now() + 1000 },
+			},
+		});
+
+		const view = deriveSessionView(store, 'ses1');
+		expect(view.toolActivity).toEqual(
+			expect.objectContaining({
+				toolName: 'bash',
+			}),
+		);
+		expect(view.generationStatus.phase).toBe('retry');
+		expect(view.generationStatus.label).toBe('Retrying…');
 	});
 
 	it('projects reasoning part as RenderThinkingMessage', () => {

@@ -15,7 +15,6 @@ import { NotificationOverlay } from './components/chat/NotificationOverlay.tsx';
 import { QueuedMessageBanner } from './components/chat/QueuedMessageBanner';
 import { SessionStatisticsPanel } from './components/chat/SessionStatisticsPanel';
 import { getGroupedItemShouldCollapse } from './components/chat/SimpleTool';
-import type { ToolGroup } from './components/chat/toolGrouping';
 import { SectionCopyButton } from './components/header/CopyActions';
 import { Header } from './components/header/Header';
 import { ChevronDownIcon } from './components/icons';
@@ -39,9 +38,8 @@ import { useUIStore } from './store/uiStore';
 import { vscode } from './utils/vscode';
 
 /**
- * Static context object for MessageItem — totalSections is no longer needed
- * since GenerationStatus rendering is controlled via a dedicated prop.
- * Using a stable reference prevents memo invalidation.
+ * Static context object for MessageItem. Using a stable reference prevents
+ * memo invalidation during streaming updates.
  */
 const buildMessageItemCtx = (sessionId: string) => ({ totalSections: 0, sessionId });
 
@@ -72,16 +70,8 @@ const HiddenNativeScroller = React.forwardRef<
 HiddenNativeScroller.displayName = 'HiddenNativeScroller';
 
 const MessageSectionComponent = React.memo<MessageSectionProps>(
-	({ section, isLastSection, isStreaming, sessionId }) => {
+	({ section, isStreaming, sessionId }) => {
 		const messageItemCtx = useMemo(() => buildMessageItemCtx(sessionId), [sessionId]);
-		const preserveStatusDuringLiveTools = useMemo(
-			() =>
-				section.responses.some(
-					responseItem =>
-						Array.isArray(responseItem) && Boolean((responseItem as ToolGroup).isLive),
-				),
-			[section.responses],
-		);
 
 		return (
 			<section className="relative pb-(--message-gap)">
@@ -139,12 +129,6 @@ const MessageSectionComponent = React.memo<MessageSectionProps>(
 						);
 					})}
 					<div className="flex items-center mt-0.5 pr-2 min-h-5">
-						{isLastSection && (
-							<GenerationStatus
-								sessionId={sessionId}
-								preserveDuringLiveTools={preserveStatusDuringLiveTools}
-							/>
-						)}
 						{!isStreaming && !section.isReverted && section.responses.length > 0 && (
 							<div className="flex items-center justify-end flex-1">
 								<SectionCopyButton
@@ -237,9 +221,24 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 	const virtuosoComponents = useMemo(
 		() => ({
 			Scroller: HiddenNativeScroller,
-			Footer: () => <div style={{ height: 40 }} />,
+			Footer: () => (
+				<div className="h-[72px] pointer-events-none overflow-visible box-border relative">
+					<div className="absolute -top-[10px] left-0 right-0 h-8 px-(--content-padding-x) overflow-hidden box-border z-10">
+						<div
+							className="flex h-full items-start"
+							style={{
+								background:
+									'linear-gradient(to bottom, var(--surface-base) 0%, color-mix(in srgb, var(--surface-base) 96%, transparent) 78%, transparent 100%)',
+							}}
+						>
+							<GenerationStatus sessionId={activeSessionId} className="text-left" />
+						</div>
+					</div>
+					<div className="h-10" />
+				</div>
+			),
 		}),
-		[],
+		[activeSessionId],
 	);
 
 	// Track whether the user has manually scrolled up during this processing run.
@@ -312,25 +311,21 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 
 	const handleFollowOutput = useCallback(
 		(_isAtBottom: boolean) => {
-			if (isProcessing && !userScrolledUpRef.current) return 'smooth' as const;
+			if (isProcessing && !userScrolledUpRef.current) return 'auto' as const;
 			return false as const;
 		},
 		[isProcessing],
 	);
 
-	// MutationObserver fallback: followOutput only fires when Virtuoso detects item
-	// count/size changes. When content streams inside fixed-height containers (ToolCard,
-	// SubtaskItem, SimpleToolGroup with maxHeight + overflowY), the outer Virtuoso item
-	// height doesn't change, so followOutput never fires and auto-scroll stops.
-	// NOTE: ResizeObserver on a scroll container does NOT fire when inner content grows
-	// (only when the container itself resizes). MutationObserver with childList+subtree
-	// (without characterData) catches structural DOM changes while rAF dedup prevents
-	// layout thrashing from per-token text updates.
+	// MutationObserver fallback: keep exactly one pending rAF-based bottom settle.
+	// We only react to structural DOM changes and only when already near bottom,
+	// which avoids repeated smooth-scroll passes during streaming token updates.
 	useEffect(() => {
 		const el = scrollerRef.current;
 		if (!isProcessing || !el) return;
 
 		let rafId: number | null = null;
+		let lastKnownScrollHeight = 0;
 		const nudgeScroll = () => {
 			if (userScrolledUpRef.current) return;
 			if (rafId !== null) return; // already scheduled
@@ -338,19 +333,19 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 				rafId = null;
 				const scroller = scrollerRef.current;
 				if (!scroller || userScrolledUpRef.current) return;
-				// Only nudge if we're close to the bottom (within 150px) to avoid
-				// fighting with Virtuoso's own scroll management
 				const distanceFromBottom =
 					scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-				if (distanceFromBottom < 150) {
-					scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
+				const nextScrollHeight = scroller.scrollHeight;
+				const grew = nextScrollHeight !== lastKnownScrollHeight;
+				lastKnownScrollHeight = nextScrollHeight;
+				if (grew && distanceFromBottom < 96) {
+					scroller.scrollTo({ top: nextScrollHeight, behavior: 'auto' });
 				}
 			});
 		};
 
 		const observer = new MutationObserver(nudgeScroll);
-		// childList+subtree catches new elements (messages, tool cards) without
-		// the per-token overhead of characterData. rAF dedup above prevents thrashing.
+		lastKnownScrollHeight = el.scrollHeight;
 		observer.observe(el, { childList: true, subtree: true });
 
 		return () => {

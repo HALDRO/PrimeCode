@@ -41,21 +41,6 @@ const formatStatus = (status: string): string => {
 	return withoutTrailingDots.charAt(0).toUpperCase() + withoutTrailingDots.slice(1);
 };
 
-/**
- * Derive the best display text from tool activity and session status.
- * Tool activity takes priority when available (more specific).
- */
-function deriveStatusText(
-	toolActivity: { toolName: string; label: string; filePath?: string } | null,
-	status: string,
-): string {
-	if (toolActivity?.label) {
-		return formatStatus(toolActivity.label);
-	}
-	const formatted = formatStatus(status);
-	return formatted;
-}
-
 const statusTextBaseStyle = {
 	color: 'var(--vscode-descriptionForeground)',
 	filter: 'saturate(0.92)',
@@ -251,52 +236,13 @@ SubtaskGenerationStatus.displayName = 'SubtaskGenerationStatus';
 
 export const GenerationStatus: React.FC<{
 	sessionId?: string;
-	preserveDuringLiveTools?: boolean;
-}> = ({ sessionId, preserveDuringLiveTools = false }) => {
-	const { isProcessing, status, streamingToolId, isTextStreaming, toolActivity } =
-		useGenerationStatusSnapshot(sessionId);
+	className?: string;
+}> = ({ sessionId, className }) => {
+	const { isProcessing, phase, status } = useGenerationStatusSnapshot(sessionId);
 	const [visible, setVisible] = useState(false);
 	const showTimestampRef = useRef(0);
-	const wasProcessingRef = useRef(false);
-	const processingEpochRef = useRef(0);
 
-	// ── Stabilize tool activity via useEffect (NEVER mutate refs during render) ──
-	const lastToolActivityRef = useRef<typeof toolActivity>(null);
-	const lastToolActivityEpochRef = useRef(0);
-	useEffect(() => {
-		if (isProcessing && !wasProcessingRef.current) {
-			processingEpochRef.current += 1;
-			lastToolActivityRef.current = null;
-			lastToolActivityEpochRef.current = processingEpochRef.current;
-		}
-		if (!isProcessing && wasProcessingRef.current) {
-			lastToolActivityRef.current = null;
-		}
-		wasProcessingRef.current = isProcessing;
-	}, [isProcessing]);
-
-	useEffect(() => {
-		if (toolActivity) {
-			lastToolActivityRef.current = toolActivity;
-			lastToolActivityEpochRef.current = processingEpochRef.current;
-		} else if (isTextStreaming && !streamingToolId) {
-			lastToolActivityRef.current = null;
-		}
-	}, [toolActivity, isTextStreaming, streamingToolId]);
-
-	// Derive stable tool activity — use current or last known during processing
-	const stableToolActivity = useMemo(() => {
-		if (!isProcessing) return null;
-		if (toolActivity) return toolActivity;
-		if (lastToolActivityEpochRef.current !== processingEpochRef.current) return null;
-		return lastToolActivityRef.current;
-	}, [isProcessing, toolActivity]);
-
-	// Hide during pure text streaming unless the trailing grouped-tool block is still live.
-	// When a live tool group remains active, keep the generation status visible so the
-	// UI does not appear to "finish" while grouped tool work is still visually in progress.
-	const shouldShow =
-		isProcessing && (!isTextStreaming || !!streamingToolId || preserveDuringLiveTools);
+	const shouldShow = isProcessing && phase !== 'idle';
 
 	// ── Visibility with grace period ─────────────────────────────────────────
 	useEffect(() => {
@@ -315,10 +261,7 @@ export const GenerationStatus: React.FC<{
 	}, [shouldShow]);
 
 	// ── Aggregated status text with minimum display duration ──────────────────
-	const rawStatusText = useMemo(
-		() => deriveStatusText(stableToolActivity, status),
-		[stableToolActivity, status],
-	);
+	const rawStatusText = useMemo(() => formatStatus(status), [status]);
 	const {
 		text: displayStatus,
 		isFadingIn,
@@ -326,14 +269,15 @@ export const GenerationStatus: React.FC<{
 	} = useAggregatedStatus(rawStatusText, shouldShow);
 
 	const isActive = visible && shouldShow;
-	const showStatus = displayStatus || rawStatusText || formatStatus(status);
+	const showStatus = displayStatus || rawStatusText || 'Working';
 
 	return (
 		<div
 			className={cn(
-				'flex items-center justify-start gap-2 mt-[16px]',
-				'transition-all duration-300 ease-out',
-				isActive ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-1 pointer-events-none',
+				'flex h-5 items-center justify-start gap-2 overflow-hidden whitespace-nowrap',
+				'transition-opacity duration-200 ease-out',
+				isActive ? 'opacity-100' : 'opacity-0 pointer-events-none',
+				className,
 			)}
 			style={{ visibility: isActive ? 'visible' : 'hidden' }}
 			aria-hidden={!isActive}

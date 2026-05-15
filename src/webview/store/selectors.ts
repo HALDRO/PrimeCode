@@ -191,6 +191,7 @@ const EMPTY_NODE_IDS: string[] = [];
 const EMPTY_SECTIONS: MessageSection[] = [];
 const EMPTY_GENERATION_STATUS_SNAPSHOT = {
 	isProcessing: false,
+	phase: 'idle',
 	status: 'Ready',
 	streamingToolId: null,
 	isTextStreaming: false,
@@ -407,20 +408,15 @@ export const useGenerationStatusSnapshot = (sessionId?: string) =>
 			const sid = sessionId ?? state.activeSessionId;
 			if (!sid) return EMPTY_GENERATION_STATUS_SNAPSHOT;
 
-			const sessionRuntimeStatus = getSessionRuntimeStatus(state, sid);
 			const derivedView = deriveSessionView(state, sid);
 			return {
 				isProcessing: isSessionProcessing(state, sid),
-				status:
-					sessionRuntimeStatus?.type === 'busy'
-						? 'Working...'
-						: sessionRuntimeStatus?.type === 'retry'
-							? 'Retrying…'
-							: 'Ready',
-				streamingToolId: derivedView.streamingToolId ?? null,
-				isTextStreaming:
-					sessionRuntimeStatus?.type === 'busy' && (derivedView.isLastAssistantStreaming ?? false),
-				toolActivity: derivedView.toolActivity ?? null,
+				phase: derivedView.generationStatus.phase,
+				status: derivedView.generationStatus.label,
+				streamingToolId: derivedView.generationStatus.toolCallId,
+				isTextStreaming: derivedView.generationStatus.phase === 'responding',
+				toolActivity:
+					derivedView.generationStatus.phase === 'tool' ? (derivedView.toolActivity ?? null) : null,
 			};
 		}),
 	);

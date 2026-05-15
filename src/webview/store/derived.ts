@@ -64,6 +64,18 @@ export interface SessionDerivedView {
 	toolActivity: { toolName: string; label: string; toolUseId: string } | null;
 	streamingToolId: string | null;
 	isLastAssistantStreaming: boolean;
+	generationStatus: GenerationStatusSnapshot;
+}
+
+export type GenerationPhase = 'idle' | 'retry' | 'tool' | 'thinking' | 'responding' | 'working';
+
+export interface GenerationStatusSnapshot {
+	phase: GenerationPhase;
+	label: string;
+	isVisible: boolean;
+	stableKey: string;
+	toolCallId: string | null;
+	toolName: string | null;
 }
 
 interface SessionDerivedCacheEntry {
@@ -89,6 +101,14 @@ const EMPTY_VIEW: SessionDerivedView = {
 	toolActivity: null,
 	streamingToolId: null,
 	isLastAssistantStreaming: false,
+	generationStatus: {
+		phase: 'idle',
+		label: 'Ready',
+		isVisible: false,
+		stableKey: 'idle',
+		toolCallId: null,
+		toolName: null,
+	},
 };
 const sessionViewCache = new Map<string, SessionDerivedCacheEntry>();
 const OMO_INTERNAL_INITIATOR_MARKER = '<!-- OMO_INTERNAL_INITIATOR -->';
@@ -364,6 +384,87 @@ function getLastAssistantStreaming(nodes: RenderNode[]): boolean {
 		if (node.kind === 'user') return false;
 	}
 	return false;
+}
+
+function getLastStreamingThinking(nodes: RenderNode[]): RenderThinkingMessage | null {
+	for (let i = nodes.length - 1; i >= 0; i--) {
+		const node = nodes[i];
+		if (node.kind === 'thinking' && node.isStreaming) return node;
+		if (node.kind === 'assistant' || node.kind === 'tool_use') return null;
+	}
+	return null;
+}
+
+function buildGenerationStatusSnapshot(input: {
+	sessionRuntimeStatus: ReturnType<typeof getSessionRuntimeStatus>;
+	isProcessing: boolean;
+	toolActivity: SessionDerivedView['toolActivity'];
+	isLastAssistantStreaming: boolean;
+	lastStreamingThinking: RenderThinkingMessage | null;
+}): GenerationStatusSnapshot {
+	if (!input.isProcessing) {
+		return {
+			phase: 'idle',
+			label: 'Ready',
+			isVisible: false,
+			stableKey: 'idle',
+			toolCallId: null,
+			toolName: null,
+		};
+	}
+
+	if (input.sessionRuntimeStatus?.type === 'retry') {
+		return {
+			phase: 'retry',
+			label: 'Retrying…',
+			isVisible: true,
+			stableKey: 'retry',
+			toolCallId: null,
+			toolName: null,
+		};
+	}
+
+	if (input.toolActivity) {
+		return {
+			phase: 'tool',
+			label: input.toolActivity.label,
+			isVisible: true,
+			stableKey: `tool:${input.toolActivity.toolUseId}:${input.toolActivity.label}`,
+			toolCallId: input.toolActivity.toolUseId,
+			toolName: input.toolActivity.toolName,
+		};
+	}
+
+	if (input.lastStreamingThinking) {
+		return {
+			phase: 'thinking',
+			label: 'Thinking…',
+			isVisible: true,
+			stableKey: `thinking:${input.lastStreamingThinking.partId}`,
+			toolCallId: null,
+			toolName: null,
+		};
+	}
+
+	if (input.isLastAssistantStreaming) {
+		return {
+			phase: 'responding',
+			label: 'Writing…',
+			isVisible: true,
+			stableKey: 'responding',
+			toolCallId: null,
+			toolName: null,
+		};
+	}
+
+	return {
+		phase: 'working',
+		label: 'Working…',
+		isVisible: true,
+		stableKey: 'working',
+		toolCallId: null,
+		toolName: null,
+	};
 }
 
 function getTaskResultOutput(part: ToolPart): string | undefined {
@@ -1268,6 +1369,16 @@ export function deriveSessionView(
 		isProcessing,
 	);
 	const toolActivity = getRunningToolMeta(messages, state.parts);
+	const isLastAssistantStreaming = getLastAssistantStreaming(nodes);
+	const lastStreamingThinking = getLastStreamingThinking(nodes);
+	const sessionRuntimeStatus = getSessionRuntimeStatus(state, sessionId);
+	const generationStatus = buildGenerationStatusSnapshot({
+		sessionRuntimeStatus,
+		isProcessing,
+		toolActivity,
+		isLastAssistantStreaming,
+		lastStreamingThinking,
+	});
 
 	const view = {
 		nodeIds,
@@ -1277,7 +1388,8 @@ export function deriveSessionView(
 		activeModelId: getLatestAssistantModelId(messages),
 		toolActivity,
 		streamingToolId: toolActivity?.toolUseId ?? null,
-		isLastAssistantStreaming: getLastAssistantStreaming(nodes),
+		isLastAssistantStreaming,
+		generationStatus,
 	};
 	sessionViewCache.set(cacheKey, {
 		messagesRef: messages,
