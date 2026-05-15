@@ -272,7 +272,7 @@ const PermissionsSettings: React.FC = () => {
 						<Button
 							size="sm"
 							variant="secondary"
-							onClick={() => postMessage({ type: 'openFile', filePath: 'opencode.json' })}
+							onClick={() => postMessage({ type: 'openOpenCodeConfig', scope: 'project' })}
 						>
 							{permissions.openCodeConfig ? 'Open' : 'Create'}
 						</Button>

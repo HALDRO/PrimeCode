@@ -202,8 +202,17 @@ export class OpenCodeClientService {
 		}
 	}
 
+	private async readMergedConfig(workspaceRoot: string): Promise<OpenCodeJsonConfig> {
+		this.setWorkspaceRoot(workspaceRoot);
+		const [globalEntry, projectConfig] = await Promise.all([
+			this.projectConfig.readGlobalConfigForInspection(),
+			this.readProjectConfig(workspaceRoot),
+		]);
+		return mergeOpenCodeConfigs(globalEntry.config as OpenCodeJsonConfig, projectConfig);
+	}
+
 	async getProjectModelDefaults(workspaceRoot: string): Promise<ProjectModelDefaults> {
-		const config = await this.readProjectConfig(workspaceRoot);
+		const config = await this.readMergedConfig(workspaceRoot);
 		return {
 			model: typeof config.model === 'string' ? config.model : undefined,
 		};
@@ -389,7 +398,7 @@ export class OpenCodeClientService {
 		workspaceRoot: string,
 		providerId: string,
 	): Promise<ProjectProxyProviderConfig | undefined> {
-		const config = await this.readProjectConfig(workspaceRoot);
+		const config = await this.readMergedConfig(workspaceRoot);
 		const provider = config.provider?.[providerId];
 		if (!provider || !isCustomEndpointNpm(provider.npm)) return undefined;
 
@@ -422,11 +431,11 @@ export class OpenCodeClientService {
 	}
 
 	/**
-	 * Read ALL custom endpoint proxy providers from opencode.json.
+	 * Read ALL custom endpoint proxy providers from merged OpenCode config.
 	 * Used for reverse-syncing config file providers into the settings UI.
 	 */
 	async getAllProjectProxyProviders(workspaceRoot: string): Promise<ProjectProxyProviderConfig[]> {
-		const config = await this.readProjectConfig(workspaceRoot);
+		const config = await this.readMergedConfig(workspaceRoot);
 		if (!config.provider) return [];
 
 		const results: ProjectProxyProviderConfig[] = [];
@@ -652,4 +661,19 @@ export class OpenCodeClientService {
 			})
 			.map(([id]) => id);
 	}
+}
+
+function mergeOpenCodeConfigs(
+	globalConfig: OpenCodeJsonConfig,
+	projectConfig: OpenCodeJsonConfig,
+): OpenCodeJsonConfig {
+	const mergedProvider = {
+		...(globalConfig.provider ?? {}),
+		...(projectConfig.provider ?? {}),
+	};
+	return {
+		...globalConfig,
+		...projectConfig,
+		...(Object.keys(mergedProvider).length > 0 ? { provider: mergedProvider } : {}),
+	};
 }

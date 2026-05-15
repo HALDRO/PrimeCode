@@ -90,7 +90,7 @@ export type MCPServersMap = Static<typeof MCPServersMapSchema>;
 // =============================================================================
 
 export const InstalledMcpServerMetadataSchema = Type.Object({
-	source: Type.Literal('custom'),
+	source: Type.Union([Type.Literal('custom'), Type.Literal('runtime')]),
 	displayName: Type.Optional(Type.String()),
 	description: Type.Optional(Type.String()),
 	category: Type.Optional(Type.String()),

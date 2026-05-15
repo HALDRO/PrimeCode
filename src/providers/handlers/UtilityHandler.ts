@@ -26,6 +26,9 @@ export class UtilityHandler implements WebviewMessageHandler {
 
 	public async handleMessage(msg: WebviewCommand): Promise<void> {
 		switch (msg.type) {
+			case 'openOpenCodeConfig':
+				logger.info('[UtilityHandler] User opened OpenCode config', { scope: msg.scope });
+				return this.handleOpenOpenCodeConfig(msg);
 			case 'proxyFetch':
 				return this.handleProxyFetch(msg);
 			case 'proxyFetchAbort':
@@ -213,6 +216,17 @@ export class UtilityHandler implements WebviewMessageHandler {
 
 		const fileUri = this.resolveResourceUri(filePath);
 		await vscode.window.showTextDocument(fileUri);
+	}
+
+	private async handleOpenOpenCodeConfig(
+		msg: Extract<WebviewCommand, { type: 'openOpenCodeConfig' }>,
+	): Promise<void> {
+		const configPath =
+			msg.scope === 'global'
+				? await this.context.services.openCodeConfig.ensureGlobalConfig()
+				: await this.context.services.openCodeConfig.ensureProjectConfig();
+		if (!configPath) return;
+		await vscode.window.showTextDocument(vscode.Uri.file(configPath));
 	}
 
 	private resolveResourceUri(resourcePath: string): vscode.Uri {

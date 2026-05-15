@@ -38,10 +38,31 @@ export class OpenCodeConfigService {
 		return configDir ? path.join(configDir, PATHS.OPENCODE_CONFIG) : undefined;
 	}
 
+	public async resolveGlobalConfigPath(): Promise<string | undefined> {
+		const configDir = this.getGlobalConfigDir();
+		if (!configDir) return undefined;
+		const jsonPath = path.join(configDir, PATHS.OPENCODE_CONFIG);
+		const jsoncPath = path.join(configDir, `${PATHS.OPENCODE_CONFIG}c`);
+		if (await fileExists(vscode.Uri.file(jsonPath))) return jsonPath;
+		if (await fileExists(vscode.Uri.file(jsoncPath))) return jsoncPath;
+		return jsonPath;
+	}
+
 	public async ensureProjectConfig(): Promise<string | undefined> {
 		const configPath = await this.resolveProjectConfigPath();
 		if (!configPath) return undefined;
+		if (await fileExists(vscode.Uri.file(configPath))) return configPath;
 		await this.patchProjectConfig(config => config);
+		return configPath;
+	}
+
+	public async ensureGlobalConfig(): Promise<string | undefined> {
+		const configPath = await this.resolveGlobalConfigPath();
+		if (!configPath) return undefined;
+		const uri = vscode.Uri.file(configPath);
+		if (await fileExists(uri)) return configPath;
+		await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(configPath)));
+		await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode('{}\n'));
 		return configPath;
 	}
 

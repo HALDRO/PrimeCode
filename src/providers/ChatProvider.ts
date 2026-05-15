@@ -456,6 +456,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		r.register(
 			this.utilityHandler,
 			[
+				'openOpenCodeConfig',
 				'proxyFetch',
 				'proxyFetchAbort',
 				'openCommandFile',

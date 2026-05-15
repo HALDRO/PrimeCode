@@ -31,7 +31,7 @@ export class McpHandler implements WebviewMessageHandler {
 				break;
 			case 'openMcpConfig':
 				logger.info('[McpHandler] User opened MCP config');
-				await this.onOpenMcpConfig();
+				await this.onOpenMcpConfig(msg);
 				break;
 		}
 	}
@@ -141,6 +141,8 @@ export class McpHandler implements WebviewMessageHandler {
 					resources: resourcesByServer.get(name),
 				};
 			}
+
+			await this.context.services.mcpManagement.syncRuntimeServers(mcpStatusForUI);
 
 			// Post both message types so both settings panel and chat can use the data
 			this.context.bridge.data('opencodeMcpStatus', opencodeMcpStatus);
@@ -281,8 +283,8 @@ export class McpHandler implements WebviewMessageHandler {
 		await this.context.services.mcpManagement.deleteMCPServer(msg.name);
 	}
 
-	private async onOpenMcpConfig(): Promise<void> {
-		await this.context.services.mcpManagement.openMcpConfig();
+	private async onOpenMcpConfig(msg: CommandOf<'openMcpConfig'>): Promise<void> {
+		await this.context.services.mcpManagement.openMcpConfig(msg.scope);
 	}
 
 	dispose() {

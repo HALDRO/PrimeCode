@@ -42,6 +42,8 @@ export const PluginsTab: React.FC = () => {
 	const handleDelete = (name: string) =>
 		postMessage({ type: 'mutateResource', kind: 'plugin', action: 'delete', name });
 	const handleOpen = (filePath: string) => postMessage({ type: 'openPluginFile', filePath });
+	const handleOpenConfig = (scope: 'project' | 'global') =>
+		postMessage({ type: 'openOpenCodeConfig', scope });
 
 	return (
 		<>
@@ -121,6 +123,15 @@ export const PluginsTab: React.FC = () => {
 										size="xs"
 										variant="ghost"
 										onClick={() => handleOpen(plugin.path as string)}
+									>
+										<EditIcon size={12} />
+									</Button>
+								)}
+								{plugin.origin === 'config' && (
+									<Button
+										size="xs"
+										variant="ghost"
+										onClick={() => handleOpenConfig(plugin.locationScope)}
 									>
 										<EditIcon size={12} />
 									</Button>

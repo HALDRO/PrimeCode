@@ -649,6 +649,12 @@ export interface DeleteMCPServerCommand {
 }
 export interface OpenMcpConfigCommand {
 	type: 'openMcpConfig';
+	scope?: 'project' | 'global';
+}
+
+export interface OpenOpenCodeConfigCommand {
+	type: 'openOpenCodeConfig';
+	scope: 'project' | 'global';
 }
 
 // =============================================================================
@@ -911,6 +917,7 @@ export type WebviewCommand =
 	| SetMCPServerEnabledCommand
 	| DeleteMCPServerCommand
 	| OpenMcpConfigCommand
+	| OpenOpenCodeConfigCommand
 	| ReloadAllProvidersCommand
 	| CheckOpenCodeStatusCommand
 	| LoadOpenCodeProvidersCommand

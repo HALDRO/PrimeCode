@@ -39,12 +39,20 @@ export const McpSettingsPanel: React.FC = () => {
 			const config = mcpServers[name] as MCPServerConfig;
 			const meta = mcpInstalledMetadata[name];
 			const status = mcpStatus[name];
-			return { name, config, meta, status };
+			const isRuntimeOnly = meta?.source === 'runtime';
+			return {
+				name,
+				config,
+				meta,
+				status,
+				isRuntimeOnly,
+				configScope: isRuntimeOnly ? ('global' as const) : ('project' as const),
+			};
 		});
 	}, [mcpServers, mcpInstalledMetadata, mcpStatus]);
 
-	const openMcpConfig = () => {
-		postMessage({ type: 'openMcpConfig' });
+	const openMcpConfig = (scope: 'project' | 'global' = 'project') => {
+		postMessage({ type: 'openMcpConfig', scope });
 	};
 
 	const deleteServer = (name: string) => postMessage({ type: 'deleteMCPServer', name });
@@ -62,7 +70,7 @@ export const McpSettingsPanel: React.FC = () => {
 					tooltip="Edit MCP server configuration in opencode.json"
 					last
 				>
-					<Button size="sm" variant="secondary" onClick={openMcpConfig}>
+					<Button size="sm" variant="secondary" onClick={() => openMcpConfig()}>
 						Edit
 					</Button>
 				</SettingRow>
@@ -75,7 +83,7 @@ export const McpSettingsPanel: React.FC = () => {
 						<br />
 						<button
 							type="button"
-							onClick={openMcpConfig}
+							onClick={() => openMcpConfig()}
 							className="text-vscode-textLink-foreground hover:text-vscode-textLink-activeForeground underline mt-1"
 						>
 							Add one in opencode.json
@@ -90,6 +98,9 @@ export const McpSettingsPanel: React.FC = () => {
 						const tools = r.status?.tools ?? [];
 						const toolsCount = tools.length;
 						const isLast = idx === installedRows.length - 1;
+						const editTitle = r.isRuntimeOnly
+							? 'Open global OpenCode config'
+							: 'Open project OpenCode config';
 
 						const dotColor = !enabled
 							? 'bg-(--alpha-20)'
@@ -154,21 +165,30 @@ export const McpSettingsPanel: React.FC = () => {
 									<div className="flex items-center gap-1 shrink-0">
 										<IconButton
 											icon={<EditIcon size={10} />}
-											title="Edit in opencode.json"
-											onClick={openMcpConfig}
+											title={editTitle}
+											onClick={() => openMcpConfig(r.configScope)}
 										/>
-										<IconButton
-											icon={<TrashIcon size={10} />}
-											title="Delete"
-											danger
-											onClick={() => deleteServer(r.name)}
-										/>
+										{!r.isRuntimeOnly && (
+											<IconButton
+												icon={<TrashIcon size={10} />}
+												title="Delete"
+												danger
+												onClick={() => deleteServer(r.name)}
+											/>
+										)}
 										<Switch
 											checked={enabled}
 											onChange={val => toggleEnabled(r.name, r.config, val)}
 										/>
 									</div>
 								</div>
+
+								{r.isRuntimeOnly && (
+									<div className="text-xs text-vscode-descriptionForeground mt-1 truncate">
+										Runtime/global MCP server. Edit opens the global config; toggles create a
+										project-level override.
+									</div>
+								)}
 
 								{enabled && toolsCount > 0 && isExpanded && (
 									<div className="mt-1.5 pt-1.5 border-t border-(--border-subtle)">

@@ -67,27 +67,38 @@ export class McpManagementService {
 	public async loadMCPServers(): Promise<void> {
 		const agentsConfig = await this._agentsConfig.loadProjectConfig();
 
-		const servers = agentsConfig?.mcp ? mcpServersToConfigMap(agentsConfig.mcp) : {};
+		const cachedStatus = this._getMcpStatusCache();
+		const servers = this._composeServers(
+			agentsConfig?.mcp ? mcpServersToConfigMap(agentsConfig.mcp) : {},
+			cachedStatus,
+		);
 
 		this._postMessage({ type: 'mcpServers', data: servers });
 
-		const metadata = await this._loadInstalledMetadata();
+		const metadata = this._composeInstalledMetadata(await this._loadInstalledMetadata(), servers);
 		this._postMessage({ type: 'mcpInstalledMetadata', data: { metadata } });
 
-		const cachedStatus = this._getMcpStatusCache();
 		if (cachedStatus && Object.keys(cachedStatus).length > 0) {
 			const filteredStatus: McpStatusCache = {};
 			for (const name of Object.keys(servers)) {
-				if (cachedStatus[name]) {
-					filteredStatus[name] = cachedStatus[name];
-				}
+				if (cachedStatus[name]) filteredStatus[name] = cachedStatus[name];
 			}
-			if (Object.keys(filteredStatus).length > 0) {
+			if (Object.keys(filteredStatus).length > 0)
 				this._postMessage({ type: 'mcpStatus', data: filteredStatus });
-			}
 		}
 
 		await this.checkProjectMcpConfig();
+	}
+
+	public async syncRuntimeServers(runtimeStatus: McpStatusCache): Promise<void> {
+		const agentsConfig = await this._agentsConfig.loadProjectConfig();
+		const servers = this._composeServers(
+			agentsConfig?.mcp ? mcpServersToConfigMap(agentsConfig.mcp) : {},
+			runtimeStatus,
+		);
+		this._postMessage({ type: 'mcpServers', data: servers });
+		const metadata = this._composeInstalledMetadata(await this._loadInstalledMetadata(), servers);
+		this._postMessage({ type: 'mcpInstalledMetadata', data: { metadata } });
 	}
 
 	public async pingMcpServers(): Promise<void> {
@@ -157,9 +168,12 @@ export class McpManagementService {
 		});
 	}
 
-	public async openMcpConfig(): Promise<void> {
+	public async openMcpConfig(scope: 'project' | 'global' = 'project'): Promise<void> {
 		try {
-			const configPath = await this._openCodeConfig.ensureProjectConfig();
+			const configPath =
+				scope === 'global'
+					? await this._openCodeConfig.ensureGlobalConfig()
+					: await this._openCodeConfig.ensureProjectConfig();
 			if (configPath) {
 				const uri = vscode.Uri.file(configPath);
 				await vscode.window.showTextDocument(uri);
@@ -217,6 +231,34 @@ export class McpManagementService {
 		const existing = this._getMcpStatusCache() || {};
 		const merged = { ...existing, ...status };
 		await this._context.globalState.update(MCP_STATUS_CACHE_KEY, merged);
+	}
+
+	private _composeServers(
+		projectServers: Record<string, MCPServerConfig>,
+		runtimeStatus?: McpStatusCache,
+	): Record<string, MCPServerConfig> {
+		const merged = { ...projectServers };
+		for (const [name, status] of Object.entries(runtimeStatus ?? {})) {
+			if (merged[name]) continue;
+			merged[name] = {
+				enabled: status.status !== 'disabled',
+			};
+		}
+		return merged;
+	}
+
+	private _composeInstalledMetadata(
+		stored: Record<string, InstalledMcpServerMetadata>,
+		servers: Record<string, MCPServerConfig>,
+	): Record<string, InstalledMcpServerMetadata> {
+		const merged: Record<string, InstalledMcpServerMetadata> = {};
+		for (const name of Object.keys(servers)) {
+			merged[name] = stored[name] ?? {
+				source: 'runtime',
+				displayName: name,
+			};
+		}
+		return merged;
 	}
 
 	private async _pingSingleServer(name: string, server: McpServer): Promise<void> {

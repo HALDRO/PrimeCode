@@ -60,6 +60,7 @@ export const CommandsTab: React.FC = () => {
 	const handleDelete = (name: string) =>
 		postMessage({ type: 'mutateResource', kind: 'command', action: 'delete', name });
 	const handleOpen = (filePath: string) => postMessage({ type: 'openCommandFile', filePath });
+	const canOpenCommand = (filePath: string) => !filePath.startsWith('opencode://');
 
 	return (
 		<>
@@ -168,9 +169,11 @@ export const CommandsTab: React.FC = () => {
 							last={index === commands.items.length - 1}
 						>
 							<SettingRowActions>
-								<Button size="xs" variant="ghost" onClick={() => handleOpen(command.path)}>
-									<EditIcon size={12} />
-								</Button>
+								{canOpenCommand(command.path) && (
+									<Button size="xs" variant="ghost" onClick={() => handleOpen(command.path)}>
+										<EditIcon size={12} />
+									</Button>
+								)}
 								{command.source === 'project' && (
 									<Button size="xs" variant="ghost" onClick={() => handleDelete(command.name)}>
 										<TrashIcon size={12} />

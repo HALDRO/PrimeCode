@@ -66,8 +66,14 @@ export class ToolHandler implements WebviewMessageHandler {
 
 		this.hydratePoliciesPromise = (async () => {
 			try {
-				const config = await this.context.services.openCodeConfig.readProjectConfigForInspection();
-				const permissionValue = config.permission;
+				const [globalEntry, projectConfig] = await Promise.all([
+					this.context.services.openCodeConfig.readGlobalConfigForInspection(),
+					this.context.services.openCodeConfig.readProjectConfigForInspection(),
+				]);
+				const permissionValue = mergePermissionConfig(
+					globalEntry.config.permission,
+					projectConfig.permission,
+				);
 				if (
 					!permissionValue ||
 					typeof permissionValue !== 'object' ||
@@ -329,4 +335,17 @@ export class ToolHandler implements WebviewMessageHandler {
 	private async onCheckCliDiagnostics(): Promise<void> {
 		this.context.bridge.data('cliDiagnostics', null);
 	}
+}
+
+function mergePermissionConfig(globalValue: unknown, projectValue: unknown): unknown {
+	if (!globalValue || typeof globalValue !== 'object' || Array.isArray(globalValue)) {
+		return projectValue;
+	}
+	if (!projectValue || typeof projectValue !== 'object' || Array.isArray(projectValue)) {
+		return globalValue;
+	}
+	return {
+		...(globalValue as Record<string, unknown>),
+		...(projectValue as Record<string, unknown>),
+	};
 }
