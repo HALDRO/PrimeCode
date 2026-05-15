@@ -162,6 +162,26 @@ describe('chatStore restore', () => {
 		expect(useUIStore.getState().notifications).toEqual([]);
 	});
 
+	it('does not surface wrapped unknown agent resolution errors', () => {
+		useChatStore.getState().actions.applyTabState([SESSION_ID], SESSION_ID);
+
+		restoreFromEvents([
+			{
+				type: 'session.error',
+				properties: {
+					sessionID: SESSION_ID,
+					error: {
+						name: 'UnknownError',
+						message:
+							'UnknownError: UnknownError\n    at <anonymous> (B:/~BUN/root/chunk-4er2r1w8.js:1888:2246)\n    at SessionPrompt.createUserMessage (B:/~BUN/root/chunk-4er2r1w8.js:1889:370)\n    at SessionPrompt.prompt (B:/~BUN/root/chunk-zpgs2p4y.js:9:126643)',
+					},
+				},
+			} as never,
+		]);
+
+		expect(useUIStore.getState().notifications).toEqual([]);
+	});
+
 	it('keeps inactive-session errors suppressed even when content matches the active session error', () => {
 		restoreFromEvents([
 			{

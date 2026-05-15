@@ -321,9 +321,11 @@ function shouldSuppressRuntimeErrorNotification(error: unknown, message: string)
 			? ((error as { name: string }).name || '').toLowerCase()
 			: '';
 	if (name === 'messageabortederror') return true;
-	if (!lowerMessage.includes('agent not found')) return false;
+	if (name !== 'unknownerror') return false;
+	if (lowerMessage.includes('agent not found')) return true;
 	return (
-		lowerMessage.includes('unknownerror') || message.includes('SessionPrompt.createUserMessage')
+		lowerMessage.includes('sessionprompt.createusermessage') &&
+		lowerMessage.includes('unknownerror: unknownerror')
 	);
 }
 

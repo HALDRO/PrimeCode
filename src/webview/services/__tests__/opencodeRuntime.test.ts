@@ -177,6 +177,26 @@ describe('openCodeRuntime status recovery', () => {
 		await expect(openCodeRuntime.unrevert('ses-1')).rejects.toThrow('unrevert failed');
 	});
 
+	it('suppresses noisy wrapped unknown agent resolution runtime errors', () => {
+		openCodeRuntime.showRuntimeError({
+			name: 'UnknownError',
+			message:
+				'UnknownError: UnknownError\n    at <anonymous> (B:/~BUN/root/chunk-4er2r1w8.js:1888:2246)\n    at SessionPrompt.createUserMessage (B:/~BUN/root/chunk-4er2r1w8.js:1889:370)\n    at SessionPrompt.prompt (B:/~BUN/root/chunk-zpgs2p4y.js:9:126643)',
+		});
+
+		expect(useUIStore.getState().notifications).toEqual([]);
+	});
+
+	it('suppresses noisy direct unknown agent-not-found runtime errors', () => {
+		openCodeRuntime.showRuntimeError({
+			name: 'UnknownError',
+			message:
+				'Agent not found: "Sisyphus - Ultraworker". Available agents: build, explore, general, plan',
+		});
+
+		expect(useUIStore.getState().notifications).toEqual([]);
+	});
+
 	it('edits already-reverted history without deleting messages again', async () => {
 		await openCodeRuntime.editMessage({
 			sessionId: 'ses-1',

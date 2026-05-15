@@ -187,9 +187,14 @@ function isNoisySessionError(error: unknown): boolean {
 	const errorInfo = summarizeSessionError(error);
 	const name = errorInfo.name?.toLowerCase() ?? '';
 	const message = errorInfo.message.toLowerCase();
+	const isWrappedUnknownAgentError =
+		name === 'unknownerror' &&
+		message.includes('sessionprompt.createusermessage') &&
+		message.includes('unknownerror: unknownerror');
 	return (
 		name === 'messageabortederror' ||
-		(message.includes('agent not found') && name === 'unknownerror')
+		(message.includes('agent not found') && name === 'unknownerror') ||
+		isWrappedUnknownAgentError
 	);
 }
 
