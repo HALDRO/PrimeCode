@@ -4,9 +4,8 @@
  * Uses NormalizedEntry (ViewModel) for clean data access.
  */
 
-import type { OverlayScrollbars } from 'overlayscrollbars';
-import { OverlayScrollbarsComponent } from 'overlayscrollbars-react';
-import React, { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { motion } from 'framer-motion';
+import React, { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import type { ActionType, LspDiagnosticsByFile } from '../../../common/normalizedTypes';
 import { buildToolActionType, extractLspDiagnostics } from '../../../common/normalizedTypes';
 import { pathsReferToSameFile } from '../../../utils/path';
@@ -16,9 +15,15 @@ import {
 	isMcpTool,
 	isToolMatch,
 	resolveToolName,
-	TOOL_CARD_EXPANDED_MAX_HEIGHT,
+	TOOL_CARD_EXPANDED_MAX_HEIGHT_PX,
 	TOOL_CARD_PREVIEW_MAX_HEIGHT,
+	UI_CARD_MOUNT_ANIMATE,
+	UI_CARD_MOUNT_INITIAL,
+	UI_MOTION_FRAMER_TRANSITION,
+	UI_MOTION_OPACITY_CLASS,
+	UI_MOTION_TRANSFORM_CLASS,
 } from '../../constants';
+import { useContainerAutoScroll } from '../../hooks/useContainerAutoScroll';
 import { useElapsedTimer } from '../../hooks/useElapsedTimer';
 import { cn } from '../../lib/cn';
 import {
@@ -81,23 +86,6 @@ const TOOL_CARD_CLASSES = 'bg-(--tool-bg-header) border border-(--tool-border-co
 
 const TOOL_CARD_HEADER_CLASSES =
 	'flex items-center justify-between w-full h-(--tool-header-height) px-(--tool-header-padding) bg-(--tool-bg-header) select-none';
-
-/** Module-level constant — avoids recreating nested object on every render */
-const OVERLAY_SCROLLBAR_OPTIONS = {
-	scrollbars: {
-		theme: 'os-theme-dark' as const,
-		autoHide: 'scroll' as const,
-		autoHideDelay: 800,
-		clickScroll: true,
-	},
-	overflow: { x: 'scroll' as const, y: 'scroll' as const },
-};
-
-/** Scroll an OverlayScrollbars viewport to the bottom. */
-const scrollToBottom = (instance: OverlayScrollbars) => {
-	const viewport = instance.elements().viewport;
-	if (viewport) viewport.scrollTop = viewport.scrollHeight;
-};
 
 const getFileChangeCardKey = (change: ResolvedFileChange, index: number) =>
 	change.filePath || `${change.name}-${index}`;
@@ -170,7 +158,7 @@ const ToolCardLeadingIcon: React.FC<{ children: ReactNode; className?: string }>
 	<span
 		className={cn(
 			'toolcard-leading-icon flex items-center justify-center w-[18px] h-[18px] shrink-0',
-			'transition-opacity duration-150 ease-out',
+			UI_MOTION_OPACITY_CLASS,
 			className,
 		)}
 	>
@@ -194,6 +182,50 @@ interface ToolCardProps {
 	className?: string;
 }
 
+interface AnimatedCardBodyProps {
+	expanded: boolean;
+	isStreaming?: boolean;
+	previewHeight: number;
+	expandedHeight: number;
+	className?: string;
+	children: ReactNode;
+	scrollRef?: ((node: HTMLDivElement | null) => void) | React.RefObject<HTMLDivElement | null>;
+}
+
+export const AnimatedCardBody: React.FC<AnimatedCardBodyProps> = ({
+	expanded,
+	isStreaming = false,
+	previewHeight,
+	expandedHeight,
+	className,
+	children,
+	scrollRef,
+}) => {
+	const targetHeight = expanded ? 'auto' : isStreaming ? previewHeight : 0;
+	const innerStyle =
+		expanded || isStreaming
+			? {
+					maxHeight: expanded ? expandedHeight : previewHeight,
+					overflowX: 'hidden' as const,
+					overflowY: 'auto' as const,
+					scrollbarWidth: 'none' as const,
+				}
+			: undefined;
+
+	return (
+		<motion.div
+			className={cn('overflow-hidden', className)}
+			initial={false}
+			animate={{ height: targetHeight }}
+			transition={UI_MOTION_FRAMER_TRANSITION}
+		>
+			<div ref={scrollRef} style={innerStyle}>
+				{children}
+			</div>
+		</motion.div>
+	);
+};
+
 export const ToolCard: React.FC<ToolCardProps> = ({
 	headerLeft,
 	headerRight,
@@ -207,7 +239,12 @@ export const ToolCard: React.FC<ToolCardProps> = ({
 }) => {
 	const canToggle = Boolean(isCollapsible && onToggle);
 	return (
-		<div className="relative animate-fade-slide-in">
+		<motion.div
+			className="relative"
+			initial={UI_CARD_MOUNT_INITIAL}
+			animate={UI_CARD_MOUNT_ANIMATE}
+			transition={UI_MOTION_FRAMER_TRANSITION}
+		>
 			<div className={cn(TOOL_CARD_CLASSES, 'group overflow-hidden', className)}>
 				<div
 					role={canToggle ? 'button' : undefined}
@@ -225,16 +262,14 @@ export const ToolCard: React.FC<ToolCardProps> = ({
 								className={cn(
 									'absolute left-0 top-1/2 -translate-y-1/2',
 									'flex items-center justify-center w-5 h-5',
-									'opacity-0 transition-opacity duration-150 ease-out',
+									'opacity-0',
+									UI_MOTION_OPACITY_CLASS,
 									'group-hover/toolcard-header:opacity-90',
 								)}
 							>
 								<ChevronDownIcon
 									size={14}
-									className={cn(
-										'transition-transform duration-150 ease-out',
-										expanded && 'rotate-180',
-									)}
+									className={cn(UI_MOTION_TRANSFORM_CLASS, expanded && 'rotate-180')}
 								/>
 							</div>
 						)}
@@ -261,7 +296,7 @@ export const ToolCard: React.FC<ToolCardProps> = ({
 				)}
 			</div>
 			{accessGate}
-		</div>
+		</motion.div>
 	);
 };
 
@@ -665,6 +700,24 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		const displayDuration = isRunning ? liveElapsed : liveElapsed || toolStateDurationMs;
 		const [expanded, setExpanded] = useState(defaultExpanded ?? false);
 		const [expandedDiffKeys, setExpandedDiffKeys] = useState<Set<string>>(() => new Set());
+		// Track whether user manually toggled — if not, auto-collapse when streaming ends
+		const [manualExpanded, setManualExpanded] = useState<boolean | null>(null);
+		const wasRunningRef = useRef(isRunning);
+
+		// Auto-scroll during streaming preview using the same MutationObserver approach
+		// as SimpleToolGroup and TaskCardItem — reliable across all overflow/animation modes.
+		const { scrollerRef: streamingScrollerRef } = useContainerAutoScroll({
+			active: isRunning && !expanded,
+			observeCharacterData: true,
+		});
+
+		// Auto-collapse when streaming ends, unless user explicitly expanded
+		useEffect(() => {
+			if (wasRunningRef.current && !isRunning && manualExpanded === null) {
+				setExpanded(false);
+			}
+			wasRunningRef.current = isRunning;
+		}, [isRunning, manualExpanded]);
 
 		// --- All hooks must be called unconditionally, before any early returns ---
 		const meta = useMemo(() => {
@@ -692,17 +745,6 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 			[hasBody, fullText],
 		);
 
-		const streamingViewportRef = useRef<HTMLElement | null>(null);
-		const handleOsInitialized = useCallback((instance: OverlayScrollbars) => {
-			streamingViewportRef.current = instance.elements().viewport;
-			scrollToBottom(instance);
-		}, []);
-		useEffect(() => {
-			if (!isRunning || !fullText) return;
-			const el = streamingViewportRef.current;
-			if (el) el.scrollTop = el.scrollHeight;
-		}, [fullText, isRunning]);
-
 		if (!toolName) return null;
 		if (shouldHideWhileRunning) return null;
 
@@ -723,6 +765,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 					isError={isError}
 					defaultExpanded={defaultExpanded}
 					normalizedEntry={normalizedEntry}
+					toolMetadata={effectiveMetadata}
 				/>
 			);
 		}
@@ -817,9 +860,9 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		// scrollable body. Diff/file-change cards keep their dedicated preview mode.
 		const alwaysCollapsible = hasBody;
 
-		// Show body when: user expanded manually, OR tool is running with streaming output.
-		// This ensures command/MCP output streams live during execution.
-		const showBody = expanded || (isRunning && hasBody);
+		// Body is always mounted when there is content so AnimatedCardBody can
+		// animate the height transition. Visibility is controlled by the height itself.
+		const showBody = hasBody;
 
 		return (
 			<ToolCard
@@ -861,10 +904,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 					<div className="flex items-center gap-2">
 						{meta && (
 							<div
-								className={cn(
-									'opacity-0 transition-opacity duration-150 ease-out z-10',
-									'group-hover:opacity-100',
-								)}
+								className={cn('opacity-0 z-10', UI_MOTION_OPACITY_CLASS, 'group-hover:opacity-100')}
 							>
 								<CopyButton text={meta} title="Copy request" />
 							</div>
@@ -879,20 +919,21 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 				}
 				isCollapsible={alwaysCollapsible || (needsExpand && hasBody) || Boolean(showAccessGate)}
 				expanded={expanded || (isRunning && hasBody)}
-				onToggle={() => setExpanded(prev => !prev)}
+				onToggle={() => {
+					const next = !expanded;
+					setExpanded(next);
+					setManualExpanded(next ? true : null);
+				}}
 				body={
 					showBody && hasBody ? (
 						<div className="relative">
-							<OverlayScrollbarsComponent
-								style={{
-									maxHeight: expanded
-										? TOOL_CARD_EXPANDED_MAX_HEIGHT
-										: TOOL_CARD_PREVIEW_MAX_HEIGHT,
-								}}
+							<AnimatedCardBody
+								expanded={expanded}
+								isStreaming={isRunning}
+								previewHeight={TOOL_CARD_PREVIEW_MAX_HEIGHT}
+								expandedHeight={TOOL_CARD_EXPANDED_MAX_HEIGHT_PX}
 								className="bg-(--tool-bg-header)"
-								options={OVERLAY_SCROLLBAR_OPTIONS}
-								events={{ initialized: handleOsInitialized }}
-								defer
+								scrollRef={streamingScrollerRef}
 							>
 								<div className="p-(--tool-content-padding)">
 									<pre
@@ -904,11 +945,12 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 										{fullText}
 									</pre>
 								</div>
-							</OverlayScrollbarsComponent>
+							</AnimatedCardBody>
 							<div
 								className={cn(
 									'absolute right-(--tool-content-padding) bottom-0',
-									'opacity-0 transition-opacity duration-150 ease-out',
+									'opacity-0',
+									UI_MOTION_OPACITY_CLASS,
 									'group-hover:opacity-100',
 								)}
 							>

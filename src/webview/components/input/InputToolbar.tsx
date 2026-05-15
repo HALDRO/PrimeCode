@@ -1,14 +1,17 @@
 /**
  * @file InputToolbar — Bottom toolbar with agent, model, thinking, permissions, plus (attach), improve buttons
- * @description Extracted from ChatInput. Contains toolbar buttons and their dropdowns, including the agent selector opened from the main agent button.
+ * @description Extracted from ChatInput. Contains toolbar buttons and their dropdowns, including the agent selector
+ *              opened from the main agent button. The plus (+) button opens a small portal dropdown with two options:
+ *              attach file/image and attach folder — replacing the old hover-based folder overlay.
  */
 
 import type React from 'react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { cn } from '../../lib/cn';
 import { useSettingsStore } from '../../store';
 import { useVSCode } from '../../utils/vscode';
-import { ImprovePromptIcon, LoaderIcon, PlusIcon } from '../icons';
+import { FolderOpenIcon, ImprovePromptIcon, LoaderIcon, PlusIcon } from '../icons';
 import { Button, IconButton } from '../ui';
 import { AgentButtonIcon, AgentDropdown, getAgentLabel } from './AgentDropdown';
 import { AutoAcceptButton } from './AutoAcceptButton';
@@ -31,6 +34,67 @@ interface InputToolbarProps {
 	onModelToggle: (anchor: HTMLElement) => void;
 	onModelClose: () => void;
 }
+
+/** Portal dropdown shown when user clicks the + button */
+const AttachDropdown: React.FC<{
+	anchorEl: HTMLElement;
+	onClose: () => void;
+	onAttachFile: () => void;
+	onAttachFolder: () => void;
+}> = ({ anchorEl, onClose, onAttachFile, onAttachFolder }) => {
+	const ref = useRef<HTMLDivElement>(null);
+	const rect = anchorEl.getBoundingClientRect();
+
+	useEffect(() => {
+		const handlePointerDown = (e: PointerEvent) => {
+			const target = e.target as Node | null;
+			if (ref.current && target && !ref.current.contains(target) && !anchorEl.contains(target)) {
+				onClose();
+			}
+		};
+		document.addEventListener('pointerdown', handlePointerDown);
+		return () => document.removeEventListener('pointerdown', handlePointerDown);
+	}, [anchorEl, onClose]);
+
+	const menuStyle: React.CSSProperties = {
+		position: 'fixed',
+		bottom: `${window.innerHeight - rect.top + 4}px`,
+		right: `${window.innerWidth - rect.right}px`,
+		zIndex: 9999,
+	};
+
+	return createPortal(
+		<div
+			ref={ref}
+			style={menuStyle}
+			className="min-w-[160px] bg-(--tool-bg-header) border border-(--tool-border-color) rounded-lg overflow-hidden shadow-lg py-1"
+		>
+			<button
+				type="button"
+				className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-vscode-foreground opacity-80 hover:opacity-100 hover:bg-vscode-list-hoverBackground transition-colors duration-100 font-(family-name:--vscode-font-family) cursor-pointer"
+				onClick={() => {
+					onAttachFile();
+					onClose();
+				}}
+			>
+				<PlusIcon size={13} strokeWidth={2.5} className="shrink-0" />
+				<span>Attach file or image</span>
+			</button>
+			<button
+				type="button"
+				className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-vscode-foreground opacity-80 hover:opacity-100 hover:bg-vscode-list-hoverBackground transition-colors duration-100 font-(family-name:--vscode-font-family) cursor-pointer"
+				onClick={() => {
+					onAttachFolder();
+					onClose();
+				}}
+			>
+				<FolderOpenIcon size={13} strokeWidth={2.2} className="shrink-0" />
+				<span>Attach folder</span>
+			</button>
+		</div>,
+		document.body,
+	);
+};
 
 export const InputToolbar: React.FC<InputToolbarProps> = ({
 	selectedAgent,
@@ -58,6 +122,8 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({
 	const [agentButtonAnchorElement, setAgentButtonAnchorElement] = useState<HTMLElement | null>(
 		null,
 	);
+	const [showAttachDropdown, setShowAttachDropdown] = useState(false);
+	const [plusAnchorEl, setPlusAnchorEl] = useState<HTMLElement | null>(null);
 
 	return (
 		<div className="h-(--input-toolbar-height) flex items-center justify-between pl-(--gap-2) pr-0 box-border shrink-0">
@@ -155,11 +221,25 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({
 							className="transition-transform duration-200 group-hover/plus:scale-110"
 						/>
 					}
-					onClick={() => postMessage({ type: 'browseFiles' })}
-					title="Attach file or image"
+					onClick={e => {
+						setPlusAnchorEl(e.currentTarget as HTMLElement);
+						setShowAttachDropdown(prev => !prev);
+					}}
+					title="Attach file, image or folder"
 					size={22}
-					className="group/plus text-vscode-foreground opacity-70 hover:opacity-100"
+					className={cn(
+						'group/plus text-vscode-foreground opacity-70 hover:opacity-100',
+						showAttachDropdown && 'opacity-100',
+					)}
 				/>
+				{showAttachDropdown && plusAnchorEl && (
+					<AttachDropdown
+						anchorEl={plusAnchorEl}
+						onClose={() => setShowAttachDropdown(false)}
+						onAttachFile={() => postMessage({ type: 'browseFiles' })}
+						onAttachFolder={() => postMessage({ type: 'browseFolders' })}
+					/>
+				)}
 			</div>
 		</div>
 	);

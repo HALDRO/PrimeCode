@@ -149,7 +149,52 @@ export const getMcpToolDisplayInfo = (
 
 export const TOOL_CARD_PREVIEW_MAX_HEIGHT = 120;
 
-export const TOOL_CARD_EXPANDED_MAX_HEIGHT = 'calc(500px - var(--tool-header-height))';
+export const STREAM_PREVIEW_MAX_HEIGHT = TOOL_CARD_PREVIEW_MAX_HEIGHT;
+
+// 500px max card height minus the 26px header height (--tool-header-height CSS var)
+const TOOL_CARD_MAX_HEIGHT_BASE_PX = 500;
+const TOOL_CARD_HEADER_HEIGHT_PX = 26;
+
+export const TOOL_CARD_EXPANDED_MAX_HEIGHT_PX =
+	TOOL_CARD_MAX_HEIGHT_BASE_PX - TOOL_CARD_HEADER_HEIGHT_PX;
+
+export const TOOL_CARD_EXPANDED_MAX_HEIGHT = `${TOOL_CARD_EXPANDED_MAX_HEIGHT_PX}px`;
+
+export const UI_MOTION_DURATION_MS = 180;
+
+export const UI_MOTION_EASE_CSS = 'ease-[cubic-bezier(0.2,0,0,1)]';
+
+// Literal strings — Tailwind JIT scans statically and cannot read JS interpolation
+export const UI_MOTION_OPACITY_CLASS =
+	'transition-opacity duration-[180ms] ease-[cubic-bezier(0.2,0,0,1)]';
+
+export const UI_MOTION_TRANSFORM_CLASS =
+	'transition-transform duration-[180ms] ease-[cubic-bezier(0.2,0,0,1)]';
+
+export const UI_MOTION_ALL_CLASS = 'transition-all duration-[180ms] ease-[cubic-bezier(0.2,0,0,1)]';
+
+export const UI_MOTION_FRAMER_TRANSITION = {
+	duration: UI_MOTION_DURATION_MS / 1000,
+	ease: [0.2, 0, 0, 1] as const,
+};
+
+export const UI_CARD_MOUNT_INITIAL = { opacity: 0, y: 6 } as const;
+
+export const UI_CARD_MOUNT_ANIMATE = { opacity: 1, y: 0 } as const;
+
+export const UI_CARD_MOUNT_EXIT = { opacity: 0, y: -4 } as const;
+
+export const UI_CARD_EXPAND_INITIAL = { height: 0, opacity: 0 } as const;
+
+export const UI_CARD_EXPAND_ANIMATE = { height: 'auto', opacity: 1 } as const;
+
+export const UI_CARD_EXPAND_EXIT = { height: 0, opacity: 0 } as const;
+
+export const UI_CARD_EXPAND_OFFSET_INITIAL = { opacity: 0 } as const;
+
+export const UI_CARD_EXPAND_OFFSET_ANIMATE = { opacity: 1 } as const;
+
+export const UI_CARD_EXPAND_OFFSET_EXIT = { opacity: 0 } as const;
 
 // ============================================================================
 // Timeout Configuration

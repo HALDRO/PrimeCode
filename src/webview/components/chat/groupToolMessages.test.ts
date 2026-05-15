@@ -369,21 +369,28 @@ describe('groupToolMessages', () => {
 			expect((result[2] as Message).kind).toBe('tool_use');
 		});
 
-		it('should not absorb multiline assistant summaries into tool groups', () => {
+		it('should absorb short multiline assistant progress text into tool groups', () => {
 			const msgs = [
 				toolUse('1'),
 				toolResult('1r', 'tu-1'),
 				toolUse('2'),
 				toolResult('2r', 'tu-2'),
-				assistant('a1', 'Summary line 1\n\nSummary line 2'),
+				assistant('a1', 'continue\n\n**Step 2 — Grep**'),
 				toolUse('3'),
 				toolResult('3r', 'tu-3'),
 			];
 			const result = groupToolMessages(msgs, NO_MCP, false);
 			expect(Array.isArray(result[0])).toBe(true);
-			expect((result[0] as Message[]).map(item => item.id)).toEqual(['1', '1r', '2', '2r']);
-			expect((result[1] as Message).kind).toBe('assistant');
-			expect((result[2] as Message).kind).toBe('tool_use');
+			expect((result[0] as Message[]).map(item => item.id)).toEqual([
+				'1',
+				'1r',
+				'2',
+				'2r',
+				'a1',
+				'3',
+				'3r',
+			]);
+			expect(result).toHaveLength(1);
 		});
 	});
 
@@ -444,11 +451,24 @@ describe('groupToolMessages', () => {
 			expect((result[0] as Message[]).length).toBe(7);
 		});
 
-		it('should strip trailing assistant from group even when streaming', () => {
-			// New algorithm: trailing bridge messages are always stripped from the group
-			// on flush. During streaming, the group stays stable (no flickering) because
-			// the assistant is simply emitted after the group — not treated as a hard
-			// boundary that breaks the group apart.
+		it('should keep a trailing assistant inside the live group while streaming', () => {
+			const msgs = [
+				toolUse('1'),
+				toolResult('1r', 'tu-1'),
+				toolUse('2'),
+				toolResult('2r', 'tu-2'),
+				assistant('a1', 'Reading more...'),
+			];
+			const result = groupToolMessages(msgs, NO_MCP, true);
+			expect(result).toHaveLength(1);
+			expect(Array.isArray(result[0])).toBe(true);
+			expect((result[0] as Message[]).map(item => item.id)).toEqual(['1', '1r', '2', '2r', 'a1']);
+		});
+
+		it('should keep trailing assistant inside the live group while streaming', () => {
+			// During live streaming, a short assistant bridge should stay inside the
+			// trailing tool group immediately so it does not first render outside and
+			// only later move into the group when more tools arrive.
 			const msgs = [
 				toolUse('1'),
 				toolResult('1r', 'tu-1'),
@@ -459,11 +479,17 @@ describe('groupToolMessages', () => {
 				assistant('a1', 'Let me continue...'),
 			];
 			const result = groupToolMessages(msgs, NO_MCP, true);
-			// Group of 6 tools + standalone trailing assistant
-			expect(result).toHaveLength(2);
+			expect(result).toHaveLength(1);
 			expect(Array.isArray(result[0])).toBe(true);
-			expect((result[0] as Message[]).length).toBe(6);
-			expect((result[1] as Message).kind).toBe('assistant');
+			expect((result[0] as Message[]).map(item => item.id)).toEqual([
+				'1',
+				'1r',
+				'2',
+				'2r',
+				'3',
+				'3r',
+				'a1',
+			]);
 		});
 
 		it('should NOT absorb trailing assistant when NOT streaming (final state)', () => {
@@ -486,9 +512,10 @@ describe('groupToolMessages', () => {
 			expect((result[1] as Message).kind).toBe('assistant');
 		});
 
-		it('should strip trailing assistant consistently in both streaming and non-streaming', () => {
-			// New algorithm: trailing bridge messages are always stripped from the group.
-			// No difference between streaming and non-streaming for this behavior.
+		it('should keep trailing assistant in streaming but strip it in final non-streaming state', () => {
+			// Streaming keeps the bridge inside the live group immediately. Once the
+			// stream is finalized, the same trailing assistant becomes visible text
+			// outside the collapsed tool group.
 			const msgs = [
 				toolUse('1'),
 				toolResult('1r', 'tu-1'),
@@ -499,14 +526,13 @@ describe('groupToolMessages', () => {
 				assistant('a1', 'Here is the summary.'),
 			];
 
-			// Streaming: group + standalone trailing assistant
+			// Streaming: assistant stays inside the live group
 			const streaming = groupToolMessages(msgs, NO_MCP, true);
-			expect(streaming).toHaveLength(2);
+			expect(streaming).toHaveLength(1);
 			expect(Array.isArray(streaming[0])).toBe(true);
-			expect((streaming[0] as Message[]).length).toBe(6);
-			expect((streaming[1] as Message).kind).toBe('assistant');
+			expect((streaming[0] as Message[]).length).toBe(7);
 
-			// Non-streaming: same result
+			// Non-streaming: assistant is emitted after the group
 			const final = groupToolMessages(msgs, NO_MCP, false);
 			expect(final).toHaveLength(2);
 			expect(Array.isArray(final[0])).toBe(true);
@@ -514,7 +540,7 @@ describe('groupToolMessages', () => {
 			expect((final[1] as Message).kind).toBe('assistant');
 		});
 
-		it('should keep mid-group assistant but strip trailing assistant', () => {
+		it('should keep both mid-group and trailing assistant inside the live group while streaming', () => {
 			const msgs = [
 				toolUse('1'),
 				toolResult('1r', 'tu-1'),
@@ -528,14 +554,13 @@ describe('groupToolMessages', () => {
 				assistant('a2', 'Done.'),
 			];
 
-			// Streaming: mid-group assistant stays, trailing stripped
+			// Streaming: both assistant bridges stay inside the live group
 			const streaming = groupToolMessages(msgs, NO_MCP, true);
-			expect(streaming).toHaveLength(2);
+			expect(streaming).toHaveLength(1);
 			expect(Array.isArray(streaming[0])).toBe(true);
-			expect((streaming[0] as Message[]).length).toBe(9);
-			expect((streaming[1] as Message).kind).toBe('assistant');
+			expect((streaming[0] as Message[]).length).toBe(10);
 
-			// Non-streaming: same shape
+			// Non-streaming: trailing assistant is stripped, mid-group assistant stays
 			const final = groupToolMessages(msgs, NO_MCP, false);
 			expect(final).toHaveLength(2);
 			expect((final[0] as Message[]).length).toBe(9);

@@ -5,10 +5,18 @@
  * tool-local preview data only.
  */
 
+import { motion } from 'framer-motion';
 import type { OverlayScrollbars } from 'overlayscrollbars';
 import { OverlayScrollbarsComponent } from 'overlayscrollbars-react';
 import type React from 'react';
 import { Fragment, useMemo } from 'react';
+import {
+	TOOL_CARD_EXPANDED_MAX_HEIGHT,
+	UI_CARD_MOUNT_ANIMATE,
+	UI_CARD_MOUNT_INITIAL,
+	UI_MOTION_ALL_CLASS,
+	UI_MOTION_FRAMER_TRANSITION,
+} from '../../constants';
 import { cn } from '../../lib/cn';
 import { getShortFileName } from '../../utils/format';
 
@@ -531,9 +539,14 @@ export const SimpleDiff: React.FC<SimpleDiffProps> = ({
 
 	if (displayLines.length === 0) {
 		return (
-			<div className="bg-(--tool-bg-header) text-vscode-descriptionForeground text-sm px-3 py-2 italic">
+			<motion.div
+				className="bg-(--tool-bg-header) text-vscode-descriptionForeground text-sm px-3 py-2 italic"
+				initial={UI_CARD_MOUNT_INITIAL}
+				animate={UI_CARD_MOUNT_ANIMATE}
+				transition={UI_MOTION_FRAMER_TRANSITION}
+			>
 				No changes
-			</div>
+			</motion.div>
 		);
 	}
 
@@ -541,82 +554,95 @@ export const SimpleDiff: React.FC<SimpleDiffProps> = ({
 	const last = displayLines[displayLines.length - 1];
 
 	return (
-		<OverlayScrollbarsComponent
-			style={{ maxHeight: expanded ? undefined : `${maxHeight}px` }}
-			className="bg-(--tool-bg-header)"
-			options={{
-				scrollbars: {
-					theme: 'os-theme-dark',
-					autoHide: 'scroll',
-					autoHideDelay: 800,
-					clickScroll: true,
-				},
-				overflow: { x: 'scroll', y: 'scroll' },
-			}}
-			events={{ initialized: scrollToBottom }}
-			defer
+		<motion.div
+			initial={UI_CARD_MOUNT_INITIAL}
+			animate={UI_CARD_MOUNT_ANIMATE}
+			transition={UI_MOTION_FRAMER_TRANSITION}
 		>
-			<div className="min-w-fit relative">
-				<div
-					className={cn(
-						'absolute top-0 left-0 w-(--border-indicator) h-1.5 rounded-tr-(--gap-1) z-1',
-						first.type === 'added'
-							? 'bg-success'
-							: first.type === 'removed'
-								? 'bg-error'
-								: 'bg-transparent',
-					)}
-				/>
-				<div
-					className={cn(
-						'absolute bottom-0 left-0 w-(--border-indicator) h-1.5 rounded-br-(--gap-1) z-1',
-						last.type === 'added'
-							? 'bg-success'
-							: last.type === 'removed'
-								? 'bg-error'
-								: 'bg-transparent',
-					)}
-				/>
-
-				{displayLines.map((line: DisplayLine) => (
-					<Fragment key={line.id}>
-						{line.hiddenBefore != null && line.hiddenBefore > 0 && (
-							<div className="flex items-center h-(--line-height-diff) px-2 text-xs text-vscode-descriptionForeground select-none bg-(--tool-bg-header)">
-								<span className="opacity-70">— {line.hiddenBefore} hidden lines —</span>
-							</div>
+			<OverlayScrollbarsComponent
+				style={{
+					maxHeight: expanded ? TOOL_CARD_EXPANDED_MAX_HEIGHT : `${maxHeight}px`,
+				}}
+				className={cn('bg-(--tool-bg-header)', UI_MOTION_ALL_CLASS)}
+				options={{
+					scrollbars: {
+						theme: 'os-theme-dark',
+						autoHide: 'scroll',
+						autoHideDelay: 800,
+						clickScroll: true,
+					},
+					overflow: { x: 'scroll', y: 'scroll' },
+				}}
+				events={{ initialized: scrollToBottom }}
+				defer
+			>
+				<motion.div
+					className="min-w-fit relative"
+					initial={{ opacity: 0, y: -2 }}
+					animate={{ opacity: 1, y: 0 }}
+					transition={UI_MOTION_FRAMER_TRANSITION}
+				>
+					<div
+						className={cn(
+							'absolute top-0 left-0 w-(--border-indicator) h-1.5 rounded-tr-(--gap-1) z-1',
+							first.type === 'added'
+								? 'bg-success'
+								: first.type === 'removed'
+									? 'bg-error'
+									: 'bg-transparent',
 						)}
-						<div
-							className={cn(
-								'flex items-stretch min-h-(--line-height-diff) leading-(--line-height-diff) text-sm',
-								line.type === 'added'
-									? 'bg-success/12'
-									: line.type === 'removed'
-										? 'bg-error/12'
-										: '',
+					/>
+					<div
+						className={cn(
+							'absolute bottom-0 left-0 w-(--border-indicator) h-1.5 rounded-br-(--gap-1) z-1',
+							last.type === 'added'
+								? 'bg-success'
+								: last.type === 'removed'
+									? 'bg-error'
+									: 'bg-transparent',
+						)}
+					/>
+
+					{displayLines.map((line: DisplayLine) => (
+						<Fragment key={line.id}>
+							{line.hiddenBefore != null && line.hiddenBefore > 0 && (
+								<div className="flex items-center h-(--line-height-diff) px-2 text-xs text-vscode-descriptionForeground select-none bg-(--tool-bg-header)">
+									<span className="opacity-70">— {line.hiddenBefore} hidden lines —</span>
+								</div>
 							)}
-						>
 							<div
 								className={cn(
-									'w-(--border-indicator) shrink-0',
+									'flex items-stretch min-h-(--line-height-diff) leading-(--line-height-diff) text-sm',
 									line.type === 'added'
-										? 'bg-success'
+										? 'bg-success/12'
 										: line.type === 'removed'
-											? 'bg-error'
-											: 'bg-transparent',
-								)}
-							/>
-							<pre
-								className={cn(
-									'm-0 px-2 whitespace-pre text-vscode-foreground flex-1',
-									line.type === 'removed' ? 'opacity-70' : 'opacity-100',
+											? 'bg-error/12'
+											: '',
 								)}
 							>
-								{line.content || ' '}
-							</pre>
-						</div>
-					</Fragment>
-				))}
-			</div>
-		</OverlayScrollbarsComponent>
+								<div
+									className={cn(
+										'w-(--border-indicator) shrink-0',
+										line.type === 'added'
+											? 'bg-success'
+											: line.type === 'removed'
+												? 'bg-error'
+												: 'bg-transparent',
+									)}
+								/>
+								<pre
+									className={cn(
+										'm-0 px-2 whitespace-pre text-vscode-foreground flex-1',
+										line.type === 'removed' ? 'opacity-70' : 'opacity-100',
+									)}
+								>
+									{line.content || ' '}
+								</pre>
+							</div>
+						</Fragment>
+					))}
+				</motion.div>
+			</OverlayScrollbarsComponent>
+		</motion.div>
 	);
 };

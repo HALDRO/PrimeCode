@@ -26,8 +26,11 @@ const collectTokenHighlights = (
 	validNames: Set<string>,
 	type: MessageHighlight['type'],
 ): MessageHighlight[] => {
+	if (type === 'subagent') {
+		return collectNamedHighlights(text, prefix, [...validNames], type);
+	}
 	const highlights: MessageHighlight[] = [];
-	const regex = new RegExp(`\\${prefix}([a-zA-Z][a-zA-Z0-9_-]*)`, 'g');
+	const regex = new RegExp(`\\${prefix}([a-zA-Z][a-zA-Z0-9_:-]*)`, 'g');
 	let match: RegExpExecArray | null;
 
 	// biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec pattern
@@ -52,6 +55,41 @@ const collectTokenHighlights = (
 
 	return highlights;
 };
+
+function collectNamedHighlights(
+	text: string,
+	prefix: '/' | '@',
+	validNames: string[],
+	type: MessageHighlight['type'],
+): MessageHighlight[] {
+	const highlights: MessageHighlight[] = [];
+	const normalizedText = text.toLowerCase();
+	const sortedNames = [...validNames].sort((a, b) => b.length - a.length);
+
+	for (let index = 0; index < text.length; index++) {
+		if (text[index] !== prefix) continue;
+		const prevChar = text[index - 1];
+		if (!isBoundaryChar(prevChar)) continue;
+
+		for (const validName of sortedNames) {
+			const candidate = `${prefix}${validName}`;
+			if (!normalizedText.startsWith(candidate.toLowerCase(), index)) continue;
+			const end = index + candidate.length;
+			const nextChar = text[end];
+			if (!isBoundaryChar(nextChar)) continue;
+			highlights.push({
+				start: index,
+				end,
+				content: text.slice(index, end),
+				type,
+			});
+			index = end - 1;
+			break;
+		}
+	}
+
+	return highlights;
+}
 
 /**
  * Finds all commands (starting with /) and subagents (starting with @) in the text.

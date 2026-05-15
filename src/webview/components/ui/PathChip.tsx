@@ -153,12 +153,14 @@ export const PathChip: React.FC<PathChipProps> = ({
 interface InlineAttachmentChipProps {
 	match: InlineAttachmentMatch;
 	onOpen: (filePath: string, startLine?: number, endLine?: number) => void;
+	onRemove?: () => void;
 	className?: string;
 }
 
 export const InlineAttachmentChip: React.FC<InlineAttachmentChipProps> = ({
 	match,
 	onOpen,
+	onRemove,
 	className,
 }) => (
 	<span className={cn('inline-flex align-middle mx-(--gap-0-5) max-w-full', className)}>
@@ -169,6 +171,7 @@ export const InlineAttachmentChip: React.FC<InlineAttachmentChipProps> = ({
 			endLine={match.endLine}
 			title={match.displayPath}
 			onClick={() => onOpen(match.path, match.startLine, match.endLine)}
+			onRemove={onRemove}
 		/>
 	</span>
 );

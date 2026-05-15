@@ -7,7 +7,7 @@
 import type React from 'react';
 import { useCallback, useMemo } from 'react';
 import type { CommandItem } from '../../constants';
-import { useChatInputState, useSettingsStore, useSlashCommandsState } from '../../store';
+import { useSettingsStore, useSlashCommandsState } from '../../store';
 import { type AnchorRectLike, DropdownMenu } from '../ui';
 
 /**
@@ -46,63 +46,24 @@ interface SlashCommandsDropdownProps {
 	anchorElement?: HTMLElement | null;
 	/** Optional explicit anchor rect override (e.g. caret position). */
 	anchorRect?: AnchorRectLike | null;
+	onInsertCommand: (text: string) => void;
 }
 
 export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 	anchorElement,
 	anchorRect,
+	onInsertCommand,
 }) => {
 	const agentResources = useSettingsStore(state => state.resources.agent.items);
+	const commandResources = useSettingsStore(state => state.resources.command.items);
 	const skillResources = useSettingsStore(state => state.resources.skill.items);
 
-	const { input, setInput } = useChatInputState();
 	const { slashFilter, setShowSlashCommands, setSlashFilter } = useSlashCommandsState();
 
 	const onClose = useCallback(() => {
 		setShowSlashCommands(false);
 		setSlashFilter('');
 	}, [setShowSlashCommands, setSlashFilter]);
-
-	/**
-	 * Replace the current slash command being typed with selected text.
-	 * If input starts with /, replace from start to first space (or end).
-	 * Otherwise append the text.
-	 */
-	const replaceCurrentCommand = useCallback(
-		(newCommand: string) => {
-			const lastSlashIndex = input.lastIndexOf('/');
-			if (lastSlashIndex >= 0) {
-				const afterSlash = input.substring(lastSlashIndex);
-				const spaceIndex = afterSlash.indexOf(' ');
-				const commandEnd = spaceIndex >= 0 ? lastSlashIndex + spaceIndex : input.length;
-				const before = input.substring(0, lastSlashIndex);
-				const after = input.substring(commandEnd);
-				setInput(`${before}${newCommand}${after}`);
-			} else {
-				setInput(input.trim() ? `${input} ${newCommand} ` : `${newCommand} `);
-			}
-		},
-		[input, setInput],
-	);
-
-	const onSelectCommand = useCallback(
-		(text: string) => {
-			if (text) {
-				replaceCurrentCommand(text);
-			} else {
-				const lastSlashIndex = input.lastIndexOf('/');
-				if (lastSlashIndex >= 0) {
-					const afterSlash = input.substring(lastSlashIndex);
-					const spaceIndex = afterSlash.indexOf(' ');
-					const commandEnd = spaceIndex >= 0 ? lastSlashIndex + spaceIndex : input.length;
-					const before = input.substring(0, lastSlashIndex);
-					const after = input.substring(commandEnd);
-					setInput(`${before}${after}`.trim());
-				}
-			}
-		},
-		[input, setInput, replaceCurrentCommand],
-	);
 
 	const sections = useMemo(() => {
 		const skillList: CommandItem[] = skillResources.map(skill => ({
@@ -126,20 +87,22 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 				prompt: `@${agent.name}`,
 			}));
 
-		const runtimeCommands: CommandItem[] = [
-			{
-				id: 'compact',
-				name: 'compact',
-				description: 'Summarize and compact session context',
+		const runtimeCommands: CommandItem[] = commandResources
+			.filter(command => !CLI_COMMANDS_UI_BLOCKLIST.has(command.name))
+			.map(command => ({
+				id: command.name,
+				name: command.name,
+				description: command.description ?? '',
 				type: 'cli' as const,
-			},
-		].filter(command => !CLI_COMMANDS_UI_BLOCKLIST.has(command.name));
+				source: command.source,
+			}));
 
 		return [
+			{ title: 'CLI', items: runtimeCommands },
 			{ title: 'Skills', items: skillList },
-			{ title: 'Commands', items: [...runtimeCommands, ...subagentList] },
+			{ title: 'Subagents', items: subagentList },
 		];
-	}, [agentResources, skillResources]);
+	}, [agentResources, commandResources, skillResources]);
 
 	const filteredSections = useMemo(() => {
 		const term = slashFilter.toLowerCase().replace(/^\//, '');
@@ -161,17 +124,17 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 	const handleSelect = useCallback(
 		(cmd: CommandItem) => {
 			if (cmd.type === 'cli' || cmd.type === 'custom') {
-				replaceCurrentCommand(`/${cmd.id} `);
+				onInsertCommand(`/${cmd.id} `);
 			} else if (cmd.type === 'skill') {
-				replaceCurrentCommand(`/skill ${cmd.prompt} `);
+				onInsertCommand(`/skill ${cmd.prompt} `);
 			} else if (cmd.type === 'subagent') {
-				replaceCurrentCommand(`${cmd.prompt} `);
+				onInsertCommand(`${cmd.prompt} `);
 			} else {
-				onSelectCommand(cmd.prompt || '');
+				onInsertCommand(cmd.prompt || '');
 			}
 			onClose();
 		},
-		[onClose, onSelectCommand, replaceCurrentCommand],
+		[onClose, onInsertCommand],
 	);
 
 	const dropdownSections = useMemo(
@@ -185,7 +148,12 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 					const tooltipContent = parts.length > 0 ? parts.join('\n\n') : undefined;
 					return {
 						id: `${cmd.type}-${cmd.id}`,
-						label: cmd.type === 'skill' ? cmd.name : `/${cmd.name}`,
+						label:
+							cmd.type === 'skill'
+								? cmd.name
+								: cmd.type === 'subagent'
+									? `@${cmd.name}`
+									: `/${cmd.name}`,
 						description: tooltipContent,
 						meta: getTypeLabel(cmd.type, cmd.source),
 						data: cmd,

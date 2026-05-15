@@ -424,6 +424,7 @@ const useStickyMessageSettings = () =>
 			opencodeProviders: state.opencodeProviders,
 			proxyEndpoints: state.proxyEndpoints,
 			agentResources: state.resources.agent.items,
+			commandResources: state.resources.command.items,
 		})),
 	);
 
@@ -440,9 +441,17 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 		const chatActions = useChatActions();
 		const { setEditingMessageId } = chatActions;
 		const activeModelID = useActiveModelID();
-		const { opencodeProviders, proxyEndpoints, agentResources } = useStickyMessageSettings();
+		const { opencodeProviders, proxyEndpoints, agentResources, commandResources } =
+			useStickyMessageSettings();
 
-		const validCommands = useMemo(() => new Set<string>(['compact']), []);
+		const validCommands = useMemo(
+			() =>
+				new Set<string>([
+					'compact',
+					...commandResources.map(command => command.name.toLowerCase()),
+				]),
+			[commandResources],
+		);
 		const validSubagents = useMemo(
 			() =>
 				new Set(

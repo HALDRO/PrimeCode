@@ -1,13 +1,12 @@
 /**
  * @file useContainerAutoScroll — shared auto-scroll + detach logic for scrollable containers.
  *
- * Mirrors the main session's scroll behavior:
- * - MutationObserver with rAF dedup for auto-scroll during streaming
- * - Manual scroll-up detection ("detach") so the user can browse history
- * - Re-attach when user scrolls back to bottom
- * - showScrollToBottom flag for a floating button
- *
- * Used by SubtaskItem and SimpleToolGroup to unify behavior with the main chat.
+ * @description Mirrors the main session's scroll behavior using a MutationObserver with rAF
+ * dedup for auto-scroll during streaming, manual scroll-up detection ("detach") so the user
+ * can browse history, re-attach when user scrolls back to bottom, and a showScrollToBottom
+ * flag for a floating button. Uses a callback ref pattern so that the MutationObserver
+ * correctly attaches even when the scrollable element mounts after the hook activates
+ * (e.g. ToolCard preview body appearing on first streaming token).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -24,8 +23,10 @@ interface UseContainerAutoScrollOptions {
 }
 
 interface UseContainerAutoScrollReturn {
-	/** Attach to the scrollable container element. */
-	scrollerRef: React.RefObject<HTMLDivElement | null>;
+	/** Callback ref — attach to the scrollable container's `ref` prop. */
+	scrollerRef: (node: HTMLDivElement | null) => void;
+	/** Stable RefObject pointing to the same element (for passing to components that read .current). */
+	scrollerObjectRef: React.RefObject<HTMLDivElement | null>;
 	/** Whether the scroll-to-bottom button should be visible. */
 	showScrollToBottom: boolean;
 	/** Call this to programmatically scroll to bottom and re-attach. */
@@ -47,6 +48,12 @@ export function useContainerAutoScroll({
 	const userDetachedRef = useRef(false);
 	const programmaticScrollRef = useRef(false);
 	const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+	// Track element presence so effects re-run when the ref target mounts/unmounts.
+	const [scrollerEl, setScrollerEl] = useState<HTMLDivElement | null>(null);
+	const callbackRef = useCallback((node: HTMLDivElement | null) => {
+		scrollerRef.current = node;
+		setScrollerEl(node);
+	}, []);
 
 	// Reset detach flag when streaming starts
 	useEffect(() => {
@@ -58,7 +65,7 @@ export function useContainerAutoScroll({
 
 	// ── Scroll listener: detach detection + button visibility ──────
 	useEffect(() => {
-		const el = scrollerRef.current;
+		const el = scrollerEl;
 		if (!el) return;
 
 		let rafId: number | null = null;
@@ -103,12 +110,12 @@ export function useContainerAutoScroll({
 			el.removeEventListener('scroll', onScroll);
 			if (rafId !== null) cancelAnimationFrame(rafId);
 		};
-	}, [active, buttonThreshold, detachThreshold]);
+	}, [scrollerEl, active, buttonThreshold, detachThreshold]);
 
 	// ── MutationObserver: auto-scroll when content changes ─────────
 
 	useEffect(() => {
-		const el = scrollerRef.current;
+		const el = scrollerEl;
 		if (!active || !el) return;
 
 		let rafId: number | null = null;
@@ -138,7 +145,7 @@ export function useContainerAutoScroll({
 			observer.disconnect();
 			if (rafId !== null) cancelAnimationFrame(rafId);
 		};
-	}, [active, observeCharacterData]);
+	}, [scrollerEl, active, observeCharacterData]);
 
 	const scrollToBottom = useCallback(() => {
 		userDetachedRef.current = false;
@@ -148,7 +155,8 @@ export function useContainerAutoScroll({
 	}, []);
 
 	return {
-		scrollerRef,
+		scrollerRef: callbackRef,
+		scrollerObjectRef: scrollerRef,
 		showScrollToBottom,
 		scrollToBottom,
 		isDetached: userDetachedRef.current,

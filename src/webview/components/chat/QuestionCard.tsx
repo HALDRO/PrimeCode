@@ -6,9 +6,21 @@
  * "Other" free-text input, step indicator, and back/next/skip navigation.
  */
 
+import { AnimatePresence, motion } from 'framer-motion';
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { QuestionInfo, SessionQuestionRequest } from '../../../common';
+import {
+	UI_CARD_EXPAND_ANIMATE,
+	UI_CARD_EXPAND_EXIT,
+	UI_CARD_EXPAND_INITIAL,
+	UI_CARD_EXPAND_OFFSET_ANIMATE,
+	UI_CARD_EXPAND_OFFSET_EXIT,
+	UI_CARD_EXPAND_OFFSET_INITIAL,
+	UI_CARD_MOUNT_ANIMATE,
+	UI_CARD_MOUNT_INITIAL,
+	UI_MOTION_FRAMER_TRANSITION,
+} from '../../constants';
 import { cn } from '../../lib/cn';
 import { openCodeRuntime } from '../../services/opencodeRuntime';
 import { useChatStore } from '../../store/chatStore';
@@ -45,7 +57,7 @@ const OptionButton: React.FC<{
 			'focus:outline-none focus-visible:ring-1 focus-visible:ring-vscode-focusBorder',
 			disabled && 'cursor-default',
 			selected
-				? 'border-[var(--vscode-focusBorder)] bg-[var(--vscode-focusBorder)]/8'
+				? 'border-[var(--vscode-focusBorder)] bg-[color-mix(in_srgb,var(--vscode-focusBorder)_8%,transparent)]'
 				: 'border-(--tool-border-color) bg-transparent',
 			!disabled && !selected && 'hover:bg-(--alpha-5)',
 		)}
@@ -77,7 +89,7 @@ const OptionButton: React.FC<{
 					{label}
 				</span>
 				{recommended && (
-					<span className="text-[10px] px-1 py-px rounded bg-[var(--vscode-focusBorder)]/15 text-[var(--vscode-focusBorder)] font-medium shrink-0">
+					<span className="text-[10px] px-1 py-px rounded bg-[color-mix(in_srgb,var(--vscode-focusBorder)_15%,transparent)] text-[var(--vscode-focusBorder)] font-medium shrink-0">
 						Recommended
 					</span>
 				)}
@@ -257,7 +269,12 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ request }) => {
 	const goBack = () => setStep(s => Math.max(s - 1, 0));
 
 	return (
-		<div className="mb-(--tool-block-margin)">
+		<motion.div
+			className="mb-(--tool-block-margin)"
+			initial={UI_CARD_MOUNT_INITIAL}
+			animate={UI_CARD_MOUNT_ANIMATE}
+			transition={UI_MOTION_FRAMER_TRANSITION}
+		>
 			<div
 				className={cn(
 					'bg-(--tool-bg-header) border border-(--tool-border-color) rounded-lg overflow-hidden',
@@ -306,76 +323,92 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ request }) => {
 					</div>
 				)}
 
-				{expanded && (
-					<div className="px-(--tool-content-padding) pb-2">
-						{resolved && isCarousel && (
-							<div className="flex items-center justify-between mb-2">
-								<span className="text-sm text-vscode-foreground/50">
-									Question {step + 1} of {questions.length}
-								</span>
-								<StepDots total={questions.length} current={step} onDotClick={setStep} />
-							</div>
-						)}
-						<div className="text-sm text-vscode-foreground mb-2 whitespace-pre-wrap">
-							{q.question}
-						</div>
-
-						{q.options.length > 0 && (
-							<div className="flex flex-col gap-1 mb-2">
-								{q.options.map((opt: (typeof q.options)[number]) => (
-									<OptionButton
-										key={opt.label}
-										label={opt.label}
-										description={opt.description}
-										selected={activeSelections.includes(opt.label)}
-										multiple={!!q.multiple}
-										recommended={opt.recommended}
-										disabled={resolved}
-										onClick={() => toggleOption(step, opt.label, !!q.multiple)}
-									/>
-								))}
-							</div>
-						)}
-
-						<div className="relative">
-							<input
-								ref={inputRef}
-								type="text"
-								value={activeCustomInput}
-								onChange={e => updateCustomInput(step, e.target.value)}
-								onKeyDown={e => {
-									if (resolved) return;
-									if (e.key === 'Enter') {
-										if (isLastStep && (stepHasAnswer || customInputs[step]?.trim())) {
-											handleSubmit();
-										} else if (!isLastStep) {
-											goNext();
-										}
-									}
-								}}
-								placeholder="Other…"
-								readOnly={resolved}
-								className={cn(
-									'w-full text-sm pl-2.5 pr-8 py-1.5 rounded-md',
-									'bg-vscode-input-background border border-(--tool-border-color)',
-									'text-vscode-foreground placeholder:text-vscode-foreground/30',
-									'outline-none focus:border-[var(--vscode-focusBorder)]',
-									'transition-colors duration-150',
+				<AnimatePresence initial={false}>
+					{expanded && (
+						<motion.div
+							initial={UI_CARD_EXPAND_INITIAL}
+							animate={UI_CARD_EXPAND_ANIMATE}
+							exit={UI_CARD_EXPAND_EXIT}
+							transition={UI_MOTION_FRAMER_TRANSITION}
+							className="overflow-hidden"
+						>
+							<motion.div
+								className="px-(--tool-content-padding) pb-2"
+								initial={UI_CARD_EXPAND_OFFSET_INITIAL}
+								animate={UI_CARD_EXPAND_OFFSET_ANIMATE}
+								exit={UI_CARD_EXPAND_OFFSET_EXIT}
+								transition={UI_MOTION_FRAMER_TRANSITION}
+							>
+								{resolved && isCarousel && (
+									<div className="flex items-center justify-between mb-2">
+										<span className="text-sm text-vscode-foreground/50">
+											Question {step + 1} of {questions.length}
+										</span>
+										<StepDots total={questions.length} current={step} onDotClick={setStep} />
+									</div>
 								)}
-							/>
-							{!resolved && customInputs[step]?.trim() && (
-								<button
-									type="button"
-									onClick={() => updateCustomInput(step, '')}
-									className="absolute right-2 top-1/2 -translate-y-1/2 text-vscode-foreground/30 hover:text-vscode-foreground/60"
-									aria-label="Clear"
-								>
-									<CloseIcon size={12} />
-								</button>
-							)}
-						</div>
-					</div>
-				)}
+								<div className="text-sm text-vscode-foreground mb-2 whitespace-pre-wrap">
+									{q.question}
+								</div>
+
+								{q.options.length > 0 && (
+									<div className="flex flex-col gap-1 mb-2">
+										{q.options.map((opt: (typeof q.options)[number]) => (
+											<OptionButton
+												key={opt.label}
+												label={opt.label}
+												description={opt.description}
+												selected={activeSelections.includes(opt.label)}
+												multiple={!!q.multiple}
+												recommended={opt.recommended}
+												disabled={resolved}
+												onClick={() => toggleOption(step, opt.label, !!q.multiple)}
+											/>
+										))}
+									</div>
+								)}
+
+								<div className="relative">
+									<input
+										ref={inputRef}
+										type="text"
+										value={activeCustomInput}
+										onChange={e => updateCustomInput(step, e.target.value)}
+										onKeyDown={e => {
+											if (resolved) return;
+											if (e.key === 'Enter') {
+												if (isLastStep && (stepHasAnswer || customInputs[step]?.trim())) {
+													handleSubmit();
+												} else if (!isLastStep) {
+													goNext();
+												}
+											}
+										}}
+										placeholder="Other…"
+										readOnly={resolved}
+										className={cn(
+											'w-full text-sm pl-2.5 pr-8 py-1.5 rounded-md',
+											'bg-vscode-input-background border border-(--tool-border-color)',
+											'text-vscode-foreground placeholder:text-vscode-foreground/30',
+											'outline-none focus:border-[var(--vscode-focusBorder)]',
+											'transition-colors duration-150',
+										)}
+									/>
+									{!resolved && customInputs[step]?.trim() && (
+										<button
+											type="button"
+											onClick={() => updateCustomInput(step, '')}
+											className="absolute right-2 top-1/2 -translate-y-1/2 text-vscode-foreground/30 hover:text-vscode-foreground/60"
+											aria-label="Clear"
+										>
+											<CloseIcon size={12} />
+										</button>
+									)}
+								</div>
+							</motion.div>
+						</motion.div>
+					)}
+				</AnimatePresence>
 
 				{resolved && expanded && isCarousel && (
 					<div className="flex items-center justify-center gap-2 px-(--tool-content-padding) py-1.5 border-t border-(--tool-border-color)">
@@ -504,6 +537,6 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ request }) => {
 					</div>
 				)}
 			</div>
-		</div>
+		</motion.div>
 	);
 };

@@ -5,8 +5,20 @@
  *              (returns text to input), and force-send (stop + send).
  */
 
+import { AnimatePresence, motion } from 'framer-motion';
 import type React from 'react';
 import { useCallback, useRef, useState } from 'react';
+import {
+	UI_CARD_EXPAND_ANIMATE,
+	UI_CARD_EXPAND_EXIT,
+	UI_CARD_EXPAND_INITIAL,
+	UI_CARD_EXPAND_OFFSET_ANIMATE,
+	UI_CARD_EXPAND_OFFSET_EXIT,
+	UI_CARD_EXPAND_OFFSET_INITIAL,
+	UI_CARD_MOUNT_ANIMATE,
+	UI_CARD_MOUNT_INITIAL,
+	UI_MOTION_FRAMER_TRANSITION,
+} from '../../constants';
 import { cn } from '../../lib/cn';
 import { openCodeRuntime } from '../../services/opencodeRuntime';
 import { useQueuedMessages } from '../../store';
@@ -174,7 +186,12 @@ export const QueuedMessageBanner: React.FC = () => {
 	const count = queuedMessages.length;
 
 	return (
-		<div className="w-full box-border relative bg-transparent animate-fade-in mb-px">
+		<motion.div
+			className="w-full box-border relative bg-transparent mb-px"
+			initial={UI_CARD_MOUNT_INITIAL}
+			animate={UI_CARD_MOUNT_ANIMATE}
+			transition={UI_MOTION_FRAMER_TRANSITION}
+		>
 			<div
 				className={cn('bg-(--panel-header-bg) rounded-lg border border-(--panel-header-border)')}
 			>
@@ -209,108 +226,122 @@ export const QueuedMessageBanner: React.FC = () => {
 				</button>
 
 				{/* Message list */}
-				{expanded && (
-					<ul
-						aria-live="polite"
-						aria-label={`${count} message${count > 1 ? 's' : ''} queued`}
-						className="flex flex-col list-none m-0 p-0"
-					>
-						{queuedMessages.map((entry, idx) => {
-							const truncated =
-								entry.text.length > 100 ? `${entry.text.slice(0, 100)}\u2026` : entry.text;
-							const isDragging = dragIdx === idx;
-							const isDragOver = dragOverIdx === idx && dragIdx !== idx;
+				<AnimatePresence initial={false}>
+					{expanded && (
+						<motion.div
+							initial={UI_CARD_EXPAND_INITIAL}
+							animate={UI_CARD_EXPAND_ANIMATE}
+							exit={UI_CARD_EXPAND_EXIT}
+							transition={UI_MOTION_FRAMER_TRANSITION}
+							className="overflow-hidden"
+						>
+							<motion.ul
+								aria-live="polite"
+								aria-label={`${count} message${count > 1 ? 's' : ''} queued`}
+								className="flex flex-col list-none m-0 p-0"
+								initial={UI_CARD_EXPAND_OFFSET_INITIAL}
+								animate={UI_CARD_EXPAND_OFFSET_ANIMATE}
+								exit={UI_CARD_EXPAND_OFFSET_EXIT}
+								transition={UI_MOTION_FRAMER_TRANSITION}
+							>
+								{queuedMessages.map((entry, idx) => {
+									const truncated =
+										entry.text.length > 100 ? `${entry.text.slice(0, 100)}\u2026` : entry.text;
+									const isDragging = dragIdx === idx;
+									const isDragOver = dragOverIdx === idx && dragIdx !== idx;
 
-							return (
-								<li
-									key={entry.queueId}
-									draggable={count > 1}
-									onDragStart={e => handleDragStart(e, idx)}
-									onDragOver={e => handleDragOver(e, idx)}
-									onDragEnd={handleDragEnd}
-									onDrop={e => handleDrop(e, idx)}
-									className={cn(
-										'flex items-center gap-(--gap-2) px-(--tool-header-padding) py-(--gap-1-5)',
-										'border-t border-(--panel-header-border)',
-										'text-xs transition-all duration-100',
-										isDragging && 'opacity-40',
-										isDragOver && 'bg-vscode-textLink-foreground/8',
-									)}
-								>
-									{/* Drag handle */}
-									{count > 1 && (
-										<span
-											className="shrink-0 cursor-grab active:cursor-grabbing text-vscode-descriptionForeground opacity-40 hover:opacity-80"
-											title="Drag to reorder"
+									return (
+										<li
+											key={entry.queueId}
+											draggable={count > 1}
+											onDragStart={e => handleDragStart(e, idx)}
+											onDragOver={e => handleDragOver(e, idx)}
+											onDragEnd={handleDragEnd}
+											onDrop={e => handleDrop(e, idx)}
+											className={cn(
+												'flex items-center gap-(--gap-2) px-(--tool-header-padding) py-(--gap-1-5)',
+												'border-t border-(--panel-header-border)',
+												'text-xs transition-all duration-100',
+												isDragging && 'opacity-40',
+												isDragOver && 'bg-vscode-textLink-foreground/8',
+											)}
 										>
-											<DragIcon size={12} />
-										</span>
-									)}
+											{/* Drag handle */}
+											{count > 1 && (
+												<span
+													className="shrink-0 cursor-grab active:cursor-grabbing text-vscode-descriptionForeground opacity-40 hover:opacity-80"
+													title="Drag to reorder"
+												>
+													<DragIcon size={12} />
+												</span>
+											)}
 
-									{/* Order number */}
-									<span className="shrink-0 w-4 text-center text-vscode-descriptionForeground opacity-50 text-[10px] font-medium">
-										{idx + 1}
-									</span>
+											{/* Order number */}
+											<span className="shrink-0 w-4 text-center text-vscode-descriptionForeground opacity-50 text-[10px] font-medium">
+												{idx + 1}
+											</span>
 
-									{/* Message text */}
-									<span
-										className="flex-1 min-w-0 truncate text-vscode-foreground opacity-80"
-										title={entry.text}
-									>
-										{truncated}
-									</span>
+											{/* Message text */}
+											<span
+												className="flex-1 min-w-0 truncate text-vscode-foreground opacity-80"
+												title={entry.text}
+											>
+												{truncated}
+											</span>
 
-									{/* Force send */}
-									<button
-										type="button"
-										onClick={e => {
-											e.stopPropagation();
-											handleForceSend(entry.queueId, entry.sessionId);
-										}}
-										aria-label="Stop current generation and send this message now"
-										className={cn(
-											'shrink-0 flex items-center gap-1 px-(--gap-1-5) py-(--gap-0-5)',
-											'rounded text-[11px] font-medium',
-											'text-vscode-textLink-foreground',
-											'hover:bg-vscode-textLink-foreground/10',
-											'focus-visible:outline focus-visible:outline-2 focus-visible:outline-vscode-focusBorder',
-											'transition-colors duration-150 cursor-pointer',
-											'border-none bg-transparent',
-										)}
-										title="Stop generation and send this message now"
-									>
-										<ForceSendIcon size={10} />
-										<span>Send</span>
-									</button>
+											{/* Force send */}
+											<button
+												type="button"
+												onClick={e => {
+													e.stopPropagation();
+													handleForceSend(entry.queueId, entry.sessionId);
+												}}
+												aria-label="Stop current generation and send this message now"
+												className={cn(
+													'shrink-0 flex items-center gap-1 px-(--gap-1-5) py-(--gap-0-5)',
+													'rounded text-[11px] font-medium',
+													'text-vscode-textLink-foreground',
+													'hover:bg-vscode-textLink-foreground/10',
+													'focus-visible:outline focus-visible:outline-2 focus-visible:outline-vscode-focusBorder',
+													'transition-colors duration-150 cursor-pointer',
+													'border-none bg-transparent',
+												)}
+												title="Stop generation and send this message now"
+											>
+												<ForceSendIcon size={10} />
+												<span>Send</span>
+											</button>
 
-									{/* Cancel */}
-									<button
-										type="button"
-										onClick={e => {
-											e.stopPropagation();
-											handleCancel(entry.queueId, entry.sessionId);
-										}}
-										aria-label="Cancel queued message and return text to input"
-										className={cn(
-											'shrink-0 flex items-center justify-center',
-											'w-5 h-5 rounded',
-											'text-vscode-foreground opacity-50 hover:opacity-100',
-											'hover:bg-(--alpha-10)',
-											'focus-visible:outline focus-visible:outline-2 focus-visible:outline-vscode-focusBorder',
-											'transition-all duration-150 cursor-pointer',
-											'border-none bg-transparent',
-										)}
-										title="Cancel and return text to input"
-									>
-										<CancelIcon size={10} />
-									</button>
-								</li>
-							);
-						})}
-					</ul>
-				)}
+											{/* Cancel */}
+											<button
+												type="button"
+												onClick={e => {
+													e.stopPropagation();
+													handleCancel(entry.queueId, entry.sessionId);
+												}}
+												aria-label="Cancel queued message and return text to input"
+												className={cn(
+													'shrink-0 flex items-center justify-center',
+													'w-5 h-5 rounded',
+													'text-vscode-foreground opacity-50 hover:opacity-100',
+													'hover:bg-(--alpha-10)',
+													'focus-visible:outline focus-visible:outline-2 focus-visible:outline-vscode-focusBorder',
+													'transition-all duration-150 cursor-pointer',
+													'border-none bg-transparent',
+												)}
+												title="Cancel and return text to input"
+											>
+												<CancelIcon size={10} />
+											</button>
+										</li>
+									);
+								})}
+							</motion.ul>
+						</motion.div>
+					)}
+				</AnimatePresence>
 			</div>
-		</div>
+		</motion.div>
 	);
 };
 QueuedMessageBanner.displayName = 'QueuedMessageBanner';

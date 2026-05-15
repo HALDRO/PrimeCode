@@ -475,6 +475,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (!this.directory) return;
 		logger.info('[OpenCode] Preloading metadata cache...');
 		await Promise.allSettled([
+			this.listCommands(this.directory),
 			this.listAgents(this.directory),
 			this.listSkills(this.directory),
 			this.getMcpStatus(this.directory),
@@ -485,6 +486,37 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	// =========================================================================
 	// API Helpers (Fetch Only)
 	// =========================================================================
+
+	public async listCommands(
+		directory: string,
+	): Promise<Array<{ name: string; description?: string }>> {
+		const cached = this._commandsCache.get();
+		if (cached) return cached;
+		try {
+			if (!this.serverUrl) return [];
+			const url = new URL('/command', this.serverUrl);
+			url.searchParams.set('directory', directory);
+			const response = await fetch(url);
+			if (!response.ok) return [];
+			const data = (await response.json()) as Array<{ name?: string; description?: string }>;
+			const commands = Array.isArray(data)
+				? data
+						.filter(
+							(command): command is { name: string; description?: string } =>
+								typeof command?.name === 'string' && command.name.trim().length > 0,
+						)
+						.map(command => ({
+							name: command.name.trim(),
+							...(typeof command.description === 'string'
+								? { description: command.description }
+								: {}),
+						}))
+				: [];
+			return this._commandsCache.set(commands);
+		} catch {
+			return [];
+		}
+	}
 
 	public async listAgents(directory: string): Promise<unknown> {
 		const cached = this._agentsCache.get();

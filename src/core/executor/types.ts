@@ -38,6 +38,8 @@ export interface CLIExecutor extends EventEmitter {
 	listSkills?(
 		directory: string,
 	): Promise<Array<{ name: string; description: string; location?: string; content?: string }>>;
+	/** Fetch built-in CLI commands from the OpenCode server. */
+	listCommands?(directory: string): Promise<Array<{ name: string; description?: string }>>;
 	/** Fetch agents from the OpenCode server (GET /agent). */
 	listAgents?(directory: string): Promise<unknown>;
 	/** Returns connection details for the status UI. */

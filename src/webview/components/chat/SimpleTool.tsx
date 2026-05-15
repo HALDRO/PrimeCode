@@ -1,6 +1,20 @@
+import { AnimatePresence, motion } from 'framer-motion';
 import React, { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { NormalizedEntry } from '../../../common/normalizedTypes';
-import { resolveToolName, TOOL_CARD_EXPANDED_MAX_HEIGHT } from '../../constants';
+import {
+	resolveToolName,
+	STREAM_PREVIEW_MAX_HEIGHT,
+	TOOL_CARD_EXPANDED_MAX_HEIGHT,
+	UI_CARD_EXPAND_ANIMATE,
+	UI_CARD_EXPAND_EXIT,
+	UI_CARD_EXPAND_INITIAL,
+	UI_CARD_EXPAND_OFFSET_ANIMATE,
+	UI_CARD_EXPAND_OFFSET_EXIT,
+	UI_CARD_EXPAND_OFFSET_INITIAL,
+	UI_CARD_MOUNT_ANIMATE,
+	UI_CARD_MOUNT_INITIAL,
+	UI_MOTION_FRAMER_TRANSITION,
+} from '../../constants';
 import { cn } from '../../lib/cn';
 import { useSettingsStore } from '../../store';
 import { formatDuration, formatToolName } from '../../utils/format';
@@ -35,6 +49,9 @@ const TodoStatusIcon: React.FC<{ status: string }> = ({ status }) => {
 			return <TodoPendingIcon size={14} className="text-vscode-foreground opacity-60 shrink-0" />;
 	}
 };
+
+export const THINKING_TEXT_CLASS_NAME =
+	'[&_p]:!text-sm [&_p]:!text-vscode-descriptionForeground [&_li]:!text-sm [&_li]:!text-vscode-descriptionForeground [&_ul]:!text-sm [&_ol]:!text-sm !text-vscode-descriptionForeground';
 
 interface SimpleToolProps {
 	icon: ReactNode;
@@ -88,7 +105,12 @@ export const SimpleTool: React.FC<SimpleToolProps> = ({
 	};
 
 	return (
-		<div className={cn('mb-(--tool-utility-block-margin) ml-2 animate-fade-slide-in', className)}>
+		<motion.div
+			className={cn('mb-(--tool-utility-block-margin) ml-2', className)}
+			initial={UI_CARD_MOUNT_INITIAL}
+			animate={UI_CARD_MOUNT_ANIMATE}
+			transition={UI_MOTION_FRAMER_TRANSITION}
+		>
 			<button
 				type="button"
 				onClick={toggle}
@@ -139,28 +161,38 @@ export const SimpleTool: React.FC<SimpleToolProps> = ({
 					</span>
 				)}
 			</button>
-			{expanded && hasContent && (
-				<div className="relative group">
-					<div
-						id={contentId}
-						style={{
-							maxHeight: maxExpandedHeight,
-							opacity: 1,
-							transform: 'translateY(0)',
-							transition:
-								'max-height 240ms ease-out, opacity 220ms ease-out, transform 220ms ease-out',
-						}}
-						className={cn(
-							'pl-3 ml-1 border-l border-(--border-subtle) mt-1 py-1 text-sm overflow-x-auto overflow-y-auto animate-fade-in',
-							contentClassName,
-						)}
+			<AnimatePresence initial={false}>
+				{expanded && hasContent && (
+					<motion.div
+						className="relative group"
+						initial={UI_CARD_EXPAND_INITIAL}
+						animate={UI_CARD_EXPAND_ANIMATE}
+						exit={UI_CARD_EXPAND_EXIT}
+						transition={UI_MOTION_FRAMER_TRANSITION}
 					>
-						{children}
-					</div>
-					{showCollapseOverlay && <CollapseOverlay visible={true} onCollapse={toggle} />}
-				</div>
-			)}
-		</div>
+						<motion.div
+							id={contentId}
+							initial={UI_CARD_EXPAND_OFFSET_INITIAL}
+							animate={UI_CARD_EXPAND_OFFSET_ANIMATE}
+							exit={UI_CARD_EXPAND_OFFSET_EXIT}
+							transition={UI_MOTION_FRAMER_TRANSITION}
+							className={cn(
+								'pl-3 ml-1 border-l border-(--border-subtle) mt-1 py-1 text-sm overflow-hidden',
+								contentClassName,
+							)}
+						>
+							<div
+								style={{ maxHeight: maxExpandedHeight }}
+								className="overflow-x-auto overflow-y-auto animate-fade-in"
+							>
+								{children}
+							</div>
+						</motion.div>
+						{showCollapseOverlay && <CollapseOverlay visible={true} onCollapse={toggle} />}
+					</motion.div>
+				)}
+			</AnimatePresence>
+		</motion.div>
 	);
 };
 
@@ -170,6 +202,7 @@ interface ThinkingMessageProps {
 	isStreaming?: boolean;
 	startTime?: string | number;
 	defaultExpanded?: boolean;
+	inheritPreviewHeight?: boolean;
 }
 
 import { useElapsedTimer } from '../../hooks/useElapsedTimer';
@@ -178,30 +211,34 @@ import { useElapsedTimer } from '../../hooks/useElapsedTimer';
 export { useElapsedTimer };
 
 export const ThinkingMessage = React.memo<ThinkingMessageProps>(
-	({ content, durationMs, isStreaming, startTime, defaultExpanded }) => {
-		const [expanded, setExpanded] = useState(defaultExpanded ?? isStreaming ?? false);
-		const wasStreamingRef = useRef(isStreaming);
-		const autoExpandedRef = useRef(Boolean(defaultExpanded ?? isStreaming));
+	({
+		content,
+		durationMs,
+		isStreaming,
+		startTime,
+		defaultExpanded,
+		inheritPreviewHeight = false,
+	}) => {
+		const [manualExpanded, setManualExpanded] = useState<boolean | null>(defaultExpanded ?? null);
+		const wasStreamingRef = useRef(Boolean(isStreaming));
 		const liveElapsed = useElapsedTimer(isStreaming ?? false, startTime, durationMs);
+		const expanded = manualExpanded ?? Boolean(isStreaming);
+		const previewMaxHeight = isStreaming
+			? inheritPreviewHeight
+				? 'none'
+				: `${STREAM_PREVIEW_MAX_HEIGHT}px`
+			: undefined;
 
 		useEffect(() => {
-			if (isStreaming) {
-				setExpanded(true);
-				autoExpandedRef.current = true;
-			} else if (wasStreamingRef.current && !isStreaming) {
-				if (autoExpandedRef.current) {
-					setExpanded(false);
-				}
-				autoExpandedRef.current = false;
-			} else if (!isStreaming) {
-				// On restore/replay the component can mount or be reused in an expanded
-				// state without seeing a clean streaming->idle transition. Thinking blocks
-				// should default to collapsed whenever they are not actively streaming.
-				setExpanded(false);
-				autoExpandedRef.current = false;
+			if (wasStreamingRef.current && !isStreaming && manualExpanded === null) {
+				setManualExpanded(false);
+			} else if (!isStreaming && manualExpanded === null) {
+				// On restore/replay the component can mount or be reused without seeing
+				// a live transition. Default completed thinking blocks to collapsed.
+				setManualExpanded(false);
 			}
-			wasStreamingRef.current = isStreaming;
-		}, [isStreaming]);
+			wasStreamingRef.current = Boolean(isStreaming);
+		}, [isStreaming, manualExpanded]);
 
 		const displayDuration = liveElapsed;
 
@@ -209,7 +246,14 @@ export const ThinkingMessage = React.memo<ThinkingMessageProps>(
 		const combinedMeta = (
 			<span className="flex items-center gap-1 w-full min-w-0">
 				{displayDuration != null && displayDuration > 0 && (
-					<span className="shrink-0 flex items-center gap-1 text-sm font-bold text-vscode-descriptionForeground">
+					<span
+						className={cn(
+							'shrink-0 flex items-center gap-1 text-sm font-bold transition-colors duration-300',
+							isStreaming
+								? 'text-vscode-textLink-foreground animate-pulse'
+								: 'text-vscode-descriptionForeground',
+						)}
+					>
 						<TimerIcon size={11} />
 						{formatDuration(displayDuration)}
 					</span>
@@ -219,21 +263,31 @@ export const ThinkingMessage = React.memo<ThinkingMessageProps>(
 
 		return (
 			<SimpleTool
-				icon={<BrainSideIcon size={17} className="text-vscode-descriptionForeground" />}
+				icon={
+					<BrainSideIcon
+						size={17}
+						className={cn(
+							'transition-colors duration-300',
+							isStreaming
+								? 'text-vscode-textLink-foreground animate-pulse'
+								: 'text-vscode-descriptionForeground',
+						)}
+					/>
+				}
 				label="Thinking"
 				meta={combinedMeta}
 				expanded={expanded}
+				maxExpandedHeight={previewMaxHeight}
 				onToggle={() => {
-					autoExpandedRef.current = false;
-					setExpanded(prev => !prev);
+					setManualExpanded(prev => !(prev ?? Boolean(isStreaming)));
 				}}
-				className="mb-(--message-gap)"
+				className="mb-(--tool-utility-block-margin)"
 			>
 				{content && (
 					<Markdown
 						content={content}
 						isStreaming={isStreaming}
-						className="[&_p]:!text-sm [&_p]:!text-vscode-descriptionForeground [&_li]:!text-sm [&_li]:!text-vscode-descriptionForeground [&_ul]:!text-sm [&_ol]:!text-sm !text-vscode-descriptionForeground"
+						className={THINKING_TEXT_CLASS_NAME}
 					/>
 				)}
 			</SimpleTool>
@@ -285,6 +339,14 @@ const getSkillMeta = (input: Record<string, unknown> | null) => ({
 	path: getInputString(input, 'location', 'filePath', 'file_path', 'path'),
 });
 
+const GREP_SUMMARY_LINE =
+	/^Found (\d+) match(?:es|\(es\))(?: in \d+ file\(s\))?(?: \(showing first \d+\))?$/;
+
+const SEARCH_FILE_LINE =
+	/^(?<path>(?:[A-Za-z]:[\\/]|\.\.?[\\/]|\/)[^\r\n]*?(?:\.[A-Za-z0-9_-]{1,16}|[\\/][^\\/.:\r\n]+))(?::)?$/;
+const SEARCH_MATCH_LINE = /^\s+(?:Line\s+)?(?<line>\d+):\s?(?<text>.*)$/;
+const SEARCH_PARSER_STOP_LINE = /^(?:\[Agent Usage Reminder\]|```)/;
+
 interface InlineToolLineProps {
 	toolName: string;
 	rawInput: unknown;
@@ -292,6 +354,7 @@ interface InlineToolLineProps {
 	isError: boolean;
 	defaultExpanded?: boolean;
 	normalizedEntry?: NormalizedEntry;
+	toolMetadata?: Record<string, unknown>;
 	showCollapseOverlay?: boolean;
 }
 
@@ -303,6 +366,7 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 		isError,
 		defaultExpanded,
 		normalizedEntry,
+		toolMetadata,
 		showCollapseOverlay,
 	}) => {
 		const { postMessage } = useVSCode();
@@ -544,47 +608,19 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 		const lines = useMemo((): string[] => fullText.split('\n'), [fullText]);
 		const nonEmptyLineCount = lines.filter((l: string) => l.length > 0).length;
 
-		// Parse search results into structured entries: { filePath, line }
-		// Grep format: "Found N matches\n/path/file.ts:\n  Line 10: content\n  Line 25: content"
-		// Glob format: "/path/file1.ts\n/path/file2.ts"
-		const searchEntries = useMemo(() => {
-			if (!isSearch || !fullText.trim()) return [];
-			const entries: Array<{ filePath: string; line?: number }> = [];
-			const seen = new Set<string>();
-			let currentFile = '';
-			for (const raw of lines) {
-				const trimmed = raw.trim();
-				if (!trimmed) continue;
-				// Skip summary lines like "Found N matches" or "(Results truncated...)"
-				if (/^Found \d+ matches/.test(trimmed) || /^\(/.test(trimmed)) continue;
-				// Grep file header: "/absolute/path/file.ts:"
-				if (/^.+:$/.test(trimmed) && !trimmed.startsWith('Line ')) {
-					currentFile = trimmed.slice(0, -1);
-					continue;
-				}
-				// Grep match line: "  Line 42: content"
-				const lineMatch = trimmed.match(/^Line (\d+):/);
-				if (lineMatch && currentFile) {
-					const key = `${currentFile}:${lineMatch[1]}`;
-					if (seen.has(key)) continue;
-					seen.add(key);
-					entries.push({ filePath: currentFile, line: Number(lineMatch[1]) });
-					continue;
-				}
-				// Glob: any path-like entry, including relative files with spaces.
-				if (
-					!trimmed.startsWith('Line ') &&
-					(/[\\/]/.test(trimmed) || /\.\w{1,10}$/.test(trimmed))
-				) {
-					if (seen.has(trimmed)) continue;
-					seen.add(trimmed);
-					entries.push({ filePath: trimmed });
-				}
-			}
-			return entries;
-		}, [isSearch, fullText, lines]);
-
-		const searchResultCount = searchEntries.length;
+		const searchResultCount = useMemo(() => {
+			if (!isSearch) return 0;
+			const metadataCount =
+				typeof toolMetadata?.matches === 'number'
+					? toolMetadata.matches
+					: typeof toolMetadata?.count === 'number'
+						? toolMetadata.count
+						: undefined;
+			if (typeof metadataCount === 'number' && metadataCount >= 0) return metadataCount;
+			const firstNonEmptyLine = lines.find(line => line.trim().length > 0)?.trim();
+			const summaryMatch = firstNonEmptyLine?.match(GREP_SUMMARY_LINE);
+			return summaryMatch ? Number(summaryMatch[1]) : 0;
+		}, [isSearch, lines, toolMetadata]);
 
 		const rawInputText = useMemo(() => {
 			if (!rawInput || isKnownTool || isRead || isSearch || isTodoWrite || isTaskResult) return '';
@@ -596,6 +632,93 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 		}, [isKnownTool, isRead, isSearch, isTaskResult, isTodoWrite, rawInput]);
 		const genericRawBody = rawInputText.trim();
 		const hasBody = !isRead && (fullText.trim().length > 0 || genericRawBody.length > 0);
+
+		const renderedSearchLines = useMemo(() => {
+			if (!isSearch || !hasBody) return [] as React.ReactNode[];
+			let currentFilePath: string | null = null;
+			let parsingEnabled = true;
+			return lines.map((line, index) => {
+				const lineKey = `${index}:${line}`;
+				const trimmed = line.trim();
+				if (!trimmed) {
+					return <div key={lineKey} className="h-[0.5lh]" />;
+				}
+
+				if (SEARCH_PARSER_STOP_LINE.test(trimmed)) {
+					parsingEnabled = false;
+					currentFilePath = null;
+				}
+
+				if (!parsingEnabled) {
+					return (
+						<div
+							key={lineKey}
+							className="text-sm leading-(--line-height-code) text-vscode-descriptionForeground opacity-80 whitespace-pre-wrap"
+						>
+							{line}
+						</div>
+					);
+				}
+
+				const fileMatch = line.match(SEARCH_FILE_LINE);
+				if (
+					fileMatch?.groups?.path &&
+					!trimmed.startsWith('Found ') &&
+					!trimmed.startsWith('(') &&
+					!trimmed.startsWith('[')
+				) {
+					currentFilePath = fileMatch.groups.path.replace(/:$/, '');
+					return (
+						<div key={lineKey} className="my-0.5">
+							<PathChip
+								path={currentFilePath}
+								title={currentFilePath}
+								onClick={() => postMessage({ type: 'openFile', filePath: currentFilePath ?? '' })}
+								className="max-w-full min-w-0"
+							/>
+						</div>
+					);
+				}
+
+				const lineMatch = line.match(SEARCH_MATCH_LINE);
+				if (lineMatch?.groups?.line && currentFilePath) {
+					const filePath = currentFilePath;
+					const lineNumber = Number(lineMatch.groups.line);
+					const matchText = lineMatch.groups.text ?? '';
+					return (
+						<div key={lineKey} className="flex items-start gap-2 py-[1px]">
+							<PathChip
+								path={filePath}
+								label={getLeafName(filePath)}
+								line={lineNumber}
+								title={`${filePath}:${lineNumber}`}
+								onClick={() =>
+									postMessage({
+										type: 'openFile',
+										filePath,
+										startLine: lineNumber,
+										endLine: lineNumber,
+									})
+								}
+								className="shrink-0"
+							/>
+							<span className="text-sm leading-(--line-height-code) text-vscode-descriptionForeground opacity-80 break-all">
+								{matchText}
+							</span>
+						</div>
+					);
+				}
+
+				return (
+					<div
+						key={lineKey}
+						className="text-sm leading-(--line-height-code) text-vscode-descriptionForeground opacity-80 whitespace-pre-wrap"
+					>
+						{line}
+					</div>
+				);
+			});
+		}, [hasBody, isSearch, lines, postMessage]);
 
 		const todos = useMemo((): Array<{ content: string; status: string }> => {
 			if (!isTodoWrite) return [];
@@ -683,30 +806,8 @@ export const InlineToolLine = React.memo<InlineToolLineProps>(
 						content={fullText}
 						className="[&_p]:!text-sm [&_p]:!text-vscode-descriptionForeground [&_li]:!text-sm [&_li]:!text-vscode-descriptionForeground [&_ul]:!text-sm [&_ol]:!text-sm !text-vscode-descriptionForeground"
 					/>
-				) : isSearch && searchEntries.length > 0 ? (
-					<div className="flex flex-wrap gap-1">
-						{searchEntries.map((entry, idx) => (
-							<PathChip
-								// biome-ignore lint/suspicious/noArrayIndexKey: static list
-								key={idx}
-								path={entry.filePath}
-								line={entry.line}
-								title={entry.filePath}
-								onClick={() =>
-									postMessage({
-										type: 'openFile',
-										filePath: entry.filePath,
-										...(entry.line !== undefined ? { line: entry.line } : {}),
-									})
-								}
-								className="shrink-0"
-							/>
-						))}
-					</div>
 				) : isSearch && hasBody ? (
-					<pre className="m-0 px-1 py-0.5 rounded-sm text-sm leading-(--line-height-code) whitespace-pre-wrap text-vscode-descriptionForeground opacity-80">
-						{fullText}
-					</pre>
+					<div className="m-0 px-1 py-0.5 rounded-sm">{renderedSearchLines}</div>
 				) : isTodoWrite ? (
 					<div className="flex flex-col gap-1">
 						{todos.map((todo, idx) => (

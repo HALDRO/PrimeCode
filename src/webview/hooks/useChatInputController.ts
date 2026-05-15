@@ -138,14 +138,14 @@ export function useChatInputController(
 		sessionModel,
 	]);
 
-	// Build a set of valid agent names for @mention parsing
-	const validAgentNames = useMemo(() => {
-		const names = new Set<string>();
-		for (const agent of agentResources) {
-			if (!agent.disabled && !agent.hidden) names.add(agent.name.toLowerCase());
-		}
-		return names;
-	}, [agentResources]);
+	const availableAgentNames = useMemo(
+		() =>
+			agentResources
+				.filter(agent => !agent.disabled && !agent.hidden)
+				.map(agent => agent.name)
+				.sort((a, b) => b.length - a.length),
+		[agentResources],
+	);
 
 	useEffect(() => {
 		if (!selectedAgent) return;
@@ -270,18 +270,24 @@ export function useChatInputController(
 			builtAttachments.files || builtAttachments.codeSnippets || builtAttachments.images;
 
 		// Parse @agent from text as fallback when selectedAgent is not set via InputToolbar.
-		// Only match known subagent/CLI agent names to avoid false positives with @filenames.
+		// Only match known agent names from resources to avoid false positives with @filenames.
 		let agent = selectedAgent;
 		if (!agent) {
-			const mentions = inputValue.match(/(?<=^|\s)@([a-zA-Z0-9_-]+)(?=\s|$)/g);
-			if (mentions) {
-				for (const mention of mentions) {
-					const name = mention.trim().slice(1); // remove @ prefix
-					if (validAgentNames.has(name.toLowerCase())) {
-						agent = name;
-						break;
-					}
+			const normalizedInput = inputValue.toLowerCase();
+			for (let index = 0; index < inputValue.length; index++) {
+				if (inputValue[index] !== '@') continue;
+				const prevChar = inputValue[index - 1];
+				if (prevChar && !/\s/.test(prevChar)) continue;
+
+				for (const candidate of availableAgentNames) {
+					const mention = `@${candidate}`;
+					if (!normalizedInput.startsWith(mention.toLowerCase(), index)) continue;
+					const nextChar = inputValue[index + mention.length];
+					if (nextChar && !/\s/.test(nextChar)) continue;
+					agent = candidate;
+					break;
 				}
+				if (agent) break;
 			}
 		}
 
@@ -320,7 +326,7 @@ export function useChatInputController(
 		clearPromptVersions,
 		lastSelectedModel,
 		sessionModel,
-		validAgentNames.has,
+		availableAgentNames,
 		ensureSessionForSend,
 	]);
 

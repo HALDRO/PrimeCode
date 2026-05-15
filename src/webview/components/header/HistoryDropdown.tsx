@@ -6,6 +6,8 @@
 
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { UI_MOTION_ALL_CLASS } from '../../constants';
+import { cn } from '../../lib/cn';
 import { openCodeRuntime } from '../../services/opencodeRuntime';
 import {
 	type ConversationIndexEntry,
@@ -251,7 +253,16 @@ export const HistoryDropdown: React.FC = () => {
 					setHoveredId(item.id);
 				}}
 				onMouseLeave={() => setHoveredId(null)}
-				className={`flex items-center px-(--gap-3) py-(--gap-2) gap-(--gap-3) min-h-(--h-md) text-md relative rounded-md transition-colors hover:bg-(--alpha-8) ${isEditing ? 'cursor-default' : 'cursor-pointer'} ${selected || isHovered ? 'bg-vscode-list-hoverBackground' : isActive ? 'bg-(--alpha-5)' : 'bg-transparent'}`}
+				className={cn(
+					'flex items-center px-(--gap-3) py-(--gap-2) gap-(--gap-3) min-h-(--h-md) text-md relative rounded-md hover:bg-(--alpha-8)',
+					UI_MOTION_ALL_CLASS,
+					isEditing ? 'cursor-default' : 'cursor-pointer',
+					selected || isHovered
+						? 'bg-vscode-list-hoverBackground'
+						: isActive
+							? 'bg-(--alpha-5)'
+							: 'bg-transparent',
+				)}
 			>
 				{isEditing ? (
 					<input
@@ -268,7 +279,7 @@ export const HistoryDropdown: React.FC = () => {
 						<span className="opacity-50 flex shrink-0">{item.icon}</span>
 						{openSessionNumber ? (
 							<span
-								className={`inline-flex min-w-5 h-5 items-center justify-center rounded-md px-1 text-xs font-medium shrink-0 ${isActive ? 'bg-vscode-focusBorder/15 text-vscode-focusBorder' : 'bg-(--alpha-8) text-vscode-descriptionForeground'}`}
+								className={`inline-flex min-w-5 h-5 items-center justify-center rounded-md px-1 text-xs font-medium shrink-0 ${isActive ? 'bg-[color-mix(in_srgb,var(--vscode-focusBorder)_15%,transparent)] text-vscode-focusBorder' : 'bg-(--alpha-8) text-vscode-descriptionForeground'}`}
 								title={`Open in header as chat ${openSessionNumber}`}
 							>
 								{openSessionNumber}

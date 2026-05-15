@@ -126,6 +126,9 @@ class InlineAttachmentWidget extends WidgetType {
 	constructor(
 		private readonly match: ReturnType<typeof extractInlineAttachmentMatches>[number],
 		private readonly onOpen: (filePath: string, startLine?: number, endLine?: number) => void,
+		private readonly onRemove: (
+			match: ReturnType<typeof extractInlineAttachmentMatches>[number],
+		) => void,
 	) {
 		super();
 	}
@@ -143,6 +146,7 @@ class InlineAttachmentWidget extends WidgetType {
 			createElement(InlineAttachmentChip, {
 				match: this.match,
 				onOpen: this.onOpen,
+				onRemove: () => this.onRemove(this.match),
 			}),
 		);
 		(wrap as HTMLElement & { __root?: Root | null }).__root = root;
@@ -187,12 +191,30 @@ function buildInlineAttachmentDecorations(view: EditorView): DecorationSet {
 	const openFile = (filePath: string, startLine?: number, endLine?: number) => {
 		vscode.postMessage({ type: 'openFile', filePath, startLine, endLine });
 	};
+	const removeAttachment = (
+		targetMatch: ReturnType<typeof extractInlineAttachmentMatches>[number],
+	) => {
+		const currentDoc = view.state.doc.toString();
+		const trailingWhitespaceMatch = currentDoc.slice(targetMatch.end).match(/^ +/);
+		let to = targetMatch.end;
+		if (trailingWhitespaceMatch) {
+			to += trailingWhitespaceMatch[0].length;
+			if (to > targetMatch.end + 1 && to < currentDoc.length) {
+				to = targetMatch.end + 1;
+			}
+		}
+		view.dispatch({
+			changes: { from: targetMatch.start, to, insert: '' },
+			selection: { anchor: targetMatch.start },
+		});
+		view.focus();
+	};
 	for (const match of matches) {
 		builder.add(
 			match.start,
 			match.end,
 			Decoration.replace({
-				widget: new InlineAttachmentWidget(match, openFile),
+				widget: new InlineAttachmentWidget(match, openFile, removeAttachment),
 				inclusive: false,
 			}),
 		);
@@ -209,7 +231,7 @@ function findInlineRangeAt(
 	position: number,
 ): InlineAttachmentRange | null {
 	for (const range of ranges) {
-		if (position >= range.from && position <= range.to) return range;
+		if (position >= range.from && position < range.to) return range;
 	}
 	return null;
 }
@@ -231,7 +253,8 @@ function removeInlineAttachmentAtSelection(
 	direction: 'backward' | 'forward',
 ): boolean {
 	const selection = view.state.selection.main;
-	const ranges = getInlineAttachmentRanges(view.state.doc.toString());
+	const doc = view.state.doc.toString();
+	const ranges = getInlineAttachmentRanges(doc);
 	if (ranges.length === 0) return false;
 
 	let target: InlineAttachmentRange | null = null;
@@ -245,8 +268,14 @@ function removeInlineAttachmentAtSelection(
 	}
 	if (!target) return false;
 
+	// Also consume the trailing space after the deleted attachment
+	let cleanTo = target.to;
+	while (cleanTo < doc.length && doc[cleanTo] === ' ') cleanTo++;
+	// But keep at least one space if there's content after
+	if (cleanTo > target.to + 1 && cleanTo < doc.length) cleanTo = target.to + 1;
+
 	view.dispatch({
-		changes: { from: target.from, to: target.to, insert: '' },
+		changes: { from: target.from, to: cleanTo, insert: '' },
 		selection: { anchor: target.from },
 	});
 	return true;
@@ -273,7 +302,13 @@ class ChatHighlighterPlugin {
 	}
 
 	update(update: ViewUpdate) {
-		if (update.docChanged || update.viewportChanged) {
+		if (
+			update.docChanged ||
+			update.viewportChanged ||
+			update.startState.facet(validCommandsFacet) !== update.state.facet(validCommandsFacet) ||
+			update.startState.facet(validSubagentsFacet) !== update.state.facet(validSubagentsFacet) ||
+			update.startState.facet(validSkillsFacet) !== update.state.facet(validSkillsFacet)
+		) {
 			this.decorations = buildHighlightDecorations(update.view);
 		}
 	}
@@ -293,7 +328,7 @@ class InlineAttachmentPlugin {
 	}
 
 	update(update: ViewUpdate) {
-		if (update.docChanged || update.viewportChanged) {
+		if (update.docChanged) {
 			this.decorations = buildInlineAttachmentDecorations(update.view);
 		}
 	}

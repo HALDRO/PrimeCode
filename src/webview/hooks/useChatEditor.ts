@@ -4,13 +4,37 @@
  *              Uses Compartment for dynamic extension updates without remounting.
  */
 
-import { Compartment, EditorState, type Extension } from '@codemirror/state';
+import {
+	Annotation,
+	Compartment,
+	EditorState,
+	type Extension,
+	Transaction,
+} from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { type RefObject, useEffect, useRef } from 'react';
 
-type PrimeCodeEditorView = EditorView & {
-	__primecodeSuppressNextSyncChange?: boolean;
-};
+const controlledSyncAnnotation = Annotation.define<boolean>();
+
+function getMinimalDocChange(current: string, next: string) {
+	let start = 0;
+	const sharedLength = Math.min(current.length, next.length);
+	while (start < sharedLength && current[start] === next[start]) start++;
+	if (start === current.length && start === next.length) return null;
+
+	let currentEnd = current.length;
+	let nextEnd = next.length;
+	while (currentEnd > start && nextEnd > start && current[currentEnd - 1] === next[nextEnd - 1]) {
+		currentEnd--;
+		nextEnd--;
+	}
+
+	return {
+		from: start,
+		to: currentEnd,
+		insert: next.slice(start, nextEnd),
+	};
+}
 
 export interface UseChatEditorOptions {
 	containerRef: RefObject<HTMLDivElement | null>;
@@ -28,10 +52,15 @@ export function useChatEditor(options: UseChatEditorOptions): RefObject<EditorVi
 	const viewRef = useRef<EditorView | null>(null);
 	const compartmentRef = useRef(new Compartment());
 	const onChangeRef = useRef(options.onChange);
+	const autoFocusRef = useRef(options.autoFocus);
 
 	useEffect(() => {
 		onChangeRef.current = options.onChange;
 	}, [options.onChange]);
+
+	useEffect(() => {
+		autoFocusRef.current = options.autoFocus;
+	}, [options.autoFocus]);
 
 	// Stable refs for values that should NOT trigger EditorView re-creation
 	const initialValueRef = useRef(options.initialValue);
@@ -47,9 +76,9 @@ export function useChatEditor(options: UseChatEditorOptions): RefObject<EditorVi
 
 		const updateListener = EditorView.updateListener.of(update => {
 			if (update.docChanged) {
-				const currentView = update.view as PrimeCodeEditorView;
-				if (currentView.__primecodeSuppressNextSyncChange) {
-					currentView.__primecodeSuppressNextSyncChange = false;
+				if (
+					update.transactions.some(transaction => transaction.annotation(controlledSyncAnnotation))
+				) {
 					return;
 				}
 				onChangeRef.current(update.state.doc.toString());
@@ -70,7 +99,7 @@ export function useChatEditor(options: UseChatEditorOptions): RefObject<EditorVi
 		});
 
 		viewRef.current = view;
-		if (options.autoFocus) {
+		if (autoFocusRef.current) {
 			requestAnimationFrame(() => view.focus());
 		}
 
@@ -79,15 +108,15 @@ export function useChatEditor(options: UseChatEditorOptions): RefObject<EditorVi
 			viewRef.current = null;
 		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [options.autoFocus, options.containerRef]);
+	}, [options.containerRef]);
 
 	// Dynamically reconfigure extensions via Compartment (no editor re-creation)
 	useEffect(() => {
-		if (viewRef.current && options.extensions) {
-			viewRef.current.dispatch({
-				effects: compartmentRef.current.reconfigure(options.extensions),
-			});
-		}
+		const view = viewRef.current;
+		if (!view) return;
+		view.dispatch({
+			effects: compartmentRef.current.reconfigure(options.extensions ?? []),
+		});
 	}, [options.extensions]);
 
 	return viewRef;
@@ -104,16 +133,11 @@ export function useSyncEditorValue(viewRef: RefObject<EditorView | null>, value:
 		const view = viewRef.current;
 		if (!view) return;
 		const current = view.state.doc.toString();
-		if (current !== value) {
-			// Prevent controlled sync dispatches from feeding back into React onChange.
-			// Without this guard, a single external value update can be observed as a
-			// second user edit and duplicate the composed text.
-			const syncView = view as PrimeCodeEditorView;
-			syncView.__primecodeSuppressNextSyncChange = true;
-			view.dispatch({
-				changes: { from: 0, to: current.length, insert: value },
-				selection: { anchor: value.length },
-			});
-		}
+		const change = getMinimalDocChange(current, value);
+		if (!change) return;
+		view.dispatch({
+			changes: change,
+			annotations: [controlledSyncAnnotation.of(true), Transaction.addToHistory.of(false)],
+		});
 	}, [value, viewRef]);
 }

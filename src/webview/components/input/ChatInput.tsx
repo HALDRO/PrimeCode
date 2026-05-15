@@ -4,6 +4,8 @@
  *              All sub-concerns are extracted into dedicated components and hooks.
  */
 
+import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
+import { Prec } from '@codemirror/state';
 import { keymap } from '@codemirror/view';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -16,8 +18,6 @@ import { useFileAttachments } from '../../hooks/useFileAttachments';
 import { cn } from '../../lib/cn';
 import { useFilePickerControls, useSettingsStore, useSlashCommandsState } from '../../store';
 import { useVSCode } from '../../utils/vscode';
-import { FolderOpenIcon } from '../icons';
-import { IconButton } from '../ui';
 import {
 	chatHighlighter,
 	chatKeymap,
@@ -83,7 +83,6 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 	}) => {
 		const { postMessage } = useVSCode();
 		const editorRef = useRef<EditorCoreRef>(null);
-		const [showFolderOverlay, setShowFolderOverlay] = useState(false);
 		const inputBridgeRef = useRef<{
 			inputValue: string;
 			setInputValue: (value: string) => void;
@@ -95,16 +94,22 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 			const view = editorRef.current?.view;
 			if (view) {
 				const selection = view.state.selection.main;
+				const docLen = view.state.doc.length;
+
+				// Ensure a single space before the reference if preceded by non-whitespace
 				const prefix =
 					selection.from > 0 &&
 					!/\s/.test(view.state.doc.sliceString(selection.from - 1, selection.from))
 						? ' '
 						: '';
-				const suffix =
-					selection.to < view.state.doc.length &&
-					!/\s/.test(view.state.doc.sliceString(selection.to, selection.to + 1))
-						? ' '
-						: '';
+
+				// Always add a trailing space so the cursor lands in a clean position
+				// for the next attachment or typed text. If there's already a space after,
+				// skip the extra one to avoid double-spacing.
+				const charAfter =
+					selection.to < docLen ? view.state.doc.sliceString(selection.to, selection.to + 1) : '';
+				const suffix = charAfter === ' ' ? '' : ' ';
+
 				const insert = `${prefix}${inlineReference}${suffix}`;
 				view.dispatch({
 					changes: { from: selection.from, to: selection.to, insert },
@@ -117,7 +122,7 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 			const bridge = inputBridgeRef.current;
 			if (!bridge) return;
 			const trimmed = bridge.inputValue.trimEnd();
-			bridge.setInputValue(`${trimmed}${trimmed ? ' ' : ''}${inlineReference}`);
+			bridge.setInputValue(`${trimmed}${trimmed ? ' ' : ''}${inlineReference} `);
 		}, []);
 
 		const {
@@ -152,10 +157,13 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 			controlledOnSend,
 			attachments,
 		});
-		inputBridgeRef.current = {
-			inputValue: controller.inputValue,
-			setInputValue: controller.setInputValue,
-		};
+
+		useEffect(() => {
+			inputBridgeRef.current = {
+				inputValue: controller.inputValue,
+				setInputValue: controller.setInputValue,
+			};
+		}, [controller.inputValue, controller.setInputValue]);
 
 		const dropdowns = useDropdownTriggers();
 		const { showSlashCommands, setShowSlashCommands, setSlashFilter } = useSlashCommandsState();
@@ -167,9 +175,17 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 		);
 
 		const agentResources = useSettingsStore(s => s.resources.agent.items);
+		const commandResources = useSettingsStore(s => s.resources.command.items);
 		const skillResources = useSettingsStore(s => s.resources.skill.items);
 
-		const validCommands = useMemo(() => new Set<string>(['compact']), []);
+		const validCommands = useMemo(
+			() =>
+				new Set<string>([
+					'compact',
+					...commandResources.map(command => command.name.toLowerCase()),
+				]),
+			[commandResources],
+		);
 		const validSkillNames = useMemo(
 			() => new Set(skillResources.map(skill => skill.name.toLowerCase())),
 			[skillResources],
@@ -217,18 +233,22 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 
 				if (view && triggerPos !== null) {
 					const currentPos = view.state.selection.main.head;
+					const docLen = view.state.doc.length;
+					// Add trailing space unless the character after the replaced range is already a space
+					const charAfter =
+						currentPos < docLen ? view.state.doc.sliceString(currentPos, currentPos + 1) : '';
+					const insertText = charAfter === ' ' ? inlineReference : `${inlineReference} `;
 					view.dispatch({
-						changes: { from: triggerPos, to: currentPos, insert: inlineReference },
-						selection: { anchor: triggerPos + inlineReference.length },
+						changes: { from: triggerPos, to: currentPos, insert: insertText },
+						selection: { anchor: triggerPos + insertText.length },
 					});
 					view.focus();
 				} else {
 					// Fallback: string-based removal
 					const lastAt = controller.inputValue.lastIndexOf('@');
 					if (lastAt >= 0) {
-						const nextValue = `${controller.inputValue.substring(0, lastAt).trimEnd()}${
-							controller.inputValue.substring(0, lastAt).trimEnd() ? ' ' : ''
-						}${inlineReference}`;
+						const before = controller.inputValue.substring(0, lastAt).trimEnd();
+						const nextValue = `${before}${before ? ' ' : ''}${inlineReference} `;
 						controller.setInputValue(nextValue);
 					}
 				}
@@ -246,6 +266,33 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 			[postMessage],
 		);
 
+		const handleSlashCommandSelect = useCallback(
+			(insertText: string) => {
+				const view = editorRef.current?.view;
+				const triggerPos = dropdowns.slashCommandTriggerIndex;
+				if (view && triggerPos !== null) {
+					const currentPos = view.state.selection.main.head;
+					view.dispatch({
+						changes: { from: triggerPos, to: currentPos, insert: insertText },
+						selection: { anchor: triggerPos + insertText.length },
+					});
+					view.focus();
+					return;
+				}
+
+				const lastSlash = controller.inputValue.lastIndexOf('/');
+				if (lastSlash < 0) {
+					controller.setInputValue(
+						controller.inputValue.trim() ? `${controller.inputValue} ${insertText}` : insertText,
+					);
+					return;
+				}
+				const before = controller.inputValue.substring(0, lastSlash);
+				controller.setInputValue(`${before}${insertText}`);
+			},
+			[controller, dropdowns.slashCommandTriggerIndex],
+		);
+
 		const dropdownsOpen = showSlashCommands || showFilePicker;
 
 		// Stable refs for CM6 callbacks — prevents cmExtensions from being
@@ -257,6 +304,10 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 		sendDisabledRef.current = sendDisabled;
 		const onCancelRef = useRef(onCancel);
 		onCancelRef.current = onCancel;
+		const setShowSlashCommandsRef = useRef(setShowSlashCommands);
+		setShowSlashCommandsRef.current = setShowSlashCommands;
+		const setShowFilePickerRef = useRef(setShowFilePicker);
+		setShowFilePickerRef.current = setShowFilePicker;
 		const dropdownsOpenRef = useRef(dropdownsOpen);
 		dropdownsOpenRef.current = dropdownsOpen;
 		const showSlashRef = useRef(showSlashCommands);
@@ -270,15 +321,15 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 
 		// Stable wrappers that read from refs — identity never changes
 		const stableOnSubmit = useCallback(() => {
-			if (showSlashRef.current || showFilePickerRef.current) return false;
+			if (showSlashRef.current || showFilePickerRef.current) return true;
 			if (sendDisabledRef.current) return true; // block send but consume the key
 			handleSendRef.current();
 			return true;
 		}, []);
 		const stableOnCancel = useCallback(() => {
 			if (showSlashRef.current || showFilePickerRef.current) {
-				setShowSlashCommands(false);
-				setShowFilePicker(false);
+				setShowSlashCommandsRef.current(false);
+				setShowFilePickerRef.current(false);
 				return true;
 			}
 			if (onCancelRef.current) {
@@ -286,7 +337,7 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 				return true;
 			}
 			return false;
-		}, [setShowSlashCommands, setShowFilePicker]);
+		}, []);
 		const stableDropdownsOpen = useCallback(() => dropdownsOpenRef.current, []);
 		const stableTriggerCallbacks = useRef<typeof dropdowns.triggerCallbacks>({
 			onSlashTrigger: (...args) => triggerCallbacksRef.current.onSlashTrigger(...args),
@@ -302,14 +353,17 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 		// Only command/subagent/skill sets change when settings update (rare).
 		const cmExtensions = useMemo(
 			() => [
+				history(),
 				chatHighlighter,
 				inlineAttachmentBehavior,
 				dropHandler,
+				Prec.high(chatKeymap({ onSubmit: stableOnSubmit, onCancel: stableOnCancel })),
 				keymap.of([
+					...defaultKeymap,
+					...historyKeymap,
 					{ key: 'ArrowUp', run: () => stableDropdownsOpen() },
 					{ key: 'ArrowDown', run: () => stableDropdownsOpen() },
 				]),
-				chatKeymap({ onSubmit: stableOnSubmit, onCancel: stableOnCancel }),
 				triggerDetector(stableTriggerCallbacks.current),
 				pasteHandler(stablePaste),
 				validCommandsFacet.of(validCommands),
@@ -335,11 +389,6 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 			inlineAttachmentState.files.length > 0 || inlineAttachmentState.codeSnippets.length > 0;
 		const hasToolbarAttachments = attachedImages.length > 0;
 
-		const handleRightOverlayMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-			const rect = e.currentTarget.getBoundingClientRect();
-			setShowFolderOverlay(e.clientX >= rect.right - 96);
-		}, []);
-
 		return (
 			<div
 				className={cn(
@@ -353,23 +402,10 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 						'flex flex-row transition-colors duration-150 relative group',
 						isDragOver && 'bg-vscode-button-background/10 border-(--input-border-focus)',
 					)}
-					onMouseMove={handleRightOverlayMouseMove}
-					onMouseLeave={() => setShowFolderOverlay(false)}
 					onDragOver={handleDragOver}
 					onDragLeave={handleDragLeave}
 					onDrop={handleDrop}
 				>
-					<IconButton
-						icon={<FolderOpenIcon size={13} strokeWidth={2.2} />}
-						onClick={() => postMessage({ type: 'browseFolders' })}
-						aria-label="Attach folder"
-						size={22}
-						className={cn(
-							'absolute right-[calc(var(--send-btn-size)+var(--send-btn-margin)*2)] bottom-[calc(var(--input-toolbar-height)+var(--gap-1))] z-20 text-vscode-foreground opacity-0 pointer-events-none translate-y-1 scale-95 shadow-lg transition-all duration-200',
-							showFolderOverlay &&
-								'opacity-70 pointer-events-auto translate-y-0 scale-100 hover:opacity-100',
-						)}
-					/>
 					<div className="flex-1 min-w-0 flex flex-col relative pb-(--gap-0-5)">
 						{isDragOver && (
 							<div className="absolute inset-0 bg-vscode-button-background/10 rounded-lg flex items-center justify-center z-10 pointer-events-none">
@@ -455,6 +491,7 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 										? (dropdowns.slashCommandsAnchorRect ?? undefined)
 										: undefined
 								}
+								onInsertCommand={handleSlashCommandSelect}
 							/>
 						)}
 						{showFilePicker && (

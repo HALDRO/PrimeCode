@@ -6,8 +6,9 @@
  * centralizes per-message branching in one place.
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { extractCanonicalTaskResult } from '../../../common';
+import { STREAM_PREVIEW_MAX_HEIGHT, TOOL_CARD_EXPANDED_MAX_HEIGHT_PX } from '../../constants';
 import { useContainerAutoScroll } from '../../hooks/useContainerAutoScroll';
 import { cn } from '../../lib/cn';
 import {
@@ -51,7 +52,7 @@ import {
 	ThinkingMessage,
 	type ToolGroup,
 } from './SimpleTool';
-import { CopyButton, ToolCard, ToolCardMessage } from './ToolCard';
+import { AnimatedCardBody, CopyButton, ToolCard, ToolCardMessage } from './ToolCard';
 import { type GroupedResponseItem, groupToolMessages } from './toolGrouping';
 
 interface MessageItemContext {
@@ -79,6 +80,13 @@ type SubtaskExpandState = 'preview' | 'expanded';
 
 const SUBTASK_EXPANDED_MAX_HEIGHT = 500;
 const SUBTASK_STREAMING_PREVIEW_MAX_HEIGHT = 180;
+const SCROLL_TO_BOTTOM_BUTTON_CLASS_NAME =
+	'absolute bottom-1 left-1/2 z-10 flex size-[22px] -translate-x-1/2 items-center justify-center rounded-full cursor-pointer ' +
+	'bg-vscode-editor-background/80 text-vscode-foreground backdrop-blur-md transition-all duration-200 ' +
+	'border border-[color-mix(in_srgb,var(--vscode-foreground)_10%,transparent)] ' +
+	'shadow-[0_4px_12px_color-mix(in_srgb,var(--vscode-widget-shadow,#000)_50%,transparent)] ' +
+	'hover:bg-vscode-editor-background/95 hover:shadow-[0_6px_16px_color-mix(in_srgb,var(--vscode-widget-shadow,#000)_60%,transparent)] ' +
+	'active:scale-95';
 
 function getReadableModelLabel(childModelId: string | undefined): string | undefined {
 	if (!childModelId) return undefined;
@@ -283,27 +291,28 @@ const TaskCardItem = React.memo<{
 	const effectiveModelId = childModelId;
 	const modelLabel = useMemo(() => getReadableModelLabel(effectiveModelId), [effectiveModelId]);
 	const shouldShowAgentMeta = agentLabel.trim().length > 0;
-	const taskMetaItems = useMemo(
-		() =>
-			[
-				shouldShowAgentMeta && agentLabel
-					? { key: 'agent', title: `Agent: ${agentLabel}`, value: agentLabel }
-					: undefined,
-				effectiveModelId
-					? {
-							key: 'model',
-							title: `Model: ${modelLabel ?? effectiveModelId}`,
-							value: modelLabel ?? effectiveModelId,
-						}
-					: undefined,
-				category ? { key: 'category', title: `Category: ${category}`, value: category } : undefined,
-			].filter((item): item is { key: string; title: string; value: string } => Boolean(item)),
-		[agentLabel, category, effectiveModelId, modelLabel, shouldShowAgentMeta],
-	);
+	const taskMetaItems = useMemo(() => {
+		const items: Array<{ key: string; title: string; value: string }> = [];
+		if (shouldShowAgentMeta && agentLabel) {
+			items.push({ key: 'agent', title: `Agent: ${agentLabel}`, value: agentLabel });
+		}
+		if (effectiveModelId) {
+			items.push({
+				key: 'model',
+				title: `Model: ${modelLabel ?? effectiveModelId}`,
+				value: modelLabel ?? effectiveModelId,
+			});
+		}
+		if (category) {
+			items.push({ key: 'category', title: `Category: ${category}`, value: category });
+		}
+		return items;
+	}, [agentLabel, category, effectiveModelId, modelLabel, shouldShowAgentMeta]);
 
 	// Unified auto-scroll with detach support (mirrors main session behavior)
 	const {
 		scrollerRef: bodyRef,
+		scrollerObjectRef: bodyObjectRef,
 		showScrollToBottom: showSubtaskScrollBtn,
 		scrollToBottom: subtaskScrollToBottom,
 	} = useContainerAutoScroll({ active: isRunning });
@@ -428,98 +437,82 @@ const TaskCardItem = React.memo<{
 				toolSummary.length === 0 &&
 				taskResultItems.length === 0 ? undefined : (
 					<div className="relative bg-(--tool-bg-header)">
-						<div
-							ref={bodyRef}
-							className="px-(--tool-content-padding) py-2 relative"
-							style={
-								expandState === 'expanded'
-									? {
-											maxHeight: SUBTASK_EXPANDED_MAX_HEIGHT,
-											overflowX: 'hidden',
-											overflowY: 'auto',
-											scrollbarWidth: 'none' as const,
-										}
-									: isRunning && expandState === 'preview'
-										? {
-												maxHeight: SUBTASK_STREAMING_PREVIEW_MAX_HEIGHT,
-												overflowX: 'hidden',
-												overflowY: 'auto',
-												scrollbarWidth: 'none' as const,
-											}
-										: undefined
-							}
+						<AnimatedCardBody
+							expanded={expandState === 'expanded'}
+							previewHeight={SUBTASK_STREAMING_PREVIEW_MAX_HEIGHT}
+							expandedHeight={Math.min(
+								SUBTASK_EXPANDED_MAX_HEIGHT,
+								TOOL_CARD_EXPANDED_MAX_HEIGHT_PX,
+							)}
 						>
-							{metaBlock}
-							{prompt && prompt !== description && (
-								<SimpleTool
-									icon={<WandIcon size={14} />}
-									label="Prompt"
-									meta={!promptExpanded ? prompt : undefined}
-									expanded={promptExpanded}
-									onToggle={() => setPromptExpanded(prev => !prev)}
-									showCollapseOverlay
-									className="mb-2"
-								>
-									<div className="text-sm text-vscode-descriptionForeground whitespace-pre-wrap">
-										{prompt}
-									</div>
-								</SimpleTool>
-							)}
-							{!shouldRenderTranscript ? (
-								<>
-									{pendingAccess && (
-										<div className="mb-2 text-sm text-warning whitespace-pre-wrap break-words">
-											Waiting for permission to continue
+							<div
+								ref={bodyRef}
+								className="px-(--tool-content-padding) py-2 relative overflow-x-hidden overflow-y-auto"
+								style={{ scrollbarWidth: 'none' }}
+							>
+								{metaBlock}
+								{prompt && prompt !== description && (
+									<SimpleTool
+										icon={<WandIcon size={14} />}
+										label="Prompt"
+										meta={!promptExpanded ? prompt : undefined}
+										expanded={promptExpanded}
+										onToggle={() => setPromptExpanded(prev => !prev)}
+										showCollapseOverlay
+										className="mb-2"
+									>
+										<div className="text-sm text-vscode-descriptionForeground whitespace-pre-wrap">
+											{prompt}
 										</div>
-									)}
-									<PreviewToolSummary
-										toolSummary={toolSummary}
-										onOpenFullHistory={openExpandedHistory}
+									</SimpleTool>
+								)}
+								{!shouldRenderTranscript ? (
+									<>
+										{pendingAccess && (
+											<div className="mb-2 text-sm text-warning whitespace-pre-wrap break-words">
+												Waiting for permission to continue
+											</div>
+										)}
+										<PreviewToolSummary
+											toolSummary={toolSummary}
+											onOpenFullHistory={openExpandedHistory}
+										/>
+										{taskResultItems.map(item => (
+											<TaskResultLine key={item.id} message={item} />
+										))}
+									</>
+								) : (
+									childTranscriptBlock
+								)}
+								{isRunning && (
+									<SubtaskGenerationStatus
+										isRunning={isRunning}
+										status={effectiveStatus}
+										retryMessage={retryInfo?.message}
 									/>
-									{taskResultItems.map(item => (
-										<TaskResultLine key={item.id} message={item} />
-									))}
-								</>
-							) : (
-								childTranscriptBlock
-							)}
-							{isRunning && (
-								<SubtaskGenerationStatus
-									isRunning={isRunning}
-									status={effectiveStatus}
-									retryMessage={retryInfo?.message}
-								/>
-							)}
-							{shouldRenderTranscript && pendingAccess && (
-								<AccessGate
-									requestId={pendingAccess.requestId}
-									sessionId={ctx.sessionId}
-									messageId={pendingAccess.id}
-									tool={pendingAccess.tool}
-									input={pendingAccess.input}
-									pattern={pendingAccess.pattern}
-									className="my-2"
-								/>
-							)}
-						</div>
+								)}
+								{shouldRenderTranscript && pendingAccess && (
+									<AccessGate
+										requestId={pendingAccess.requestId}
+										sessionId={ctx.sessionId}
+										messageId={pendingAccess.id}
+										tool={pendingAccess.tool}
+										input={pendingAccess.input}
+										pattern={pendingAccess.pattern}
+										className="my-2"
+									/>
+								)}
+							</div>
+						</AnimatedCardBody>
 						{isRunning && isPreviewMode && (
 							<>
-								<ScrollThumb scrollerRef={bodyRef} autoHideDelay={800} />
+								<ScrollThumb scrollerRef={bodyObjectRef} autoHideDelay={800} />
 								{showSubtaskScrollBtn && (
 									<button
 										type="button"
 										onClick={subtaskScrollToBottom}
 										aria-label="Scroll to bottom"
-										className="absolute bottom-1 left-1/2 z-10 flex items-center justify-center rounded-md cursor-pointer border-none transition-opacity duration-200"
-										style={{
-											transform: 'translateX(-50%)',
-											width: 22,
-											height: 22,
-											backgroundColor: 'var(--vscode-editor-background)',
-											color: 'var(--vscode-foreground)',
-											boxShadow: '0 1px 4px rgba(0,0,0,0.25)',
-											opacity: 0.9,
-										}}
+										className={SCROLL_TO_BOTTOM_BUTTON_CLASS_NAME}
 										title="Scroll to bottom"
 									>
 										<ChevronDownIcon size={12} />
@@ -534,8 +527,6 @@ const TaskCardItem = React.memo<{
 	);
 });
 TaskCardItem.displayName = 'TaskCardItem';
-
-const TOOL_GROUP_PREVIEW_MAX_HEIGHT = 120;
 
 const SimpleToolGroup = React.memo<{
 	messages: RenderNode[];
@@ -604,15 +595,31 @@ const SimpleToolGroup = React.memo<{
 	const [manualExpanded, setManualExpanded] = useState<boolean | null>(null);
 	const autoExpanded = isLive || !shouldCollapse;
 	const expanded = manualExpanded ?? autoExpanded;
+	const prevAutoExpandedRef = useRef(autoExpanded);
+	const prevIsLiveRef = useRef(isLive);
 
-	// Reset manual override when collapse state changes (boundary appeared/disappeared)
+	// Reset manual override when auto expansion policy changes so the group can
+	// follow the latest auto-expanded/auto-collapsed state instead of getting stuck.
 	useEffect(() => {
-		setManualExpanded(null);
-	}, []);
+		if (prevAutoExpandedRef.current !== autoExpanded) {
+			setManualExpanded(null);
+		}
+		prevAutoExpandedRef.current = autoExpanded;
+	}, [autoExpanded]);
+
+	// When live streaming ends, auto-collapse the trailing tool group unless the
+	// user explicitly collapsed/expanded it after the stream already ended.
+	useEffect(() => {
+		if (prevIsLiveRef.current && !isLive && manualExpanded === null) {
+			setManualExpanded(false);
+		}
+		prevIsLiveRef.current = isLive;
+	}, [isLive, manualExpanded]);
 
 	// Unified auto-scroll with detach support (mirrors main session behavior)
 	const {
 		scrollerRef: bodyRef,
+		scrollerObjectRef: bodyObjectRef2,
 		showScrollToBottom: showToolGroupScrollBtn,
 		scrollToBottom: toolGroupScrollToBottom,
 	} = useContainerAutoScroll({ active: isLive });
@@ -643,7 +650,7 @@ const SimpleToolGroup = React.memo<{
 					style={
 						isLive
 							? {
-									maxHeight: TOOL_GROUP_PREVIEW_MAX_HEIGHT,
+									maxHeight: STREAM_PREVIEW_MAX_HEIGHT,
 									overflowX: 'hidden',
 									overflowY: 'auto',
 									scrollbarWidth: 'none' as const,
@@ -651,7 +658,8 @@ const SimpleToolGroup = React.memo<{
 							: undefined
 					}
 				>
-					{renderItems.map(msg => {
+					{renderItems.map((msg, idx) => {
+						const previousMsg = idx > 0 ? renderItems[idx - 1] : undefined;
 						if (msg.kind === 'task_result') {
 							return <TaskResultLine key={msg.id} message={msg as RenderTaskResultNode} />;
 						}
@@ -661,9 +669,12 @@ const SimpleToolGroup = React.memo<{
 							return (
 								<div
 									key={msg.id}
-									className="py-1 text-xs text-vscode-descriptionForeground opacity-80 italic pl-2"
+									className={cn(
+										'pb-1 pl-2 opacity-90',
+										previousMsg?.kind === 'thinking' ? 'pt-0' : 'pt-1',
+									)}
 								>
-									{content}
+									<Markdown content={content} />
 								</div>
 							);
 						}
@@ -675,6 +686,7 @@ const SimpleToolGroup = React.memo<{
 									durationMs={(msg as RenderThinkingMessage).durationMs}
 									isStreaming={(msg as RenderThinkingMessage).isStreaming}
 									startTime={(msg as RenderThinkingMessage).startTime}
+									inheritPreviewHeight
 								/>
 							);
 						}
@@ -685,22 +697,13 @@ const SimpleToolGroup = React.memo<{
 				</div>
 				{isLive && (
 					<>
-						<ScrollThumb scrollerRef={bodyRef} autoHideDelay={800} />
+						<ScrollThumb scrollerRef={bodyObjectRef2} autoHideDelay={800} />
 						{showToolGroupScrollBtn && (
 							<button
 								type="button"
 								onClick={toolGroupScrollToBottom}
 								aria-label="Scroll to bottom"
-								className="absolute bottom-1 left-1/2 z-10 flex items-center justify-center rounded-md cursor-pointer border-none transition-opacity duration-200"
-								style={{
-									transform: 'translateX(-50%)',
-									width: 20,
-									height: 20,
-									backgroundColor: 'var(--vscode-editor-background)',
-									color: 'var(--vscode-foreground)',
-									boxShadow: '0 1px 4px rgba(0,0,0,0.25)',
-									opacity: 0.9,
-								}}
+								className={SCROLL_TO_BOTTOM_BUTTON_CLASS_NAME}
 								title="Scroll to bottom"
 							>
 								<ChevronDownIcon size={10} />

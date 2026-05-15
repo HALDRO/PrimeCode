@@ -7,11 +7,26 @@
  *              OPTIMIZED: Todo display extracted to separate component to isolate rerenders.
  */
 
-import React, { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import {
+	autoUpdate,
+	flip,
+	offset,
+	safePolygon,
+	shift,
+	useDismiss,
+	useFloating,
+	useFocus,
+	useHover,
+	useInteractions,
+	useRole,
+	useTransitionStyles,
+} from '@floating-ui/react';
+import { AnimatePresence, motion } from 'framer-motion';
+import React, { useCallback, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { UI_MOTION_DURATION_MS, UI_MOTION_FRAMER_TRANSITION } from '../../constants';
 import { cn } from '../../lib/cn';
 import {
-	useHasTodos,
 	useIsActiveChildSession,
 	useSessionDiffFiles,
 	useSessionDiffSummary,
@@ -55,85 +70,49 @@ const TodoStatusIcon: React.FC<{ status: string }> = ({ status }) => {
 /** Todo hover popup - adaptive positioning to stay within viewport */
 const TodoHoverPopup = React.memo<{
 	todos: TodoItem[];
-	triggerRef: React.RefObject<HTMLDivElement | null>;
-}>(({ todos, triggerRef }) => {
-	const popupRef = useRef<HTMLDivElement>(null);
-	const [position, setPosition] = useState<{ left: number; top: number; maxWidth: number } | null>(
-		null,
-	);
+	floatingRef: (node: HTMLDivElement | null) => void;
+	floatingStyles: React.CSSProperties;
+	transitionStyles: React.CSSProperties;
+	getFloatingProps: ReturnType<typeof useInteractions>['getFloatingProps'];
+}>(({ todos, floatingRef, floatingStyles, transitionStyles, getFloatingProps }) => {
 	const completedCount = todos.filter(t => t.status === 'completed').length;
 	const totalCount = todos.length;
 
-	useLayoutEffect(() => {
-		const trigger = triggerRef.current;
-		const popup = popupRef.current;
-		if (!trigger || !popup) return;
-
-		const triggerRect = trigger.getBoundingClientRect();
-		const viewportWidth = window.innerWidth;
-		const padding = 8;
-
-		// Desired width: 75vw but capped to available space
-		const desiredWidth = viewportWidth * 0.75;
-		const maxAvailable = viewportWidth - padding * 2;
-		const finalWidth = Math.min(desiredWidth, maxAvailable);
-
-		// Center popup relative to trigger, then clamp to viewport
-		const triggerCenter = triggerRect.left + triggerRect.width / 2;
-		let left = triggerCenter - finalWidth / 2;
-
-		// Clamp: don't overflow left
-		if (left < padding) left = padding;
-		// Clamp: don't overflow right
-		if (left + finalWidth > viewportWidth - padding) {
-			left = viewportWidth - padding - finalWidth;
-		}
-
-		const top = Math.max(padding, triggerRect.top - popup.offsetHeight - padding);
-
-		setPosition({ left, top, maxWidth: finalWidth });
-	}, [triggerRef]);
-
 	return createPortal(
 		<div
-			ref={popupRef}
-			className="fixed z-10000 pointer-events-none"
+			ref={floatingRef}
+			className="z-[10000] w-[min(400px,75vw)] overflow-hidden rounded-lg border border-(--tool-border-color) bg-(--tool-bg-header)/88 font-(family-name:--vscode-font-family) text-vscode-foreground shadow-[0_12px_36px_color-mix(in_srgb,var(--vscode-editor-background)_72%,transparent)] backdrop-blur-md"
 			style={{
-				left: position ? `${position.left}px` : 0,
-				top: position ? `${position.top}px` : 0,
-				width: position ? `${position.maxWidth}px` : '75vw',
-				visibility: position ? 'visible' : 'hidden',
+				...floatingStyles,
+				...transitionStyles,
 			}}
+			{...getFloatingProps()}
 		>
-			<div className="bg-(--tool-bg-header) border border-(--tool-border-color) rounded-lg overflow-hidden w-full pointer-events-auto">
-				{/* Header */}
-				<div className="flex items-center gap-1.5 h-(--tool-header-height) px-(--tool-header-padding) border-b border-(--border-subtle) bg-(--tool-bg-header)">
-					<TodoListIcon size={14} className="text-vscode-foreground opacity-80 shrink-0" />
-					<span className="text-sm text-vscode-foreground opacity-90">
-						{completedCount} of {totalCount} Done
-					</span>
-				</div>
-				{/* Content */}
-				<div className="px-(--tool-header-padding) py-1 bg-(--tool-bg-header)">
-					<div className="flex flex-col gap-(--gap-1)">
-						{todos.map(todo => (
-							<div key={todo.content} className="flex items-start gap-1.5">
-								<TodoStatusIcon status={todo.status} />
-								<span
-									className={cn(
-										'text-sm break-words min-w-0 text-left',
-										todo.status === 'completed'
-											? 'text-vscode-foreground opacity-50'
-											: todo.status === 'cancelled'
-												? 'text-vscode-foreground opacity-40 line-through'
-												: 'text-vscode-foreground opacity-90',
-									)}
-								>
-									{todo.content}
-								</span>
-							</div>
-						))}
-					</div>
+			<div className="flex items-center gap-1.5 border-b border-(--border-subtle) bg-(--tool-bg-header)/92 px-(--tool-header-padding) h-(--tool-header-height)">
+				<TodoListIcon size={14} className="text-vscode-foreground opacity-80 shrink-0" />
+				<span className="text-sm text-vscode-foreground opacity-90">
+					{completedCount} of {totalCount} Done
+				</span>
+			</div>
+			<div className="bg-(--tool-bg-header)/72 px-(--tool-header-padding) py-1.5">
+				<div className="flex flex-col gap-(--gap-1)">
+					{todos.map(todo => (
+						<div key={todo.content} className="flex items-start gap-1.5">
+							<TodoStatusIcon status={todo.status} />
+							<span
+								className={cn(
+									'text-sm break-words min-w-0 text-left leading-relaxed',
+									todo.status === 'completed'
+										? 'text-vscode-foreground opacity-50'
+										: todo.status === 'cancelled'
+											? 'text-vscode-foreground opacity-40 line-through'
+											: 'text-vscode-foreground opacity-90',
+								)}
+							>
+								{todo.content}
+							</span>
+						</div>
+					))}
 				</div>
 			</div>
 		</div>,
@@ -149,44 +128,54 @@ TodoHoverPopup.displayName = 'TodoHoverPopup';
 const TodoSection: React.FC = React.memo(() => {
 	const currentTodos = useTodoState();
 	const [showTodoPopup, setShowTodoPopup] = useState(false);
-	const triggerRef = useRef<HTMLDivElement>(null);
+	const { refs, floatingStyles, context } = useFloating({
+		open: showTodoPopup,
+		onOpenChange: setShowTodoPopup,
+		placement: 'top',
+		strategy: 'fixed',
+		transform: false,
+		whileElementsMounted: autoUpdate,
+		middleware: [offset(8), flip({ padding: 8 }), shift({ padding: 8 })],
+	});
+	const hover = useHover(context, {
+		move: false,
+		delay: { open: 160, close: 0 },
+		handleClose: safePolygon({ buffer: 1 }),
+	});
+	const focus = useFocus(context);
+	const dismiss = useDismiss(context);
+	const role = useRole(context, { role: 'dialog' });
+	const { getReferenceProps, getFloatingProps } = useInteractions([hover, focus, dismiss, role]);
+	const { isMounted, styles: transitionStyles } = useTransitionStyles(context, {
+		duration: UI_MOTION_DURATION_MS,
+		initial: { opacity: 0 },
+	});
 
 	if (!currentTodos || currentTodos.length === 0) {
 		return null;
 	}
 
 	return (
-		<div
-			ref={triggerRef}
-			className="relative flex"
-			onMouseEnter={() => setShowTodoPopup(true)}
-			onMouseLeave={() => setShowTodoPopup(false)}
-		>
+		<div ref={refs.setReference} className="relative flex" {...getReferenceProps()}>
 			<span className="flex items-center gap-(--gap-1-5) bg-transparent border-none px-(--gap-2) py-(--gap-1) rounded-sm cursor-default text-vscode-foreground opacity-70 transition-all duration-100 ease-out text-sm font-(family-name:--vscode-font-family) hover:bg-vscode-list-hoverBackground hover:opacity-100 whitespace-nowrap">
 				<TodoListIcon size={12} className="shrink-0" />
 				<span>
 					{currentTodos.filter(t => t.status === 'completed').length}/{currentTodos.length}
 				</span>
 			</span>
-			{showTodoPopup && <TodoHoverPopup todos={currentTodos} triggerRef={triggerRef} />}
+			{isMounted && (
+				<TodoHoverPopup
+					todos={currentTodos}
+					floatingRef={refs.setFloating}
+					floatingStyles={floatingStyles}
+					transitionStyles={transitionStyles}
+					getFloatingProps={getFloatingProps}
+				/>
+			)}
 		</div>
 	);
 });
 TodoSection.displayName = 'TodoSection';
-
-/** Centered todo block shown when there are todos but no changed files yet */
-const StandaloneTodoPanel: React.FC = React.memo(() => (
-	<div className="w-full box-border relative bg-transparent">
-		<div className="@container/panel relative h-(--tool-header-height) px-(--tool-header-padding) text-(--changed-files-font-size) font-(family-name:--vscode-font-family)">
-			<div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-				<div className="pointer-events-auto">
-					<TodoSection />
-				</div>
-			</div>
-		</div>
-	</div>
-));
-StandaloneTodoPanel.displayName = 'StandaloneTodoPanel';
 
 function formatDiffCount(value: number, kind: 'added' | 'removed'): string {
 	if (value <= 0) {
@@ -225,7 +214,7 @@ const FileRow = React.memo<{
 		<Tooltip content="Accept changes" position="top" delay={200}>
 			<button
 				type="button"
-				className="bg-transparent border-none p-0.5 rounded-sm cursor-pointer text-vscode-descriptionForeground flex items-center opacity-70 transition-all duration-100 ease-out font-(family-name:--vscode-font-family) hover:bg-white/10 hover:opacity-100"
+				className="bg-transparent border-none p-0.5 rounded-sm cursor-pointer text-vscode-descriptionForeground flex items-center opacity-70 transition-all duration-100 ease-out font-(family-name:--vscode-font-family) hover:bg-white/10 hover:opacity-100 active:scale-95"
 				onClick={onAccept}
 			>
 				<AcceptIcon />
@@ -237,7 +226,7 @@ const FileRow = React.memo<{
 		<Tooltip content="Reject changes" position="top" delay={200}>
 			<button
 				type="button"
-				className="bg-transparent border-none p-0.5 rounded-sm cursor-pointer text-vscode-descriptionForeground flex items-center opacity-70 transition-all duration-100 ease-out font-(family-name:--vscode-font-family) hover:bg-white/10 hover:opacity-100"
+				className="bg-transparent border-none p-0.5 rounded-sm cursor-pointer text-vscode-descriptionForeground flex items-center opacity-70 transition-all duration-100 ease-out font-(family-name:--vscode-font-family) hover:bg-white/10 hover:opacity-100 active:scale-95"
 				onClick={onReject}
 			>
 				<RejectIcon />
@@ -249,7 +238,6 @@ FileRow.displayName = 'FileRow';
 
 export const ChangedFilesPanel: React.FC = React.memo(() => {
 	const files = useSessionDiffFiles();
-	const hasTodos = useHasTodos();
 	const isChild = useIsActiveChildSession();
 
 	// Child sessions don't own file changes — diffs belong to the parent session.
@@ -257,12 +245,8 @@ export const ChangedFilesPanel: React.FC = React.memo(() => {
 
 	const hasFiles = files.length > 0;
 
-	if (!hasFiles && !hasTodos) {
-		return null;
-	}
-
 	if (!hasFiles) {
-		return <StandaloneTodoPanel />;
+		return null;
 	}
 
 	return <ChangedFilesPanelContent />;
@@ -370,7 +354,7 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 						<Tooltip content="Keep all changes" position="top" delay={200}>
 							<button
 								type="button"
-								className="bg-transparent border-none px-1.5 py-0.5 rounded-sm cursor-pointer text-vscode-foreground opacity-70 transition-all duration-100 ease-out text-sm font-(family-name:--vscode-font-family) hover:bg-white/10 hover:opacity-100 whitespace-nowrap"
+								className="bg-transparent border-none px-1.5 py-0.5 rounded-sm cursor-pointer text-vscode-foreground opacity-70 transition-all duration-100 ease-out text-sm font-(family-name:--vscode-font-family) hover:bg-white/10 hover:opacity-100 active:scale-95 whitespace-nowrap"
 								onClick={e => {
 									e.stopPropagation();
 									showConfirmDialog({
@@ -389,7 +373,7 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 						<Tooltip content="Undo all changes" position="top" delay={200}>
 							<button
 								type="button"
-								className="bg-transparent border-none px-1.5 py-0.5 rounded-sm cursor-pointer text-vscode-foreground opacity-70 transition-all duration-100 ease-out text-sm font-(family-name:--vscode-font-family) hover:bg-white/10 hover:opacity-100 whitespace-nowrap"
+								className="bg-transparent border-none px-1.5 py-0.5 rounded-sm cursor-pointer text-vscode-foreground opacity-70 transition-all duration-100 ease-out text-sm font-(family-name:--vscode-font-family) hover:bg-white/10 hover:opacity-100 active:scale-95 whitespace-nowrap"
 								onClick={e => {
 									e.stopPropagation();
 									showConfirmDialog({
@@ -407,21 +391,36 @@ const ChangedFilesPanelContent: React.FC = React.memo(() => {
 					</div>
 				</button>
 
-				{expanded && (
-					<div>
-						<ScrollContainer className="px-(--tool-header-padding) max-h-[40vh]">
-							{files.map(file => (
-								<FileRow
-									key={file.filePath}
-									file={file}
-									onOpenDiff={() => handleOpenDiff(file.filePath)}
-									onAccept={() => handleAcceptFile(file.filePath)}
-									onReject={() => handleRejectFile(file.filePath)}
-								/>
-							))}
-						</ScrollContainer>
-					</div>
-				)}
+				<AnimatePresence initial={false}>
+					{expanded && (
+						<motion.div
+							initial={{ height: 0, opacity: 0 }}
+							animate={{ height: 'auto', opacity: 1 }}
+							exit={{ height: 0, opacity: 0 }}
+							transition={UI_MOTION_FRAMER_TRANSITION}
+							className="overflow-hidden"
+						>
+							<motion.div
+								initial={{ y: -2 }}
+								animate={{ y: 0 }}
+								exit={{ y: -2 }}
+								transition={UI_MOTION_FRAMER_TRANSITION}
+							>
+								<ScrollContainer className="px-(--tool-header-padding) max-h-[40vh]">
+									{files.map(file => (
+										<FileRow
+											key={file.filePath}
+											file={file}
+											onOpenDiff={() => handleOpenDiff(file.filePath)}
+											onAccept={() => handleAcceptFile(file.filePath)}
+											onReject={() => handleRejectFile(file.filePath)}
+										/>
+									))}
+								</ScrollContainer>
+							</motion.div>
+						</motion.div>
+					)}
+				</AnimatePresence>
 			</div>
 		</div>
 	);

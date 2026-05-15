@@ -9,6 +9,7 @@ import {
 	autoUpdate,
 	flip,
 	offset,
+	safePolygon,
 	shift,
 	useClick,
 	useDismiss,
@@ -22,6 +23,7 @@ import {
 import type React from 'react';
 import { useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { UI_MOTION_DURATION_MS, UI_MOTION_OPACITY_CLASS } from '../../constants';
 import { cn } from '../../lib/cn';
 import { useActiveSessionTreeUsageStats } from '../../store';
 import type { SessionTreeUsageStats } from '../../store/sessionUsage';
@@ -153,7 +155,11 @@ export const SessionStatisticsPanel: React.FC = () => {
 		whileElementsMounted: autoUpdate,
 		middleware: FLOATING_MIDDLEWARE,
 	});
-	const hover = useHover(context, { move: false, delay: { open: 0, close: 120 } });
+	const hover = useHover(context, {
+		move: false,
+		delay: { open: 0, close: 0 },
+		handleClose: safePolygon({ buffer: 1 }),
+	});
 	const focus = useFocus(context);
 	const click = useClick(context);
 	const dismiss = useDismiss(context);
@@ -166,7 +172,7 @@ export const SessionStatisticsPanel: React.FC = () => {
 		role,
 	]);
 	const { isMounted, styles: transitionStyles } = useTransitionStyles(context, {
-		duration: 100,
+		duration: UI_MOTION_DURATION_MS,
 		initial: { opacity: 0 },
 	});
 
@@ -183,7 +189,8 @@ export const SessionStatisticsPanel: React.FC = () => {
 					aria-haspopup="dialog"
 					aria-expanded={expanded}
 					className={cn(
-						'pointer-events-auto group/stat inline-flex h-(--h-xs) items-center justify-center gap-(--gap-2) rounded-sm border-none bg-transparent px-(--gap-1) cursor-pointer transition-opacity duration-150',
+						'pointer-events-auto group/stat inline-flex h-(--h-xs) items-center justify-center gap-(--gap-2) rounded-sm border-none bg-transparent px-(--gap-1) cursor-pointer',
+						UI_MOTION_OPACITY_CLASS,
 						'opacity-70 hover:opacity-100 focus:outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-vscode-focusBorder',
 						expanded && 'opacity-100',
 					)}

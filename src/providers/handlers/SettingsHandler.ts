@@ -580,9 +580,13 @@ export class SettingsHandler implements WebviewMessageHandler {
 
 	private async listCommands(): Promise<Array<CommandListItem & { kind: 'command'; id: string }>> {
 		try {
-			const [project, global] = await Promise.all([
+			const workspaceRoot = this.context.settings.getWorkspaceRoot();
+			const [project, global, builtin] = await Promise.all([
 				this.context.services.resources.getAll('commands') as Promise<ParsedCommand[]>,
 				this.context.services.resources.getGlobalCommands(),
+				workspaceRoot && this.context.cli.listCommands
+					? this.context.cli.listCommands(workspaceRoot)
+					: Promise.resolve([]),
 			]);
 			return this.mergeByPath<CommandListItem>([
 				...project.map(command => ({
@@ -592,6 +596,14 @@ export class SettingsHandler implements WebviewMessageHandler {
 				})),
 				...global.map(command => ({
 					...command,
+					source: 'global' as const,
+					locationScope: 'global' as const,
+				})),
+				...builtin.map(command => ({
+					name: command.name,
+					description: command.description,
+					template: '',
+					path: `opencode://command/${command.name}`,
 					source: 'global' as const,
 					locationScope: 'global' as const,
 				})),

@@ -78,7 +78,6 @@ export const isBridgeMessage = (msg: RenderNode): boolean => {
 	const content = (msg as { content?: string }).content?.trim() ?? '';
 	if (!content) return false;
 	if (content.length > MAX_BRIDGE_MESSAGE_LENGTH) return false;
-	if (content.includes('\n\n')) return false;
 	if (/^[-*]\s/m.test(content)) return false;
 	if (ASSISTANT_BRIDGE_BLOCKERS.some(token => content.includes(token))) return false;
 	return true;
@@ -118,7 +117,10 @@ export const groupToolMessages = (
 	const flushGroup = (reason: 'boundary' | 'final', collapseOnFlush = false) => {
 		if (currentToolGroup.length === 0) return;
 
-		const trailingBridges = stripTrailingBridges(currentToolGroup);
+		const shouldKeepTrailingBridgesInLiveGroup = reason === 'final' && isStreaming;
+		const trailingBridges = shouldKeepTrailingBridgesInLiveGroup
+			? []
+			: stripTrailingBridges(currentToolGroup);
 		const toolUseCount = getToolUseCount(currentToolGroup);
 		const canGroup = toolUseCount >= MIN_SIMPLE_TOOL_GROUP_SIZE;
 

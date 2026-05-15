@@ -5,6 +5,7 @@
  * Implements a robust Flex Column layout to ensure the chat input is pinned to the bottom.
  */
 
+import { AnimatePresence, motion } from 'framer-motion';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { ChangedFilesPanel } from './components/chat/ChangedFilesPanel';
@@ -460,14 +461,22 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 		setScrollerEl(div);
 	}, []);
 
+	const scrollTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+	useEffect(() => {
+		return () => {
+			scrollTimersRef.current.forEach(clearTimeout);
+		};
+	}, []);
+
 	const handleScrollToBottom = useCallback(() => {
 		userScrolledUpRef.current = false;
 		const scrollOnce = () =>
 			virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end', behavior: 'smooth' });
 		scrollOnce();
 		// Virtuoso renders lazily — retry after content settles to ensure we reach true bottom
-		setTimeout(scrollOnce, 150);
-		setTimeout(scrollOnce, 400);
+		scrollTimersRef.current.forEach(clearTimeout);
+		scrollTimersRef.current = [setTimeout(scrollOnce, 150), setTimeout(scrollOnce, 400)];
 	}, []);
 
 	return (
@@ -618,7 +627,18 @@ export const App: React.FC = () => {
 			</div>
 
 			<div className="flex-1 min-h-0 relative">
-				<ChatArea activeSessionId={activeSessionId} />
+				<AnimatePresence mode="popLayout" initial={false}>
+					<motion.div
+						key={activeSessionId}
+						className="h-full"
+						initial={{ opacity: 0 }}
+						animate={{ opacity: 1 }}
+						exit={{ opacity: 0 }}
+						transition={{ duration: 0.15, ease: 'easeOut' }}
+					>
+						<ChatArea activeSessionId={activeSessionId} />
+					</motion.div>
+				</AnimatePresence>
 			</div>
 
 			<div
