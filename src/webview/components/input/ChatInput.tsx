@@ -16,7 +16,7 @@ import { useChatInputController } from '../../hooks/useChatInputController';
 import { useDropdownTriggers } from '../../hooks/useDropdownTriggers';
 import { useFileAttachments } from '../../hooks/useFileAttachments';
 import { cn } from '../../lib/cn';
-import { useFilePickerControls, useSettingsStore, useSlashCommandsState } from '../../store';
+import { useSettingsStore } from '../../store';
 import { useVSCode } from '../../utils/vscode';
 import {
 	chatHighlighter,
@@ -132,6 +132,8 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 			addImage,
 			removeImage,
 			clearAll,
+			requestBrowseFiles,
+			requestBrowseFolders,
 			handleDragOver,
 			handleDragLeave,
 			handleDrop,
@@ -157,6 +159,7 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 			controlledOnSend,
 			attachments,
 		});
+		const dropdowns = useDropdownTriggers();
 
 		useEffect(() => {
 			inputBridgeRef.current = {
@@ -165,9 +168,6 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 			};
 		}, [controller.inputValue, controller.setInputValue]);
 
-		const dropdowns = useDropdownTriggers();
-		const { showSlashCommands, setShowSlashCommands, setSlashFilter } = useSlashCommandsState();
-		const { showFilePicker, setShowFilePicker, setFileFilter } = useFilePickerControls();
 		const [showModelDropdown, setShowModelDropdown] = useState(false);
 		const [modelBtnAnchor, setModelBtnAnchor] = useState<HTMLElement | null>(null);
 		const [previewImage, setPreviewImage] = useState<{ name: string; dataUrl: string } | null>(
@@ -204,6 +204,11 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 				),
 			[agentResources],
 		);
+
+		const setShowSlashCommands = dropdowns.setShowSlashCommands;
+		const setShowFilePicker = dropdowns.setShowFilePicker;
+		const setSlashFilter = dropdowns.setSlashFilter;
+		const setFileFilter = dropdowns.setFileFilter;
 
 		useEffect(() => {
 			return () => {
@@ -253,10 +258,10 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 					}
 				}
 
-				setShowFilePicker(false);
-				setFileFilter('');
+				dropdowns.setShowFilePicker(false);
+				dropdowns.setFileFilter('');
 			},
-			[dropdowns.filePickerTriggerIndex, controller, setShowFilePicker, setFileFilter],
+			[dropdowns, controller],
 		);
 
 		const handleOpenFile = useCallback(
@@ -293,7 +298,7 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 			[controller, dropdowns.slashCommandTriggerIndex],
 		);
 
-		const dropdownsOpen = showSlashCommands || showFilePicker;
+		const dropdownsOpen = dropdowns.showSlashCommands || dropdowns.showFilePicker;
 
 		// Stable refs for CM6 callbacks — prevents cmExtensions from being
 		// recreated on every keystroke, which would trigger compartment.reconfigure()
@@ -304,16 +309,16 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 		sendDisabledRef.current = sendDisabled;
 		const onCancelRef = useRef(onCancel);
 		onCancelRef.current = onCancel;
-		const setShowSlashCommandsRef = useRef(setShowSlashCommands);
-		setShowSlashCommandsRef.current = setShowSlashCommands;
-		const setShowFilePickerRef = useRef(setShowFilePicker);
-		setShowFilePickerRef.current = setShowFilePicker;
+		const setShowSlashCommandsRef = useRef(dropdowns.setShowSlashCommands);
+		setShowSlashCommandsRef.current = dropdowns.setShowSlashCommands;
+		const setShowFilePickerRef = useRef(dropdowns.setShowFilePicker);
+		setShowFilePickerRef.current = dropdowns.setShowFilePicker;
 		const dropdownsOpenRef = useRef(dropdownsOpen);
 		dropdownsOpenRef.current = dropdownsOpen;
-		const showSlashRef = useRef(showSlashCommands);
-		showSlashRef.current = showSlashCommands;
-		const showFilePickerRef = useRef(showFilePicker);
-		showFilePickerRef.current = showFilePicker;
+		const showSlashRef = useRef(dropdowns.showSlashCommands);
+		showSlashRef.current = dropdowns.showSlashCommands;
+		const showFilePickerRef = useRef(dropdowns.showFilePicker);
+		showFilePickerRef.current = dropdowns.showFilePicker;
 		const triggerCallbacksRef = useRef(dropdowns.triggerCallbacks);
 		triggerCallbacksRef.current = dropdowns.triggerCallbacks;
 		const handlePasteRef = useRef(handlePaste);
@@ -480,11 +485,19 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 								setShowModelDropdown(!showModelDropdown);
 							}}
 							onModelClose={() => setShowModelDropdown(false)}
+							onBrowseFiles={requestBrowseFiles}
+							onBrowseFolders={requestBrowseFolders}
 						/>
 
 						{/* Dropdowns triggered by typing @ or / in the editor */}
-						{showSlashCommands && (
+						{dropdowns.showSlashCommands && (
 							<SlashCommandsDropdown
+								slashFilter={dropdowns.slashFilter}
+								setSlashFilter={dropdowns.setSlashFilter}
+								onClose={() => {
+									dropdowns.setShowSlashCommands(false);
+									dropdowns.setSlashFilter('');
+								}}
 								anchorElement={dropdowns.slashButtonAnchorElement}
 								anchorRect={
 									!dropdowns.slashButtonAnchorElement
@@ -494,9 +507,15 @@ export const ChatInput: React.FC<ChatInputProps> = React.memo(
 								onInsertCommand={handleSlashCommandSelect}
 							/>
 						)}
-						{showFilePicker && (
+						{dropdowns.showFilePicker && (
 							<FilePickerDropdown
 								onSelectFile={handleFileSelect}
+								fileFilter={dropdowns.fileFilter}
+								setFileFilter={dropdowns.setFileFilter}
+								onClose={() => {
+									dropdowns.setShowFilePicker(false);
+									dropdowns.setFileFilter('');
+								}}
 								anchorElement={dropdowns.fileButtonAnchorElement}
 								anchorRect={
 									!dropdowns.fileButtonAnchorElement

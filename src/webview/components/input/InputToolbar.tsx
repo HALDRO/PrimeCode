@@ -10,7 +10,6 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { cn } from '../../lib/cn';
 import { useSettingsStore } from '../../store';
-import { useVSCode } from '../../utils/vscode';
 import { FolderOpenIcon, ImprovePromptIcon, LoaderIcon, PlusIcon } from '../icons';
 import { Button, IconButton } from '../ui';
 import { AgentButtonIcon, AgentDropdown, getAgentLabel } from './AgentDropdown';
@@ -33,6 +32,8 @@ interface InputToolbarProps {
 	modelButtonAnchorElement: HTMLElement | null;
 	onModelToggle: (anchor: HTMLElement) => void;
 	onModelClose: () => void;
+	onBrowseFiles: () => void;
+	onBrowseFolders: () => void;
 }
 
 /** Portal dropdown shown when user clicks the + button */
@@ -67,7 +68,7 @@ const AttachDropdown: React.FC<{
 		<div
 			ref={ref}
 			style={menuStyle}
-			className="min-w-[160px] bg-(--tool-bg-header) border border-(--tool-border-color) rounded-lg overflow-hidden shadow-lg py-1"
+			className="dropdown-menu min-w-[160px] bg-(--tool-bg-header) border border-(--tool-border-color) rounded-lg overflow-hidden shadow-lg py-1"
 		>
 			<button
 				type="button"
@@ -107,8 +108,9 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({
 	modelButtonAnchorElement,
 	onModelToggle,
 	onModelClose,
+	onBrowseFiles,
+	onBrowseFolders,
 }) => {
-	const { postMessage } = useVSCode();
 	const effectiveAgent = useSettingsStore(s => {
 		if (selectedAgent) return selectedAgent;
 		const configured = s.opencodeAgent;
@@ -236,8 +238,8 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({
 					<AttachDropdown
 						anchorEl={plusAnchorEl}
 						onClose={() => setShowAttachDropdown(false)}
-						onAttachFile={() => postMessage({ type: 'browseFiles' })}
-						onAttachFolder={() => postMessage({ type: 'browseFolders' })}
+						onAttachFile={onBrowseFiles}
+						onAttachFolder={onBrowseFolders}
 					/>
 				)}
 			</div>

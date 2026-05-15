@@ -10,7 +10,7 @@
  * - No heuristic "looks like code" detection — this caused false positives and errors.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { decodeFilePath } from '../../utils/path';
 import { useVSCode } from '../utils/vscode';
 
@@ -61,6 +61,7 @@ function dedupeAttachedImages(images: AttachedImage[]): AttachedImage[] {
 export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 	const { initialImages = [], onAttachPath } = options;
 	const { postMessage } = useVSCode();
+	const browseRequestIdRef = useRef<string | null>(null);
 	const [attachedImages, setAttachedImages] = useState<AttachedImage[]>(() =>
 		dedupeAttachedImages(initialImages.map(img => ({ ...img, file: undefined }))),
 	);
@@ -98,6 +99,16 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 	const clearAll = useCallback(() => {
 		setAttachedImages([]);
 	}, []);
+
+	const requestBrowseFiles = useCallback(() => {
+		browseRequestIdRef.current = crypto.randomUUID();
+		postMessage({ type: 'browseFiles', requestId: browseRequestIdRef.current });
+	}, [postMessage]);
+
+	const requestBrowseFolders = useCallback(() => {
+		browseRequestIdRef.current = crypto.randomUUID();
+		postMessage({ type: 'browseFolders', requestId: browseRequestIdRef.current });
+	}, [postMessage]);
 
 	// ── Drag & Drop ──────────────────────────────────────────────────────
 
@@ -173,7 +184,13 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 					if (IMAGE_EXT_RE.test(processedPath)) {
 						const name = processedPath.split(/[/\\]/).pop() || 'image';
 						const id = `img-${crypto.randomUUID()}`;
-						postMessage({ type: 'getImageData', path: processedPath, id, name });
+						postMessage({
+							type: 'getImageData',
+							path: processedPath,
+							id,
+							name,
+							requestId: browseRequestIdRef.current ?? undefined,
+						});
 						continue;
 					}
 
@@ -230,12 +247,14 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 			const message = event.data;
 
 			if (message?.type === 'imageData' && message.dataUrl) {
+				if (message.requestId && message.requestId !== browseRequestIdRef.current) return;
 				const id = message.id || `img-${crypto.randomUUID()}`;
 				const name = message.name || 'image.png';
 				addAttachedImage({ id, name, dataUrl: message.dataUrl, path: message.path });
 			}
 
 			if (message?.type === 'browsedFiles' && Array.isArray(message.paths)) {
+				if (message.requestId && message.requestId !== browseRequestIdRef.current) return;
 				for (const filePath of message.paths as string[]) {
 					const trimmed = filePath.trim();
 					if (trimmed) addFile(trimmed);
@@ -254,6 +273,8 @@ export function useFileAttachments(options: UseFileAttachmentsOptions = {}) {
 		addImage: addAttachedImage,
 		removeImage,
 		clearAll,
+		requestBrowseFiles,
+		requestBrowseFolders,
 		handleDragOver,
 		handleDragLeave,
 		handleDrop,

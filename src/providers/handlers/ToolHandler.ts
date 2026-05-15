@@ -66,13 +66,15 @@ export class ToolHandler implements WebviewMessageHandler {
 
 		this.hydratePoliciesPromise = (async () => {
 			try {
-				const [globalEntry, projectConfig] = await Promise.all([
-					this.context.services.openCodeConfig.readGlobalConfigForInspection(),
-					this.context.services.openCodeConfig.readProjectConfigForInspection(),
-				]);
+				const globalEntry = this.context.services.openCodeConfig.readGlobalConfigForInspection
+					? await this.context.services.openCodeConfig.readGlobalConfigForInspection()
+					: undefined;
+				const projectConfig = this.context.services.openCodeConfig.readProjectConfigForInspection
+					? await this.context.services.openCodeConfig.readProjectConfigForInspection()
+					: undefined;
 				const permissionValue = mergePermissionConfig(
-					globalEntry.config.permission,
-					projectConfig.permission,
+					globalEntry?.config.permission,
+					projectConfig?.permission,
 				);
 				if (
 					!permissionValue ||

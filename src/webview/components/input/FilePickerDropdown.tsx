@@ -1,12 +1,15 @@
 /**
  * @file FilePickerDropdown - Workspace file picker
  * @description Uses universal DropdownMenu for consistent styling. Shows workspace files
- *              with type icons and keyboard navigation.
+ *              with type icons and keyboard navigation. The owning ChatInput provides the
+ *              transient search/open state so multiple editor instances do not mirror each
+ *              other's @-trigger UI while still reusing shared workspace file results.
  */
 
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useFilePickerState, type WorkspaceFile } from '../../store';
+import type { WorkspaceFile } from '../../store';
+import { useUIStore } from '../../store';
 import { vscode } from '../../utils/vscode';
 import { FileTypeIcon } from '../icons/FileTypeIcon';
 import { type AnchorRectLike, DropdownMenu, type DropdownMenuItem } from '../ui';
@@ -17,6 +20,9 @@ interface FilePickerDropdownProps {
 	anchorElement?: HTMLElement | null;
 	/** Optional explicit anchor rect override (e.g. caret position). */
 	anchorRect?: AnchorRectLike | null;
+	fileFilter: string;
+	setFileFilter: (value: string) => void;
+	onClose: () => void;
 	/** Show a search input inside the dropdown */
 	showSearch?: boolean;
 	/** Autofocus the dropdown search input when shown */
@@ -29,18 +35,16 @@ export const FilePickerDropdown: React.FC<FilePickerDropdownProps> = ({
 	onSelectFile,
 	anchorElement,
 	anchorRect,
+	fileFilter,
+	setFileFilter,
+	onClose,
 	showSearch = false,
 	searchAutoFocus = false,
 	searchReadOnly = false,
 }) => {
-	const { workspaceFiles, fileFilter, setShowFilePicker, setFileFilter } = useFilePickerState();
+	const workspaceFiles = useUIStore(state => state.workspaceFiles);
 	const [isLoading, setIsLoading] = useState(true);
 	const requestIdRef = useRef(0);
-
-	const onClose = useCallback(() => {
-		setShowFilePicker(false);
-		setFileFilter('');
-	}, [setShowFilePicker, setFileFilter]);
 
 	useEffect(() => {
 		setIsLoading(true);

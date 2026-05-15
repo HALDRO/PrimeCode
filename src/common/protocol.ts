@@ -142,7 +142,17 @@ export type PermissionsUpdatedMessage = BaseExtensionMessage<
 
 export type WorkspaceFilesMessage = BaseExtensionMessage<'workspaceFiles', WorkspaceFile[]>;
 export type ImagePathMessage = BaseExtensionMessage<'imagePath', { filePath: string }>;
-export type ImageDataMessage = BaseExtensionMessage<'imageData', unknown>;
+export type ImageDataMessage = BaseExtensionMessage<'imageData', unknown> & {
+	requestId?: string;
+	id?: string;
+	name?: string;
+	path?: string;
+	dataUrl?: string;
+};
+export type BrowsedFilesMessage = BaseExtensionMessage<'browsedFiles', { paths: string[] }> & {
+	paths: string[];
+	requestId?: string;
+};
 
 export interface WorkspaceInfoData {
 	name: string;
@@ -507,6 +517,7 @@ export type ExtensionMessage =
 	| WorkspaceFilesMessage
 	| ImagePathMessage
 	| ImageDataMessage
+	| BrowsedFilesMessage
 	| WorkspaceInfoMessage
 	| ModelSelectedMessage
 	| SettingsDataMessage
@@ -807,12 +818,15 @@ export interface GetImageDataCommand {
 	id?: string;
 	name?: string;
 	path?: string;
+	requestId?: string;
 }
 export interface BrowseFilesCommand {
 	type: 'browseFiles';
+	requestId?: string;
 }
 export interface BrowseFoldersCommand {
 	type: 'browseFolders';
+	requestId?: string;
 }
 export interface GetWorkspaceFilesCommand {
 	type: 'getWorkspaceFiles';

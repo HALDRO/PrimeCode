@@ -1,20 +1,29 @@
 /**
- * @file useDropdownTriggers — Dropdown state management for slash commands and file picker
- * @description Manages open/close state, anchor positioning, and filter text for
- *              slash commands and file picker dropdowns triggered from CM6 editor.
+ * @file useDropdownTriggers — Per-input dropdown trigger state for ChatInput
+ * @description Manages instance-local open/close state, filters, trigger indices, and
+ *              anchor positioning for slash commands and file picker dropdowns triggered
+ *              from a single CM6 editor. This prevents multiple ChatInput instances from
+ *              reacting to the same transient trigger state while preserving shared data sources.
  */
 
 import { useCallback, useRef, useState } from 'react';
 import type { AnchorRectLike, TriggerCallbacks } from '../components/input';
-import { useFilePickerControls, useSlashCommandsState } from '../store';
 
 interface DropdownTriggerState {
 	// Slash commands
+	showSlashCommands: boolean;
+	slashFilter: string;
+	setShowSlashCommands: (show: boolean) => void;
+	setSlashFilter: (filter: string) => void;
 	slashCommandsAnchorRect: AnchorRectLike | null;
 	slashButtonAnchorElement: HTMLElement | null;
 	setSlashButtonAnchorElement: (el: HTMLElement | null) => void;
 	slashCommandTriggerIndex: number | null;
 	// File picker
+	showFilePicker: boolean;
+	fileFilter: string;
+	setShowFilePicker: (show: boolean) => void;
+	setFileFilter: (filter: string) => void;
 	filePickerAnchorRect: AnchorRectLike | null;
 	fileButtonAnchorElement: HTMLElement | null;
 	setFileButtonAnchorElement: (el: HTMLElement | null) => void;
@@ -27,8 +36,10 @@ interface DropdownTriggerState {
 }
 
 export function useDropdownTriggers(): DropdownTriggerState {
-	const { showSlashCommands, setShowSlashCommands, setSlashFilter } = useSlashCommandsState();
-	const { showFilePicker, setShowFilePicker, setFileFilter } = useFilePickerControls();
+	const [showSlashCommands, setShowSlashCommands] = useState(false);
+	const [slashFilter, setSlashFilter] = useState('');
+	const [showFilePicker, setShowFilePicker] = useState(false);
+	const [fileFilter, setFileFilter] = useState('');
 
 	const [slashCommandsAnchorRect, setSlashCommandsAnchorRect] = useState<AnchorRectLike | null>(
 		null,
@@ -42,23 +53,17 @@ export function useDropdownTriggers(): DropdownTriggerState {
 	const filePickerTriggerIndexRef = useRef<number | null>(null);
 
 	// CM6 trigger callbacks
-	const onSlashTrigger = useCallback(
-		(pos: number, filter: string, rect: AnchorRectLike | null) => {
-			slashCommandTriggerIndexRef.current = pos;
-			setShowSlashCommands(true);
-			setSlashFilter(filter);
-			setSlashButtonAnchorElement(null);
-			setSlashCommandsAnchorRect(rect);
-		},
-		[setShowSlashCommands, setSlashFilter],
-	);
+	const onSlashTrigger = useCallback((pos: number, filter: string, rect: AnchorRectLike | null) => {
+		slashCommandTriggerIndexRef.current = pos;
+		setShowSlashCommands(true);
+		setSlashFilter(filter);
+		setSlashButtonAnchorElement(null);
+		setSlashCommandsAnchorRect(rect);
+	}, []);
 
-	const onSlashUpdate = useCallback(
-		(filter: string) => {
-			setSlashFilter(filter);
-		},
-		[setSlashFilter],
-	);
+	const onSlashUpdate = useCallback((filter: string) => {
+		setSlashFilter(filter);
+	}, []);
 
 	const onSlashClose = useCallback(() => {
 		if (showSlashCommands) {
@@ -67,25 +72,19 @@ export function useDropdownTriggers(): DropdownTriggerState {
 			setSlashCommandsAnchorRect(null);
 			slashCommandTriggerIndexRef.current = null;
 		}
-	}, [showSlashCommands, setShowSlashCommands, setSlashFilter]);
+	}, [showSlashCommands]);
 
-	const onAtTrigger = useCallback(
-		(pos: number, filter: string, rect: AnchorRectLike | null) => {
-			filePickerTriggerIndexRef.current = pos;
-			setShowFilePicker(true);
-			setFileFilter(filter);
-			setFileButtonAnchorElement(null);
-			setFilePickerAnchorRect(rect);
-		},
-		[setShowFilePicker, setFileFilter],
-	);
+	const onAtTrigger = useCallback((pos: number, filter: string, rect: AnchorRectLike | null) => {
+		filePickerTriggerIndexRef.current = pos;
+		setShowFilePicker(true);
+		setFileFilter(filter);
+		setFileButtonAnchorElement(null);
+		setFilePickerAnchorRect(rect);
+	}, []);
 
-	const onAtUpdate = useCallback(
-		(filter: string) => {
-			setFileFilter(filter);
-		},
-		[setFileFilter],
-	);
+	const onAtUpdate = useCallback((filter: string) => {
+		setFileFilter(filter);
+	}, []);
 
 	const onAtClose = useCallback(() => {
 		if (showFilePicker) {
@@ -94,7 +93,7 @@ export function useDropdownTriggers(): DropdownTriggerState {
 			setFilePickerAnchorRect(null);
 			filePickerTriggerIndexRef.current = null;
 		}
-	}, [showFilePicker, setShowFilePicker, setFileFilter]);
+	}, [showFilePicker]);
 
 	const triggerCallbacks: TriggerCallbacks = {
 		onSlashTrigger,
@@ -111,7 +110,7 @@ export function useDropdownTriggers(): DropdownTriggerState {
 			setShowSlashCommands(!showSlashCommands);
 			setSlashFilter('');
 		},
-		[showSlashCommands, setShowSlashCommands, setSlashFilter],
+		[showSlashCommands],
 	);
 
 	const openFilePickerFromButton = useCallback(
@@ -120,14 +119,22 @@ export function useDropdownTriggers(): DropdownTriggerState {
 			setShowFilePicker(!showFilePicker);
 			setFileFilter('');
 		},
-		[showFilePicker, setShowFilePicker, setFileFilter],
+		[showFilePicker],
 	);
 
 	return {
+		showSlashCommands,
+		slashFilter,
+		setShowSlashCommands,
+		setSlashFilter,
 		slashCommandsAnchorRect,
 		slashButtonAnchorElement,
 		setSlashButtonAnchorElement,
 		slashCommandTriggerIndex: slashCommandTriggerIndexRef.current,
+		showFilePicker,
+		fileFilter,
+		setShowFilePicker,
+		setFileFilter,
 		filePickerAnchorRect,
 		fileButtonAnchorElement,
 		setFileButtonAnchorElement,

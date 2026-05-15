@@ -39,10 +39,10 @@ export class FileHandler implements WebviewMessageHandler {
 				await this.onGetImageData(msg);
 				break;
 			case 'browseFiles':
-				await this.onBrowseFiles();
+				await this.onBrowseFiles(msg);
 				break;
 			case 'browseFolders':
-				await this.onBrowseFolders();
+				await this.onBrowseFolders(msg);
 				break;
 		}
 	}
@@ -215,6 +215,7 @@ export class FileHandler implements WebviewMessageHandler {
 			name,
 			path: fileUri.fsPath,
 			dataUrl,
+			requestId: msg.requestId,
 		});
 	}
 
@@ -229,7 +230,7 @@ export class FileHandler implements WebviewMessageHandler {
 		'ico',
 	]);
 
-	private async onBrowseFiles(): Promise<void> {
+	private async onBrowseFiles(msg: CommandOf<'browseFiles'>): Promise<void> {
 		logger.info('[FileHandler] User opened file browser');
 		const picks = await vscode.window.showOpenDialog({
 			canSelectFiles: true,
@@ -275,6 +276,7 @@ export class FileHandler implements WebviewMessageHandler {
 					name,
 					path: fileUri.fsPath,
 					dataUrl,
+					requestId: msg.requestId,
 				});
 			} else {
 				// Regular file — collect path
@@ -286,11 +288,12 @@ export class FileHandler implements WebviewMessageHandler {
 			this.context.bridge.send({
 				type: 'browsedFiles',
 				paths: filePaths,
+				requestId: msg.requestId,
 			});
 		}
 	}
 
-	private async onBrowseFolders(): Promise<void> {
+	private async onBrowseFolders(msg: CommandOf<'browseFolders'>): Promise<void> {
 		logger.info('[FileHandler] User opened folder browser');
 		const picks = await vscode.window.showOpenDialog({
 			canSelectFiles: false,
@@ -305,6 +308,7 @@ export class FileHandler implements WebviewMessageHandler {
 		this.context.bridge.send({
 			type: 'browsedFiles',
 			paths: picks.map(folderUri => folderUri.fsPath),
+			requestId: msg.requestId,
 		});
 	}
 }

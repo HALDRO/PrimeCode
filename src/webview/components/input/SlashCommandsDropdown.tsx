@@ -1,13 +1,15 @@
 /**
  * @file SlashCommandsDropdown - Slash commands picker
  * @description Uses universal DropdownMenu for consistent styling. Shows CLI commands,
- *              skills, and subagents in separate sections.
+ *              skills, and subagents in separate sections. The open/filter state is
+ *              controlled by the owning ChatInput instance so multiple editors do not
+ *              share transient slash-command UI state.
  */
 
 import type React from 'react';
 import { useCallback, useMemo } from 'react';
 import type { CommandItem } from '../../constants';
-import { useSettingsStore, useSlashCommandsState } from '../../store';
+import { useSettingsStore } from '../../store';
 import { type AnchorRectLike, DropdownMenu } from '../ui';
 
 /**
@@ -46,24 +48,23 @@ interface SlashCommandsDropdownProps {
 	anchorElement?: HTMLElement | null;
 	/** Optional explicit anchor rect override (e.g. caret position). */
 	anchorRect?: AnchorRectLike | null;
+	slashFilter: string;
+	setSlashFilter: (value: string) => void;
+	onClose: () => void;
 	onInsertCommand: (text: string) => void;
 }
 
 export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 	anchorElement,
 	anchorRect,
+	slashFilter,
+	setSlashFilter,
+	onClose,
 	onInsertCommand,
 }) => {
 	const agentResources = useSettingsStore(state => state.resources.agent.items);
 	const commandResources = useSettingsStore(state => state.resources.command.items);
 	const skillResources = useSettingsStore(state => state.resources.skill.items);
-
-	const { slashFilter, setShowSlashCommands, setSlashFilter } = useSlashCommandsState();
-
-	const onClose = useCallback(() => {
-		setShowSlashCommands(false);
-		setSlashFilter('');
-	}, [setShowSlashCommands, setSlashFilter]);
 
 	const sections = useMemo(() => {
 		const skillList: CommandItem[] = skillResources.map(skill => ({

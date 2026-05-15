@@ -122,6 +122,11 @@ interface InlineAttachmentRange {
 	to: number;
 }
 
+interface HighlightTokenRange {
+	from: number;
+	to: number;
+}
+
 class InlineAttachmentWidget extends WidgetType {
 	constructor(
 		private readonly match: ReturnType<typeof extractInlineAttachmentMatches>[number],
@@ -248,6 +253,18 @@ function findInlineRangeTouching(
 	return null;
 }
 
+function findHighlightRangeTouching(
+	ranges: HighlightTokenRange[],
+	position: number,
+	direction: 'backward' | 'forward',
+): HighlightTokenRange | null {
+	for (const range of ranges) {
+		if (direction === 'backward' && position === range.to) return range;
+		if (direction === 'forward' && position === range.from) return range;
+	}
+	return null;
+}
+
 function removeInlineAttachmentAtSelection(
 	view: EditorView,
 	direction: 'backward' | 'forward',
@@ -290,6 +307,53 @@ const inlineAttachmentKeymap: Extension = Prec.high(
 		{
 			key: 'Delete',
 			run: view => removeInlineAttachmentAtSelection(view, 'forward'),
+		},
+	]),
+);
+
+function getHighlightTokenRanges(view: EditorView): HighlightTokenRange[] {
+	const validCommands = view.state.facet(validCommandsFacet);
+	const validSubagents = view.state.facet(validSubagentsFacet);
+	const validSkills = view.state.facet(validSkillsFacet);
+	const doc = view.state.doc.toString();
+	return getMessageHighlights(doc, validCommands, validSubagents, validSkills).map(highlight => ({
+		from: highlight.start,
+		to: highlight.end,
+	}));
+}
+
+function removeHighlightTokenAtSelection(
+	view: EditorView,
+	direction: 'backward' | 'forward',
+): boolean {
+	const selection = view.state.selection.main;
+	const ranges = getHighlightTokenRanges(view);
+	if (ranges.length === 0) return false;
+
+	let target: HighlightTokenRange | null = null;
+	if (!selection.empty) {
+		target = ranges.find(range => selection.from < range.to && selection.to > range.from) ?? null;
+	} else {
+		target = findHighlightRangeTouching(ranges, selection.from, direction);
+	}
+	if (!target) return false;
+
+	view.dispatch({
+		changes: { from: target.from, to: target.to, insert: '' },
+		selection: { anchor: target.from },
+	});
+	return true;
+}
+
+const highlightTokenKeymap: Extension = Prec.high(
+	keymap.of([
+		{
+			key: 'Backspace',
+			run: view => removeHighlightTokenAtSelection(view, 'backward'),
+		},
+		{
+			key: 'Delete',
+			run: view => removeHighlightTokenAtSelection(view, 'forward'),
 		},
 	]),
 );
@@ -471,6 +535,7 @@ export const dropHandler: Extension = EditorView.domEventHandlers({
 export const inlineAttachmentBehavior: Extension = [
 	inlineAttachmentPlugin,
 	inlineAttachmentKeymap,
+	highlightTokenKeymap,
 	inlineAttachmentAtomicRanges,
 ];
 

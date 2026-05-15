@@ -87,6 +87,9 @@ const TOOL_CARD_CLASSES = 'bg-(--tool-bg-header) border border-(--tool-border-co
 const TOOL_CARD_HEADER_CLASSES =
 	'flex items-center justify-between w-full h-(--tool-header-height) px-(--tool-header-padding) bg-(--tool-bg-header) select-none';
 
+const TOOL_CARD_HEADER_RIGHT_CLASSES =
+	'flex items-center justify-center self-stretch shrink-0 ml-auto z-10 -mr-(--tool-header-padding) pr-1';
+
 const getFileChangeCardKey = (change: ResolvedFileChange, index: number) =>
 	change.filePath || `${change.name}-${index}`;
 
@@ -282,9 +285,7 @@ export const ToolCard: React.FC<ToolCardProps> = ({
 							{headerLeft}
 						</div>
 					</div>
-					<div className="flex items-center gap-1.5 shrink-0 ml-auto z-10 -mr-(--tool-header-padding) pr-1">
-						{headerRight}
-					</div>
+					<div className={TOOL_CARD_HEADER_RIGHT_CLASSES}>{headerRight}</div>
 				</div>
 				{body && (
 					<div className="relative">
@@ -901,16 +902,20 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 					</>
 				}
 				headerRight={
-					<div className="flex items-center gap-2">
+					<div className="flex items-center self-stretch h-full gap-2">
 						{meta && (
 							<div
-								className={cn('opacity-0 z-10', UI_MOTION_OPACITY_CLASS, 'group-hover:opacity-100')}
+								className={cn(
+									'flex items-center self-stretch h-full opacity-0 z-10',
+									UI_MOTION_OPACITY_CLASS,
+									'group-hover:opacity-100',
+								)}
 							>
 								<CopyButton text={meta} title="Copy request" />
 							</div>
 						)}
 						{displayDuration > 0 && (
-							<span className="flex items-center gap-1 text-xs text-vscode-descriptionForeground shrink-0 tabular-nums">
+							<span className="flex items-center self-stretch h-full gap-1 text-xs text-vscode-descriptionForeground shrink-0 tabular-nums">
 								<TimerIcon size={11} />
 								{formatDuration(displayDuration)}
 							</span>
@@ -946,16 +951,6 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 									</pre>
 								</div>
 							</AnimatedCardBody>
-							<div
-								className={cn(
-									'absolute right-(--tool-content-padding) bottom-0',
-									'opacity-0',
-									UI_MOTION_OPACITY_CLASS,
-									'group-hover:opacity-100',
-								)}
-							>
-								<CopyButton text={fullText} title="Copy" />
-							</div>
 						</div>
 					) : undefined
 				}
