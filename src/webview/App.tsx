@@ -50,7 +50,6 @@ interface ChatVirtuosoContext {
 
 interface MessageSectionProps {
 	section: MessageSection;
-	isLastSection: boolean;
 	isStreaming: boolean;
 	sessionId: string;
 }
@@ -128,7 +127,7 @@ const MessageSectionComponent = React.memo<MessageSectionProps>(
 							/>
 						);
 					})}
-					<div className="flex items-center mt-0.5 pr-2 min-h-5">
+					<div className="relative z-20 flex items-center mt-0.5 pr-2 min-h-5">
 						{!isStreaming && !section.isReverted && section.responses.length > 0 && (
 							<div className="flex items-center justify-end flex-1">
 								<SectionCopyButton
@@ -143,11 +142,7 @@ const MessageSectionComponent = React.memo<MessageSectionProps>(
 		);
 	},
 	(prev, next) => {
-		return (
-			prev.section === next.section &&
-			prev.isLastSection === next.isLastSection &&
-			prev.isStreaming === next.isStreaming
-		);
+		return prev.section === next.section && prev.isStreaming === next.isStreaming;
 	},
 );
 MessageSectionComponent.displayName = 'MessageSectionComponent';
@@ -224,13 +219,7 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 			Footer: () => (
 				<div className="h-[72px] pointer-events-none overflow-visible box-border relative">
 					<div className="absolute -top-[10px] left-0 right-0 h-8 px-(--content-padding-x) overflow-hidden box-border z-10">
-						<div
-							className="flex h-full items-start"
-							style={{
-								background:
-									'linear-gradient(to bottom, var(--surface-base) 0%, color-mix(in srgb, var(--surface-base) 96%, transparent) 78%, transparent 100%)',
-							}}
-						>
+						<div className="flex h-full items-start">
 							<GenerationStatus sessionId={activeSessionId} className="text-left" />
 						</div>
 					</div>
@@ -371,7 +360,6 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 			return (
 				<MessageSectionComponent
 					section={section}
-					isLastSection={isLast}
 					isStreaming={isLast && context.isProcessing}
 					sessionId={activeSessionId}
 				/>

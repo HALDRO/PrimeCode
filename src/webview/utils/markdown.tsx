@@ -364,6 +364,70 @@ const CopyButton: React.FC<{ code: string; className?: string }> = ({ code, clas
 	);
 };
 
+const escapeMarkdownTableCell = (text: string) =>
+	text
+		.replace(/\|/g, '\\|')
+		.replace(/\r?\n|\r/g, '<br />')
+		.trim();
+
+const serializeTableToMarkdown = (table: HTMLTableElement | null): string => {
+	if (!table) return '';
+	const rows = Array.from(table.querySelectorAll('tr'))
+		.map(row =>
+			Array.from(row.querySelectorAll('th, td')).map(cell =>
+				escapeMarkdownTableCell(cell.textContent ?? ''),
+			),
+		)
+		.filter(row => row.length > 0);
+	if (rows.length === 0) return '';
+
+	const [header, ...body] = rows;
+	const separator = header.map(() => '---');
+	const markdownRows = [header, separator, ...body].map(row => `| ${row.join(' | ')} |`);
+	return markdownRows.join('\n');
+};
+
+const MarkdownTable: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+	const tableRef = useRef<HTMLTableElement>(null);
+	const [copied, setCopied] = useState(false);
+	const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+	useEffect(() => {
+		return () => {
+			if (timerRef.current !== null) clearTimeout(timerRef.current);
+		};
+	}, []);
+
+	const handleCopy = async () => {
+		const markdown = serializeTableToMarkdown(tableRef.current);
+		if (!markdown) return;
+		await copyTextToClipboard(markdown);
+		setCopied(true);
+		if (timerRef.current !== null) clearTimeout(timerRef.current);
+		timerRef.current = setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
+	};
+
+	return (
+		<div className="group/codeblock isolate relative my-2 overflow-hidden rounded-lg border border-(--tool-border-color) bg-(--tool-bg-header)">
+			<div className="absolute bottom-0 right-0 z-1 flex items-center gap-1 rounded-tl bg-(--tool-bg-header) p-1 opacity-0 transition-opacity group-hover/codeblock:opacity-100">
+				<IconButton
+					icon={copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+					onClick={handleCopy}
+					title={copied ? 'Copied!' : 'Copy'}
+					aria-label={copied ? 'Copied' : 'Copy table'}
+					size={20}
+					className={cn(copied && 'text-success')}
+				/>
+			</div>
+			<div className="overflow-x-auto">
+				<table ref={tableRef} className="w-full border-collapse text-md">
+					{children}
+				</table>
+			</div>
+		</div>
+	);
+};
+
 const getTextContent = (children: React.ReactNode): string => {
 	if (typeof children === 'string') return children;
 	if (typeof children === 'number') return String(children);
@@ -584,11 +648,7 @@ const components: Components = {
 			loading="lazy"
 		/>
 	),
-	table: ({ children }) => (
-		<div className="my-2 overflow-hidden rounded-lg border border-(--tool-border-color) bg-(--tool-bg-header)">
-			<table className="w-full text-md border-collapse">{children}</table>
-		</div>
-	),
+	table: ({ children }) => <MarkdownTable>{children}</MarkdownTable>,
 	thead: ({ children }) => (
 		<thead className="bg-(--tool-bg-header) text-vscode-editor-foreground font-medium border-b border-(--border-subtle)">
 			{children}

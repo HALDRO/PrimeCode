@@ -438,6 +438,7 @@ const TaskCardItem = React.memo<{
 					<div className="relative bg-(--tool-bg-header)">
 						<AnimatedCardBody
 							expanded={expandState === 'expanded'}
+							isStreaming={isPreviewMode}
 							previewHeight={SUBTASK_STREAMING_PREVIEW_MAX_HEIGHT}
 							expandedHeight={Math.min(
 								SUBTASK_EXPANDED_MAX_HEIGHT,
