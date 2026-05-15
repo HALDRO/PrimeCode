@@ -23,6 +23,7 @@ import {
 	useMessageTurnTokens,
 	useSessionModel,
 	useSessionProcessing,
+	useSessionRevertState,
 } from '../../store';
 import type { SectionStats } from '../../store/derived';
 import { useSettingsStore } from '../../store/settingsStore';
@@ -56,6 +57,17 @@ interface MessageCompaction {
 	assistantMessageId?: string;
 	isStreaming?: boolean;
 	completedAt?: number;
+}
+
+interface CurrentAttachments {
+	files: string[];
+	codeSnippets: Array<{
+		filePath: string;
+		startLine: number;
+		endLine: number;
+		content: string;
+	}>;
+	images: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
 }
 
 const CompactionCard = React.memo<{ compaction: MessageCompaction }>(({ compaction }) => {
@@ -424,6 +436,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 
 		const isProcessing = useSessionProcessing(message.message.sessionID);
 		const sessionModel = useSessionModel();
+		const sessionRevert = useSessionRevertState(message.message.sessionID);
 		const chatActions = useChatActions();
 		const { setEditingMessageId } = chatActions;
 		const activeModelID = useActiveModelID();
@@ -524,20 +537,7 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 		const { showConfirmDialog } = useUIActions();
 
 		const doSendUpdate = useCallback(
-			(
-				text: string,
-				shouldRestore: boolean,
-				currentAttachments?: {
-					files: string[];
-					codeSnippets: Array<{
-						filePath: string;
-						startLine: number;
-						endLine: number;
-						content: string;
-					}>;
-					images: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
-				},
-			) => {
+			(text: string, shouldRestore: boolean, currentAttachments?: CurrentAttachments) => {
 				const files = currentAttachments?.files ?? [];
 				const snippets = currentAttachments?.codeSnippets ?? [];
 				const images = currentAttachments?.images ?? attachedImages;
@@ -547,18 +547,20 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 					codeSnippets: snippets.length > 0 ? snippets : undefined,
 					images: images.length > 0 ? images : undefined,
 				};
-				const hasAttachments =
-					editAttachments.files || editAttachments.codeSnippets || editAttachments.images;
+				const hasAttachments = Boolean(
+					editAttachments.files || editAttachments.codeSnippets || editAttachments.images,
+				);
 
 				const sessionId = message.message.sessionID;
 				if (!sessionId) return;
+				const hasActiveRevert = Boolean(sessionRevert?.messageID);
 				const run = async () => {
 					await openCodeRuntime.editMessage({
 						sessionId,
 						messageId: message.id,
 						text,
 						mode: shouldRestore ? 'restore_and_send' : 'replace_history',
-						isAlreadyReverted: isRevertPoint,
+						isAlreadyReverted: hasActiveRevert,
 						model: sessionModel,
 						agent: agentResources.some(a => a.name === message.message.agent)
 							? message.message.agent
@@ -575,11 +577,11 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 			},
 			[
 				message.id,
-				isRevertPoint,
 				chatActions,
 				setEditingMessageId,
 				attachedImages,
 				sessionModel,
+				sessionRevert,
 				message.message.sessionID,
 				message.message.agent,
 				userMessageModel?.variant,
@@ -588,26 +590,17 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 		);
 
 		const handleSendUpdate = useCallback(
-			(
-				text: string,
-				currentAttachments?: {
-					files: string[];
-					codeSnippets: Array<{
-						filePath: string;
-						startLine: number;
-						endLine: number;
-						content: string;
-					}>;
-					images: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
-				},
-			) => {
+			(text: string, currentAttachments?: CurrentAttachments) => {
 				const hasAttachments = Boolean(
-					currentAttachments &&
-						(currentAttachments.files.length > 0 ||
-							currentAttachments.codeSnippets.length > 0 ||
-							currentAttachments.images.length > 0),
+					currentAttachments?.files.length ||
+						currentAttachments?.codeSnippets.length ||
+						currentAttachments?.images.length,
 				);
 				if (!text.trim() && !hasAttachments) {
+					return;
+				}
+				if (sessionRevert?.messageID) {
+					doSendUpdate(text, true, currentAttachments);
 					return;
 				}
 				if (message.id) {
@@ -615,16 +608,17 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 						title: 'Edit Message History?',
 						message:
 							'This will remove this message and everything after it, then send the edited message here. If later assistant turns changed files, choose whether to restore files to the state before this message first.',
-						confirmLabel: 'Restore files and send',
-						cancelLabel: 'Only replace history',
-						onConfirm: () => doSendUpdate(text, true, currentAttachments),
-						onSecondary: () => doSendUpdate(text, false, currentAttachments),
+						confirmLabel: 'Only replace history',
+						cancelLabel: 'Restore files and send',
+						requireExplicitChoice: true,
+						onConfirm: () => doSendUpdate(text, false, currentAttachments),
+						onSecondary: () => doSendUpdate(text, true, currentAttachments),
 					});
 				} else {
 					doSendUpdate(text, false, currentAttachments);
 				}
 			},
-			[message.id, doSendUpdate, showConfirmDialog],
+			[message.id, doSendUpdate, sessionRevert, showConfirmDialog],
 		);
 
 		const handleRestore = useCallback(() => {

@@ -270,6 +270,27 @@ describe('eventRuntime', () => {
 			expect(flushQueuedMessagesMock).toHaveBeenCalledWith('child');
 			expect(flushQueuedMessagesMock).toHaveBeenCalledWith('root');
 		});
+
+		it('forwards session.updated revert events into the store batch', () => {
+			const event = {
+				type: 'session.updated',
+				properties: {
+					info: {
+						id: 'ses-1',
+						revert: { messageID: 'msg-2' },
+					},
+				},
+			};
+
+			eventRuntime.handleExtensionMessage({
+				type: 'opencodeEvent',
+				data: { payload: event },
+			});
+			flushRaf();
+
+			expect(appliedBatches).toHaveLength(1);
+			expect(appliedBatches[0]).toEqual([event]);
+		});
 	});
 
 	describe('event coalescing', () => {

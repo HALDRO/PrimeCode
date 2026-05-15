@@ -143,6 +143,25 @@ describe('forwardBackendStatusEvent', () => {
 
 		expect(postedMessages).toContainEqual({ type: 'opencodeEvent', data: event });
 	});
+
+	it('forwards session.updated events carrying revert metadata', () => {
+		const { provider, postedMessages } = createBridgeProvider();
+		const event = {
+			payload: {
+				type: 'session.updated',
+				properties: {
+					info: {
+						id: 'ses-1',
+						revert: { messageID: 'msg-2' },
+					},
+				},
+			},
+		};
+
+		(provider as any).forwardBackendStatusEvent(event);
+
+		expect(postedMessages).toContainEqual({ type: 'opencodeEvent', data: event });
+	});
 });
 
 describe('Health monitor', () => {

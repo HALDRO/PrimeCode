@@ -106,14 +106,6 @@ function getPermissionListsClient() {
 	};
 }
 
-function getNextUserMessageId(sessionId: string, messageId: string): string | null {
-	const messages = useChatStore.getState().messages[sessionId] ?? [];
-	const nextUserMessage = messages.find(
-		message => message.role === 'user' && message.id > messageId,
-	);
-	return nextUserMessage?.id ?? null;
-}
-
 async function haltSessionIfBusy(sessionId: string): Promise<void> {
 	const processingSessionIds = getProcessingSessionIds(useChatStore.getState(), sessionId);
 	if (processingSessionIds.length === 0) return;
@@ -140,6 +132,21 @@ function applyLocalRevertState(sessionId: string, revert: { messageID: string } 
 			}
 		}),
 	);
+}
+
+function throwRuntimeClientError(error: unknown): never {
+	if (isConfigError(error)) {
+		throw new Error(formatConfigError(error));
+	}
+	if (isServerError(error)) {
+		throw new Error(error.data?.message ?? error.name);
+	}
+	throw error instanceof Error ? error : new Error(String(error));
+}
+
+function assertRuntimeResult(result: { error?: unknown } | undefined): void {
+	if (!result?.error) return;
+	throwRuntimeClientError(result.error);
 }
 
 type RuntimeAttachments = {
@@ -273,7 +280,7 @@ function isServerError(error: unknown): error is ServerError {
 	);
 }
 
-function isConfigError(error: unknown): boolean {
+function isConfigError(error: unknown): error is ServerError {
 	return isServerError(error) && error.name === 'ConfigInvalidError';
 }
 
@@ -912,27 +919,23 @@ export const openCodeRuntime = {
 	async restoreMessage(sessionId: string, messageId: string): Promise<void> {
 		const client = getClient();
 		await haltSessionIfBusy(sessionId);
-		const nextUserMessageId = getNextUserMessageId(sessionId, messageId);
-		if (nextUserMessageId) {
-			await client.session.revert({
-				sessionID: sessionId,
-				messageID: nextUserMessageId,
-				directory: getWorkspaceRoot(),
-			});
-			applyLocalRevertState(sessionId, { messageID: nextUserMessageId });
-		} else {
-			await client.session.unrevert({
-				sessionID: sessionId,
-				directory: getWorkspaceRoot(),
-			});
-			applyLocalRevertState(sessionId, undefined);
-		}
+		const result = await client.session.revert({
+			sessionID: sessionId,
+			messageID: messageId,
+			directory: getWorkspaceRoot(),
+		});
+		assertRuntimeResult(result);
+		applyLocalRevertState(sessionId, { messageID: messageId });
 	},
 
 	async unrevert(sessionId: string): Promise<void> {
 		const client = getClient();
 		await haltSessionIfBusy(sessionId);
-		await client.session.unrevert({ sessionID: sessionId, directory: getWorkspaceRoot() });
+		const result = await client.session.unrevert({
+			sessionID: sessionId,
+			directory: getWorkspaceRoot(),
+		});
+		assertRuntimeResult(result);
 		applyLocalRevertState(sessionId, undefined);
 	},
 
@@ -957,20 +960,40 @@ export const openCodeRuntime = {
 		variant?: string;
 	}): Promise<void> {
 		await haltSessionIfBusy(params.sessionId);
+		const shouldUseRevertFlow = params.isAlreadyReverted || params.mode === 'restore_and_send';
+
+		log.info('Editing message history', {
+			sessionId: params.sessionId,
+			messageId: params.messageId,
+			mode: params.mode,
+			isAlreadyReverted: params.isAlreadyReverted,
+			strategy: shouldUseRevertFlow ? 'revert-flow' : 'delete-flow',
+		});
+
+		if (params.isAlreadyReverted && params.mode === 'replace_history') {
+			log.info('Promoting replace_history to revert-flow for already reverted session', {
+				sessionId: params.sessionId,
+				messageId: params.messageId,
+			});
+		}
 
 		if (!params.isAlreadyReverted && params.mode === 'restore_and_send') {
-			await getClient().session.revert({
+			const result = await getClient().session.revert({
 				sessionID: params.sessionId,
 				messageID: params.messageId,
 				directory: getWorkspaceRoot(),
 			});
+			assertRuntimeResult(result);
+			applyLocalRevertState(params.sessionId, { messageID: params.messageId });
 		}
 
-		await deleteMessagesFrom(params.sessionId, params.messageId);
-		useChatStore
-			.getState()
-			.actions.truncateSessionMessages(params.sessionId, params.messageId, true);
-		applyLocalRevertState(params.sessionId, undefined);
+		if (!shouldUseRevertFlow) {
+			await deleteMessagesFrom(params.sessionId, params.messageId);
+			useChatStore
+				.getState()
+				.actions.truncateSessionMessages(params.sessionId, params.messageId, true);
+			applyLocalRevertState(params.sessionId, undefined);
+		}
 
 		await this.sendMessage({
 			sessionId: params.sessionId,

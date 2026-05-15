@@ -16,6 +16,10 @@ import { Button } from './Button';
 export const ConfirmDialog: React.FC = () => {
 	const confirmDialog = useUIStore(state => state.confirmDialog);
 	const { hideConfirmDialog } = useUIActions();
+	const hasSecondary = Boolean(confirmDialog?.onSecondary);
+	const requireExplicitChoice = Boolean(confirmDialog?.requireExplicitChoice);
+	const shouldAutoFocusConfirm = !hasSecondary && !requireExplicitChoice;
+	const shouldAutoFocusCancel = requireExplicitChoice || hasSecondary;
 
 	const handleConfirm = useCallback(() => {
 		confirmDialog?.onConfirm();
@@ -42,13 +46,19 @@ export const ConfirmDialog: React.FC = () => {
 			if (e.key === 'Escape') {
 				handleCancel();
 			} else if (e.key === 'Enter') {
-				handleConfirm();
+				if (requireExplicitChoice) {
+					e.preventDefault();
+					return;
+				}
+				if (shouldAutoFocusConfirm) {
+					handleConfirm();
+				}
 			}
 		};
 
 		window.addEventListener('keydown', handleKeyDown);
 		return () => window.removeEventListener('keydown', handleKeyDown);
-	}, [confirmDialog, handleCancel, handleConfirm]);
+	}, [confirmDialog, handleCancel, handleConfirm, requireExplicitChoice, shouldAutoFocusConfirm]);
 
 	if (!confirmDialog) {
 		return null;
@@ -95,13 +105,13 @@ export const ConfirmDialog: React.FC = () => {
 						variant="primary"
 						size="md"
 						onClick={handleConfirm}
-						autoFocus
+						autoFocus={shouldAutoFocusConfirm}
 						fullWidth
 						className="min-h-10 text-center whitespace-normal leading-snug"
 					>
 						{confirmDialog.confirmLabel || 'Confirm'}
 					</Button>
-					{confirmDialog.onSecondary && (
+					{hasSecondary && (
 						<Button
 							variant="secondary"
 							size="md"
@@ -116,10 +126,11 @@ export const ConfirmDialog: React.FC = () => {
 						variant="secondary"
 						size="md"
 						onClick={handleCancel}
+						autoFocus={shouldAutoFocusCancel}
 						fullWidth
 						className="min-h-10 text-center whitespace-normal leading-snug"
 					>
-						{confirmDialog.onSecondary ? 'Cancel' : confirmDialog.cancelLabel || 'Cancel'}
+						{hasSecondary ? 'Cancel' : confirmDialog.cancelLabel || 'Cancel'}
 					</Button>
 				</div>
 			</div>

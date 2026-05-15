@@ -23,6 +23,8 @@ export interface ConfirmDialogData {
 	onConfirm: () => void;
 	/** Optional explicit secondary action. Closing the dialog does not trigger it. */
 	onSecondary?: () => void;
+	/** When true, Enter does not auto-confirm and the user must choose explicitly. */
+	requireExplicitChoice?: boolean;
 	onCancel?: () => void;
 }
 

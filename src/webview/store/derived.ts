@@ -1248,9 +1248,14 @@ export function deriveSessionView(
 		state.sessions.find(session => session.id === sessionId)?.revert?.messageID ?? null;
 	let revertedFromMessageId: string | null = null;
 	if (revertMessageId) {
-		for (const message of messages) {
-			if (message.id >= revertMessageId) break;
-			if (message.role === 'user') revertedFromMessageId = message.id;
+		const revertIndex = messages.findIndex(message => message.id === revertMessageId);
+		if (revertIndex !== -1) {
+			for (let index = revertIndex; index >= 0; index -= 1) {
+				if (messages[index]?.role === 'user') {
+					revertedFromMessageId = messages[index].id;
+					break;
+				}
+			}
 		}
 		revertedFromMessageId ??= revertMessageId;
 	}

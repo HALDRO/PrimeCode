@@ -449,6 +449,56 @@ describe('chatStore restore', () => {
 		expect(view.sections[2].isRevertPoint).toBe(false);
 	});
 
+	it('keeps the revert marker on the exact user message selected for restore', () => {
+		const first = createUserMessage('msg-1', 'first');
+		const second = createUserMessage('msg-2', 'second');
+		const third = createUserMessage('msg-3', 'third');
+
+		restoreFromEvents([
+			{
+				type: 'message.updated',
+				properties: { sessionID: SESSION_ID, info: first.message },
+			} as never,
+			{
+				type: 'message.part.updated',
+				properties: { part: first.part },
+			} as never,
+			{
+				type: 'message.updated',
+				properties: { sessionID: SESSION_ID, info: second.message },
+			} as never,
+			{
+				type: 'message.part.updated',
+				properties: { part: second.part },
+			} as never,
+			{
+				type: 'message.updated',
+				properties: { sessionID: SESSION_ID, info: third.message },
+			} as never,
+			{
+				type: 'message.part.updated',
+				properties: { part: third.part },
+			} as never,
+		]);
+
+		useChatStore.setState(state => ({
+			...state,
+			sessions: [
+				{
+					id: SESSION_ID,
+					revert: { messageID: 'msg-2' },
+				} as never,
+			],
+		}));
+
+		const view = deriveSessionView(useChatStore.getState(), SESSION_ID);
+		expect(view.sections).toHaveLength(3);
+		expect(view.sections[1].isRevertPoint).toBe(true);
+		expect(view.sections[1].isReverted).toBe(true);
+		expect(view.sections[2].isReverted).toBe(true);
+		expect(view.sections[0].isRevertPoint).toBe(false);
+	});
+
 	it('allows follow-up send immediately after local revert state switches session back to idle', () => {
 		useChatStore.setState(state => ({
 			...state,

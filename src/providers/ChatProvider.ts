@@ -1087,6 +1087,15 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			// retry metadata (attempt, message, next) reaches the webview intact.
 			return;
 		}
+
+		if (payload.type === 'session.updated') {
+			const info = properties.info as Record<string, unknown> | undefined;
+			const revert = info?.revert as Record<string, unknown> | undefined;
+			logger.info('[ChatProvider] Forwarding session.updated event', {
+				sessionId: typeof info?.id === 'string' ? info.id : null,
+				revertMessageId: typeof revert?.messageID === 'string' ? revert.messageID : null,
+			});
+		}
 	}
 
 	private async sendInitialState(): Promise<void> {

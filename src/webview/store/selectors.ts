@@ -562,6 +562,14 @@ export const useRevertedFromMessageId = () =>
 		return session?.revert?.messageID ?? null;
 	});
 
+export const useSessionRevertState = (sessionId?: string) =>
+	useChatStore((state: SessionStore) => {
+		const sid = sessionId ?? state.activeSessionId;
+		if (!sid) return null;
+		const session = state.sessions.find(item => item.id === sid);
+		return session?.revert ?? null;
+	});
+
 export const useIsImprovingPrompt = () =>
 	useChatStore((state: SessionStore) => state.isImprovingPrompt);
 export const useImprovingPromptRequestId = () =>

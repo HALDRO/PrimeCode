@@ -120,6 +120,16 @@ function handleGlobalEnvelope(
 			// Full reconcile only happens on bootstrap or explicit user reload.
 			return;
 		}
+		if (maybeEnvelope.payload.type === 'session.updated') {
+			const payload = maybeEnvelope.payload as {
+				properties?: { info?: { id?: string; revert?: { messageID?: string } | null } };
+			};
+			const info = payload.properties?.info;
+			log.info('Received session.updated event', {
+				sessionId: info?.id,
+				revertMessageId: info?.revert?.messageID ?? null,
+			});
+		}
 		enqueue(maybeEnvelope.payload as WebviewSdkEvent);
 		return;
 	}
