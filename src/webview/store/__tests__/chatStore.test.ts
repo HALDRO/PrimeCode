@@ -106,6 +106,7 @@ describe('chatStore restore', () => {
 	});
 
 	it('stores session.error notifications with their origin sessionId', () => {
+		useChatStore.getState().actions.applyTabState([SESSION_ID], SESSION_ID);
 		restoreFromEvents([
 			{
 				type: 'session.error',
@@ -123,6 +124,42 @@ describe('chatStore restore', () => {
 				sessionId: SESSION_ID,
 			}),
 		]);
+	});
+
+	it('does not surface session.error from inactive sessions as top-level notifications', () => {
+		useChatStore.getState().actions.applyTabState([SESSION_ID, 'session-2'], SESSION_ID);
+
+		restoreFromEvents([
+			{
+				type: 'session.error',
+				properties: {
+					sessionID: 'session-2',
+					error: { name: 'ModelUnavailableError', message: 'Background model is down' },
+				},
+			} as never,
+		]);
+
+		expect(useUIStore.getState().notifications).toEqual([]);
+	});
+
+	it('does not surface noisy unknown agent-not-found session errors', () => {
+		useChatStore.getState().actions.applyTabState([SESSION_ID], SESSION_ID);
+
+		restoreFromEvents([
+			{
+				type: 'session.error',
+				properties: {
+					sessionID: SESSION_ID,
+					error: {
+						name: 'UnknownError',
+						message:
+							'Agent not found: "Sisyphus - Ultraworker". Available agents: build, explore, general, plan',
+					},
+				},
+			} as never,
+		]);
+
+		expect(useUIStore.getState().notifications).toEqual([]);
 	});
 
 	it('does not deduplicate identical error content across different sessions', () => {

@@ -18,10 +18,20 @@ import { produce } from 'immer';
 import { create } from 'zustand';
 import type { NormalizedEntry } from '../../common/normalizedTypes';
 import type { SessionMessageEntry } from '../services/opencodeRuntime';
+import { webviewLogger } from '../utils/logger';
 import { eventReducer, reconcileSessionGraph, type WebviewSdkEvent } from './eventReducer';
 import { rebuildSessionOwnedFiles } from './fileOwnership';
 import { useSettingsStore } from './settingsStore';
 import { useUIStore } from './uiStore';
+
+const log = webviewLogger.forComponent('ChatStore');
+
+type SessionErrorSummary = {
+	code?: string;
+	message: string;
+	name?: string;
+	severity: 'critical' | 'error' | 'warning' | 'info';
+};
 
 function createMessageDomainState() {
 	return {
@@ -147,7 +157,68 @@ function normalizeTopLevelTabs(state: SessionStore): void {
 	}
 }
 
-function pushSessionErrorNotification(error: unknown, sessionId?: string): void {
+function summarizeSessionError(error: unknown): SessionErrorSummary {
+	const message = getSessionErrorMessage(error) ?? 'Unknown error';
+	if (!error || typeof error !== 'object') {
+		return { message, severity: 'error' };
+	}
+	const record = error as Record<string, unknown>;
+	const name =
+		typeof record.name === 'string' && record.name.trim() ? record.name.trim() : undefined;
+	const code =
+		typeof record.code === 'string' && record.code.trim() ? record.code.trim() : undefined;
+	const lowerMessage = message.toLowerCase();
+	const lowerName = name?.toLowerCase() ?? '';
+	const severity =
+		lowerName.includes('autherror') ||
+		lowerName.includes('providerautherror') ||
+		lowerName.includes('contextoverflowerror') ||
+		/\b(quota|insufficient[_\s]?quota)\b/.test(lowerMessage)
+			? 'critical'
+			: /\boutput[_\s]?length\b/.test(lowerMessage) ||
+					/\brate[_\s]?limit\b/.test(lowerMessage) ||
+					lowerMessage.includes('too many requests')
+				? 'warning'
+				: 'error';
+	return { code, message, name, severity };
+}
+
+function isNoisySessionError(error: unknown): boolean {
+	const errorInfo = summarizeSessionError(error);
+	const name = errorInfo.name?.toLowerCase() ?? '';
+	const message = errorInfo.message.toLowerCase();
+	return (
+		name === 'messageabortederror' ||
+		(message.includes('agent not found') && name === 'unknownerror')
+	);
+}
+
+function shouldSurfaceSessionError(
+	state: SessionStore,
+	error: unknown,
+	sessionId?: string,
+): boolean {
+	if (!sessionId) return false;
+	if (state.activeSessionId !== sessionId) return false;
+	const session = state.sessions.find(item => item.id === sessionId);
+	if (session?.parentID) return false;
+	if (isNoisySessionError(error)) return false;
+	return true;
+}
+
+function handleSessionError(state: SessionStore, error: unknown, sessionId?: string): void {
+	const errorInfo = summarizeSessionError(error);
+	const surface = shouldSurfaceSessionError(state, error, sessionId);
+	log.warn('Received session.error event', {
+		sessionId,
+		activeSessionId: state.activeSessionId,
+		name: errorInfo.name,
+		message: errorInfo.message,
+		severity: errorInfo.severity,
+		code: errorInfo.code,
+		surface,
+	});
+	if (!surface) return;
 	const errorMsg = getSessionErrorMessage(error);
 	if (!errorMsg) return;
 	useUIStore.getState().actions.pushNotification({
@@ -569,7 +640,7 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 	actions: {
 		applyEvent: event => {
 			if (event.type === 'session.error') {
-				pushSessionErrorNotification(event.properties.error, event.properties.sessionID);
+				handleSessionError(get(), event.properties.error, event.properties.sessionID);
 			}
 			set(
 				produce((state: SessionStore) => {
@@ -582,7 +653,7 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 		applyBatch: events => {
 			for (const event of events) {
 				if (event.type === 'session.error') {
-					pushSessionErrorNotification(event.properties.error, event.properties.sessionID);
+					handleSessionError(get(), event.properties.error, event.properties.sessionID);
 				}
 			}
 

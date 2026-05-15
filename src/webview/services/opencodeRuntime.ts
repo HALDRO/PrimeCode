@@ -298,14 +298,47 @@ function formatConfigError(error: ServerError): string {
 	return detail ? `Config error in ${file}: ${detail}` : `Invalid config at ${file}`;
 }
 
+function getRuntimeErrorMessage(error: unknown): string {
+	if (error instanceof Error) return error.message || error.name || 'OpenCode request failed';
+	if (typeof error === 'string' && error.trim()) return error.trim();
+	if (!error || typeof error !== 'object') return 'OpenCode request failed';
+	const record = error as Record<string, unknown>;
+	if (typeof record.message === 'string' && record.message.trim()) return record.message.trim();
+	const data = record.data;
+	if (data && typeof data === 'object') {
+		const dataMessage = (data as Record<string, unknown>).message;
+		if (typeof dataMessage === 'string' && dataMessage.trim()) return dataMessage.trim();
+	}
+	return 'OpenCode request failed';
+}
+
+function shouldSuppressRuntimeErrorNotification(error: unknown, message: string): boolean {
+	const lowerMessage = message.toLowerCase();
+	const name =
+		typeof error === 'object' &&
+		error !== null &&
+		typeof (error as { name?: unknown }).name === 'string'
+			? ((error as { name: string }).name || '').toLowerCase()
+			: '';
+	if (name === 'messageabortederror') return true;
+	if (!lowerMessage.includes('agent not found')) return false;
+	return (
+		lowerMessage.includes('unknownerror') || message.includes('SessionPrompt.createUserMessage')
+	);
+}
+
 function showRuntimeError(error: unknown): void {
+	const message = getRuntimeErrorMessage(error);
+	const suppressNotification = shouldSuppressRuntimeErrorNotification(error, message);
 	log.error('Runtime error', {
-		error: error instanceof Error ? error.message : String(error),
+		error: message,
+		suppressNotification,
 		stack: error instanceof Error ? error.stack : undefined,
 	});
+	if (suppressNotification) return;
 	useUIStore.getState().actions.pushNotification({
 		type: 'error',
-		content: error instanceof Error ? error.message : 'OpenCode request failed',
+		content: message,
 		timestamp: new Date().toISOString(),
 		autoDismissMs: 8000,
 	});
