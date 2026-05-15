@@ -31,14 +31,12 @@ const STATUS_COMMIT_DELAY_MS = 200;
 
 // ─── Utilities ───────────────────────────────────────────────────────────────
 
-/** Format status text for display — strips trailing dots, capitalizes. */
+/** Format status text for display — trims and capitalizes. */
 const formatStatus = (status: string): string => {
 	if (!status || status === 'Ready') return '';
 	const cleaned = status.trim();
 	if (!cleaned) return '';
-	const withoutTrailingDots = cleaned.replace(/[.\u2026]+\s*$/, '').trim();
-	if (!withoutTrailingDots) return '';
-	return withoutTrailingDots.charAt(0).toUpperCase() + withoutTrailingDots.slice(1);
+	return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
 };
 
 const statusTextBaseStyle = {

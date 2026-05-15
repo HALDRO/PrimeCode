@@ -337,7 +337,7 @@ function getRunningToolMeta(
 			const displayName = getToolDisplayName(toolPart.tool);
 			lastRunningTool = {
 				toolName: toolPart.tool,
-				label: `Running ${displayName}...`,
+				label: `Running ${displayName}`,
 				toolUseId: toolPart.callID,
 				messageId: message.id,
 				partIndex: j,
@@ -416,7 +416,7 @@ function buildGenerationStatusSnapshot(input: {
 	if (input.sessionRuntimeStatus?.type === 'retry') {
 		return {
 			phase: 'retry',
-			label: 'Retrying…',
+			label: 'Retrying',
 			isVisible: true,
 			stableKey: 'retry',
 			toolCallId: null,
@@ -438,7 +438,7 @@ function buildGenerationStatusSnapshot(input: {
 	if (input.lastStreamingThinking) {
 		return {
 			phase: 'thinking',
-			label: 'Thinking…',
+			label: 'Thinking',
 			isVisible: true,
 			stableKey: `thinking:${input.lastStreamingThinking.partId}`,
 			toolCallId: null,
@@ -449,7 +449,7 @@ function buildGenerationStatusSnapshot(input: {
 	if (input.isLastAssistantStreaming) {
 		return {
 			phase: 'responding',
-			label: 'Writing…',
+			label: 'Working',
 			isVisible: true,
 			stableKey: 'responding',
 			toolCallId: null,
@@ -459,7 +459,7 @@ function buildGenerationStatusSnapshot(input: {
 
 	return {
 		phase: 'working',
-		label: 'Working…',
+		label: 'Working',
 		isVisible: true,
 		stableKey: 'working',
 		toolCallId: null,

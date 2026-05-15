@@ -274,7 +274,7 @@ const TaskCardItem = React.memo<{
 	const isRunning = effectiveStatus === 'running';
 	const isPending = effectiveStatus === 'pending';
 	const isPreviewMode = expandState === 'preview';
-	const shouldRenderTranscript = expandState === 'expanded' || isRunning;
+	const shouldRenderTranscript = expandState === 'expanded';
 	const groupedChildren = useGroupedTranscript(rawChildItems, mcpServerNames, isRunning);
 	const toolSummary = useMemo(() => summarizePreviewTools(groupedChildren), [groupedChildren]);
 
@@ -438,7 +438,8 @@ const TaskCardItem = React.memo<{
 					<div className="relative bg-(--tool-bg-header)">
 						<AnimatedCardBody
 							expanded={expandState === 'expanded'}
-							isStreaming={isPreviewMode}
+							isStreaming={isRunning && isPreviewMode}
+							keepPreviewOpen={isPreviewMode}
 							previewHeight={SUBTASK_STREAMING_PREVIEW_MAX_HEIGHT}
 							expandedHeight={Math.min(
 								SUBTASK_EXPANDED_MAX_HEIGHT,

@@ -188,6 +188,7 @@ interface ToolCardProps {
 interface AnimatedCardBodyProps {
 	expanded: boolean;
 	isStreaming?: boolean;
+	keepPreviewOpen?: boolean;
 	previewHeight: number;
 	expandedHeight: number;
 	className?: string;
@@ -198,17 +199,18 @@ interface AnimatedCardBodyProps {
 export const AnimatedCardBody: React.FC<AnimatedCardBodyProps> = ({
 	expanded,
 	isStreaming = false,
+	keepPreviewOpen = false,
 	previewHeight,
 	expandedHeight,
 	className,
 	children,
 	scrollRef,
 }) => {
-	const targetHeight = expanded ? 'auto' : isStreaming ? previewHeight : 0;
+	const targetHeight = expanded || keepPreviewOpen ? 'auto' : isStreaming ? previewHeight : 0;
 	const innerStyle =
-		expanded || isStreaming
+		expanded || isStreaming || keepPreviewOpen
 			? {
-					maxHeight: expanded ? expandedHeight : previewHeight,
+					maxHeight: expanded ? expandedHeight : keepPreviewOpen ? expandedHeight : previewHeight,
 					overflowX: 'hidden' as const,
 					overflowY: 'auto' as const,
 					scrollbarWidth: 'none' as const,

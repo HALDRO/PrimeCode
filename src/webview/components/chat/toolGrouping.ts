@@ -83,13 +83,17 @@ export const isBridgeMessage = (msg: RenderNode): boolean => {
 	return true;
 };
 
-const stripTrailingBridges = (group: RenderNode[]): RenderNode[] => {
-	const stripped: RenderNode[] = [];
-	while (group.length > 0 && isBridgeMessage(group[group.length - 1])) {
-		const msg = group.pop();
-		if (msg) stripped.unshift(msg);
+const findNextGroupableToolIndex = (
+	msgs: RenderNode[],
+	start: number,
+	mcpServerNames: string[],
+): number => {
+	for (let i = start; i < msgs.length; i++) {
+		const msg = msgs[i];
+		if (isGroupableTool(msg, mcpServerNames)) return i;
+		if (!isBridgeMessage(msg)) return -1;
 	}
-	return stripped;
+	return -1;
 };
 
 // -----------------------------------------------------------------------------
@@ -117,16 +121,10 @@ export const groupToolMessages = (
 	const flushGroup = (reason: 'boundary' | 'final', collapseOnFlush = false) => {
 		if (currentToolGroup.length === 0) return;
 
-		const shouldKeepTrailingBridgesInLiveGroup = reason === 'final' && isStreaming;
-		const trailingBridges = shouldKeepTrailingBridgesInLiveGroup
-			? []
-			: stripTrailingBridges(currentToolGroup);
 		const toolUseCount = getToolUseCount(currentToolGroup);
 		const canGroup = toolUseCount >= MIN_SIMPLE_TOOL_GROUP_SIZE;
 
 		if (canGroup) {
-			// Keep bridges inside the group — they render inline between tools
-			// when the group is expanded, and are hidden when collapsed.
 			const group = [...currentToolGroup] as ToolGroup;
 			group.isLive = reason === 'final' && isStreaming;
 			group.shouldCollapse = reason === 'boundary' && collapseOnFlush;
@@ -134,9 +132,6 @@ export const groupToolMessages = (
 		} else {
 			result.push(...currentToolGroup);
 		}
-
-		// Trailing bridges always render outside (they follow the group boundary)
-		result.push(...trailingBridges);
 
 		currentToolGroup = [];
 	};
@@ -150,8 +145,19 @@ export const groupToolMessages = (
 		}
 
 		if (isBridgeMessage(msg) && currentToolGroup.length > 0) {
-			currentToolGroup.push(msg);
-			continue;
+			const nextToolIdx = findNextGroupableToolIndex(msgs, i + 1, mcpServerNames);
+			if (nextToolIdx !== -1) {
+				for (let j = i; j < nextToolIdx; j++) {
+					currentToolGroup.push(msgs[j]);
+				}
+				i = nextToolIdx - 1;
+				continue;
+			}
+
+			if (isStreaming && msg.kind === 'thinking') {
+				currentToolGroup.push(msg);
+				continue;
+			}
 		}
 
 		// Hard boundary — flush first, then emit the trigger/boundary message outside the group.

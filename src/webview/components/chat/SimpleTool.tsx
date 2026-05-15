@@ -15,6 +15,7 @@ import {
 	UI_CARD_MOUNT_INITIAL,
 	UI_MOTION_FRAMER_TRANSITION,
 } from '../../constants';
+import { useContainerAutoScroll } from '../../hooks/useContainerAutoScroll';
 import { cn } from '../../lib/cn';
 import { useSettingsStore } from '../../store';
 import { formatDuration, formatToolName } from '../../utils/format';
@@ -23,6 +24,7 @@ import { useVSCode } from '../../utils/vscode';
 import {
 	BrainSideIcon,
 	CheckCircleIcon,
+	ChevronDownIcon,
 	FileTextIcon,
 	FolderOpenIcon,
 	SearchIcon,
@@ -35,6 +37,7 @@ import {
 	ZapIcon,
 } from '../icons';
 import { Badge, CollapseOverlay, PathChip } from '../ui';
+import { ScrollThumb } from '../ui/ScrollContainer';
 
 /** Module-level component — avoids full DOM remount on every parent render */
 const TodoStatusIcon: React.FC<{ status: string }> = ({ status }) => {
@@ -71,6 +74,7 @@ interface SimpleToolProps {
 	/** Show a CollapseOverlay at the bottom of expanded content. */
 	showCollapseOverlay?: boolean;
 	maxExpandedHeight?: string;
+	autoScrollActive?: boolean;
 }
 
 export const SimpleTool: React.FC<SimpleToolProps> = ({
@@ -87,10 +91,13 @@ export const SimpleTool: React.FC<SimpleToolProps> = ({
 	contentClassName,
 	showCollapseOverlay = false,
 	maxExpandedHeight = TOOL_CARD_EXPANDED_MAX_HEIGHT,
+	autoScrollActive = false,
 }) => {
 	const [uncontrolledExpanded, setUncontrolledExpanded] = useState(defaultExpanded);
 	const contentId = useId();
 	const hasContent = Boolean(children);
+	const { scrollerRef, scrollerObjectRef, showScrollToBottom, scrollToBottom } =
+		useContainerAutoScroll({ active: autoScrollActive });
 
 	const isControlled = controlledExpanded !== undefined;
 	const expanded = isControlled ? controlledExpanded : uncontrolledExpanded;
@@ -181,11 +188,30 @@ export const SimpleTool: React.FC<SimpleToolProps> = ({
 								contentClassName,
 							)}
 						>
-							<div
-								style={{ maxHeight: maxExpandedHeight }}
-								className="overflow-x-auto overflow-y-auto animate-fade-in"
-							>
-								{children}
+							<div className="relative">
+								<div
+									ref={scrollerRef}
+									style={{ maxHeight: maxExpandedHeight, scrollbarWidth: 'none' }}
+									className="overflow-x-auto overflow-y-auto animate-fade-in"
+								>
+									{children}
+								</div>
+								{autoScrollActive && (
+									<>
+										<ScrollThumb scrollerRef={scrollerObjectRef} autoHideDelay={800} />
+										{showScrollToBottom && (
+											<button
+												type="button"
+												onClick={scrollToBottom}
+												aria-label="Scroll to bottom"
+												className="absolute bottom-1 left-1/2 z-10 flex size-[22px] -translate-x-1/2 items-center justify-center rounded-full cursor-pointer bg-vscode-editor-background/80 text-vscode-foreground backdrop-blur-md transition-all duration-200 border border-[color-mix(in_srgb,var(--vscode-foreground)_10%,transparent)] shadow-[0_4px_12px_color-mix(in_srgb,var(--vscode-widget-shadow,#000)_50%,transparent)] hover:bg-vscode-editor-background/95 hover:shadow-[0_6px_16px_color-mix(in_srgb,var(--vscode-widget-shadow,#000)_60%,transparent)] active:scale-95"
+												title="Scroll to bottom"
+											>
+												<ChevronDownIcon size={12} />
+											</button>
+										)}
+									</>
+								)}
 							</div>
 						</motion.div>
 						{showCollapseOverlay && <CollapseOverlay visible={true} onCollapse={toggle} />}
@@ -278,6 +304,7 @@ export const ThinkingMessage = React.memo<ThinkingMessageProps>(
 				meta={combinedMeta}
 				expanded={expanded}
 				maxExpandedHeight={previewMaxHeight}
+				autoScrollActive={Boolean(isStreaming) && expanded}
 				onToggle={() => {
 					setManualExpanded(prev => !(prev ?? Boolean(isStreaming)));
 				}}
