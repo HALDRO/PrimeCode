@@ -162,7 +162,7 @@ describe('chatStore restore', () => {
 		expect(useUIStore.getState().notifications).toEqual([]);
 	});
 
-	it('does not deduplicate identical error content across different sessions', () => {
+	it('keeps inactive-session errors suppressed even when content matches the active session error', () => {
 		restoreFromEvents([
 			{
 				type: 'session.error',
@@ -181,12 +181,14 @@ describe('chatStore restore', () => {
 		]);
 
 		const notifications = useUIStore.getState().notifications;
-		expect(notifications).toHaveLength(2);
-		expect(notifications.map(notification => notification.sessionId).sort()).toEqual([
-			SESSION_ID,
-			'session-2',
-		]);
-		expect(notifications.every(notification => notification.count === 1)).toBe(true);
+		expect(notifications).toHaveLength(1);
+		expect(notifications[0]).toEqual(
+			expect.objectContaining({
+				sessionId: SESSION_ID,
+				content: 'Model is down',
+				count: 1,
+			}),
+		);
 	});
 
 	it('restores session model from the last user message in session history', () => {
@@ -534,6 +536,66 @@ describe('chatStore restore', () => {
 		expect(view.sections[1].isReverted).toBe(true);
 		expect(view.sections[2].isReverted).toBe(true);
 		expect(view.sections[0].isRevertPoint).toBe(false);
+	});
+
+	it('moves the reverted range back to the earlier turn when restore is re-targeted', () => {
+		const first = createUserMessage('msg-1', 'first');
+		const second = createUserMessage('msg-2', 'second');
+		const third = createUserMessage('msg-3', 'third');
+
+		restoreFromEvents([
+			{
+				type: 'message.updated',
+				properties: { sessionID: SESSION_ID, info: first.message },
+			} as never,
+			{
+				type: 'message.part.updated',
+				properties: { part: first.part },
+			} as never,
+			{
+				type: 'message.updated',
+				properties: { sessionID: SESSION_ID, info: second.message },
+			} as never,
+			{
+				type: 'message.part.updated',
+				properties: { part: second.part },
+			} as never,
+			{
+				type: 'message.updated',
+				properties: { sessionID: SESSION_ID, info: third.message },
+			} as never,
+			{
+				type: 'message.part.updated',
+				properties: { part: third.part },
+			} as never,
+		]);
+
+		useChatStore.setState(state => ({
+			...state,
+			sessions: [
+				{
+					id: SESSION_ID,
+					revert: { messageID: 'msg-3' },
+				} as never,
+			],
+		}));
+
+		useChatStore.setState(state => ({
+			...state,
+			sessions: [
+				{
+					id: SESSION_ID,
+					revert: { messageID: 'msg-1' },
+				} as never,
+			],
+		}));
+
+		const view = deriveSessionView(useChatStore.getState(), SESSION_ID);
+		expect(view.sections).toHaveLength(3);
+		expect(view.sections[0].isRevertPoint).toBe(true);
+		expect(view.sections[0].isReverted).toBe(true);
+		expect(view.sections[1].isReverted).toBe(true);
+		expect(view.sections[2].isReverted).toBe(true);
 	});
 
 	it('allows follow-up send immediately after local revert state switches session back to idle', () => {

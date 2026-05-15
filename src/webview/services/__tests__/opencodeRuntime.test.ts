@@ -38,13 +38,15 @@ vi.mock('@opencode-ai/sdk/v2/client', () => ({
 	createOpencodeClient: createClientMock,
 }));
 
-vi.mock('../utils/vscode', () => ({
+vi.mock('../../utils/vscode', () => ({
 	vscode: {
+		getState: vi.fn(() => ({})),
+		setState: vi.fn(),
 		postMessage: postMessageMock,
 	},
 }));
 
-vi.mock('../utils/proxyFetch', () => ({
+vi.mock('../../utils/proxyFetch', () => ({
 	proxyFetch: proxyFetchMock,
 }));
 
@@ -122,6 +124,33 @@ describe('openCodeRuntime status recovery', () => {
 			directory: 'C:\\repo',
 		});
 		expect(unrevertMock).not.toHaveBeenCalled();
+	});
+
+	it('re-targets restore to an earlier message when the session is already reverted', async () => {
+		useChatStore.setState(state => ({
+			...state,
+			sessions: [{ id: 'ses-1' } as never],
+		}));
+
+		await openCodeRuntime.restoreMessage('ses-1', 'msg-3');
+		await openCodeRuntime.restoreMessage('ses-1', 'msg-1');
+
+		expect(revertMock).toHaveBeenNthCalledWith(1, {
+			sessionID: 'ses-1',
+			messageID: 'msg-3',
+			directory: 'C:\\repo',
+		});
+		expect(revertMock).toHaveBeenNthCalledWith(2, {
+			sessionID: 'ses-1',
+			messageID: 'msg-1',
+			directory: 'C:\\repo',
+		});
+		expect(unrevertMock).not.toHaveBeenCalled();
+		expect(
+			useChatStore.getState().sessions.find(session => session.id === 'ses-1')?.revert,
+		).toEqual({
+			messageID: 'msg-1',
+		});
 	});
 
 	it('surfaces runtime errors returned by revert operations', async () => {
