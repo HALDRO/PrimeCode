@@ -5,6 +5,7 @@
  */
 
 import * as vscode from 'vscode';
+import { normalizeDriveLetter } from '../utils/path';
 
 // =============================================================================
 // Types
@@ -68,7 +69,8 @@ export class Settings implements ISettings {
 
 	constructor() {
 		this.config = vscode.workspace.getConfiguration('primeCode');
-		this.workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		const raw = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		this.workspaceRoot = raw ? normalizeDriveLetter(raw) : undefined;
 	}
 
 	// =============================================================================
@@ -140,6 +142,7 @@ export class Settings implements ISettings {
 
 	refresh(): void {
 		this.config = vscode.workspace.getConfiguration('primeCode');
-		this.workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		const raw = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		this.workspaceRoot = raw ? normalizeDriveLetter(raw) : undefined;
 	}
 }

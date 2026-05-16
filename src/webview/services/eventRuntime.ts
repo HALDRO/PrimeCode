@@ -1,4 +1,5 @@
 import type { ExtensionMessage } from '../../common';
+import { normalizeDriveLetter } from '../../utils/path';
 import { collectSessionLineageIds, useChatStore } from '../store';
 import type { WebviewSdkEvent } from '../store/eventReducer';
 import { useSettingsStore } from '../store/settingsStore';
@@ -27,10 +28,6 @@ let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
 let currentKey: string | null = null;
 let lastEventAt = Date.now();
-
-function normalizeDriveLetter(dir: string): string {
-	return dir.length >= 2 && dir[1] === ':' ? dir[0].toUpperCase() + dir.slice(1) : dir;
-}
 
 function coalescingKey(event: WebviewSdkEvent): string | null {
 	switch (event.type) {

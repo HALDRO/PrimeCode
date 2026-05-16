@@ -9,6 +9,7 @@ import { OpenCodeConfigService } from '../services/opencode/OpenCodeConfigServic
 import { ResourceService } from '../services/ResourceService';
 import { ResourceWatcherService } from '../services/ResourceWatcherService';
 import { RulesService } from '../services/RulesService';
+import { normalizeDriveLetter } from '../utils/path';
 
 export class ServiceRegistry implements vscode.Disposable {
 	public readonly resources: ResourceService;
@@ -49,7 +50,8 @@ export class ServiceRegistry implements vscode.Disposable {
 		});
 
 		// Initialize workspace-scoped services if workspace is already open
-		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		const rawRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		const workspaceRoot = rawRoot ? normalizeDriveLetter(rawRoot) : undefined;
 		if (workspaceRoot) {
 			this.setWorkspaceRoot(workspaceRoot);
 		}

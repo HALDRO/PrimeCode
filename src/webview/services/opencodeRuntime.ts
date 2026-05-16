@@ -57,7 +57,10 @@ function getWorkspaceRoot(): string {
 	if (!workspaceRoot) {
 		throw new Error('Workspace root is unavailable');
 	}
-	return workspaceRoot;
+	// Ensure uppercase drive letter for exact match with OpenCode server paths
+	return workspaceRoot.length >= 2 && workspaceRoot[1] === ':'
+		? workspaceRoot[0].toUpperCase() + workspaceRoot.slice(1)
+		: workspaceRoot;
 }
 
 function getServerUrl(): string {

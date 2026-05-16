@@ -8,6 +8,7 @@ import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk/v2/c
 
 import { PERMISSION_CATEGORIES } from '../../common/permissions';
 import { logger } from '../../utils/logger';
+import { normalizeDriveLetter } from '../../utils/path';
 import type { CLIConfig, CLIExecutor } from './types';
 
 // =============================================================================
@@ -89,7 +90,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	 * The server filters sessions by exact string match on `directory`.
 	 */
 	private static normalizeDriveLetter(dir: string): string {
-		return dir.length >= 2 && dir[1] === ':' ? dir[0].toUpperCase() + dir.slice(1) : dir;
+		return normalizeDriveLetter(dir);
 	}
 
 	private getLocalServerUrl(): string {
