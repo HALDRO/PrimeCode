@@ -154,7 +154,9 @@ export const groupToolMessages = (
 				continue;
 			}
 
-			if (isStreaming && msg.kind === 'thinking') {
+			// During streaming, keep trailing bridge messages (assistant/thinking)
+			// inside the group — the next tool may still arrive.
+			if (isStreaming) {
 				currentToolGroup.push(msg);
 				continue;
 			}

@@ -206,7 +206,9 @@ export const AnimatedCardBody: React.FC<AnimatedCardBodyProps> = ({
 	children,
 	scrollRef,
 }) => {
-	const targetHeight = expanded || keepPreviewOpen ? 'auto' : isStreaming ? previewHeight : 0;
+	// Use 'auto' for streaming so the card grows dynamically with content,
+	// capped by maxHeight on the inner scroll container.
+	const targetHeight = expanded || keepPreviewOpen || isStreaming ? 'auto' : 0;
 	const innerStyle =
 		expanded || isStreaming || keepPreviewOpen
 			? {
@@ -223,6 +225,9 @@ export const AnimatedCardBody: React.FC<AnimatedCardBodyProps> = ({
 			initial={false}
 			animate={{ height: targetHeight }}
 			transition={UI_MOTION_FRAMER_TRANSITION}
+			style={
+				isStreaming && !expanded && !keepPreviewOpen ? { maxHeight: previewHeight } : undefined
+			}
 		>
 			<div ref={scrollRef} style={innerStyle}>
 				{children}
@@ -904,11 +909,11 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 					</>
 				}
 				headerRight={
-					<div className="flex items-center self-stretch h-full gap-2">
+					<div className="flex items-center h-full gap-2">
 						{meta && (
 							<div
 								className={cn(
-									'flex items-center self-stretch h-full opacity-0 z-10',
+									'flex items-center opacity-0 z-10',
 									UI_MOTION_OPACITY_CLASS,
 									'group-hover:opacity-100',
 								)}
@@ -917,7 +922,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 							</div>
 						)}
 						{displayDuration > 0 && (
-							<span className="flex items-center self-stretch h-full gap-1 text-xs text-vscode-descriptionForeground shrink-0 tabular-nums">
+							<span className="flex items-center gap-1 text-xs text-vscode-descriptionForeground shrink-0 tabular-nums">
 								<TimerIcon size={11} />
 								{formatDuration(displayDuration)}
 							</span>
@@ -933,7 +938,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 				}}
 				body={
 					showBody && hasBody ? (
-						<div className="relative">
+						<div className="relative group/body">
 							<AnimatedCardBody
 								expanded={expanded}
 								isStreaming={isRunning}
@@ -953,6 +958,15 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 									</pre>
 								</div>
 							</AnimatedCardBody>
+							<div
+								className={cn(
+									'absolute top-1 right-1 opacity-0 z-10',
+									UI_MOTION_OPACITY_CLASS,
+									'group-hover/body:opacity-100',
+								)}
+							>
+								<CopyButton text={fullText} title="Copy output" />
+							</div>
 						</div>
 					) : undefined
 				}
