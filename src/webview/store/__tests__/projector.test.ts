@@ -271,7 +271,7 @@ describe('deriveSessionView', () => {
 		expect(busyView.toolActivity).toEqual(
 			expect.objectContaining({
 				toolName: 'bash',
-				label: 'Running Bash...',
+				label: 'Running Bash',
 				toolUseId: 'call-bash-1',
 			}),
 		);
@@ -356,7 +356,7 @@ describe('deriveSessionView', () => {
 		const view = deriveSessionView(store, 'ses1');
 		expect(view.toolActivity).toBeNull();
 		expect(view.generationStatus.phase).toBe('thinking');
-		expect(view.generationStatus.label).toBe('Thinking…');
+		expect(view.generationStatus.label).toBe('Thinking');
 	});
 
 	it('falls back to working after tool completion before any reasoning or text appears', () => {
@@ -381,7 +381,7 @@ describe('deriveSessionView', () => {
 		const view = deriveSessionView(store, 'ses1');
 		expect(view.toolActivity).toBeNull();
 		expect(view.generationStatus.phase).toBe('working');
-		expect(view.generationStatus.label).toBe('Working…');
+		expect(view.generationStatus.label).toBe('Working');
 	});
 
 	it('keeps retry as the strongest generation status', () => {
@@ -412,7 +412,7 @@ describe('deriveSessionView', () => {
 			}),
 		);
 		expect(view.generationStatus.phase).toBe('retry');
-		expect(view.generationStatus.label).toBe('Retrying…');
+		expect(view.generationStatus.label).toBe('Retrying');
 	});
 
 	it('projects reasoning part as RenderThinkingMessage', () => {

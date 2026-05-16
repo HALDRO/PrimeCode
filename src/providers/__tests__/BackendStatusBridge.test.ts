@@ -14,14 +14,15 @@ function createBridgeProvider() {
 
 	const provider: any = Object.assign(Object.create(ChatProvider.prototype), {
 		bridge,
+		settings: {
+			getWorkspaceRoot: vi.fn(() => 'C:\\repo'),
+		},
 		cli: {
 			getAdminInfo: vi.fn(() => ({
 				baseUrl: 'http://127.0.0.1:4096',
 				directory: 'C:\\repo',
 			})),
 		},
-		healthMonitorTimer: null,
-		healthConsecutiveFailures: 0,
 	});
 
 	return { provider, postedMessages, bridge };
@@ -161,44 +162,5 @@ describe('forwardBackendStatusEvent', () => {
 		(provider as any).forwardBackendStatusEvent(event);
 
 		expect(postedMessages).toContainEqual({ type: 'opencodeEvent', data: event });
-	});
-});
-
-describe('Health monitor', () => {
-	beforeEach(() => {
-		vi.clearAllMocks();
-		vi.useFakeTimers();
-	});
-
-	it('starts polling on startHealthMonitor', () => {
-		const { provider } = createBridgeProvider();
-
-		(provider as any).startHealthMonitor();
-
-		expect(provider.healthMonitorTimer).not.toBeNull();
-	});
-
-	it('stops polling on stopHealthMonitor', () => {
-		const { provider } = createBridgeProvider();
-
-		(provider as any).startHealthMonitor();
-		(provider as any).stopHealthMonitor();
-
-		expect(provider.healthMonitorTimer).toBeNull();
-	});
-
-	it('resets failure count on stopHealthMonitor + startHealthMonitor', () => {
-		const { provider } = createBridgeProvider();
-		provider.healthConsecutiveFailures = 5;
-
-		(provider as any).startHealthMonitor();
-
-		expect(provider.healthConsecutiveFailures).toBe(0);
-	});
-
-	it('does not call attemptReconnect (method removed)', () => {
-		const { provider } = createBridgeProvider();
-
-		expect((provider as any).attemptReconnect).toBeUndefined();
 	});
 });

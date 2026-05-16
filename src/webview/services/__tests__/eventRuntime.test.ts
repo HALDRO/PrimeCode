@@ -18,23 +18,15 @@ import { useSettingsStore } from '../../store/settingsStore';
 import { useUIStore } from '../../store/uiStore';
 import { eventRuntime } from '../eventRuntime';
 
-// Mock window.requestAnimationFrame/cancelAnimationFrame for Node environment
-let rafCallbacks: Array<() => void> = [];
-Object.defineProperty(globalThis, 'window', {
-	value: {
-		requestAnimationFrame: vi.fn((cb: () => void) => {
-			rafCallbacks.push(cb);
-			return rafCallbacks.length;
-		}),
-		cancelAnimationFrame: vi.fn(),
-	},
-	configurable: true,
-});
+if (typeof globalThis.window === 'undefined') {
+	Object.defineProperty(globalThis, 'window', {
+		value: globalThis,
+		configurable: true,
+	});
+}
 
-function flushRaf() {
-	const cbs = rafCallbacks.slice();
-	rafCallbacks = [];
-	for (const cb of cbs) cb();
+async function flushQueuedTimers() {
+	await vi.advanceTimersByTimeAsync(16);
 }
 
 // Intercept applyBatch calls by patching the store action
@@ -63,9 +55,9 @@ function resetStores() {
 
 describe('eventRuntime', () => {
 	beforeEach(() => {
+		vi.useFakeTimers();
 		resetStores();
 		eventRuntime.stop();
-		rafCallbacks = [];
 	});
 
 	describe('start / stop lifecycle', () => {
@@ -132,37 +124,37 @@ describe('eventRuntime', () => {
 	});
 
 	describe('event filtering (handleGlobalEnvelope)', () => {
-		it('filters out server.connected in envelope format', () => {
+		it('filters out server.connected in envelope format', async () => {
 			eventRuntime.handleExtensionMessage({
 				type: 'opencodeEvent',
 				data: { payload: { type: 'server.connected' } },
 			});
-			flushRaf();
+			await flushQueuedTimers();
 
 			expect(appliedBatches).toHaveLength(0);
 		});
 
-		it('filters out server.connected in direct format', () => {
+		it('filters out server.connected in direct format', async () => {
 			eventRuntime.handleExtensionMessage({
 				type: 'opencodeEvent',
 				data: { type: 'server.connected' },
 			});
-			flushRaf();
+			await flushQueuedTimers();
 
 			expect(appliedBatches).toHaveLength(0);
 		});
 
-		it('filters out sync events', () => {
+		it('filters out sync events', async () => {
 			eventRuntime.handleExtensionMessage({
 				type: 'opencodeEvent',
 				data: { payload: { type: 'sync' } },
 			});
-			flushRaf();
+			await flushQueuedTimers();
 
 			expect(appliedBatches).toHaveLength(0);
 		});
 
-		it('enqueues message.updated events in envelope format', () => {
+		it('enqueues message.updated events in envelope format', async () => {
 			const event = {
 				type: 'message.updated',
 				properties: { sessionID: 'ses-1', info: { id: 'msg-1', role: 'assistant' } },
@@ -172,13 +164,13 @@ describe('eventRuntime', () => {
 				type: 'opencodeEvent',
 				data: { directory: 'C:\\Project', payload: event },
 			});
-			flushRaf();
+			await flushQueuedTimers();
 
 			expect(appliedBatches).toHaveLength(1);
 			expect(appliedBatches[0]).toEqual([event]);
 		});
 
-		it('enqueues message.part.updated events in direct format', () => {
+		it('enqueues message.part.updated events in direct format', async () => {
 			const event = {
 				type: 'message.part.updated',
 				properties: { part: { id: 'p-1', messageID: 'msg-1', sessionID: 'ses-1' } },
@@ -188,13 +180,13 @@ describe('eventRuntime', () => {
 				type: 'opencodeEvent',
 				data: event,
 			});
-			flushRaf();
+			await flushQueuedTimers();
 
 			expect(appliedBatches).toHaveLength(1);
 			expect(appliedBatches[0]).toEqual([event]);
 		});
 
-		it('enqueues session.status events', () => {
+		it('enqueues session.status events', async () => {
 			const event = {
 				type: 'session.status',
 				properties: { sessionID: 'ses-1', status: { type: 'busy' } },
@@ -204,14 +196,14 @@ describe('eventRuntime', () => {
 				type: 'opencodeEvent',
 				data: { payload: event },
 			});
-			flushRaf();
+			await flushQueuedTimers();
 
 			expect(appliedBatches).toHaveLength(1);
 			expect(appliedBatches[0]).toEqual([event]);
 			expect(flushQueuedMessagesMock).not.toHaveBeenCalled();
 		});
 
-		it('flushes queued messages after canonical session.idle', () => {
+		it('flushes queued messages after canonical session.idle', async () => {
 			const event = {
 				type: 'session.idle',
 				properties: { sessionID: 'ses-1' },
@@ -221,14 +213,14 @@ describe('eventRuntime', () => {
 				type: 'opencodeEvent',
 				data: { payload: event },
 			});
-			flushRaf();
+			await flushQueuedTimers();
 
 			expect(appliedBatches).toHaveLength(1);
 			expect(appliedBatches[0]).toEqual([event]);
 			expect(flushQueuedMessagesMock).toHaveBeenCalledWith('ses-1');
 		});
 
-		it('flushes queued messages after canonical session.status idle', () => {
+		it('flushes queued messages after canonical session.status idle', async () => {
 			const event = {
 				type: 'session.status',
 				properties: { sessionID: 'ses-1', status: { type: 'idle' } },
@@ -238,14 +230,14 @@ describe('eventRuntime', () => {
 				type: 'opencodeEvent',
 				data: { payload: event },
 			});
-			flushRaf();
+			await flushQueuedTimers();
 
 			expect(appliedBatches).toHaveLength(1);
 			expect(appliedBatches[0]).toEqual([event]);
 			expect(flushQueuedMessagesMock).toHaveBeenCalledWith('ses-1');
 		});
 
-		it('flushes queued messages for the full parent lineage when a child session becomes idle', () => {
+		it('flushes queued messages for the full parent lineage when a child session becomes idle', async () => {
 			useChatStore.setState(state => ({
 				...state,
 				sessions: [
@@ -264,14 +256,14 @@ describe('eventRuntime', () => {
 				type: 'opencodeEvent',
 				data: { payload: event },
 			});
-			flushRaf();
+			await flushQueuedTimers();
 
 			expect(flushQueuedMessagesMock).toHaveBeenCalledWith('grandchild');
 			expect(flushQueuedMessagesMock).toHaveBeenCalledWith('child');
 			expect(flushQueuedMessagesMock).toHaveBeenCalledWith('root');
 		});
 
-		it('forwards session.updated revert events into the store batch', () => {
+		it('forwards session.updated revert events into the store batch', async () => {
 			const event = {
 				type: 'session.updated',
 				properties: {
@@ -286,7 +278,7 @@ describe('eventRuntime', () => {
 				type: 'opencodeEvent',
 				data: { payload: event },
 			});
-			flushRaf();
+			await flushQueuedTimers();
 
 			expect(appliedBatches).toHaveLength(1);
 			expect(appliedBatches[0]).toEqual([event]);
@@ -294,7 +286,7 @@ describe('eventRuntime', () => {
 	});
 
 	describe('event coalescing', () => {
-		it('coalesces session.status events for the same session', () => {
+		it('coalesces session.status events for the same session', async () => {
 			const event1 = {
 				type: 'session.status',
 				properties: { sessionID: 'ses-1', status: { type: 'busy' } },
@@ -306,14 +298,14 @@ describe('eventRuntime', () => {
 
 			eventRuntime.handleExtensionMessage({ type: 'opencodeEvent', data: { payload: event1 } });
 			eventRuntime.handleExtensionMessage({ type: 'opencodeEvent', data: { payload: event2 } });
-			flushRaf();
+			await flushQueuedTimers();
 
 			expect(appliedBatches).toHaveLength(1);
 			// Only the latest event should be in the batch
 			expect(appliedBatches[0]).toEqual([event2]);
 		});
 
-		it('does not coalesce events for different sessions', () => {
+		it('does not coalesce events for different sessions', async () => {
 			const event1 = {
 				type: 'session.status',
 				properties: { sessionID: 'ses-1', status: { type: 'busy' } },
@@ -325,13 +317,13 @@ describe('eventRuntime', () => {
 
 			eventRuntime.handleExtensionMessage({ type: 'opencodeEvent', data: { payload: event1 } });
 			eventRuntime.handleExtensionMessage({ type: 'opencodeEvent', data: { payload: event2 } });
-			flushRaf();
+			await flushQueuedTimers();
 
 			expect(appliedBatches).toHaveLength(1);
 			expect(appliedBatches[0]).toEqual([event1, event2]);
 		});
 
-		it('does not coalesce message.updated events', () => {
+		it('does not coalesce message.updated events', async () => {
 			const event1 = {
 				type: 'message.updated',
 				properties: { sessionID: 'ses-1', info: { id: 'msg-1' } },
@@ -343,7 +335,7 @@ describe('eventRuntime', () => {
 
 			eventRuntime.handleExtensionMessage({ type: 'opencodeEvent', data: { payload: event1 } });
 			eventRuntime.handleExtensionMessage({ type: 'opencodeEvent', data: { payload: event2 } });
-			flushRaf();
+			await flushQueuedTimers();
 
 			expect(appliedBatches).toHaveLength(1);
 			expect(appliedBatches[0]).toEqual([event1, event2]);

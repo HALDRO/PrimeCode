@@ -14,6 +14,7 @@ import {
 } from '../lib/modelVariants';
 import { openCodeRuntime } from '../services/opencodeRuntime';
 import {
+	useActiveSessionId,
 	useChatActions,
 	useChatStore,
 	useDraftAgent,
@@ -24,15 +25,39 @@ import {
 	usePromptVersions,
 	useSessionAgent,
 	useSessionModel,
-	useSessionProcessing,
 	useSessionVariant,
 	useStoreInput,
 } from '../store';
+import { getSessionRuntimeStatus } from '../store/chatStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { useUIStore } from '../store/uiStore';
-import { webviewLogger } from '../utils/logger';
 
-const log = webviewLogger.forComponent('Send');
+function mapInlineCodeSnippets(
+	codeSnippets: Array<{
+		filePath: string;
+		startLine: number;
+		endLine: number;
+		content: string;
+	}>,
+) {
+	return codeSnippets.map(codeSnippet => ({
+		filePath: codeSnippet.filePath,
+		startLine: codeSnippet.startLine,
+		endLine: codeSnippet.endLine,
+		content: codeSnippet.content,
+	}));
+}
+
+function mapAttachmentImages(
+	images: Array<{ id: string; name: string; dataUrl: string; path?: string }>,
+) {
+	return images.map(image => ({
+		id: image.id,
+		name: image.name,
+		dataUrl: image.dataUrl,
+		path: image.path,
+	}));
+}
 
 interface AttachmentState {
 	images: Array<{ id: string; name: string; dataUrl: string; path?: string }>;
@@ -92,8 +117,12 @@ export function useChatInputController(
 		togglePromptVersion,
 		clearDraftState,
 	} = useChatActions();
-	const activeSessionId = useChatStore(state => state.activeSessionId);
-	const isProcessing = useSessionProcessing(activeSessionId);
+	const activeSessionId = useActiveSessionId();
+	const isProcessing = useChatStore(state => {
+		if (!activeSessionId) return false;
+		const status = getSessionRuntimeStatus(state, activeSessionId);
+		return status?.type === 'busy' || status?.type === 'retry';
+	});
 	const { proxyEndpoints, opencodeProviders, getSessionModel, getSessionAgent, setSessionAgent } =
 		useModelSelection();
 	const isImproving = useIsImprovingPrompt();
@@ -226,44 +255,20 @@ export function useChatInputController(
 		if (isControlled && controlledOnSend) {
 			controlledOnSend(inputValue.trim(), {
 				files: inlinePayload.files,
-				codeSnippets: inlinePayload.codeSnippets.map(s => ({
-					filePath: s.filePath,
-					startLine: s.startLine,
-					endLine: s.endLine,
-					content: s.content,
-				})),
-				images: attachments.images.map(img => ({
-					id: img.id,
-					name: img.name,
-					dataUrl: img.dataUrl,
-					path: img.path,
-				})),
+				codeSnippets: mapInlineCodeSnippets(inlinePayload.codeSnippets),
+				images: mapAttachmentImages(attachments.images),
 			});
 			return;
 		}
 
 		const originalInputValue = inputValue;
+		const mappedCodeSnippets = mapInlineCodeSnippets(inlinePayload.codeSnippets);
+		const mappedImages = mapAttachmentImages(attachments.images);
 
 		const builtAttachments = {
 			files: inlinePayload.files.length > 0 ? inlinePayload.files : undefined,
-			codeSnippets:
-				inlinePayload.codeSnippets.length > 0
-					? inlinePayload.codeSnippets.map(s => ({
-							filePath: s.filePath,
-							startLine: s.startLine,
-							endLine: s.endLine,
-							content: s.content,
-						}))
-					: undefined,
-			images:
-				attachments.images.length > 0
-					? attachments.images.map(img => ({
-							id: img.id,
-							name: img.name,
-							dataUrl: img.dataUrl,
-							path: img.path,
-						}))
-					: undefined,
+			codeSnippets: mappedCodeSnippets.length > 0 ? mappedCodeSnippets : undefined,
+			images: mappedImages.length > 0 ? mappedImages : undefined,
 		};
 
 		const hasAttachments =
@@ -311,7 +316,6 @@ export function useChatInputController(
 				attachments: hasAttachments ? builtAttachments : undefined,
 			});
 		} catch (error) {
-			log.error('Request failed', error);
 			updateSessionInput(originalInputValue);
 			throw error;
 		}
@@ -332,7 +336,7 @@ export function useChatInputController(
 
 	const handleStop = useCallback(() => {
 		if (!activeSessionId) return;
-		void openCodeRuntime.abortSession(activeSessionId).catch(openCodeRuntime.showRuntimeError);
+		openCodeRuntime.abortSession(activeSessionId);
 	}, [activeSessionId]);
 
 	// Prompt improver

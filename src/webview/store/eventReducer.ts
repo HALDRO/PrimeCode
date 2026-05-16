@@ -4,7 +4,7 @@
  * Replaces 17 DISPATCH_HANDLERS with one pure function.
  * All mutations are Immer-safe (direct property assignment on draft).
  *
- * SDK events flow: server SSE (webview-owned) or extension synthetic reconcile events
+ * SDK events flow: extension-forwarded OpenCode events or synthetic local reconcile events
  * → coalescing → eventReducer → Zustand store.
  */
 
@@ -119,7 +119,6 @@ function rebuildChildSessionLinks(state: SessionStore): void {
 		for (const part of messageParts) {
 			if (part.type !== 'tool') continue;
 			const toolPart = part as ToolPart;
-			if (toolPart.tool.toLowerCase() !== 'task') continue;
 			const metadata = getToolPartMetadata(toolPart);
 			const childSessionId =
 				typeof metadata?.sessionId === 'string' ? metadata.sessionId : undefined;
@@ -375,7 +374,6 @@ export function eventReducer(state: SessionStore, event: WebviewSdkEvent): void 
 				parts[idx] = part;
 			} else parts.push(part);
 
-			// Track task tool → child session mapping
 			if (part.type === 'tool' && part.tool.toLowerCase() === 'task') {
 				const metadata = getToolPartMetadata(part as ToolPart) as
 					| { sessionId?: string }

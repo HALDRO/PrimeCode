@@ -127,8 +127,6 @@ export interface UIState {
 	serverUrl: string | null;
 	workspaceRoot: string | null;
 	serverStatus: 'connected' | 'disconnected' | 'error';
-	/** Incremented each time serverUrl is set — forces SSE reconnect even if URL is the same. */
-	serverUrlVersion: number;
 
 	/** Connection details from the extension (populated on demand). */
 	connectionDetails: {
@@ -162,7 +160,6 @@ export const useUIStore = create<UIState>((set, get) => ({
 	serverUrl: null,
 	workspaceRoot: null,
 	serverStatus: 'disconnected',
-	serverUrlVersion: 0,
 
 	connectionDetails: null,
 
@@ -183,19 +180,19 @@ export const useUIStore = create<UIState>((set, get) => ({
 		setActiveModal: activeModal => set({ activeModal }),
 		setWorkspaceFiles: workspaceFiles => set({ workspaceFiles }),
 		setConversationList: conversationList => set({ conversationList }),
-		setServerUrl: (serverUrl, revision) =>
+		setServerUrl: serverUrl =>
 			set(state => {
 				const nextUrl = serverUrl && serverUrl.trim().length > 0 ? serverUrl : null;
-				const nextRevision = typeof revision === 'number' ? revision : state.serverUrlVersion;
-				if (state.serverUrl === nextUrl && state.serverUrlVersion === nextRevision) return state;
+				if (state.serverUrl === nextUrl) return state;
 				return {
 					serverUrl: nextUrl,
-					serverUrlVersion: nextRevision,
 					connectionDetails: nextUrl === null ? null : state.connectionDetails,
 				};
 			}),
-		setWorkspaceRoot: workspaceRoot => set({ workspaceRoot }),
-		setServerStatus: serverStatus => set({ serverStatus }),
+		setWorkspaceRoot: workspaceRoot =>
+			set(state => (state.workspaceRoot === workspaceRoot ? state : { workspaceRoot })),
+		setServerStatus: serverStatus =>
+			set(state => (state.serverStatus === serverStatus ? state : { serverStatus })),
 		setShowSlashCommands: showSlashCommands => set({ showSlashCommands }),
 		setSlashFilter: slashFilter => set({ slashFilter }),
 		setShowFilePicker: showFilePicker => set({ showFilePicker }),
@@ -293,12 +290,11 @@ export const useUIStore = create<UIState>((set, get) => ({
 
 				case 'serverInfo':
 					if (message.data) {
-						const { url, revision, workspaceRoot } = message.data as {
+						const { url, workspaceRoot } = message.data as {
 							url: string;
-							revision: number;
 							workspaceRoot?: string;
 						};
-						actions.setServerUrl(url, revision);
+						actions.setServerUrl(url);
 						if (typeof workspaceRoot === 'string') {
 							actions.setWorkspaceRoot(workspaceRoot || null);
 						}

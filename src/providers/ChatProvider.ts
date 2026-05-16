@@ -11,6 +11,7 @@ import { CommandRouter } from '../transport/CommandRouter';
 import { OutboundBridge } from '../transport/OutboundBridge';
 import { extractErrorInfo } from '../utils/errorInfo';
 import { logger } from '../utils/logger';
+import { normalizeComparablePath } from '../utils/path';
 import { getHtml } from '../utils/webviewHtml';
 import { FileHandler } from './handlers/FileHandler';
 import { McpHandler } from './handlers/McpHandler';
@@ -40,6 +41,10 @@ function isCompactionCommand(text: string): boolean {
 	return slashCommand === 'compact' || slashCommand === 'summarize';
 }
 
+function toRecord(value: unknown): Record<string, unknown> | null {
+	return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null;
+}
+
 export class ChatProvider implements vscode.WebviewViewProvider {
 	private view?: vscode.WebviewView;
 	private webviewDidLaunch = false;
@@ -48,15 +53,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private settings: Settings;
 	private disposables: vscode.Disposable[] = [];
 
-	/** Monotonic revision for server rendezvous updates sent to the webview. */
-	private serverInfoRevision = 0;
 	private backendStatusAbort: AbortController | null = null;
 	private backendStatusRun: Promise<void> | null = null;
 	private backendStatusKey: string | null = null;
 	private backendStatusConnected = false;
 	private backendStatusWaiters: Array<() => void> = [];
-	private healthMonitorTimer: ReturnType<typeof setInterval> | null = null;
-	private healthConsecutiveFailures = 0;
 
 	// Handlers
 	private settingsHandler: SettingsHandler;
@@ -116,7 +117,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			refreshAfterServerRestart: async () => {
 				this.startBackendStatusBridge();
 				await this.waitForSseBridgeConnected(5000);
-				this.sendServerInfo(true);
+				this.sendServerInfo();
 				this.hasSynced = false;
 				await this.syncAllOrDefer('manual-server-restart');
 			},
@@ -328,9 +329,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			await this.waitForSseBridgeConnected(5000);
 
 			// Notify webview only after the backend event bridge is ready.
-			// This prevents bootstrap/hydration from racing ahead of live session events.
-			this.sendServerInfo(true);
-			this.startHealthMonitor();
+			// Extension should expose attach information here, not runtime recovery policy.
+			this.sendServerInfo();
 
 			// Hydrate all UI-visible state after server connection (providers, proxy models, MCP, etc.)
 			await this.syncAllOrDefer('opencode-start');
@@ -459,6 +459,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				'openOpenCodeConfig',
 				'proxyFetch',
 				'proxyFetchAbort',
+				'abortSession',
 				'openCommandFile',
 				'openSkillFile',
 				'openPluginFile',
@@ -872,112 +873,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 	// ─── Server Health Monitor & Reconnect ──────────────────────────────
 
-	private static readonly HEALTH_POLL_MS = 15_000;
-	private static readonly HEALTH_RECONNECT_THRESHOLD = 3;
-	/** Prevents concurrent reconnect attempts. */
-	private isReconnecting = false;
-
-	private startHealthMonitor(): void {
-		this.stopHealthMonitor();
-		this.healthConsecutiveFailures = 0;
-		this.healthMonitorTimer = setInterval(() => {
-			void this.checkServerHealth();
-		}, ChatProvider.HEALTH_POLL_MS);
-	}
-
-	private stopHealthMonitor(): void {
-		if (this.healthMonitorTimer) {
-			clearInterval(this.healthMonitorTimer);
-			this.healthMonitorTimer = null;
-		}
-	}
-
-	private async checkServerHealth(): Promise<void> {
-		const admin = this.cli.getAdminInfo();
-		if (!admin?.baseUrl) return;
-
-		const healthy = await this.probeHealth(admin.baseUrl);
-		if (healthy) {
-			this.healthConsecutiveFailures = 0;
-			return;
-		}
-
-		this.healthConsecutiveFailures++;
-		logger.warn('[ChatProvider] Server health check failing', {
-			failures: this.healthConsecutiveFailures,
-		});
-
-		if (this.healthConsecutiveFailures >= ChatProvider.HEALTH_RECONNECT_THRESHOLD) {
-			await this.attemptServerRediscovery();
-		}
-	}
-
-	/**
-	 * Health probe with retry, modeled after official OpenCode's server-health.ts.
-	 * Retries up to 2 times with 100ms delay for transient network errors.
-	 */
-	private async probeHealth(baseUrl: string, retries = 2, delayMs = 100): Promise<boolean> {
-		for (let attempt = 0; attempt <= retries; attempt++) {
-			try {
-				const res = await fetch(`${baseUrl}/global/health`, {
-					signal: AbortSignal.timeout(3000),
-				});
-				if (res.ok) return true;
-			} catch (error) {
-				// Only retry on transient network errors (not timeouts or aborts)
-				const isRetryable =
-					error instanceof TypeError ||
-					(error instanceof Error && /network|fetch|econnreset|econnrefused/i.test(error.message));
-				if (!isRetryable || attempt >= retries) return false;
-				await new Promise(resolve => setTimeout(resolve, delayMs * (attempt + 1)));
-			}
-		}
-		return false;
-	}
-
-	/**
-	 * Attempt to rediscover a live OpenCode server after health failures.
-	 * Uses process scan to find servers on non-canonical ports.
-	 * Does NOT spawn a new server to avoid duplicates.
-	 */
-	private async attemptServerRediscovery(): Promise<void> {
-		if (this.isReconnecting) return;
-		this.isReconnecting = true;
-
-		try {
-			logger.info('[ChatProvider] Attempting server rediscovery...');
-			const reconnected = await this.cli.tryReconnect();
-
-			if (reconnected) {
-				logger.info('[ChatProvider] Server rediscovered, reinitializing connections');
-				this.healthConsecutiveFailures = 0;
-				this.stopBackendStatusBridge();
-				this.startBackendStatusBridge();
-				await this.waitForSseBridgeConnected(5000);
-				this.sendServerInfo(true);
-				this.hasSynced = false;
-				await this.syncAllOrDefer('health-reconnect');
-			} else {
-				logger.warn('[ChatProvider] Server rediscovery failed, no live server found');
-				this.bridge.showNotification({
-					notification: {
-						id: `server_lost-${Date.now()}`,
-						type: 'system_notice',
-						content:
-							'OpenCode server is unreachable. Use the Reload button or restart OpenCode manually.',
-						timestamp: new Date().toISOString(),
-					},
-				});
-				// Stop polling to avoid spamming logs — user must reload manually
-				this.stopHealthMonitor();
-			}
-		} catch (error) {
-			logger.error('[ChatProvider] Server rediscovery error:', error);
-		} finally {
-			this.isReconnecting = false;
-		}
-	}
-
 	private async runBackendStatusBridge(
 		baseUrl: string,
 		directory: string,
@@ -986,7 +881,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		const client = createOpencodeClient({ baseUrl, directory });
 		const RECONNECT_DELAY_MS = 250;
 		const MAX_RETRY_MS = 30_000;
-		const HEARTBEAT_TIMEOUT_MS = 15_000;
+		const HEARTBEAT_TIMEOUT_MS = 35_000;
 		let consecutiveFailures = 0;
 
 		while (!signal.aborted) {
@@ -1053,50 +948,19 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	}
 
 	private forwardBackendStatusEvent(event: unknown): void {
+		const eventRecord = toRecord(event);
+		const eventDirectory = eventRecord?.directory;
+		const workspaceRoot = this.settings.getWorkspaceRoot();
+		if (
+			typeof eventDirectory === 'string' &&
+			workspaceRoot &&
+			normalizeComparablePath(eventDirectory).toLowerCase() !==
+				normalizeComparablePath(workspaceRoot).toLowerCase()
+		) {
+			return;
+		}
+
 		this.bridge.data('opencodeEvent', event);
-
-		const payload =
-			typeof event === 'object' &&
-			event !== null &&
-			'payload' in event &&
-			typeof (event as { payload?: unknown }).payload === 'object'
-				? ((event as { payload?: unknown }).payload as Record<string, unknown>)
-				: (event as Record<string, unknown> | null);
-
-		if (!payload || typeof payload.type !== 'string' || typeof payload.properties !== 'object') {
-			return;
-		}
-
-		const properties = payload.properties as Record<string, unknown>;
-
-		if (payload.type === 'session.idle') {
-			const sessionId = typeof properties.sessionID === 'string' ? properties.sessionID : null;
-			if (!sessionId) return;
-			return;
-		}
-
-		if (payload.type === 'session.status') {
-			const sessionId = typeof properties.sessionID === 'string' ? properties.sessionID : null;
-			const rawStatus =
-				typeof properties.status === 'object' && properties.status !== null
-					? (properties.status as Record<string, unknown>)
-					: null;
-			const statusType = typeof rawStatus?.type === 'string' ? rawStatus.type : null;
-			if (!sessionId || !rawStatus || !statusType) return;
-
-			// Reconstruct the full SessionStatus from the raw event payload so
-			// retry metadata (attempt, message, next) reaches the webview intact.
-			return;
-		}
-
-		if (payload.type === 'session.updated') {
-			const info = properties.info as Record<string, unknown> | undefined;
-			const revert = info?.revert as Record<string, unknown> | undefined;
-			logger.info('[ChatProvider] Forwarding session.updated event', {
-				sessionId: typeof info?.id === 'string' ? info.id : null,
-				revertMessageId: typeof revert?.messageID === 'string' ? revert.messageID : null,
-			});
-		}
 	}
 
 	private async sendInitialState(): Promise<void> {
@@ -1125,24 +989,19 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
-	/** Notify webview of the current server URL so it can establish SSE health polling. */
-	private sendServerInfo(forceRevisionBump = false): void {
-		if (forceRevisionBump) {
-			this.serverInfoRevision += 1;
-		}
+	/** Notify webview of the current server attach target and workspace scope. */
+	private sendServerInfo(): void {
 		const serverInfo = this.cli.getAdminInfo();
 		const workspaceRoot = this.settings.getWorkspaceRoot() ?? '';
 		if (serverInfo?.baseUrl) {
 			this.bridge.data('serverInfo', {
 				url: serverInfo.baseUrl,
-				revision: this.serverInfoRevision,
 				workspaceRoot,
 			});
 			return;
 		}
 		this.bridge.data('serverInfo', {
 			url: '',
-			revision: this.serverInfoRevision,
 			workspaceRoot,
 		});
 	}
@@ -1194,7 +1053,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	}
 
 	dispose(): void {
-		this.stopHealthMonitor();
 		this.stopBackendStatusBridge();
 		for (const disposable of this.disposables) {
 			disposable.dispose();

@@ -461,7 +461,7 @@ export type EditorSelectionMessage = BaseExtensionMessage<
 >;
 export type ServerInfoMessage = BaseExtensionMessage<
 	'serverInfo',
-	{ url: string; revision: number; workspaceRoot: string }
+	{ url: string; workspaceRoot: string }
 >;
 
 export type OpencodeEventMessage = BaseExtensionMessage<'opencodeEvent', unknown>;
@@ -777,6 +777,11 @@ export interface GetConnectionDetailsCommand {
 	type: 'getConnectionDetails';
 }
 
+export interface AbortSessionCommand {
+	type: 'abortSession';
+	sessionIds: string[];
+}
+
 // =============================================================================
 // Webview → Extension log forwarding (developer diagnostics)
 // =============================================================================
@@ -975,6 +980,7 @@ export type WebviewCommand =
 	| RestartOpenCodeCommand
 	| ReloadExtensionCommand
 	| GetConnectionDetailsCommand
+	| AbortSessionCommand
 	| WebviewLogCommand;
 
 // =============================================================================

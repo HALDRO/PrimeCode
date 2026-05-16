@@ -127,7 +127,6 @@ const initListener = () => {
 					cancel() {
 						entry.cleanup?.();
 						pendingFetches.delete(id);
-						vscode.postMessage({ type: 'proxyFetchAbort', id });
 					},
 				}),
 				{
@@ -208,7 +207,6 @@ export async function proxyFetch(input: RequestInfo | URL, init?: RequestInit): 
 			abortHandler = () => {
 				abortController.abort();
 				pendingFetches.delete(id);
-				vscode.postMessage({ type: 'proxyFetchAbort', id });
 				reject(new DOMException('Aborted', 'AbortError'));
 			};
 			init.signal.addEventListener('abort', abortHandler);

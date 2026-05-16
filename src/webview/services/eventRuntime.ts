@@ -23,7 +23,7 @@ type QueuedEvent = WebviewSdkEvent;
 
 const queue: QueuedEvent[] = [];
 const coalesced = new Map<string, number>();
-let flushTimer: number | null = null;
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
 let currentKey: string | null = null;
 let lastEventAt = Date.now();
@@ -84,7 +84,7 @@ function flushQueuedEvents(): void {
 
 function scheduleFlush(): void {
 	if (flushTimer !== null) return;
-	flushTimer = window.requestAnimationFrame(flushQueuedEvents);
+	flushTimer = globalThis.setTimeout(flushQueuedEvents, 16);
 }
 
 function enqueue(event: WebviewSdkEvent): void {
@@ -120,16 +120,6 @@ function handleGlobalEnvelope(
 			// Full reconcile only happens on bootstrap or explicit user reload.
 			return;
 		}
-		if (maybeEnvelope.payload.type === 'session.updated') {
-			const payload = maybeEnvelope.payload as {
-				properties?: { info?: { id?: string; revert?: { messageID?: string } | null } };
-			};
-			const info = payload.properties?.info;
-			log.info('Received session.updated event', {
-				sessionId: info?.id,
-				revertMessageId: info?.revert?.messageID ?? null,
-			});
-		}
 		enqueue(maybeEnvelope.payload as WebviewSdkEvent);
 		return;
 	}
@@ -148,7 +138,9 @@ export const eventRuntime = {
 		const extensionMessage = message as ExtensionMessage;
 		if (extensionMessage.type === 'opencodeEvent') {
 			handleGlobalEnvelope(extensionMessage.data as GlobalStreamEnvelope | WebviewSdkEvent);
-			useUIStore.getState().actions.setServerStatus('connected');
+			if (useUIStore.getState().serverStatus !== 'connected') {
+				useUIStore.getState().actions.setServerStatus('connected');
+			}
 			return;
 		}
 
@@ -170,7 +162,7 @@ export const eventRuntime = {
 
 	stop(): void {
 		if (flushTimer !== null) {
-			window.cancelAnimationFrame(flushTimer);
+			globalThis.clearTimeout(flushTimer);
 			flushTimer = null;
 		}
 		queue.length = 0;

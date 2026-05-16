@@ -48,8 +48,8 @@ let improvePromptController: AbortController | null = null;
 let improvePromptRequestId: string | null = null;
 const pendingStatusRechecks = new Map<string, number>();
 
-function normalizeDriveLetter(dir: string): string {
-	return dir.length >= 2 && dir[1] === ':' ? dir[0].toUpperCase() + dir.slice(1) : dir;
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null;
 }
 
 function getWorkspaceRoot(): string {
@@ -57,7 +57,7 @@ function getWorkspaceRoot(): string {
 	if (!workspaceRoot) {
 		throw new Error('Workspace root is unavailable');
 	}
-	return normalizeDriveLetter(workspaceRoot);
+	return workspaceRoot;
 }
 
 function getServerUrl(): string {
@@ -107,17 +107,7 @@ function getPermissionListsClient() {
 }
 
 async function haltSessionIfBusy(sessionId: string): Promise<void> {
-	const processingSessionIds = getProcessingSessionIds(useChatStore.getState(), sessionId);
-	if (processingSessionIds.length === 0) return;
-	await Promise.all(
-		processingSessionIds.map(async processingSessionId => {
-			await getClient()
-				.session.abort({ sessionID: processingSessionId, directory: getWorkspaceRoot() })
-				.catch(() => {
-					// Best effort only. Revert/restore should still continue even if abort fails.
-				});
-		}),
-	);
+	await openCodeRuntime.abortSession(sessionId);
 }
 
 function applyLocalRevertState(sessionId: string, revert: { messageID: string } | undefined): void {
@@ -141,12 +131,25 @@ function throwRuntimeClientError(error: unknown): never {
 	if (isServerError(error)) {
 		throw new Error(error.data?.message ?? error.name);
 	}
-	throw error instanceof Error ? error : new Error(String(error));
+	const message = getRuntimeErrorMessage(error);
+	if (error instanceof Error) {
+		throw new Error(message || error.message || error.name, { cause: error });
+	}
+	throw new Error(message);
 }
 
 function assertRuntimeResult(result: { error?: unknown } | undefined): void {
 	if (!result?.error) return;
 	throwRuntimeClientError(result.error);
+}
+
+function requireRuntimeData<T>(
+	result: { data?: T; error?: unknown } | undefined,
+	fallbackMessage: string,
+): T {
+	assertRuntimeResult(result);
+	if (result?.data !== undefined) return result.data;
+	throw new Error(fallbackMessage);
 }
 
 type RuntimeAttachments = {
@@ -187,7 +190,6 @@ async function dispatchMessage(params: RuntimeSendParams): Promise<void> {
 		attachments: params.attachments,
 	});
 }
-
 async function flushQueuedMessages(sessionId: string): Promise<void> {
 	if (isSessionActive(sessionId)) return;
 	const entry = useChatStore.getState().actions.dequeueMessage(sessionId);
@@ -301,12 +303,12 @@ function formatConfigError(error: ServerError): string {
 function getRuntimeErrorMessage(error: unknown): string {
 	if (error instanceof Error) return error.message || error.name || 'OpenCode request failed';
 	if (typeof error === 'string' && error.trim()) return error.trim();
-	if (!error || typeof error !== 'object') return 'OpenCode request failed';
-	const record = error as Record<string, unknown>;
+	if (!isRecord(error)) return 'OpenCode request failed';
+	const record = error;
 	if (typeof record.message === 'string' && record.message.trim()) return record.message.trim();
 	const data = record.data;
-	if (data && typeof data === 'object') {
-		const dataMessage = (data as Record<string, unknown>).message;
+	if (isRecord(data)) {
+		const dataMessage = data.message;
 		if (typeof dataMessage === 'string' && dataMessage.trim()) return dataMessage.trim();
 	}
 	return 'OpenCode request failed';
@@ -314,12 +316,7 @@ function getRuntimeErrorMessage(error: unknown): string {
 
 function shouldSuppressRuntimeErrorNotification(error: unknown, message: string): boolean {
 	const lowerMessage = message.toLowerCase();
-	const name =
-		typeof error === 'object' &&
-		error !== null &&
-		typeof (error as { name?: unknown }).name === 'string'
-			? ((error as { name: string }).name || '').toLowerCase()
-			: '';
+	const name = isRecord(error) && typeof error.name === 'string' ? error.name.toLowerCase() : '';
 	if (name === 'messageabortederror') return true;
 	if (name !== 'unknownerror') return false;
 	if (lowerMessage.includes('agent not found')) return true;
@@ -522,6 +519,9 @@ async function hydrateSession(sessionId: string, activate = true): Promise<void>
 			serverUrl: cachedUrl,
 			workspaceRoot,
 		});
+		if (sessionResult.error) {
+			throwRuntimeClientError(sessionResult.error);
+		}
 		throw new Error(`Failed to load session ${sessionId}`);
 	}
 
@@ -586,9 +586,7 @@ async function refreshConversationList(): Promise<void> {
 			serverUrl: cachedUrl,
 			workspaceRoot,
 		});
-		if (isConfigError(result.error)) {
-			throw result.error;
-		}
+		throwRuntimeClientError(result.error);
 	}
 	const sessions = ((result.data ?? []) as RestorableSession[]).filter(
 		session => session.id && !session.parentID,
@@ -633,6 +631,40 @@ async function reconcileOpenSessions(): Promise<void> {
 			}
 		}),
 	);
+}
+
+async function createSession(): Promise<string> {
+	const client = getClient();
+	const workspaceRoot = getWorkspaceRoot();
+	const result = await client.session.create({ directory: workspaceRoot });
+	if (result.error || !result.data) {
+		log.error('createSession: SDK returned error', {
+			error: result.error,
+			hasData: !!result.data,
+			serverUrl: cachedUrl,
+			workspaceRoot,
+		});
+		if (result.error) {
+			throwRuntimeClientError(result.error);
+		}
+		throw new Error('Failed to create session');
+	}
+	const session = requireRuntimeData(result, 'Failed to create session') as Session;
+	useChatStore.setState(
+		produce((state: SessionStore) => {
+			const index = state.sessions.findIndex(item => item.id === session.id);
+			if (index >= 0) state.sessions[index] = session;
+			else state.sessions.push(session);
+			if (!state.sessionOrder.includes(session.id)) {
+				state.sessionOrder.push(session.id);
+			}
+			state.activeSessionId = session.id;
+		}),
+	);
+	persistTabs();
+	await hydrateSession(session.id, true);
+	await refreshConversationList();
+	return session.id;
 }
 
 export const openCodeRuntime = {
@@ -825,34 +857,7 @@ export const openCodeRuntime = {
 	},
 
 	async createSession(): Promise<string> {
-		const client = getClient();
-		const workspaceRoot = getWorkspaceRoot();
-		const result = await client.session.create({ directory: workspaceRoot });
-		if (result.error || !result.data) {
-			log.error('createSession: SDK returned error', {
-				error: result.error,
-				hasData: !!result.data,
-				serverUrl: cachedUrl,
-				workspaceRoot,
-			});
-			throw new Error('Failed to create session');
-		}
-		const session = result.data as Session;
-		useChatStore.setState(
-			produce((state: SessionStore) => {
-				const index = state.sessions.findIndex(item => item.id === session.id);
-				if (index >= 0) state.sessions[index] = session;
-				else state.sessions.push(session);
-				if (!state.sessionOrder.includes(session.id)) {
-					state.sessionOrder.push(session.id);
-				}
-				state.activeSessionId = session.id;
-			}),
-		);
-		persistTabs();
-		await hydrateSession(session.id, true);
-		await refreshConversationList();
-		return session.id;
+		return createSession();
 	},
 
 	switchSession(sessionId: string): void {
@@ -929,26 +934,48 @@ export const openCodeRuntime = {
 		await refreshConversationList();
 	},
 
-	async abortSession(sessionId: string): Promise<void> {
-		// Always abort the requested session — the server handles child propagation via task tool abort listeners.
-		// Additionally abort any known processing children for faster cancellation.
+	abortSession(sessionId: string): Promise<void> {
 		const state = useChatStore.getState();
-		const processingChildren = getProcessingSessionIds(state, sessionId).filter(
-			id => id !== sessionId,
-		);
-		const abortTargets = [sessionId, ...processingChildren];
-		await Promise.all(
-			abortTargets.map(currentSessionId =>
-				getClient()
-					.session.abort({ sessionID: currentSessionId, directory: getWorkspaceRoot() })
-					.catch(() => {}),
-			),
-		);
-		// Schedule status recheck for the ENTIRE subtree — not just currently-busy children.
-		// After reconnect/hydration, children may have stale "busy" status that the server
-		// has already cleared. The recheck will reconcile UI state with the server.
-		const allSubtreeIds = collectSessionSubtreeIds(state, sessionId);
-		scheduleBusyStatusRecheck(allSubtreeIds, 2000);
+		const allIds = collectSessionSubtreeIds(state, sessionId);
+		for (const id of allIds) {
+			state.actions.clearQueuedMessages(id);
+		}
+		const processingIds = getProcessingSessionIds(state, sessionId);
+		const sessionIds = [...new Set([sessionId, ...processingIds])];
+		log.info('abortSession: sending abort', {
+			rootSessionId: sessionId,
+			subtreeSize: allIds.length,
+			processingCount: processingIds.length,
+			abortTargets: sessionIds,
+		});
+		vscode.postMessage({ type: 'abortSession', sessionIds });
+		scheduleBusyStatusRecheck(allIds, 3000);
+
+		// Wait until the entire subtree is idle (max 10s).
+		return new Promise<void>(resolve => {
+			const check = () => getProcessingSessionIds(useChatStore.getState(), sessionId).length === 0;
+			if (check()) {
+				log.info('abortSession: subtree already idle', { sessionId });
+				resolve();
+				return;
+			}
+			const timeout = window.setTimeout(() => {
+				const stillProcessing = getProcessingSessionIds(useChatStore.getState(), sessionId);
+				log.warn('abortSession: timed out waiting for idle', {
+					sessionId,
+					stillProcessing,
+				});
+				unsub();
+				resolve();
+			}, 10_000);
+			const unsub = useChatStore.subscribe(() => {
+				if (!check()) return;
+				log.info('abortSession: subtree fully idle', { sessionId });
+				clearTimeout(timeout);
+				unsub();
+				resolve();
+			});
+		});
 	},
 
 	async restoreMessage(sessionId: string, messageId: string): Promise<void> {
@@ -1145,7 +1172,7 @@ export const openCodeRuntime = {
 		}
 
 		if (isSessionActive(sessionId)) {
-			await this.abortSession(sessionId).catch(() => {});
+			this.abortSession(sessionId);
 			return;
 		}
 

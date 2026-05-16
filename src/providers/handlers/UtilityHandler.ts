@@ -15,8 +15,18 @@ import type { HandlerContext, WebviewMessageHandler } from './types';
 
 const GITHUB_REPO = 'HALDRO/PrimeCode';
 
-/** Default timeout for proxy fetch requests (ms). */
+/** Default timeout for proxied HTTP requests (ms). */
 const PROXY_FETCH_TIMEOUT_MS = 30_000;
+/** Session hydration can legitimately take longer than ordinary API calls. */
+const PROXY_FETCH_SESSION_TIMEOUT_MS = 90_000;
+/** Event streams need a hard fallback for half-open connections. */
+const PROXY_FETCH_STREAM_TIMEOUT_MS = 15 * 60 * 1000;
+
+function getProxyFetchTimeoutMs(url: string): number {
+	if (url.includes('/event')) return PROXY_FETCH_STREAM_TIMEOUT_MS;
+	if (url.includes('/session')) return PROXY_FETCH_SESSION_TIMEOUT_MS;
+	return PROXY_FETCH_TIMEOUT_MS;
+}
 
 export class UtilityHandler implements WebviewMessageHandler {
 	/** Active AbortControllers keyed by request ID for cancellation support. */
@@ -64,6 +74,8 @@ export class UtilityHandler implements WebviewMessageHandler {
 				return this.handleReloadExtension();
 			case 'getConnectionDetails':
 				return this.handleGetConnectionDetails();
+			case 'abortSession':
+				return this.handleAbortSession(msg);
 		}
 	}
 
@@ -82,9 +94,8 @@ export class UtilityHandler implements WebviewMessageHandler {
 		const controller = new AbortController();
 		this.activeRequests.set(id, controller);
 
-		const timer = isEventStreamRequest
-			? null
-			: setTimeout(() => controller.abort(), PROXY_FETCH_TIMEOUT_MS);
+		const timeoutMs = getProxyFetchTimeoutMs(url);
+		const timer = setTimeout(() => controller.abort(), timeoutMs);
 
 		try {
 			const response = await fetch(url, {
@@ -185,6 +196,59 @@ export class UtilityHandler implements WebviewMessageHandler {
 		if (controller) {
 			controller.abort();
 			this.activeRequests.delete(id);
+		}
+	}
+
+	// ─── Session Abort ─────────────────────────────────────────────────
+
+	private async handleAbortSession(msg: WebviewCommand): Promise<void> {
+		const { sessionIds } = msg as { sessionIds?: string[] };
+		if (!sessionIds || sessionIds.length === 0) return;
+
+		const admin = this.context.cli.getAdminInfo();
+		if (!admin?.baseUrl) {
+			logger.warn('[UtilityHandler] abortSession: no server available');
+			return;
+		}
+
+		logger.info('[UtilityHandler] abortSession: aborting sessions', {
+			count: sessionIds.length,
+			sessionIds,
+			baseUrl: admin.baseUrl,
+		});
+
+		const results = await Promise.all(
+			sessionIds.map(async sessionId => {
+				try {
+					const res = await fetch(`${admin.baseUrl}/session/${sessionId}/abort`, {
+						method: 'POST',
+						headers: {
+							'x-opencode-directory': encodeURIComponent(admin.directory),
+						},
+						signal: AbortSignal.timeout(10_000),
+					});
+					if (!res.ok) {
+						logger.warn('[UtilityHandler] abortSession: server returned non-OK', {
+							sessionId,
+							status: res.status,
+						});
+						return { sessionId, ok: false, status: res.status };
+					}
+					return { sessionId, ok: true, status: res.status };
+				} catch (error) {
+					logger.error('[UtilityHandler] abortSession failed', { sessionId, error });
+					return { sessionId, ok: false, error: String(error) };
+				}
+			}),
+		);
+
+		const failed = results.filter(r => !r.ok);
+		if (failed.length > 0) {
+			logger.warn('[UtilityHandler] abortSession: some aborts failed', { failed });
+		} else {
+			logger.info('[UtilityHandler] abortSession: all aborts succeeded', {
+				count: results.length,
+			});
 		}
 	}
 

@@ -145,7 +145,7 @@ describe('ChatProvider send pipeline', () => {
 			context: {
 				reloadOpenCodeRuntime,
 				refreshAfterServerRestart: async () => {
-					provider.sendServerInfo(true);
+					provider.sendServerInfo();
 					provider.hasSynced = false;
 					await provider.syncAllOrDefer('manual-server-restart');
 				},
@@ -156,7 +156,7 @@ describe('ChatProvider send pipeline', () => {
 		await utility.context.refreshAfterServerRestart();
 
 		expect(reloadOpenCodeRuntime).toHaveBeenCalledWith('manual-header');
-		expect(provider.sendServerInfo).toHaveBeenCalledWith(true);
+		expect(provider.sendServerInfo).toHaveBeenCalled();
 		expect(provider.syncAllOrDefer).toHaveBeenCalledWith('manual-server-restart');
 	});
 
@@ -213,14 +213,13 @@ describe('ChatProvider send pipeline', () => {
 		provider.startBackendStatusBridge = vi.fn();
 		provider.waitForSseBridgeConnected = vi.fn(async () => {});
 		provider.sendServerInfo = vi.fn();
-		provider.startHealthMonitor = vi.fn();
 		provider.syncAllOrDefer = vi.fn(async () => {});
 
 		await provider.doStartOpenCode('C:\\repo');
 
 		expect(provider.startBackendStatusBridge).toHaveBeenCalledTimes(1);
 		expect(provider.waitForSseBridgeConnected).toHaveBeenCalledWith(5000);
-		expect(provider.sendServerInfo).toHaveBeenCalledWith(true);
+		expect(provider.sendServerInfo).toHaveBeenCalled();
 		expect(provider.startBackendStatusBridge.mock.invocationCallOrder[0]).toBeLessThan(
 			provider.waitForSseBridgeConnected.mock.invocationCallOrder[0],
 		);

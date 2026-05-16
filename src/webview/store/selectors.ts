@@ -81,6 +81,7 @@ const EMPTY_QUEUED_MESSAGES: Array<{
 	createdAt: number;
 }> = [];
 const DEFAULT_CONTEXT_WINDOW = 200000;
+
 function isAssistantMessage(msg: Message): msg is AssistantMessage {
 	return msg.role === 'assistant';
 }

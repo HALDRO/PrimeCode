@@ -6,7 +6,6 @@ import { useUIStore } from '../store/uiStore';
 
 export function useOpenCodeBootstrap(): void {
 	const serverUrl = useUIStore(state => state.serverUrl);
-	const serverUrlVersion = useUIStore(state => state.serverUrlVersion);
 	const workspaceRoot = useUIStore(state => state.workspaceRoot);
 	const activeSessionId = useChatStore(state => state.activeSessionId);
 	const pendingPermissions = usePendingPermissions();
@@ -15,11 +14,11 @@ export function useOpenCodeBootstrap(): void {
 
 	useEffect(() => {
 		if (!serverUrl || !workspaceRoot) return;
-		const key = `${serverUrlVersion}:${serverUrl}:${workspaceRoot}`;
+		const key = `${serverUrl}:${workspaceRoot}`;
 		if (bootstrapKeyRef.current === key) return;
 		bootstrapKeyRef.current = key;
 		void openCodeRuntime.bootstrap();
-	}, [serverUrl, serverUrlVersion, workspaceRoot]);
+	}, [serverUrl, workspaceRoot]);
 
 	useEffect(() => {
 		const onNewSession = () => {

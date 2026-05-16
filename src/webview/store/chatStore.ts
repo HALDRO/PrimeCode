@@ -493,6 +493,7 @@ export interface SessionActions {
 	getSessionAutoAccept: (sessionId?: string) => boolean;
 	removePendingQuestion: (requestId: string, sessionId: string) => void;
 	removePendingPermission: (requestId: string, sessionId: string) => void;
+	clearQueuedMessages: (sessionId: string) => void;
 	enqueueMessage: (input: {
 		sessionId: string;
 		text: string;
@@ -950,6 +951,14 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 					if (perms) {
 						s.permissions[sessionId] = perms.filter(permission => permission.id !== requestId);
 					}
+				}),
+			);
+		},
+
+		clearQueuedMessages: sessionId => {
+			set(
+				produce((state: SessionStore) => {
+					delete state.queuedMessagesBySession[sessionId];
 				}),
 			);
 		},

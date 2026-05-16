@@ -1,38 +1,30 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const {
-	abortMock,
-	statusMock,
-	revertMock,
-	unrevertMock,
-	createClientMock,
-	postMessageMock,
-	proxyFetchMock,
-} = vi.hoisted(() => {
-	const abortMock = vi.fn(async () => {});
-	const statusMock = vi.fn(async () => ({ data: {} }));
-	const revertMock = vi.fn(async () => ({}));
-	const unrevertMock = vi.fn(async () => ({}));
-	const proxyFetchMock = vi.fn(async () => new Response('', { status: 200, statusText: 'OK' }));
-	const createClientMock = vi.fn(() => ({
-		session: {
-			abort: abortMock,
-			status: statusMock,
-			revert: revertMock,
-			unrevert: unrevertMock,
-		},
-	}));
-	const postMessageMock = vi.fn();
-	return {
-		abortMock,
-		statusMock,
-		revertMock,
-		unrevertMock,
-		createClientMock,
-		postMessageMock,
-		proxyFetchMock,
-	};
-});
+const { statusMock, revertMock, unrevertMock, createClientMock, postMessageMock, proxyFetchMock } =
+	vi.hoisted(() => {
+		const abortMock = vi.fn(async () => {});
+		const statusMock = vi.fn(async () => ({ data: {} }));
+		const revertMock = vi.fn(async () => ({}));
+		const unrevertMock = vi.fn(async () => ({}));
+		const proxyFetchMock = vi.fn(async () => new Response('', { status: 200, statusText: 'OK' }));
+		const createClientMock = vi.fn(() => ({
+			session: {
+				abort: abortMock,
+				status: statusMock,
+				revert: revertMock,
+				unrevert: unrevertMock,
+			},
+		}));
+		const postMessageMock = vi.fn();
+		return {
+			statusMock,
+			revertMock,
+			unrevertMock,
+			createClientMock,
+			postMessageMock,
+			proxyFetchMock,
+		};
+	});
 
 vi.mock('@opencode-ai/sdk/v2/client', () => ({
 	createOpencodeClient: createClientMock,
@@ -81,20 +73,28 @@ describe('openCodeRuntime status recovery', () => {
 		}));
 
 		const abortPromise = openCodeRuntime.abortSession('ses-1');
-		await abortPromise;
 
-		expect(abortMock).toHaveBeenCalledWith({
-			sessionID: 'ses-1',
-			directory: 'C:\\repo',
+		expect(postMessageMock).toHaveBeenCalledWith({
+			type: 'abortSession',
+			sessionIds: ['ses-1'],
 		});
 		expect(statusMock).not.toHaveBeenCalled();
 
-		await vi.advanceTimersByTimeAsync(2000);
+		await vi.advanceTimersByTimeAsync(3000);
 
 		expect(statusMock).toHaveBeenCalledWith({ directory: 'C:\\repo' });
+
+		useChatStore.setState(state => ({
+			...state,
+			sessionStatus: {
+				...state.sessionStatus,
+				'ses-1': { type: 'idle' },
+			},
+		}));
+		await abortPromise;
 	});
 
-	it('aborts busy descendant sessions when parent session is stopped', async () => {
+	it('aborts the parent subtree when parent session is stopped', async () => {
 		useChatStore.setState(state => ({
 			...state,
 			sessionStatus: {
@@ -107,11 +107,37 @@ describe('openCodeRuntime status recovery', () => {
 			},
 		}));
 
+		const abortPromise = openCodeRuntime.abortSession('root');
+
+		expect(postMessageMock).toHaveBeenCalledWith({
+			type: 'abortSession',
+			sessionIds: ['root', 'child'],
+		});
+
+		useChatStore.setState(state => ({
+			...state,
+			sessionStatus: {
+				...state.sessionStatus,
+				child: { type: 'idle' },
+			},
+		}));
+		await abortPromise;
+	});
+
+	it('does not abort historical descendants that are not processing', async () => {
+		useChatStore.setState(state => ({
+			...state,
+			childSessionIdsByParentId: {
+				...state.childSessionIdsByParentId,
+				root: ['child-bg'],
+			},
+		}));
+
 		await openCodeRuntime.abortSession('root');
 
-		expect(abortMock).toHaveBeenCalledWith({
-			sessionID: 'child',
-			directory: 'C:\\repo',
+		expect(postMessageMock).toHaveBeenCalledWith({
+			type: 'abortSession',
+			sessionIds: ['root'],
 		});
 	});
 
