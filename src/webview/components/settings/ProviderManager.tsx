@@ -320,6 +320,28 @@ export const ProviderManager: React.FC = () => {
 	) => {
 		updateProxyEndpoint(endpointId, { [field]: value });
 		persistProxyEndpoints(useSettingsStore.getState().proxyEndpoints);
+
+		// When protocol changes and models are already enabled, re-sync to opencode.json
+		// so the correct npm package is written immediately.
+		if (field === 'protocol') {
+			const endpoint = useSettingsStore
+				.getState()
+				.proxyEndpoints.find(item => item.id === endpointId);
+			if (endpoint && endpoint.enabledModels.length > 0) {
+				const providerId = resolveEndpointProviderId(endpoint);
+				postMessage({
+					type: 'syncProxyModels',
+					baseUrl: endpoint.baseUrl,
+					apiKey: endpoint.apiKey,
+					enabledModelIds: endpoint.enabledModels,
+					endpointId,
+					providerId,
+					providerName: providerId,
+					headers: endpoint.headers,
+					protocol: getProxyEndpointProtocol(endpoint.protocol),
+				});
+			}
+		}
 	};
 
 	const handleUpdateEndpointHeaders = (endpointId: string, headers: Record<string, string>) => {
@@ -754,10 +776,14 @@ const CustomEndpointConfig: React.FC<CustomEndpointConfigProps> = ({
 				<Select
 					value={endpoint.protocol ?? 'openai-compatible'}
 					onChange={e =>
-						onFieldChange('protocol', e.target.value as 'openai-compatible' | 'anthropic')
+						onFieldChange(
+							'protocol',
+							e.target.value as 'openai-compatible' | 'openai-responses' | 'anthropic',
+						)
 					}
 					options={[
-						{ value: 'openai-compatible', label: 'OpenAI Compatible' },
+						{ value: 'openai-compatible', label: 'OpenAI Compatible (Chat Completions)' },
+						{ value: 'openai-responses', label: 'OpenAI Responses API' },
 						{ value: 'anthropic', label: 'Anthropic' },
 					]}
 					className="flex-1 max-w-(--input-width-lg)"

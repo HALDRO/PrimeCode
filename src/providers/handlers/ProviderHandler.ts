@@ -375,7 +375,8 @@ export class ProviderHandler implements WebviewMessageHandler {
 								: undefined,
 					};
 				})
-				.filter(m => m.id.length > 0);
+				.filter(m => m.id.length > 0)
+				.filter((m, idx, arr) => arr.findIndex(x => x.id === m.id) === idx);
 
 			if (rawModels.length === 0) {
 				this.context.bridge.data('proxyModels', {

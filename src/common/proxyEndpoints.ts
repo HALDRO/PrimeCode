@@ -1,12 +1,14 @@
-export type ProxyEndpointProtocol = 'openai-compatible' | 'anthropic';
+export type ProxyEndpointProtocol = 'openai-compatible' | 'openai-responses' | 'anthropic';
 
 const CUSTOM_ENDPOINT_NPM_BY_PROTOCOL: Record<ProxyEndpointProtocol, string> = {
 	'openai-compatible': '@ai-sdk/openai-compatible',
+	'openai-responses': '@ai-sdk/openai',
 	anthropic: '@ai-sdk/anthropic',
 };
 
 const CUSTOM_ENDPOINT_DEFAULT_NAME_BY_PROTOCOL: Record<ProxyEndpointProtocol, string> = {
 	'openai-compatible': 'OpenAI Compatible',
+	'openai-responses': 'OpenAI Responses',
 	anthropic: 'Anthropic',
 };
 
@@ -31,14 +33,18 @@ export function normalizeProxyBaseUrl(raw: string): string {
 }
 
 export function getProxyEndpointProtocol(value: unknown): ProxyEndpointProtocol {
-	return value === 'anthropic' ? 'anthropic' : 'openai-compatible';
+	if (value === 'anthropic') return 'anthropic';
+	if (value === 'openai-responses') return 'openai-responses';
+	return 'openai-compatible';
 }
 
 export function normalizeCustomEndpointBaseUrl(
 	protocol: ProxyEndpointProtocol,
 	raw: string,
 ): string {
-	return protocol === 'anthropic' ? raw.trim().replace(/\/+$/, '') : normalizeProxyBaseUrl(raw);
+	if (protocol === 'anthropic') return raw.trim().replace(/\/+$/, '');
+	if (protocol === 'openai-responses') return raw.trim().replace(/\/+$/, '');
+	return normalizeProxyBaseUrl(raw);
 }
 
 export function getCustomEndpointDedupeKey(
@@ -58,7 +64,9 @@ export function getCustomEndpointNpm(protocol: ProxyEndpointProtocol): string {
 }
 
 export function getCustomEndpointProtocolFromNpm(npm: string | undefined): ProxyEndpointProtocol {
-	return npm === CUSTOM_ENDPOINT_NPM_BY_PROTOCOL.anthropic ? 'anthropic' : 'openai-compatible';
+	if (npm === CUSTOM_ENDPOINT_NPM_BY_PROTOCOL.anthropic) return 'anthropic';
+	if (npm === CUSTOM_ENDPOINT_NPM_BY_PROTOCOL['openai-responses']) return 'openai-responses';
+	return 'openai-compatible';
 }
 
 export function getCustomEndpointDefaultName(protocol: ProxyEndpointProtocol): string {

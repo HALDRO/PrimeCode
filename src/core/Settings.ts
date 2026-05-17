@@ -22,7 +22,7 @@ export interface PrimeCodeSettings {
 		name: string;
 		baseUrl: string;
 		apiKey: string;
-		protocol?: 'openai-compatible' | 'anthropic';
+		protocol?: 'openai-compatible' | 'openai-responses' | 'anthropic';
 		enabledModels: string[];
 		headers?: Record<string, string>;
 		modelVariants?: Record<string, string[]>;

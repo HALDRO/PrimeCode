@@ -749,7 +749,11 @@ export const UserMessage: React.FC<UserMessageProps> = React.memo(
 								staticTokenCount={tokenStats}
 								fileChanges={fileChangesStats}
 								modelName={getModelDisplayName(
-									(message.message.role === 'user' ? message.message.model?.modelID : undefined) ||
+									(message.message.role === 'user'
+										? message.message.model?.providerID && message.message.model?.modelID
+											? `${message.message.model.providerID}/${message.message.model.modelID}`
+											: message.message.model?.modelID
+										: undefined) ||
 										activeModelID ||
 										'',
 								)}
