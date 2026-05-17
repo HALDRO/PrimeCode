@@ -17,6 +17,7 @@ import {
 	resolveToolName,
 	TOOL_CARD_EXPANDED_MAX_HEIGHT_PX,
 	TOOL_CARD_PREVIEW_MAX_HEIGHT,
+	TOOL_CARD_PREVIEW_SHOW_DELAY_MS,
 	UI_CARD_MOUNT_ANIMATE,
 	UI_CARD_MOUNT_INITIAL,
 	UI_MOTION_FRAMER_TRANSITION,
@@ -706,18 +707,50 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		}, [toolPart]);
 		const liveElapsed = useElapsedTimer(isRunning, toolUse.timestamp, toolStateDurationMs);
 		const displayDuration = isRunning ? liveElapsed : liveElapsed || toolStateDurationMs;
+		const fallbackRawOutput =
+			typeof toolUse.rawOutput === 'string' && toolUse.rawOutput.trim() ? toolUse.rawOutput : '';
+		// During execution, bash streams output via state.metadata.output (ToolStateRunning has no .output field).
+		// After completion, output moves to state.output (ToolStateCompleted).
+		const streamingMetadataOutput =
+			isRunning && typeof liveToolMetadata?.output === 'string' ? liveToolMetadata.output : '';
+		const fullText =
+			content || liveToolOutput || streamingMetadataOutput || fallbackRawOutput || '';
+		const hasBody = fullText.trim().length > 0;
+		const lineCount = useMemo(
+			() => (hasBody ? fullText.split('\n').length : 0),
+			[hasBody, fullText],
+		);
 		const [expanded, setExpanded] = useState(defaultExpanded ?? false);
 		const [expandedDiffKeys, setExpandedDiffKeys] = useState<Set<string>>(() => new Set());
 		// Track whether user manually toggled — if not, auto-collapse when streaming ends
 		const [manualExpanded, setManualExpanded] = useState<boolean | null>(null);
+		const [delayedStreamingPreviewVisible, setDelayedStreamingPreviewVisible] = useState(false);
 		const wasRunningRef = useRef(isRunning);
+		const shouldDelayStreamingPreview = isBash && isRunning && hasBody && !expanded;
+		const streamingPreviewVisible =
+			expanded || (isRunning && hasBody && !isBash) || delayedStreamingPreviewVisible;
 
 		// Auto-scroll during streaming preview using the same MutationObserver approach
 		// as SimpleToolGroup and TaskCardItem — reliable across all overflow/animation modes.
 		const { scrollerRef: streamingScrollerRef } = useContainerAutoScroll({
-			active: isRunning && !expanded,
+			active: streamingPreviewVisible && isRunning && !expanded,
 			observeCharacterData: true,
 		});
+
+		useEffect(() => {
+			if (!shouldDelayStreamingPreview) {
+				setDelayedStreamingPreviewVisible(false);
+				return;
+			}
+
+			const timeoutId = window.setTimeout(() => {
+				setDelayedStreamingPreviewVisible(true);
+			}, TOOL_CARD_PREVIEW_SHOW_DELAY_MS);
+
+			return () => {
+				window.clearTimeout(timeoutId);
+			};
+		}, [shouldDelayStreamingPreview]);
 
 		// Auto-collapse when streaming ends, unless user explicitly expanded
 		useEffect(() => {
@@ -738,20 +771,6 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 			if (isMcp) return rawInput ? JSON.stringify(rawInput) : '';
 			return '';
 		}, [actionType, isBash, isWebSearch, isWebFetch, isMcp, rawInput]);
-
-		const fallbackRawOutput =
-			typeof toolUse.rawOutput === 'string' && toolUse.rawOutput.trim() ? toolUse.rawOutput : '';
-		// During execution, bash streams output via state.metadata.output (ToolStateRunning has no .output field).
-		// After completion, output moves to state.output (ToolStateCompleted).
-		const streamingMetadataOutput =
-			isRunning && typeof liveToolMetadata?.output === 'string' ? liveToolMetadata.output : '';
-		const fullText =
-			content || liveToolOutput || streamingMetadataOutput || fallbackRawOutput || '';
-		const hasBody = fullText.trim().length > 0;
-		const lineCount = useMemo(
-			() => (hasBody ? fullText.split('\n').length : 0),
-			[hasBody, fullText],
-		);
 
 		if (!toolName) return null;
 		if (shouldHideWhileRunning) return null;
@@ -930,7 +949,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 					</div>
 				}
 				isCollapsible={alwaysCollapsible || (needsExpand && hasBody) || Boolean(showAccessGate)}
-				expanded={expanded || (isRunning && hasBody)}
+				expanded={streamingPreviewVisible}
 				onToggle={() => {
 					const next = !expanded;
 					setExpanded(next);
@@ -941,7 +960,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 						<div className="relative group/body">
 							<AnimatedCardBody
 								expanded={expanded}
-								isStreaming={isRunning}
+								isStreaming={streamingPreviewVisible && isRunning}
 								previewHeight={TOOL_CARD_PREVIEW_MAX_HEIGHT}
 								expandedHeight={TOOL_CARD_EXPANDED_MAX_HEIGHT_PX}
 								className="bg-(--tool-bg-header)"
