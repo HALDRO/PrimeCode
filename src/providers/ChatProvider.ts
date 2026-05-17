@@ -56,7 +56,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private backendStatusAbort: AbortController | null = null;
 	private backendStatusRun: Promise<void> | null = null;
 	private backendStatusKey: string | null = null;
-	private backendStatusConnected = false;
 	private backendStatusWaiters: Array<() => void> = [];
 
 	// Handlers
@@ -115,8 +114,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			clearSessionAutoAccept: (sessionId: string) =>
 				this.toolHandler.clearSessionAutoAccept(sessionId),
 			refreshAfterServerRestart: async () => {
-				this.startBackendStatusBridge();
-				await this.waitForSseBridgeConnected(5000);
+				this.restartBackendStatusBridge();
 				this.sendServerInfo();
 				this.hasSynced = false;
 				await this.syncAllOrDefer('manual-server-restart');
@@ -195,6 +193,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	 */
 	private async reloadOpenCodeRuntime(source: string): Promise<void> {
 		logger.debug('[ChatProvider] Disposing OpenCode instance for reload', { source });
+		this.stopBackendStatusBridge();
 		this.clearLocalCaches();
 		const sdkClient = this.cli.getSdkClient();
 		if (!sdkClient) return;
@@ -326,7 +325,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			await this.reloadOpenCodeRuntimeOnStartup();
 
 			this.startBackendStatusBridge();
-			await this.waitForSseBridgeConnected(5000);
 
 			// Notify webview only after the backend event bridge is ready.
 			// Extension should expose attach information here, not runtime recovery policy.
@@ -503,7 +501,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		const startedAt = Date.now();
 
 		this.startBackendStatusBridge();
-		await this.waitForSseBridgeConnected(5000);
 		this.sendServerInfo();
 
 		await this.providerHandler.handleMessage({ type: 'reloadAllProviders' });
@@ -821,7 +818,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 		this.stopBackendStatusBridge();
 		this.backendStatusKey = nextKey;
-		this.backendStatusConnected = false;
 		this.backendStatusAbort = new AbortController();
 		this.backendStatusRun = this.runBackendStatusBridge(
 			admin.baseUrl,
@@ -832,8 +828,12 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			this.backendStatusRun = null;
 			this.backendStatusAbort = null;
 			this.backendStatusKey = null;
-			this.backendStatusConnected = false;
 		});
+	}
+
+	private restartBackendStatusBridge(): void {
+		this.stopBackendStatusBridge();
+		this.startBackendStatusBridge();
 	}
 
 	private stopBackendStatusBridge(): void {
@@ -842,33 +842,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.backendStatusAbort = null;
 		this.backendStatusRun = null;
 		this.backendStatusKey = null;
-		this.backendStatusConnected = false;
 	}
 
 	private resolveBackendStatusWaiters(): void {
 		const waiters = this.backendStatusWaiters.splice(0);
 		for (const resolve of waiters) resolve();
-	}
-
-	private async waitForSseBridgeConnected(timeoutMs: number): Promise<void> {
-		if (this.backendStatusConnected || !this.backendStatusRun) {
-			return;
-		}
-
-		await new Promise<void>(resolve => {
-			const timer = setTimeout(() => {
-				const index = this.backendStatusWaiters.indexOf(onReady);
-				if (index >= 0) this.backendStatusWaiters.splice(index, 1);
-				resolve();
-			}, timeoutMs);
-
-			const onReady = () => {
-				clearTimeout(timer);
-				resolve();
-			};
-
-			this.backendStatusWaiters.push(onReady);
-		});
 	}
 
 	// ─── Server Health Monitor & Reconnect ──────────────────────────────
@@ -913,7 +891,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 						// Webview owns connection chrome; this bridge is only for backend-owned session status.
 					},
 				});
-				this.backendStatusConnected = true;
 				this.resolveBackendStatusWaiters();
 				resetHeartbeat();
 

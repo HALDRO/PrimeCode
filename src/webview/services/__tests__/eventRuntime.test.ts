@@ -61,9 +61,9 @@ describe('eventRuntime', () => {
 	});
 
 	describe('start / stop lifecycle', () => {
-		it('sets serverStatus to connected on start', () => {
+		it('preserves existing status on start until health or events confirm connectivity', () => {
 			eventRuntime.start('http://localhost:4096', 'C:\\Project');
-			expect(useUIStore.getState().serverStatus).toBe('connected');
+			expect(useUIStore.getState().serverStatus).toBe('disconnected');
 		});
 
 		it('sets serverStatus to disconnected on stop', () => {
@@ -86,7 +86,7 @@ describe('eventRuntime', () => {
 			useUIStore.getState().actions.setServerStatus('error');
 
 			eventRuntime.start('http://localhost:5000', 'C:\\Project');
-			expect(useUIStore.getState().serverStatus).toBe('connected');
+			expect(useUIStore.getState().serverStatus).toBe('disconnected');
 		});
 
 		it('normalizes drive letter casing', () => {

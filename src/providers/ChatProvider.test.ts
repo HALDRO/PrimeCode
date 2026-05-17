@@ -43,7 +43,10 @@ function createProvider(promptAsyncImpl?: PromptAsyncMock, summarizeImpl?: Summa
 				directory: 'C:\\repo',
 			})),
 		},
+		backendStatusAbort: null,
+		backendStatusKey: null,
 		backendStatusRun: null,
+		backendStatusWaiters: [],
 	});
 
 	return {
@@ -189,7 +192,7 @@ describe('ChatProvider send pipeline', () => {
 		expect(clearAgentsCache).toHaveBeenCalledTimes(1);
 	});
 
-	it('waits for backend status bridge before notifying webview on startup', async () => {
+	it('starts backend status bridge before notifying webview on startup', async () => {
 		const { provider } = createProvider();
 		provider.services = { setWorkspaceRoot: vi.fn() };
 		provider.settings = {
@@ -211,19 +214,14 @@ describe('ChatProvider send pipeline', () => {
 		provider.cli.ensureServer = vi.fn(async () => {});
 		provider.reloadOpenCodeRuntimeOnStartup = vi.fn(async () => {});
 		provider.startBackendStatusBridge = vi.fn();
-		provider.waitForSseBridgeConnected = vi.fn(async () => {});
 		provider.sendServerInfo = vi.fn();
 		provider.syncAllOrDefer = vi.fn(async () => {});
 
 		await provider.doStartOpenCode('C:\\repo');
 
 		expect(provider.startBackendStatusBridge).toHaveBeenCalledTimes(1);
-		expect(provider.waitForSseBridgeConnected).toHaveBeenCalledWith(5000);
 		expect(provider.sendServerInfo).toHaveBeenCalled();
 		expect(provider.startBackendStatusBridge.mock.invocationCallOrder[0]).toBeLessThan(
-			provider.waitForSseBridgeConnected.mock.invocationCallOrder[0],
-		);
-		expect(provider.waitForSseBridgeConnected.mock.invocationCallOrder[0]).toBeLessThan(
 			provider.sendServerInfo.mock.invocationCallOrder[0],
 		);
 	});

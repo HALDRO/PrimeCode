@@ -154,7 +154,6 @@ export const eventRuntime = {
 		this.stop();
 		currentKey = nextKey;
 		lastEventAt = Date.now();
-		useUIStore.getState().actions.setServerStatus('connected');
 	},
 
 	stop(): void {

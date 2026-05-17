@@ -66,8 +66,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	/** True if THIS process spawned the server (vs. connecting to one started by another window). */
 	private isServerOwner = false;
 
-	/** Give a just-starting server a brief chance to become healthy before killing processes. */
-	private static readonly EXISTING_SERVER_GRACE_MS = 1500;
 	/** Timestamp when this window started the currently owned server instance. */
 	private serverStartedAt: number | null = null;
 	private static readonly LOCAL_SERVER_HOST = '127.0.0.1';
@@ -127,179 +125,20 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			return;
 		}
 
-		if (await this.tryConnectToExistingServer(config)) return;
-		if (await this.tryConnectToExistingServerWithGrace(config)) return;
-
-		// No live server found — spawn a fresh one.
-		await this.spawnServer(config.workspaceRoot, config);
-	}
-
-	/**
-	 * When a user manually kills/reloads OpenCode, process discovery may briefly see
-	 * a replacement server before `/global/health` is ready. Wait once and retry the
-	 * same discovery path before deciding the processes are zombies and spawning again.
-	 */
-	private async tryConnectToExistingServerWithGrace(config: CLIConfig): Promise<boolean> {
-		const ports = await this.discoverOpenCodePorts();
-		if (ports.length === 0) return false;
-
-		await new Promise(resolve => setTimeout(resolve, OpenCodeExecutor.EXISTING_SERVER_GRACE_MS));
-		return this.tryConnectToExistingServer(config);
-	}
-
-	// =========================================================================
-	// Process-based server discovery
-	//
-	// Instead of only probing a fixed port (4096), we discover ALL running
-	// opencode processes, find which ports they listen on, and health-check
-	// each one.  This handles:
-	//   - Server on default port 4096
-	//   - Server on random port (from previous port:0 spawn)
-	//   - Zombie processes that hold a port but don't respond to health
-	// =========================================================================
-
-	/**
-	 * Try to connect to any already-running OpenCode server.
-	 * 1. Probe the canonical port first (fast path).
-	 * 2. If that fails, discover opencode processes via OS, find their listen
-	 *    ports, and health-check each one.
-	 */
-	private async tryConnectToExistingServer(config: CLIConfig): Promise<boolean> {
-		// Fast path: try the canonical port (4096 or OPENCODE_PORT)
-		const canonicalUrl = this.getLocalServerUrl();
-		if (await this.isOpenCodeServer(canonicalUrl)) {
-			logger.info(`[OpenCode] Connected to existing server at ${canonicalUrl}`);
-			this.serverUrl = canonicalUrl;
+		const localServerUrl = this.getLocalServerUrl();
+		if (await this.isOpenCodeServer(localServerUrl)) {
+			logger.info(`[OpenCode] Connected to local server at ${localServerUrl}`);
+			this.serverUrl = localServerUrl;
 			this.isServerOwner = false;
 			this.serverStartedAt = null;
 			this.directory = OpenCodeExecutor.normalizeDriveLetter(config.workspaceRoot);
 			this.initSdkClient();
 			void this.preloadMetadata();
-			return true;
+			return;
 		}
 
-		// Slow path: discover opencode processes and their listen ports
-		const ports = await this.discoverOpenCodePorts();
-		for (const port of ports) {
-			if (port === OpenCodeExecutor.LOCAL_SERVER_PORT) continue; // already tried
-			const url = `http://${OpenCodeExecutor.LOCAL_SERVER_HOST}:${port}`;
-			if (await this.isOpenCodeServer(url)) {
-				logger.info(
-					`[OpenCode] Connected to existing server at ${url} (discovered via process scan)`,
-				);
-				this.serverUrl = url;
-				this.isServerOwner = false;
-				this.serverStartedAt = null;
-				this.directory = OpenCodeExecutor.normalizeDriveLetter(config.workspaceRoot);
-				this.initSdkClient();
-				void this.preloadMetadata();
-				return true;
-			}
-		}
-
-		return false;
-	}
-
-	/**
-	 * Discover listen ports of running `opencode` processes.
-	 * Uses OS-specific commands (runs in ~50-100ms).
-	 */
-	private async discoverOpenCodePorts(): Promise<number[]> {
-		const { execFile } = await import('node:child_process');
-		const { promisify } = await import('node:util');
-		const execFileAsync = promisify(execFile);
-
-		try {
-			const isWindows = process.platform === 'win32';
-
-			if (isWindows) {
-				const pids = new Set(await this.getWindowsOpencodePids());
-				if (pids.size === 0) return [];
-
-				// Step 2: find which ports those PIDs are listening on
-				const { stdout: netstatOut } = await execFileAsync('netstat', ['-ano', '-p', 'TCP'], {
-					timeout: 5000,
-				});
-				const ports: number[] = [];
-				for (const line of netstatOut.split('\n')) {
-					if (!line.includes('LISTENING')) continue;
-					const parts = line.trim().split(/\s+/);
-					// Format: TCP  127.0.0.1:PORT  0.0.0.0:0  LISTENING  PID
-					const pid = parts[parts.length - 1];
-					if (!pids.has(pid)) continue;
-					const addrPort = parts[1];
-					const portStr = addrPort?.split(':').pop();
-					if (portStr) {
-						const port = Number.parseInt(portStr, 10);
-						if (port > 0) ports.push(port);
-					}
-				}
-				logger.info('[OpenCode] Discovered opencode processes', { pids: [...pids], ports });
-				return ports;
-			}
-
-			// Linux / macOS: use `ss` or `lsof`
-			try {
-				// Try ss first (Linux)
-				const { stdout } = await execFileAsync('ss', ['-tlnp'], { timeout: 5000 });
-				const ports: number[] = [];
-				for (const line of stdout.split('\n')) {
-					if (!line.includes('opencode')) continue;
-					const match = line.match(/:(\d+)\s/);
-					if (match) ports.push(Number.parseInt(match[1], 10));
-				}
-				if (ports.length > 0) {
-					logger.info('[OpenCode] Discovered opencode ports via ss', { ports });
-					return ports;
-				}
-			} catch {
-				// ss not available, try lsof (macOS)
-			}
-
-			try {
-				const { stdout } = await execFileAsync('lsof', ['-iTCP', '-sTCP:LISTEN', '-P', '-n'], {
-					timeout: 5000,
-				});
-				const ports: number[] = [];
-				for (const line of stdout.split('\n')) {
-					if (!line.includes('opencode')) continue;
-					const match = line.match(/:(\d+)\s/);
-					if (match) ports.push(Number.parseInt(match[1], 10));
-				}
-				logger.info('[OpenCode] Discovered opencode ports via lsof', { ports });
-				return ports;
-			} catch {
-				// lsof not available either
-			}
-
-			return [];
-		} catch (error) {
-			logger.warn('[OpenCode] Failed to discover opencode processes', { error: String(error) });
-			return [];
-		}
-	}
-
-	/**
-	 * Kill zombie opencode processes — REMOVED.
-	 * This was destructive and could kill servers used by other VS Code windows.
-	 * The server now relies on tryConnectToExistingServer discovery instead.
-	 */
-
-	private async getWindowsOpencodePids(): Promise<string[]> {
-		const { execFile } = await import('node:child_process');
-		const { promisify } = await import('node:util');
-		const execFileAsync = promisify(execFile);
-
-		try {
-			const { stdout } = await execFileAsync(
-				'tasklist',
-				['/FI', 'IMAGENAME eq opencode.exe', '/FO', 'CSV', '/NH'],
-				{ timeout: 5000 },
-			);
-			return [...stdout.matchAll(/"opencode\.exe","(\d+)"/gi)].map(match => match[1]);
-		} catch {
-			return [];
-		}
+		// No configured or canonical local server found — spawn a fresh one.
+		await this.spawnServer(config.workspaceRoot, config);
 	}
 
 	/**
@@ -328,16 +167,10 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	/**
 	 * Spawn a new OpenCode server process via the SDK.
 	 *
-	 * We pass `port: 0` so the CLI uses its built-in fallback logic:
-	 *   tryServe(4096) ?? tryServe(0)
-	 * This means it first tries the canonical port 4096, and if that's
-	 * occupied it picks a random free port.  The SDK parses the actual URL
-	 * from stdout, so we always get the correct address.
-	 *
-	 * Before reaching this point, tryConnectToExistingServer() has already
-	 * scanned all running opencode processes and their ports.  If none
-	 * responded to health checks, killZombieOpenCodeProcesses() has cleaned
-	 * them up, so port 4096 should be free for the new server.
+	 * The desktop app treats its local runtime as a single well-known sidecar.
+	 * PrimeCode follows the same model here: use one stable local address
+	 * instead of scanning the machine for arbitrary opencode processes or
+	 * attaching to random fallback ports from previous runs.
 	 */
 	private async spawnServer(workspaceRoot: string, config: CLIConfig): Promise<void> {
 		if (this.serverUrl) return;
@@ -377,7 +210,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			const { createOpencode } = await import('@opencode-ai/sdk/v2');
 			const opencode = await createOpencode({
 				hostname: OpenCodeExecutor.LOCAL_SERVER_HOST,
-				port: 0,
+				port: OpenCodeExecutor.LOCAL_SERVER_PORT,
 				timeout: config.serverTimeoutMs ?? 15000,
 			});
 
@@ -617,7 +450,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	}
 
 	/**
-	 * Attempt to rediscover a live OpenCode server via process scan.
+	 * Attempt to rediscover a live OpenCode server on the canonical local URL.
 	 * Does NOT spawn a new server — only reconnects to an existing one.
 	 * Returns true if a live server was found and the client was reinitialized.
 	 */
@@ -632,7 +465,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			return true;
 		}
 
-		// Probe canonical port
+		// Probe canonical port only. Avoid scanning arbitrary opencode processes.
 		const canonicalUrl = this.getLocalServerUrl();
 		if (await this.isOpenCodeServer(canonicalUrl)) {
 			this.serverUrl = canonicalUrl;
@@ -642,22 +475,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			this.initSdkClient();
 			logger.info('[OpenCode] Reconnected to server at canonical port', { url: canonicalUrl });
 			return true;
-		}
-
-		// Process scan for non-canonical ports
-		const ports = await this.discoverOpenCodePorts();
-		for (const port of ports) {
-			if (port === OpenCodeExecutor.LOCAL_SERVER_PORT) continue;
-			const url = `http://${OpenCodeExecutor.LOCAL_SERVER_HOST}:${port}`;
-			if (await this.isOpenCodeServer(url)) {
-				this.serverUrl = url;
-				this.directory = directory;
-				this.isServerOwner = false;
-				this.serverStartedAt = null;
-				this.initSdkClient();
-				logger.info('[OpenCode] Reconnected to server via process scan', { url, port });
-				return true;
-			}
 		}
 
 		return false;
