@@ -134,10 +134,21 @@ export const eventRuntime = {
 	handleExtensionMessage(message: unknown): void {
 		const extensionMessage = message as ExtensionMessage;
 		if (extensionMessage.type === 'opencodeEvent') {
+			const before = useUIStore.getState().serverStatus;
 			handleGlobalEnvelope(extensionMessage.data as GlobalStreamEnvelope | WebviewSdkEvent);
-			if (useUIStore.getState().serverStatus !== 'connected') {
-				useUIStore.getState().actions.setServerStatus('connected');
-			}
+			const eventType =
+				typeof (extensionMessage.data as { type?: unknown })?.type === 'string'
+					? (extensionMessage.data as { type: string }).type
+					: typeof (extensionMessage.data as { payload?: { type?: unknown } })?.payload?.type ===
+							'string'
+						? ((extensionMessage.data as { payload: { type: string } }).payload.type ?? 'unknown')
+						: 'unknown';
+			log.debug('Received opencodeEvent', {
+				eventType,
+				serverStatusBefore: before,
+				serverStatusAfter: useUIStore.getState().serverStatus,
+				lastEventAgeMs: this.getLastEventAge(),
+			});
 			return;
 		}
 
@@ -164,7 +175,10 @@ export const eventRuntime = {
 		queue.length = 0;
 		coalesced.clear();
 		if (currentKey) {
-			log.info('Event runtime stopped');
+			log.info('Event runtime stopped', {
+				key: currentKey,
+				lastEventAgeMs: Date.now() - lastEventAt,
+			});
 		}
 		currentKey = null;
 		useUIStore.getState().actions.setServerStatus('disconnected');

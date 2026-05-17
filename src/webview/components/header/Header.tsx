@@ -333,6 +333,12 @@ export const Header: React.FC = React.memo(() => {
 		const wait = (ms: number) => new Promise<void>(resolve => window.setTimeout(resolve, ms));
 
 		const attemptHealthCheck = async (retryCount: number): Promise<boolean | null> => {
+			log.debug('Health check attempt starting', {
+				serverUrl,
+				retryCount,
+				consecutiveFailures,
+				fetchTimeoutMs: HEALTH_FETCH_TIMEOUT_MS,
+			});
 			try {
 				const controller = new AbortController();
 				const timeout = window.setTimeout(() => controller.abort(), HEALTH_FETCH_TIMEOUT_MS);
@@ -344,6 +350,12 @@ export const Header: React.FC = React.memo(() => {
 				if (disposed) return null;
 
 				if (!response.ok) {
+					log.warn('Health check returned non-OK response', {
+						serverUrl,
+						retryCount,
+						status: response.status,
+						statusText: response.statusText,
+					});
 					if (retryCount < RETRY_COUNT) {
 						await wait(RETRY_DELAY_MS * (retryCount + 1));
 						if (disposed) return null;
@@ -354,9 +366,20 @@ export const Header: React.FC = React.memo(() => {
 
 				const payload = (await response.json()) as { healthy?: boolean };
 				if (disposed) return null;
+				log.debug('Health check completed', {
+					serverUrl,
+					retryCount,
+					healthy: payload.healthy === true,
+				});
 				return payload.healthy === true;
 			} catch (error: unknown) {
 				if (disposed) return null;
+				log.warn('Health check failed', {
+					serverUrl,
+					retryCount,
+					consecutiveFailures,
+					error,
+				});
 				if (retryCount < RETRY_COUNT && isRetryable(error)) {
 					await wait(RETRY_DELAY_MS * (retryCount + 1));
 					if (disposed) return null;
@@ -381,9 +404,17 @@ export const Header: React.FC = React.memo(() => {
 			if (result) {
 				consecutiveFailures = 0;
 				setServerStatus('connected');
+				log.info('Header marked server connected', {
+					serverUrl,
+					consecutiveFailures,
+				});
 			} else {
 				consecutiveFailures++;
 				setServerStatus('error');
+				log.warn('Header marked server error', {
+					serverUrl,
+					consecutiveFailures,
+				});
 			}
 			scheduleNext();
 		};

@@ -100,7 +100,7 @@ describe('eventRuntime', () => {
 	});
 
 	describe('handleExtensionMessage', () => {
-		it('sets serverStatus to connected on opencodeEvent', () => {
+		it('does not force serverStatus to connected on opencodeEvent', () => {
 			useUIStore.getState().actions.setServerStatus('disconnected');
 
 			eventRuntime.handleExtensionMessage({
@@ -108,7 +108,7 @@ describe('eventRuntime', () => {
 				data: { payload: { type: 'server.connected' } },
 			});
 
-			expect(useUIStore.getState().serverStatus).toBe('connected');
+			expect(useUIStore.getState().serverStatus).toBe('disconnected');
 		});
 
 		it('forwards non-opencodeEvent messages to stores', () => {

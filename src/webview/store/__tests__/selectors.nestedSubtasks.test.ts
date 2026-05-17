@@ -246,9 +246,9 @@ describe('selectors nested subtasks', () => {
 			'root',
 			{
 				root: [
-					{ file: 'src/root.ts', patch: '', additions: 4, deletions: 1, status: 'modified' },
-					{ file: 'src/sibling.ts', patch: '', additions: 7, deletions: 0, status: 'modified' },
-					{ file: 'src/unknown.ts', patch: '', additions: 1, deletions: 0, status: 'modified' },
+					{ file: 'src/root.ts', additions: 4, deletions: 1, status: 'modified' },
+					{ file: 'src/sibling.ts', additions: 7, deletions: 0, status: 'modified' },
+					{ file: 'src/unknown.ts', additions: 1, deletions: 0, status: 'modified' },
 				],
 			},
 			{
@@ -268,7 +268,7 @@ describe('selectors nested subtasks', () => {
 			createState({ sessionStatus: { root: { type: 'busy' } as SessionStatus } }),
 			'root',
 			{
-				root: [{ file: 'src/child.ts', patch: '', additions: 2, deletions: 3, status: 'modified' }],
+				root: [{ file: 'src/child.ts', additions: 2, deletions: 3, status: 'modified' }],
 			},
 			{
 				child: ['src/child.ts'],
@@ -286,7 +286,7 @@ describe('selectors nested subtasks', () => {
 			createState({ sessionStatus: { root: { type: 'busy' } as SessionStatus } }),
 			'root',
 			{
-				root: [{ file: 'src/norm.ts', patch: '', additions: 3, deletions: 0, status: 'modified' }],
+				root: [{ file: 'src/norm.ts', additions: 3, deletions: 0, status: 'modified' }],
 			},
 			{
 				root: ['.\\src\\norm.ts'],

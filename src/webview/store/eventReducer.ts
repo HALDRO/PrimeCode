@@ -31,7 +31,7 @@ import type {
 	Message,
 	ToolPart,
 } from '@opencode-ai/sdk/v2/client';
-import type { SessionStore } from './chatStore';
+import type { SessionDiffSnapshot, SessionStore } from './chatStore';
 import { extractOwnedFilePaths, rebuildSessionOwnedFiles } from './fileOwnership';
 
 function refreshSessionOwnedFiles(state: SessionStore, sessionId: string): void {
@@ -226,6 +226,30 @@ function syncCompactionParentFromAssistant(
 	ensureCompactionParentMessage(state, sessionId, info.parentID, info.time.created);
 }
 
+function sanitizeSessionDiffEntries(
+	diff: EventSessionDiff['properties']['diff'],
+): SessionDiffSnapshot[] {
+	if (!Array.isArray(diff) || diff.length === 0) return [];
+	return diff
+		.map(item => {
+			if (!item || typeof item !== 'object') return null;
+			const candidate = item as Record<string, unknown>;
+			const file = typeof candidate.file === 'string' ? candidate.file : null;
+			if (!file) return null;
+			return {
+				file,
+				additions: typeof candidate.additions === 'number' ? candidate.additions : 0,
+				deletions: typeof candidate.deletions === 'number' ? candidate.deletions : 0,
+				...(candidate.status === 'added' ||
+				candidate.status === 'deleted' ||
+				candidate.status === 'modified'
+					? { status: candidate.status }
+					: {}),
+			} satisfies SessionDiffSnapshot;
+		})
+		.filter((item): item is SessionDiffSnapshot => item !== null);
+}
+
 // ─── Subset of SDK Event types that the webview cares about ─────────────────
 export type WebviewSdkEvent =
 	| EventSessionCreated
@@ -329,7 +353,7 @@ export function eventReducer(state: SessionStore, event: WebviewSdkEvent): void 
 		// ─── Session diffs ────────────────────────────────────────────────
 		case 'session.diff': {
 			const { sessionID, diff } = event.properties;
-			state.sessionDiff[sessionID] = diff;
+			state.sessionDiff[sessionID] = sanitizeSessionDiffEntries(diff);
 			break;
 		}
 

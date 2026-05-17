@@ -11,7 +11,6 @@ import type {
 	QuestionRequest,
 	Session,
 	SessionStatus,
-	SnapshotFileDiff,
 	Todo,
 } from '@opencode-ai/sdk/v2/client';
 import { produce } from 'immer';
@@ -31,6 +30,13 @@ type SessionErrorSummary = {
 	message: string;
 	name?: string;
 	severity: 'critical' | 'error' | 'warning' | 'info';
+};
+
+export type SessionDiffSnapshot = {
+	file: string;
+	additions: number;
+	deletions: number;
+	status?: 'added' | 'deleted' | 'modified';
 };
 
 function createMessageDomainState() {
@@ -243,7 +249,6 @@ export type {
 	QuestionRequest,
 	Session,
 	SessionStatus,
-	SnapshotFileDiff,
 	Todo,
 };
 
@@ -410,7 +415,7 @@ export type RenderNode =
 export interface SessionStore {
 	sessions: Session[];
 	sessionStatus: Record<string, SessionStatus>;
-	sessionDiff: Record<string, SnapshotFileDiff[]>;
+	sessionDiff: Record<string, SessionDiffSnapshot[]>;
 	sessionOwnedFiles: Record<string, string[]>;
 	messages: Record<string, Message[]>;
 	parts: Record<string, Part[]>;
@@ -520,7 +525,7 @@ export interface SessionSnapshotInput {
 	session: Session;
 	messageEntries: SessionMessageEntry[];
 	todos: Todo[];
-	diff: SnapshotFileDiff[];
+	diff: SessionDiffSnapshot[];
 	activate: boolean;
 }
 

@@ -206,6 +206,10 @@ export async function proxyFetch(input: RequestInfo | URL, init?: RequestInit): 
 			}
 			abortHandler = () => {
 				abortController.abort();
+				vscode.postMessage({
+					type: 'proxyFetchAbort',
+					id,
+				});
 				pendingFetches.delete(id);
 				reject(new DOMException('Aborted', 'AbortError'));
 			};

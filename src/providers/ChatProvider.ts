@@ -679,8 +679,28 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		};
 
 		try {
+			logger.info('[ChatProvider] sendPromptAsync starting', {
+				sessionId: params.sessionId,
+				messageID: params.messageID,
+				agent: params.agent,
+				variant: params.variant,
+				model: params.model,
+				textLength: params.text.length,
+				hasAttachments: Boolean(params.attachments),
+			});
 			await this.sendPromptAsync(params);
+			logger.info('[ChatProvider] sendPromptAsync completed', {
+				sessionId: params.sessionId,
+				messageID: params.messageID,
+				model: params.model,
+			});
 		} catch (error) {
+			logger.warn('[ChatProvider] sendPromptAsync failed before retry decision', {
+				sessionId: params.sessionId,
+				messageID: params.messageID,
+				model: params.model,
+				error,
+			});
 			if (!params.model) throw error;
 			// Model may have been removed externally (another VS Code instance).
 			// Refresh providers and retry once before giving up.
@@ -816,6 +836,13 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		const nextKey = `${admin.baseUrl}::${admin.directory}`;
 		if (this.backendStatusKey === nextKey && this.backendStatusRun) return;
 
+		logger.info('[ChatProvider] Backend status bridge starting', {
+			baseUrl: admin.baseUrl,
+			directory: admin.directory,
+			previousKey: this.backendStatusKey,
+			nextKey,
+		});
+
 		this.stopBackendStatusBridge();
 		this.backendStatusKey = nextKey;
 		this.backendStatusAbort = new AbortController();
@@ -837,6 +864,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	}
 
 	private stopBackendStatusBridge(): void {
+		logger.info('[ChatProvider] Backend status bridge stopping', {
+			key: this.backendStatusKey,
+			hadAbortController: Boolean(this.backendStatusAbort),
+			hadRun: Boolean(this.backendStatusRun),
+		});
 		this.backendStatusAbort?.abort();
 		this.resolveBackendStatusWaiters();
 		this.backendStatusAbort = null;
@@ -905,6 +937,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				consecutiveFailures++;
 				logger.warn('[ChatProvider] Backend status bridge stream failed', {
 					baseUrl,
+					directory,
 					error,
 					attempt: consecutiveFailures,
 				});
@@ -920,6 +953,12 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				consecutiveFailures <= 1
 					? RECONNECT_DELAY_MS
 					: Math.min(RECONNECT_DELAY_MS * 2 ** (consecutiveFailures - 1), MAX_RETRY_MS);
+			logger.info('[ChatProvider] Backend status bridge scheduling reconnect', {
+				baseUrl,
+				directory,
+				attempt: consecutiveFailures,
+				backoff,
+			});
 			await new Promise(resolve => setTimeout(resolve, backoff));
 		}
 	}

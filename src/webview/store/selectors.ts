@@ -2,12 +2,7 @@
  * @file Zustand selectors for the SDK-native chat and settings stores.
  */
 
-import type {
-	AssistantMessage,
-	Message,
-	SnapshotFileDiff,
-	ToolPart,
-} from '@opencode-ai/sdk/v2/client';
+import type { AssistantMessage, Message, ToolPart } from '@opencode-ai/sdk/v2/client';
 import { useCallback, useMemo, useRef } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { parseModelId } from '../../common';
@@ -18,6 +13,7 @@ import {
 	getConfiguredAgentVariant,
 	resolveEffectiveVariant,
 } from '../lib/modelVariants';
+import type { SessionDiffSnapshot } from './chatStore';
 import {
 	getSessionRuntimeStatus,
 	isSessionProcessing,
@@ -90,7 +86,7 @@ function isAssistantMessage(msg: Message): msg is AssistantMessage {
 export { collectDescendantSessionIds, computeDerivedSessionStats } from './derived';
 
 export function mapSessionDiffEntries(
-	rawDiffs: SnapshotFileDiff[] | undefined,
+	rawDiffs: SessionDiffSnapshot[] | undefined,
 ): SessionDiffEntry[] {
 	if (!rawDiffs || rawDiffs.length === 0) return EMPTY_SESSION_DIFF_FILES;
 	return rawDiffs.map(d => ({
@@ -101,7 +97,7 @@ export function mapSessionDiffEntries(
 	}));
 }
 
-function summarizeSessionDiff(rawDiffs: SnapshotFileDiff[] | undefined) {
+function summarizeSessionDiff(rawDiffs: SessionDiffSnapshot[] | undefined) {
 	if (!rawDiffs || rawDiffs.length === 0) return EMPTY_SESSION_DIFF_SUMMARY;
 
 	let added = 0;

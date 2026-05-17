@@ -1,4 +1,4 @@
-import type { Message, Part, SnapshotFileDiff } from '@opencode-ai/sdk/v2/client';
+import type { Message, Part } from '@opencode-ai/sdk/v2/client';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { isSessionProcessing, useChatStore } from '../chatStore';
 import { deriveSessionView } from '../derived';
@@ -818,7 +818,7 @@ describe('chatStore restore', () => {
 							additions: 239,
 							deletions: 143,
 							status: 'modified',
-						} satisfies SnapshotFileDiff,
+						},
 					],
 				},
 			} as never,
@@ -848,7 +848,7 @@ describe('chatStore restore', () => {
 							additions: 5,
 							deletions: 0,
 							status: 'modified',
-						} satisfies SnapshotFileDiff,
+						},
 					],
 				},
 			} as never,
@@ -1651,11 +1651,10 @@ describe('chatStore derived view streaming', () => {
 				diff: [
 					{
 						file: 'src/file.ts',
-						patch: '',
 						additions: 2,
 						deletions: 43,
 						status: 'modified',
-					} satisfies SnapshotFileDiff,
+					},
 				],
 				activate: false,
 			},

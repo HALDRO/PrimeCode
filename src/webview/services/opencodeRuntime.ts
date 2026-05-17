@@ -13,6 +13,7 @@ import {
 import { produce } from 'immer';
 import { type ConversationIndexEntry, generateId, parseModelId } from '../../common';
 import { IMPROVE_PROMPT_DEFAULT_TEMPLATE } from '../../common/promptImprover';
+import type { SessionDiffSnapshot } from '../store/chatStore';
 import {
 	collectSessionSubtreeIds,
 	getProcessingSessionIds,
@@ -175,6 +176,23 @@ type RuntimeSendParams = {
 	variant?: string;
 	attachments?: RuntimeAttachments;
 };
+
+function sanitizeSnapshotDiffs(rawDiffs: SnapshotFileDiff[] | undefined): SessionDiffSnapshot[] {
+	if (!Array.isArray(rawDiffs) || rawDiffs.length === 0) return [];
+	return rawDiffs
+		.map(diff => {
+			if (!diff || typeof diff !== 'object' || typeof diff.file !== 'string' || !diff.file) {
+				return null;
+			}
+			return {
+				file: diff.file,
+				additions: typeof diff.additions === 'number' ? diff.additions : 0,
+				deletions: typeof diff.deletions === 'number' ? diff.deletions : 0,
+				...(typeof diff.status === 'string' ? { status: diff.status } : {}),
+			} satisfies SessionDiffSnapshot;
+		})
+		.filter((diff): diff is SessionDiffSnapshot => diff !== null);
+}
 
 function isSessionActive(sessionId: string): boolean {
 	const status = getSessionRuntimeStatus(useChatStore.getState(), sessionId);
@@ -548,7 +566,7 @@ async function hydrateSession(sessionId: string, activate = true): Promise<void>
 			return {
 				session: currentSession,
 				messageEntries,
-				diff: ((diffResult.data ?? []) as SnapshotFileDiff[]) || [],
+				diff: sanitizeSnapshotDiffs(((diffResult.data ?? []) as SnapshotFileDiff[]) || []),
 			};
 		}),
 	);
