@@ -1,0 +1,2 @@
+[test]
+exclude = ["docs/**", "node_modules/**"]

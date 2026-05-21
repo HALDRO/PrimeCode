@@ -349,7 +349,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				if (resolved) return;
 				output += String(chunk);
 				const match = output.match(/opencode server listening on\s+(https?:\/\/[^\s\r\n]+)/);
-				if (!match || !match[1]) return;
+				if (!match?.[1]) return;
 				resolved = true;
 				clearTimeout(timer);
 				resolve(match[1]);

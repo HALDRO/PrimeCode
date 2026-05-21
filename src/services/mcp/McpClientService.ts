@@ -1,16 +1,18 @@
 /**
  * @file McpClientService
  * @description Service for connecting to MCP servers and retrieving their capabilities (tools, resources).
- *              Uses @modelcontextprotocol/sdk to establish connections via stdio or HTTP transports.
+ *              Uses the MCP client package to establish connections via stdio or HTTP transports.
  *              Supports StreamableHTTP and SSE protocols based on config type.
  *              Provides methods to ping servers, list tools, and manage connection lifecycle.
  *              Implements resource cleanup pattern to prevent zombie connections.
  */
 
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import {
+	Client,
+	StdioClientTransport,
+	StreamableHTTPClientTransport,
+	type Transport,
+} from '@modelcontextprotocol/client';
 import type { MCPServerConfig } from '../../common';
 import { logger } from '../../utils/logger';
 

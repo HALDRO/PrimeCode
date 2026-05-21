@@ -124,12 +124,12 @@ try {
     # --- 3. Lint ---
     Write-Host "`n[3/10] Running lint..." -ForegroundColor Cyan
     Write-Host "  Using existing installed dependencies..." -ForegroundColor DarkGray
-    npm run lint:biome
+    bun run lint:biome
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: Lint failed!" -ForegroundColor Red
         exit 1
     }
-    npm run lint:tsc
+    bun run lint:tsc
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: TypeScript check failed!" -ForegroundColor Red
         exit 1
@@ -137,7 +137,7 @@ try {
 
     # --- 4. Build ---
     Write-Host "`n[4/9] Running build..." -ForegroundColor Cyan
-    npm run build
+    bun run build
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: Build failed!" -ForegroundColor Red
         exit 1
@@ -160,7 +160,7 @@ try {
 
     # --- 6. Tests ---
     Write-Host "`n[6/10] Running tests..." -ForegroundColor Cyan
-    npm test
+    bun run test
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: Tests failed!" -ForegroundColor Red
         exit 1

@@ -3,8 +3,6 @@ import {
 	type Message,
 	type OpencodeClient,
 	type Part,
-	type PermissionRequest,
-	type QuestionRequest,
 	type Session,
 	type SessionStatus,
 	type SnapshotFileDiff,
@@ -88,26 +86,7 @@ function getClient(): OpencodeClient {
 }
 
 function getPermissionListsClient() {
-	return getClient() as OpencodeClient & {
-		permission?: {
-			list?: (params: { sessionID: string; directory: string }) => Promise<{
-				data?: PermissionRequest[];
-				error?: unknown;
-			}>;
-		};
-		question?: {
-			list?: (params: { sessionID: string; directory: string }) => Promise<{
-				data?: QuestionRequest[];
-				error?: unknown;
-			}>;
-		};
-		session: OpencodeClient['session'] & {
-			status?: (params: { directory: string }) => Promise<{
-				data?: Record<string, { type?: string }>;
-				error?: unknown;
-			}>;
-		};
-	};
+	return getClient();
 }
 
 async function haltSessionIfBusy(sessionId: string): Promise<void> {
@@ -749,8 +728,8 @@ export const openCodeRuntime = {
 		const directory = getWorkspaceRoot();
 		const [statusResult, permissionResult, questionResult] = await Promise.all([
 			client.session.status?.({ directory }).catch(() => null),
-			client.permission?.list?.({ sessionID: sessionId, directory }).catch(() => null),
-			client.question?.list?.({ sessionID: sessionId, directory }).catch(() => null),
+			client.permission?.list?.({ directory }).catch(() => null),
+			client.question?.list?.({ directory }).catch(() => null),
 		]);
 		const relevantSessionIds = new Set(sessionIds?.filter(Boolean) ?? [sessionId]);
 		const statusMap =
@@ -771,8 +750,12 @@ export const openCodeRuntime = {
 					// stale "busy" status to persist indefinitely after reconnect or abort.
 					state.sessionStatus[targetSessionId] = { type: 'idle' };
 				}
-				state.permissions[sessionId] = [...(permissionResult?.data ?? [])];
-				state.questions[sessionId] = [...(questionResult?.data ?? [])];
+				state.permissions[sessionId] = (permissionResult?.data ?? []).filter(
+					request => request.sessionID === sessionId,
+				);
+				state.questions[sessionId] = (questionResult?.data ?? []).filter(
+					request => request.sessionID === sessionId,
+				);
 			}),
 		);
 	},
@@ -823,38 +806,21 @@ export const openCodeRuntime = {
 		const client = getClient();
 		const reply =
 			params.response ?? (params.approved ? (params.alwaysAllow ? 'always' : 'once') : 'reject');
-		const permissionClient = client as OpencodeClient & {
-			permission?: {
-				reply?: (input: {
-					requestID: string;
-					reply: 'once' | 'always' | 'reject';
-				}) => Promise<{ error?: unknown }>;
-			};
-		};
-		if (permissionClient.permission?.reply) {
-			const result = await permissionClient.permission.reply({
-				requestID: params.requestId,
-				reply,
-			});
-			if (result?.error) {
-				throw new Error(`Permission response failed: ${JSON.stringify(result.error)}`);
-			}
-			return;
+		const result = await client.permission.reply({
+			requestID: params.requestId,
+			directory: getWorkspaceRoot(),
+			reply,
+		});
+		if (result?.error) {
+			throw new Error(`Permission response failed: ${JSON.stringify(result.error)}`);
 		}
-		throw new Error('Permission reply API unavailable in webview runtime');
 	},
 
 	async respondToQuestion(params: { requestId: string; answers: string[][] }): Promise<void> {
-		const client = getClient() as OpencodeClient & {
-			question?: {
-				reply?: (input: { requestID: string; answers: string[][] }) => Promise<{ error?: unknown }>;
-			};
-		};
-		if (!client.question?.reply) {
-			throw new Error('Question reply API unavailable in webview runtime');
-		}
+		const client = getClient();
 		const result = await client.question.reply({
 			requestID: params.requestId,
+			directory: getWorkspaceRoot(),
 			answers: params.answers,
 		});
 		if (result?.error) {
@@ -863,15 +829,11 @@ export const openCodeRuntime = {
 	},
 
 	async rejectQuestion(requestId: string): Promise<void> {
-		const client = getClient() as OpencodeClient & {
-			question?: {
-				reject?: (input: { requestID: string }) => Promise<{ error?: unknown }>;
-			};
-		};
-		if (!client.question?.reject) {
-			throw new Error('Question reject API unavailable in webview runtime');
-		}
-		const result = await client.question.reject({ requestID: requestId });
+		const client = getClient();
+		const result = await client.question.reject({
+			requestID: requestId,
+			directory: getWorkspaceRoot(),
+		});
 		if (result?.error) {
 			throw new Error(`Question reject failed: ${JSON.stringify(result.error)}`);
 		}

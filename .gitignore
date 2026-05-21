@@ -34,3 +34,4 @@ scripts/.*
 # Internal tools
 cli-sources/
 _wgun/
+.codegraph/

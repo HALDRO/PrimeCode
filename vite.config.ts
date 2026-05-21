@@ -7,8 +7,9 @@
  *              React Compiler (babel-plugin-react-compiler) enabled for automatic memoization.
  */
 
+import babel from '@rolldown/plugin-babel';
 import tailwindcss from '@tailwindcss/vite';
-import react from '@vitejs/plugin-react';
+import react, { reactCompilerPreset } from '@vitejs/plugin-react';
 import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
 import { defineConfig } from 'vite';
@@ -17,10 +18,7 @@ import { defineConfig } from 'vite';
 // Set VITE_DISABLE_REACT_COMPILER=1 to disable for WDYR profiling:
 //   $env:VITE_DISABLE_REACT_COMPILER="1"; bun run dev
 const enableReactCompiler = !process.env.VITE_DISABLE_REACT_COMPILER;
-const ReactCompilerConfig = {
-	// Target React 19 (default, can be omitted)
-	// target: '19',
-};
+const reactCompiler = reactCompilerPreset();
 
 /**
  * Vite plugin to serve session dump files from docs/debug/ via HTTP.
@@ -59,10 +57,8 @@ export default defineConfig({
 			// WDYR требует classic JSX transform (createElement вместо jsx/jsxs)
 			// При отключённом React Compiler переключаемся на classic
 			...(enableReactCompiler ? {} : { jsxRuntime: 'classic' }),
-			babel: {
-				plugins: enableReactCompiler ? [['babel-plugin-react-compiler', ReactCompilerConfig]] : [],
-			},
 		}),
+		...(enableReactCompiler ? [babel({ presets: [reactCompiler] })] : []),
 		tailwindcss(),
 		serveDumpsPlugin(),
 	],

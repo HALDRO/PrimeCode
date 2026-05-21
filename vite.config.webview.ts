@@ -8,22 +8,17 @@
  */
 
 import { resolve } from 'node:path';
+import babel from '@rolldown/plugin-babel';
 import tailwindcss from '@tailwindcss/vite';
-import react from '@vitejs/plugin-react';
+import react, { reactCompilerPreset } from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
-// React Compiler configuration
-const ReactCompilerConfig = {
-	// Target React 19 (default)
-};
+const reactCompiler = reactCompilerPreset();
 
 export default defineConfig({
 	plugins: [
-		react({
-			babel: {
-				plugins: [['babel-plugin-react-compiler', ReactCompilerConfig]],
-			},
-		}),
+		react(),
+		babel({ presets: [reactCompiler] }),
 		tailwindcss(),
 	],
 	build: {
@@ -43,8 +38,6 @@ export default defineConfig({
 
 		rollupOptions: {
 			output: {
-				// Ensure single file output
-				inlineDynamicImports: true,
 				// CSS output filename
 				assetFileNames: assetInfo => {
 					if (assetInfo.name?.endsWith('.css')) {
@@ -67,15 +60,11 @@ export default defineConfig({
 	// Disable module preload for library mode
 	optimizeDeps: {
 		exclude: ['vscode'],
-		esbuildOptions: {
-			define: {
-				global: 'globalThis',
-			},
-		},
 	},
 
 	// Define for build-time replacement (backup, main polyfill is via banner)
 	define: {
 		'process.env.NODE_ENV': JSON.stringify('production'),
+		global: 'globalThis',
 	},
 });

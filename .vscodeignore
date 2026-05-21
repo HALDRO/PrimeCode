@@ -24,6 +24,8 @@ AGENTS.md
 .claude-temp/**
 .opencode/**
 .vscode-test/**
+.codegraph/**
+.sisyphus/**
 
 # Dev artifacts
 dev-dist/**
@@ -34,6 +36,8 @@ node_modules/**
 
 # Package manager files
 bun.lockb
+bun.lock
+bunfig.toml
 package-lock.json
 pnpm-lock.yaml
 

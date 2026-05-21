@@ -9,7 +9,7 @@
 		"declarationDir": "../../out/build-cache/types-webview",
 		"tsBuildInfoFile": "../../out/build-cache/webview.tsbuildinfo",
 		"allowImportingTsExtensions": true,
-		"types": ["node"],
+		"types": ["node", "vite/client"],
 		"rootDir": ".."
 	},
 	"include": ["./**/*.ts", "./**/*.tsx", "../common/**/*.ts", "../utils/path.ts"],

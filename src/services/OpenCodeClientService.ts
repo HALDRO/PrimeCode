@@ -361,12 +361,7 @@ export class OpenCodeClientService {
 	}
 
 	async getLspStatus(client: OpencodeClient): Promise<LspStatusItem[]> {
-		const lspClient = (client as unknown as Record<string, unknown>).lsp as
-			| { status?: () => Promise<{ data?: unknown }> }
-			| undefined;
-		if (!lspClient?.status) return [];
-
-		const result = await lspClient.status();
+		const result = await client.lsp.status();
 		if (!Array.isArray(result.data)) return [];
 
 		return result.data.flatMap(value => {
