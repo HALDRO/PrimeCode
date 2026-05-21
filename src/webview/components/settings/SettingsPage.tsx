@@ -11,7 +11,7 @@
 
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { TIMEOUTS } from '../../../common';
-import { PERMISSION_CATEGORIES } from '../../../common/permissions';
+import { DEFAULT_POLICIES, PERMISSION_CATEGORIES } from '../../../common/permissions';
 import { SETTINGS_NAV_ITEMS, type SettingsTab } from '../../constants';
 import { cn } from '../../lib/cn';
 import { useMainSettings, useSettingsActions, useSettingsStore, useUIActions } from '../../store';
@@ -161,21 +161,93 @@ const OpenCodeProvidersSection: React.FC = () => <ProviderManager />;
 
 // Permissions settings tab (Unified)
 
-// Permissions settings tab (Unified)
+import type { PermissionPolicies } from '../../../common/permissions';
+
+interface PermissionItem {
+	key: keyof PermissionPolicies;
+	title: string;
+	tooltip: string;
+}
+
+interface PermissionSection {
+	title: string;
+	items: PermissionItem[];
+}
+
+const PERMISSION_SECTIONS: PermissionSection[] = [
+	{
+		title: 'File Operations',
+		items: [
+			{ key: 'read', title: 'Read Files', tooltip: 'Allow AI to read files' },
+			{ key: 'edit', title: 'Edit Files', tooltip: 'Allow AI to modify files in workspace' },
+			{ key: 'glob', title: 'Glob', tooltip: 'Allow AI to search files by pattern' },
+			{ key: 'grep', title: 'Grep', tooltip: 'Allow AI to search file contents' },
+			{ key: 'list', title: 'List Directory', tooltip: 'Allow AI to list directory contents' },
+		],
+	},
+	{
+		title: 'Shell & Execution',
+		items: [
+			{ key: 'bash', title: 'Shell Commands', tooltip: 'Allow AI to execute shell commands' },
+			{ key: 'task', title: 'Sub-agents', tooltip: 'Allow AI to run sub-agents' },
+			{ key: 'skill', title: 'Skills', tooltip: 'Allow AI to load skills' },
+		],
+	},
+	{
+		title: 'LSP & Todo',
+		items: [
+			{ key: 'lsp', title: 'LSP Requests', tooltip: 'Allow AI to execute LSP requests' },
+			{ key: 'todoread', title: 'Read Todo', tooltip: 'Allow AI to read the todo list' },
+			{ key: 'todowrite', title: 'Write Todo', tooltip: 'Allow AI to update the todo list' },
+		],
+	},
+	{
+		title: 'Network',
+		items: [
+			{ key: 'webfetch', title: 'Fetch URL', tooltip: 'Allow AI to fetch URLs' },
+			{ key: 'websearch', title: 'Web Search', tooltip: 'Allow AI to perform web searches' },
+			{ key: 'codesearch', title: 'Code Search', tooltip: 'Allow AI to perform code searches' },
+		],
+	},
+	{
+		title: 'Safety',
+		items: [
+			{
+				key: 'external_directory',
+				title: 'External Directory',
+				tooltip: 'Allow AI to access paths outside the project',
+			},
+			{
+				key: 'doom_loop',
+				title: 'Doom Loop Protection',
+				tooltip: 'Allow AI to repeat identical tool calls',
+			},
+		],
+	},
+];
+
 const PermissionsSettings: React.FC = () => {
 	const { postMessage } = useVSCode();
 	const { discoveryStatus, policies } = useSettingsStore();
 	const { permissions } = discoveryStatus;
 
-	type PolicyKey = keyof typeof policies;
-
-	const handlePolicyChange = (type: PolicyKey, value: 'ask' | 'allow' | 'deny') => {
-		postMessage({ type: 'setPermissionPolicy', category: type, policy: value });
+	const handlePolicyChange = (key: keyof PermissionPolicies, value: 'ask' | 'allow' | 'deny') => {
+		postMessage({ type: 'setPermissionPolicy', category: key, policy: value });
 	};
 
 	const handlePreset = (preset: 'ask' | 'allow') => {
 		for (const category of PERMISSION_CATEGORIES) {
 			postMessage({ type: 'setPermissionPolicy', category, policy: preset });
+		}
+	};
+
+	const handleDefaults = () => {
+		for (const category of PERMISSION_CATEGORIES) {
+			postMessage({
+				type: 'setPermissionPolicy',
+				category,
+				policy: DEFAULT_POLICIES[category],
+			});
 		}
 	};
 
@@ -185,67 +257,39 @@ const PermissionsSettings: React.FC = () => {
 		{ value: 'deny', label: 'Deny', title: 'Deny this tool in the project' },
 	];
 
-	const policyRow = (key: PolicyKey, title: string, tooltip: string, last = false) => (
-		<SettingRow title={title} tooltip={tooltip} last={last}>
-			<SegmentedControl
-				ariaLabel={`${title} policy`}
-				value={policies[key]}
-				options={policyOptions}
-				onChange={value => handlePolicyChange(key, value as 'ask' | 'allow' | 'deny')}
-			/>
-		</SettingRow>
-	);
-
 	return (
 		<div className="animate-fade-in">
-			<GroupTitle>File Operations</GroupTitle>
-			<SettingsGroup>
-				{policyRow('read', 'Read Files', 'Allow AI to read files')}
-				{policyRow('edit', 'Edit Files', 'Allow AI to modify files in workspace')}
-				{policyRow('glob', 'Glob', 'Allow AI to search files by pattern')}
-				{policyRow('grep', 'Grep', 'Allow AI to search file contents')}
-				{policyRow('list', 'List Directory', 'Allow AI to list directory contents', true)}
-			</SettingsGroup>
-
-			<GroupTitle>Shell & Execution</GroupTitle>
-			<SettingsGroup>
-				{policyRow('bash', 'Shell Commands', 'Allow AI to execute shell commands')}
-				{policyRow('task', 'Sub-agents', 'Allow AI to run sub-agents')}
-				{policyRow('skill', 'Skills', 'Allow AI to load skills', true)}
-			</SettingsGroup>
-
-			<GroupTitle>LSP & Todo</GroupTitle>
-			<SettingsGroup>
-				{policyRow('lsp', 'LSP Requests', 'Allow AI to execute LSP requests')}
-				{policyRow('todoread', 'Read Todo', 'Allow AI to read the todo list')}
-				{policyRow('todowrite', 'Write Todo', 'Allow AI to update the todo list', true)}
-			</SettingsGroup>
-
-			<GroupTitle>Network</GroupTitle>
-			<SettingsGroup>
-				{policyRow('webfetch', 'Fetch URL', 'Allow AI to fetch URLs')}
-				{policyRow('websearch', 'Web Search', 'Allow AI to perform web searches')}
-				{policyRow('codesearch', 'Code Search', 'Allow AI to perform code searches', true)}
-			</SettingsGroup>
-
-			<GroupTitle>Safety</GroupTitle>
-			<SettingsGroup>
-				{policyRow(
-					'external_directory',
-					'External Directory',
-					'Allow AI to access paths outside the project',
-				)}
-				{policyRow(
-					'doom_loop',
-					'Doom Loop Protection',
-					'Allow AI to repeat identical tool calls',
-					true,
-				)}
-			</SettingsGroup>
+			{PERMISSION_SECTIONS.map(section => (
+				<React.Fragment key={section.title}>
+					<GroupTitle>{section.title}</GroupTitle>
+					<SettingsGroup>
+						{section.items.map((item, idx) => (
+							<SettingRow
+								key={item.key}
+								title={item.title}
+								tooltip={item.tooltip}
+								last={idx === section.items.length - 1}
+							>
+								<SegmentedControl
+									ariaLabel={`${item.title} policy`}
+									value={policies[item.key]}
+									options={policyOptions}
+									onChange={value =>
+										handlePolicyChange(item.key, value as 'ask' | 'allow' | 'deny')
+									}
+								/>
+							</SettingRow>
+						))}
+					</SettingsGroup>
+				</React.Fragment>
+			))}
 
 			<SettingsGroup>
 				<SettingRow title="Quick Presets" tooltip="Apply preset to all policies" last>
 					<div className="flex items-center gap-1.5">
+						<Button size="xs" variant="secondary" onClick={handleDefaults}>
+							Defaults
+						</Button>
 						<Button size="xs" variant="secondary" onClick={() => handlePreset('ask')}>
 							Ask All
 						</Button>

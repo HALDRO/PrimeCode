@@ -10,7 +10,6 @@ import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk/v2/c
 import launch from 'cross-spawn';
 import type * as vscode from 'vscode';
 
-import { PERMISSION_CATEGORIES } from '../../common/permissions';
 import { logger } from '../../utils/logger';
 import { normalizeDriveLetter } from '../../utils/path';
 import type { CLIConfig, CLIExecutor } from './types';
@@ -56,14 +55,14 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	private sdkClient: OpencodeClient | null = null;
 	private ensureServerPromise: Promise<void> | null = null;
 
-	private readonly _commandsCache = new TtlCache<Array<{ name: string; description?: string }>>(
-		5 * 60 * 1000,
-	);
-	private readonly _agentsCache = new TtlCache<unknown>(5 * 60 * 1000);
-	private readonly _skillsCache = new TtlCache<
-		Array<{ name: string; description: string; location?: string; content?: string }>
-	>(5 * 60 * 1000);
-	private readonly _mcpCache = new TtlCache<unknown>(30 * 1000);
+	private readonly caches = {
+		commands: new TtlCache<Array<{ name: string; description?: string }>>(5 * 60 * 1000),
+		agents: new TtlCache<unknown>(5 * 60 * 1000),
+		skills: new TtlCache<
+			Array<{ name: string; description: string; location?: string; content?: string }>
+		>(5 * 60 * 1000),
+		mcp: new TtlCache<unknown>(30 * 1000),
+	};
 
 	private serverInstance: { close(): void } | null = null;
 	private isServerOwner = false;
@@ -249,16 +248,17 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	private async spawnServer(workspaceRoot: string, config: CLIConfig): Promise<void> {
 		if (this.serverUrl) return;
 
-		const autoApprove = config.autoApprove ?? false;
-		const permissionsEnv = this.buildPermissionsEnv(autoApprove, config.env, config.policies);
+		// Ensure no stale OPENCODE_PERMISSION env var overrides opencode.json policies.
+		// Permissions are managed exclusively via the project config file.
+		delete process.env.OPENCODE_PERMISSION;
+
 		const password = randomUUID();
-		const processEnv = {
+		const processEnv: Record<string, string | undefined> = {
 			...process.env,
 			...config.env,
 			NODE_NO_WARNINGS: '1',
 			NO_COLOR: '1',
 			NPM_CONFIG_LOGLEVEL: 'error',
-			OPENCODE_PERMISSION: permissionsEnv,
 			OPENCODE_SERVER_USERNAME: 'opencode',
 			OPENCODE_SERVER_PASSWORD: password,
 			OPENCODE_CONFIG_CONTENT:
@@ -268,24 +268,13 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		};
 
 		logger.info('[OpenCodeExecutor] Starting managed OpenCode runtime...');
-		const prevCwd = process.cwd();
-		let changedCwd = false;
 
 		try {
-			if (workspaceRoot) {
-				try {
-					process.chdir(workspaceRoot);
-					changedCwd = true;
-				} catch (e) {
-					logger.warn(`[OpenCode] Could not chdir to ${workspaceRoot}:`, e);
-				}
-			}
-
-			Object.assign(process.env, processEnv);
-
 			const { serverUrl, close, pid } = await this.launchManagedServer(
 				OpenCodeExecutor.LOCAL_SERVER_HOST,
 				config.serverTimeoutMs ?? 15_000,
+				workspaceRoot,
+				processEnv,
 			);
 			const runtimeId = randomUUID();
 			const authorization = this.createAuthorizationHeader(password);
@@ -320,18 +309,18 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		} catch (error) {
 			logger.error('[OpenCodeExecutor] Failed to start server:', error);
 			throw error;
-		} finally {
-			if (changedCwd) {
-				try {
-					process.chdir(prevCwd);
-				} catch {}
-			}
 		}
 	}
 
-	private async launchManagedServer(hostname: string, timeoutMs: number) {
+	private async launchManagedServer(
+		hostname: string,
+		timeoutMs: number,
+		cwd: string,
+		env: Record<string, string | undefined>,
+	) {
 		const proc = launch('opencode', ['serve', `--hostname=${hostname}`, '--port=0'], {
-			env: process.env,
+			cwd: cwd || undefined,
+			env,
 			stdio: ['ignore', 'pipe', 'pipe'],
 			windowsHide: true,
 		});
@@ -403,32 +392,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		});
 	}
 
-	private buildPermissionsEnv(
-		autoApprove: boolean,
-		env?: Record<string, string>,
-		policies?: Partial<Record<string, string>>,
-	): string {
-		if (env?.OPENCODE_PERMISSION) {
-			try {
-				const existing = JSON.parse(env.OPENCODE_PERMISSION);
-				return JSON.stringify({ ...existing, question: 'allow' });
-			} catch {}
-		}
-
-		if (autoApprove) {
-			const result: Record<string, string> = { question: 'allow' };
-			for (const cat of PERMISSION_CATEGORIES) result[cat] = 'allow';
-			return JSON.stringify(result);
-		}
-
-		const result: Record<string, string> = { question: 'allow' };
-		for (const cat of PERMISSION_CATEGORIES) {
-			const val = policies?.[cat];
-			result[cat] = val === 'allow' || val === 'deny' ? val : 'ask';
-		}
-		return JSON.stringify(result);
-	}
-
 	private initSdkClient(): void {
 		if (!this.serverUrl) return;
 		try {
@@ -465,7 +428,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	public async listCommands(
 		directory: string,
 	): Promise<Array<{ name: string; description?: string }>> {
-		const cached = this._commandsCache.get();
+		const cached = this.caches.commands.get();
 		if (cached) return cached;
 		try {
 			if (!this.serverUrl) return [];
@@ -489,19 +452,19 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 								: {}),
 						}))
 				: [];
-			return this._commandsCache.set(commands);
+			return this.caches.commands.set(commands);
 		} catch {
 			return [];
 		}
 	}
 
 	public async listAgents(directory: string): Promise<unknown> {
-		const cached = this._agentsCache.get();
+		const cached = this.caches.agents.get();
 		if (cached) return cached;
 		try {
 			const client = this.requireSdk();
 			const { data } = await client.app.agents({ directory });
-			return this._agentsCache.set(data);
+			return this.caches.agents.set(data);
 		} catch {
 			return [];
 		}
@@ -510,7 +473,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	public async listSkills(
 		directory: string,
 	): Promise<Array<{ name: string; description: string; location?: string; content?: string }>> {
-		const cached = this._skillsCache.get();
+		const cached = this.caches.skills.get();
 		if (cached) return cached;
 		try {
 			const client = this.requireSdk();
@@ -521,19 +484,19 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				location?: string;
 				content?: string;
 			}>;
-			return this._skillsCache.set(Array.isArray(skills) ? skills : []);
+			return this.caches.skills.set(Array.isArray(skills) ? skills : []);
 		} catch {
 			return [];
 		}
 	}
 
 	public async getMcpStatus(directory: string): Promise<unknown> {
-		const cached = this._mcpCache.get();
+		const cached = this.caches.mcp.get();
 		if (cached) return cached;
 		try {
 			const client = this.requireSdk();
 			const { data } = await client.mcp.status({ directory });
-			return this._mcpCache.set(data);
+			return this.caches.mcp.set(data);
 		} catch {
 			return {};
 		}
@@ -633,19 +596,19 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	}
 
 	clearSkillsCache(): void {
-		this._skillsCache.clear();
+		this.caches.skills.clear();
 	}
 
 	clearCommandsCache(): void {
-		this._commandsCache.clear();
+		this.caches.commands.clear();
 	}
 
 	clearAgentsCache(): void {
-		this._agentsCache.clear();
+		this.caches.agents.clear();
 	}
 
 	clearMcpCache(): void {
-		this._mcpCache.clear();
+		this.caches.mcp.clear();
 	}
 
 	getProvider(): 'opencode' {

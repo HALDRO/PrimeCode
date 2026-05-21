@@ -386,4 +386,183 @@ describe('ToolHandler', () => {
 			expect(Object.keys(policies)).toHaveLength(16);
 		});
 	});
+
+	describe('autoRespondToSessionPermissions', () => {
+		it('should auto-approve when session auto-accept is on', async () => {
+			const replyMock = vi.fn().mockResolvedValue({});
+			const listMock = vi.fn().mockResolvedValue({
+				data: [
+					{ id: 'perm-1', sessionID: 'sess-1', permission: 'edit', patterns: [], metadata: {}, always: [] },
+				],
+			});
+			const ctx = createMockHandlerContext({
+				cli: {
+					getSdkClient: () => ({ permission: { list: listMock, reply: replyMock } }),
+					getProvider: () => 'opencode',
+					getAdminInfo: () => ({ baseUrl: 'http://localhost', directory: '/ws' }),
+				} as any,
+			});
+			const handler = new ToolHandler(ctx);
+
+			await handler.handleMessage({ type: 'setAutoAccept', mode: 'on', sessionId: 'sess-1' });
+			await handler.autoRespondToSessionPermissions('sess-1');
+
+			expect(replyMock).toHaveBeenCalledWith({
+				requestID: 'perm-1',
+				directory: '/mock/workspace',
+				reply: 'once',
+			});
+		});
+
+		it('should auto-approve when accessAutoApprove setting is true', async () => {
+			const replyMock = vi.fn().mockResolvedValue({});
+			const listMock = vi.fn().mockResolvedValue({
+				data: [
+					{ id: 'perm-2', sessionID: 'sess-2', permission: 'bash', patterns: [], metadata: {}, always: [] },
+				],
+			});
+			const ctx = createMockHandlerContext({
+				cli: {
+					getSdkClient: () => ({ permission: { list: listMock, reply: replyMock } }),
+					getProvider: () => 'opencode',
+					getAdminInfo: () => ({ baseUrl: 'http://localhost', directory: '/ws' }),
+				} as any,
+				settings: {
+					get: (key: string) => (key === 'access.autoApprove' ? true : undefined),
+					getWorkspaceRoot: () => '/mock/workspace',
+				} as any,
+			});
+			const handler = new ToolHandler(ctx);
+
+			await handler.autoRespondToSessionPermissions('sess-2');
+
+			expect(replyMock).toHaveBeenCalledWith({
+				requestID: 'perm-2',
+				directory: '/mock/workspace',
+				reply: 'once',
+			});
+		});
+
+		it('should auto-approve when tool is in always-allow list', async () => {
+			const replyMock = vi.fn().mockResolvedValue({});
+			const listMock = vi.fn().mockResolvedValue({
+				data: [
+					{ id: 'perm-3', sessionID: 'sess-3', permission: 'write', patterns: [], metadata: {}, always: [] },
+				],
+			});
+			const ctx = createMockHandlerContext({
+				cli: {
+					getSdkClient: () => ({ permission: { list: listMock, reply: replyMock } }),
+					getProvider: () => 'opencode',
+					getAdminInfo: () => ({ baseUrl: 'http://localhost', directory: '/ws' }),
+				} as any,
+			});
+			const handler = new ToolHandler(ctx);
+
+			// Set always-allow for 'write' tool
+			await handler.handleMessage({ type: 'setAlwaysAllowTool', toolName: 'write', allow: true });
+			await handler.autoRespondToSessionPermissions('sess-3');
+
+			expect(replyMock).toHaveBeenCalledWith({
+				requestID: 'perm-3',
+				directory: '/mock/workspace',
+				reply: 'once',
+			});
+		});
+
+		it('should NOT auto-approve when no override applies', async () => {
+			const replyMock = vi.fn().mockResolvedValue({});
+			const listMock = vi.fn().mockResolvedValue({
+				data: [
+					{ id: 'perm-4', sessionID: 'sess-4', permission: 'bash', patterns: [], metadata: {}, always: [] },
+				],
+			});
+			const ctx = createMockHandlerContext({
+				cli: {
+					getSdkClient: () => ({ permission: { list: listMock, reply: replyMock } }),
+					getProvider: () => 'opencode',
+					getAdminInfo: () => ({ baseUrl: 'http://localhost', directory: '/ws' }),
+				} as any,
+			});
+			const handler = new ToolHandler(ctx);
+
+			await handler.autoRespondToSessionPermissions('sess-4');
+
+			expect(replyMock).not.toHaveBeenCalled();
+		});
+
+		it('should not crash when SDK client is unavailable', async () => {
+			const ctx = createMockHandlerContext({
+				cli: {
+					getSdkClient: () => null,
+					getProvider: () => 'opencode',
+					getAdminInfo: () => null,
+				} as any,
+			});
+			const handler = new ToolHandler(ctx);
+
+			await expect(handler.autoRespondToSessionPermissions('sess-5')).resolves.toBeUndefined();
+		});
+
+		it('should only respond to permissions for the target session', async () => {
+			const replyMock = vi.fn().mockResolvedValue({});
+			const listMock = vi.fn().mockResolvedValue({
+				data: [
+					{ id: 'perm-a', sessionID: 'sess-a', permission: 'edit', patterns: [], metadata: {}, always: [] },
+					{ id: 'perm-b', sessionID: 'sess-b', permission: 'edit', patterns: [], metadata: {}, always: [] },
+				],
+			});
+			const ctx = createMockHandlerContext({
+				cli: {
+					getSdkClient: () => ({ permission: { list: listMock, reply: replyMock } }),
+					getProvider: () => 'opencode',
+					getAdminInfo: () => ({ baseUrl: 'http://localhost', directory: '/ws' }),
+				} as any,
+				settings: {
+					get: (key: string) => (key === 'access.autoApprove' ? true : undefined),
+					getWorkspaceRoot: () => '/mock/workspace',
+				} as any,
+			});
+			const handler = new ToolHandler(ctx);
+
+			await handler.autoRespondToSessionPermissions('sess-a');
+
+			expect(replyMock).toHaveBeenCalledTimes(1);
+			expect(replyMock).toHaveBeenCalledWith(expect.objectContaining({ requestID: 'perm-a' }));
+		});
+	});
+
+	describe('debounced policy sync', () => {
+		it('should debounce multiple rapid policy changes into one sync', async () => {
+			const setProjectFieldMock = vi.fn().mockResolvedValue({ path: '/mock', contentHash: 'abc' });
+			const reloadMock = vi.fn().mockResolvedValue(undefined);
+			const ctx = createMockHandlerContext({
+				services: {
+					openCodeConfig: { setProjectField: setProjectFieldMock },
+					mcpConfigWatcher: { notifyUiSave: vi.fn() },
+				} as any,
+				reloadOpenCodeRuntime: reloadMock,
+			});
+			const handler = new ToolHandler(ctx);
+
+			// Fire 3 rapid policy changes without awaiting (simulates "Ask All" preset)
+			const p1 = handler.setPermissionPolicy('read', 'ask');
+			const p2 = handler.setPermissionPolicy('edit', 'ask');
+			const p3 = handler.setPermissionPolicy('bash', 'ask');
+
+			// Wait for debounce timer (300ms) + execution
+			await new Promise(resolve => setTimeout(resolve, 500));
+			await Promise.all([p1, p2, p3]);
+
+			// Should have been called only once (debounced)
+			expect(setProjectFieldMock).toHaveBeenCalledTimes(1);
+			expect(reloadMock).toHaveBeenCalledTimes(1);
+
+			// The final write should contain all 3 changes
+			const writtenPermission = setProjectFieldMock.mock.calls[0][1];
+			expect(writtenPermission.read).toBe('ask');
+			expect(writtenPermission.edit).toBe('ask');
+			expect(writtenPermission.bash).toBe('ask');
+		});
+	});
 });

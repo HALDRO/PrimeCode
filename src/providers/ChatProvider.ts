@@ -1,6 +1,7 @@
 import { createOpencodeClient } from '@opencode-ai/sdk/v2/client';
 import * as vscode from 'vscode';
 import { generateId, parseModelId } from '../common';
+import { policiesToServerFormat } from '../common/permissions.js';
 import type { SendMessageAttachments, WebviewCommand } from '../common/protocol';
 import { OpenCodeExecutor } from '../core/executor/OpenCode';
 import { buildPromptParts } from '../core/promptParts';
@@ -226,14 +227,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		const opencodeAgent = this.settings.get('opencode.agent');
 		const opencodeServerTimeout = this.settings.get('opencode.serverTimeout');
 		const opencodeServerUrl = this.settings.get('opencode.serverUrl');
-		const policies = await this.toolHandler.getPermissionPoliciesAsync();
 
 		return {
 			provider: 'opencode' as const,
 			workspaceRoot,
 			agent: typeof opencodeAgent === 'string' ? opencodeAgent : undefined,
-			autoApprove: Boolean(this.settings.get('access.autoApprove') || false),
-			policies: { ...policies },
 			serverTimeoutMs:
 				typeof opencodeServerTimeout === 'number' && Number.isFinite(opencodeServerTimeout)
 					? Math.max(0, opencodeServerTimeout) * 1000
@@ -284,6 +282,22 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			}
 		} catch (error) {
 			logger.error(`[ChatProvider] Failed to refresh ${resourceType}:`, error);
+		}
+	}
+
+	/**
+	 * Write current permission policies to opencode.json before server startup.
+	 * Since we don't use OPENCODE_PERMISSION env var, the server reads permissions
+	 * exclusively from the project config file.
+	 */
+	private async syncPoliciesToFileBeforeStart(): Promise<void> {
+		try {
+			const policies = await this.toolHandler.getPermissionPoliciesAsync();
+			const serverPermission = policiesToServerFormat(policies);
+			await this.services.openCodeConfig.setProjectField('permission', serverPermission);
+			logger.info('[ChatProvider] Pre-start: policies written to opencode.json');
+		} catch (e) {
+			logger.warn('[ChatProvider] Pre-start: failed to write policies to opencode.json', e);
 		}
 	}
 
@@ -339,6 +353,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			logger.debug('[ChatProvider] OpenCode server already running');
 			return;
 		}
+
+		// Write current permission policies to opencode.json BEFORE server starts.
+		// The server reads permissions from this file (no env var override).
+		await this.syncPoliciesToFileBeforeStart();
 
 		const config = await this.buildServerConfig(workspaceRoot);
 
@@ -1035,6 +1053,15 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				normalizeComparablePath(workspaceRoot).toLowerCase()
 		) {
 			return;
+		}
+
+		// Auto-respond to permission requests from extension side (works even when webview is hidden)
+		if (eventRecord?.type === 'permission.asked') {
+			const properties = eventRecord.properties as Record<string, unknown> | undefined;
+			const sessionID = properties?.sessionID;
+			if (typeof sessionID === 'string') {
+				void this.toolHandler.autoRespondToSessionPermissions(sessionID);
+			}
 		}
 
 		this.bridge.data('opencodeEvent', event);

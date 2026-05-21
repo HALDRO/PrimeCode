@@ -762,37 +762,69 @@ export const openCodeRuntime = {
 
 	async autoRespondPendingPermissions(sessionId: string): Promise<void> {
 		if (!sessionId) return;
-		const state = useChatStore.getState();
-		const autoAccept = state.sessionAutoAccept[sessionId] ?? false;
-		const accessAutoApprove = useSettingsStore.getState().accessAutoApprove;
-		if (!autoAccept && !accessAutoApprove) return;
 
 		await this.refreshRuntimeState(sessionId);
 		const pending = useChatStore.getState().permissions[sessionId] ?? [];
 		if (pending.length === 0) return;
 
-		const { policies, access } = useSettingsStore.getState();
-		const alwaysAllowByTool = new Set(
-			(access ?? []).filter(entry => entry.allowAll).map(entry => entry.toolName.toLowerCase()),
-		);
+		const state = useChatStore.getState();
+		const autoAccept = state.sessionAutoAccept[sessionId] ?? false;
+		const { accessAutoApprove, access } = useSettingsStore.getState();
 
+		// Only auto-respond based on PrimeCode-only overrides:
+		// - session auto-accept (⚡ button)
+		// - global accessAutoApprove setting
+		// - per-tool "always allow" list
+		// Per-category policies are handled server-side via opencode.json —
+		// if the server emits permission.asked, it already evaluated the ruleset.
+		if (!autoAccept && !accessAutoApprove) {
+			// Check per-tool always-allow list
+			const alwaysAllowByTool = new Set(
+				(access ?? []).filter(entry => entry.allowAll).map(entry => entry.toolName.toLowerCase()),
+			);
+			const toolMatches = pending.filter(request => {
+				const permissionName = request.permission?.toLowerCase?.() ?? '';
+				return alwaysAllowByTool.has(permissionName);
+			});
+			if (toolMatches.length === 0) return;
+
+			for (const request of toolMatches) {
+				await this.respondToPermission({
+					requestId: request.id,
+					toolName: request.permission,
+					approved: true,
+					alwaysAllow: false,
+					response: 'once',
+				});
+				useChatStore.getState().actions.removePendingPermission(request.id, sessionId);
+			}
+			return;
+		}
+
+		// Auto-accept or accessAutoApprove is on — approve all pending
 		for (const request of pending) {
-			const permissionName = request.permission?.toLowerCase?.() ?? '';
-			const shouldApprove =
-				accessAutoApprove ||
-				autoAccept ||
-				alwaysAllowByTool.has(permissionName) ||
-				policies[permissionName as keyof typeof policies] === 'allow';
-			const shouldDeny = policies[permissionName as keyof typeof policies] === 'deny';
-			if (!shouldApprove && !shouldDeny) continue;
-
 			await this.respondToPermission({
 				requestId: request.id,
 				toolName: request.permission,
-				approved: shouldApprove,
+				approved: true,
 				alwaysAllow: false,
-				response: shouldApprove ? 'once' : 'reject',
+				response: 'once',
 			});
+			useChatStore.getState().actions.removePendingPermission(request.id, sessionId);
+		}
+	},
+
+	/**
+	 * Re-evaluate all pending permissions across all sessions.
+	 * Called when auto-accept is toggled or access list changes.
+	 */
+	async reevaluateAllPendingPermissions(): Promise<void> {
+		const state = useChatStore.getState();
+		const sessionIds = Object.keys(state.permissions).filter(
+			sid => (state.permissions[sid]?.length ?? 0) > 0,
+		);
+		for (const sessionId of sessionIds) {
+			await this.autoRespondPendingPermissions(sessionId);
 		}
 	},
 

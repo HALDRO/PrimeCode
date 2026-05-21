@@ -23,10 +23,6 @@ export interface CLIConfig {
 	serverUrl?: string;
 	/** Enable auto-compaction for OpenCode. */
 	autoCompact?: boolean;
-	/** Auto-approve all permissions (yoloMode / autoApprove setting). */
-	autoApprove?: boolean;
-	/** Granular permission policies from the UI — all OpenCode categories. */
-	policies?: Partial<Record<string, string>>;
 }
 
 export interface CLIExecutor extends EventEmitter {

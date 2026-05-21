@@ -19,11 +19,22 @@ const AUTO_ACCEPT_KEY = 'primeCode.permissionAutoAcceptBySession';
 type PermissionAutoAcceptMode = 'default' | 'on' | 'off';
 type PermissionAutoAcceptState = { mode: PermissionAutoAcceptMode; effective: boolean };
 
+class TaskQueue {
+	private promise: Promise<void> = Promise.resolve();
+	public add(task: () => Promise<void>): Promise<void> {
+		this.promise = this.promise.then(() => task().catch(() => {}));
+		return this.promise;
+	}
+}
+
 export class ToolHandler implements WebviewMessageHandler {
 	private alwaysAllowByTool: Record<string, true> = {};
 	private policies: PermissionPolicies;
 	private readonly autoAcceptBySession = new Map<string, PermissionAutoAcceptMode>();
 	private hydratePoliciesPromise: Promise<void> | null = null;
+	private syncDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+	private syncDebounceResolvers: Array<() => void> = [];
+	private readonly writeQueue = new TaskQueue();
 
 	constructor(private context: HandlerContext) {
 		this.alwaysAllowByTool =
@@ -212,17 +223,35 @@ export class ToolHandler implements WebviewMessageHandler {
 		await this.context.extensionContext.workspaceState.update(POLICIES_KEY, this.policies);
 		this.context.bridge.data('permissionsUpdated', { policies: { ...this.policies } });
 
-		// Sync all categories to project opencode.json through the canonical writer.
-		void this.syncPoliciesToServer().catch(e =>
-			logger.warn('[ToolHandler] Failed to sync policies to server:', e),
-		);
+		// Debounce server sync: when multiple policies change rapidly (e.g. "Ask All" preset),
+		// batch them into a single file write + dispose cycle.
+		await this.debouncedSyncPoliciesToServer();
+	}
+
+	private debouncedSyncPoliciesToServer(): Promise<void> {
+		return new Promise<void>(resolve => {
+			this.syncDebounceResolvers.push(resolve);
+			if (this.syncDebounceTimer) clearTimeout(this.syncDebounceTimer);
+			this.syncDebounceTimer = setTimeout(() => {
+				this.syncDebounceTimer = null;
+				const resolvers = this.syncDebounceResolvers.splice(0);
+				void this.writeQueue
+					.add(() => this.syncPoliciesToServer())
+					.finally(() => {
+						for (const r of resolvers) r();
+					});
+			}, 300);
+		});
 	}
 
 	/**
 	 * Persist current permission policies into the project's `opencode.json`.
 	 *
 	 * Uses OpenCodeConfigService so project opencode.json writes stay centralized.
-	 * After writing, disposes the OpenCode instance so the server re-reads permissions.
+	 * After writing, disposes the OpenCode instance so the server re-reads permissions
+	 * from the file (OPENCODE_PERMISSION env var is not used — file is the single source).
+	 * Auto-respond to pending permissions is handled on the extension side via SSE listener,
+	 * so no artificial delay is needed before dispose.
 	 */
 	private async syncPoliciesToServer(): Promise<void> {
 		const serverPermission = policiesToServerFormat(this.policies);
@@ -336,6 +365,48 @@ export class ToolHandler implements WebviewMessageHandler {
 
 	private async onCheckCliDiagnostics(): Promise<void> {
 		this.context.bridge.data('cliDiagnostics', null);
+	}
+
+	/**
+	 * Auto-respond to pending permission requests for a session from the extension side.
+	 * Called from SSE event listener — works even when webview is hidden.
+	 */
+	public async autoRespondToSessionPermissions(sessionId: string): Promise<void> {
+		const client = this.context.cli.getSdkClient?.();
+		if (!client) return;
+
+		const directory = this.context.settings.getWorkspaceRoot();
+		if (!directory) return;
+
+		try {
+			const permissionResult = await client.permission.list({ directory });
+			const pending = (permissionResult?.data ?? []).filter(
+				(req: { sessionID?: string }) => req.sessionID === sessionId,
+			);
+			if (pending.length === 0) return;
+
+			const autoAccept = await this.isAutoAcceptAsync(sessionId);
+			const accessAutoApprove = Boolean(this.context.settings.get('access.autoApprove') || false);
+
+			for (const request of pending) {
+				const toolName = (request as { permission?: string }).permission?.toLowerCase?.() ?? '';
+				const alwaysAllow = this.alwaysAllowByTool[toolName] === true;
+				const shouldApprove = autoAccept || accessAutoApprove || alwaysAllow;
+
+				if (shouldApprove) {
+					await client.permission.reply({
+						requestID: (request as { id: string }).id,
+						directory,
+						reply: 'once',
+					});
+					logger.info(
+						`[ToolHandler] Auto-approved permission "${toolName}" for session ${sessionId}`,
+					);
+				}
+			}
+		} catch (error) {
+			logger.warn('[ToolHandler] Failed to auto-respond to permissions:', error);
+		}
 	}
 }
 

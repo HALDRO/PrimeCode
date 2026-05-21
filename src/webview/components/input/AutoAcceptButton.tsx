@@ -1,11 +1,13 @@
 /**
  * @file AutoAcceptButton — Tri-state auto-accept permissions control
  * @description Cycles auto-accept mode for the current session between on,
- *              default UI setting, and off.
+ *              default UI setting, and off. Optimistically updates local state
+ *              so pending permissions are auto-responded immediately on toggle.
  */
 
 import React, { useCallback } from 'react';
 import { cn } from '../../lib/cn';
+import { openCodeRuntime } from '../../services/opencodeRuntime';
 import { useChatStore } from '../../store/chatStore';
 import { useVSCode } from '../../utils/vscode';
 import { ShieldIcon } from '../icons';
@@ -36,7 +38,25 @@ export const AutoAcceptButton: React.FC = React.memo(() => {
 	const handleCycle = useCallback(() => {
 		if (!activeSessionId) return;
 		const nextMode = mode === 'default' ? 'on' : mode === 'on' ? 'off' : 'default';
+
+		// Optimistically update local state so the auto-respond effect fires immediately
+		const nextAutoAccept = nextMode === 'on';
+		useChatStore.setState(state => ({
+			sessionAutoAccept: {
+				...state.sessionAutoAccept,
+				[activeSessionId]: nextAutoAccept,
+			},
+		}));
+
+		// Notify extension for persistence and server-side state
 		postMessage({ type: 'setAutoAccept', mode: nextMode, sessionId: activeSessionId });
+
+		// If toggling to "on", immediately auto-respond any pending permissions
+		if (nextAutoAccept) {
+			void openCodeRuntime
+				.autoRespondPendingPermissions(activeSessionId)
+				.catch(openCodeRuntime.showRuntimeError);
+		}
 	}, [activeSessionId, mode, postMessage]);
 
 	const title =
