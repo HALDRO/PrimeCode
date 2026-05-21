@@ -372,6 +372,7 @@ export function DropdownMenu<T>({
 	const [selectedIndex, setSelectedIndex] = useState(0);
 	const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
+	const typeaheadRef = useRef({ buffer: '', timer: 0 });
 
 	const effectiveSearch = searchValue ?? internalSearch;
 	const allItems = sections ? sections.flatMap(s => s.items) : items || [];
@@ -454,12 +455,36 @@ export function DropdownMenu<T>({
 						}
 					}
 					break;
+				default: {
+					// Typeahead: printable single character jumps to matching item
+					if (!searchable && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+						e.preventDefault();
+						const ta = typeaheadRef.current;
+						clearTimeout(ta.timer);
+						ta.buffer += e.key.toLowerCase();
+						ta.timer = window.setTimeout(() => {
+							ta.buffer = '';
+						}, 500);
+						const matchIdx = filteredItems.findIndex(item =>
+							item.label.toLowerCase().startsWith(ta.buffer),
+						);
+						if (matchIdx >= 0) {
+							setSelectedIndex(matchIdx);
+						}
+					}
+					break;
+				}
 			}
 		};
 
 		window.addEventListener('keydown', handleKeyDown);
-		return () => window.removeEventListener('keydown', handleKeyDown);
-	}, [filteredItems, selectedIndex, onSelect, onRename, onDelete, disableKeyboardNav]);
+		return () => {
+			window.removeEventListener('keydown', handleKeyDown);
+			if (typeaheadRef.current.timer) {
+				window.clearTimeout(typeaheadRef.current.timer);
+			}
+		};
+	}, [filteredItems, selectedIndex, onSelect, onRename, onDelete, disableKeyboardNav, searchable]);
 
 	const renderMenuItem = (item: DropdownMenuItem<T>, index: number) => {
 		const isSelected = index === selectedIndex;

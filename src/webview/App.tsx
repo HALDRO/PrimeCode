@@ -5,9 +5,8 @@
  * Implements a robust Flex Column layout to ensure the chat input is pinned to the bottom.
  */
 
-import { AnimatePresence, motion } from 'framer-motion';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
+import { type StateSnapshot, Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { ChangedFilesPanel } from './components/chat/ChangedFilesPanel';
 import { GenerationStatus } from './components/chat/GenerationStatus';
 import { MessageItem } from './components/chat/MessageItem';
@@ -32,6 +31,7 @@ import {
 	useMessageSections,
 	useSessionProcessing,
 } from './store';
+import { useChatStore } from './store/chatStore';
 import type { MessageSection } from './store/derived';
 import { useSettingsStore } from './store/settingsStore';
 import { useUIStore } from './store/uiStore';
@@ -202,6 +202,10 @@ const EmptyState: React.FC = () => {
  * Extracted from App so that per-token session updates don't cascade
  * into ChatInput, ChangedFilesPanel, and other siblings.
  */
+
+/** Per-session Virtuoso state cache — preserves measured item heights across session switches. */
+const virtuosoStateCache = new Map<string, StateSnapshot>();
+
 const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) => {
 	const virtuosoRef = useRef<VirtuosoHandle>(null);
 	const scrollerRef = useRef<HTMLDivElement>(null);
@@ -212,6 +216,29 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 
 	const sections = useMessageSections();
 	const isProcessing = useSessionProcessing(activeSessionId);
+
+	// Evict closed sessions from the Virtuoso state cache to prevent memory leaks
+	const sessionOrder = useChatStore(state => state.sessionOrder);
+	useEffect(() => {
+		const activeIds = new Set(sessionOrder);
+		for (const cachedId of virtuosoStateCache.keys()) {
+			if (!activeIds.has(cachedId)) {
+				virtuosoStateCache.delete(cachedId);
+			}
+		}
+	}, [sessionOrder]);
+
+	// Save Virtuoso state when switching away from a session (cleanup runs before new value applies)
+	useEffect(() => {
+		return () => {
+			virtuosoRef.current?.getState(snapshot => {
+				virtuosoStateCache.set(activeSessionId, snapshot);
+			});
+		};
+	}, [activeSessionId]);
+
+	// Restore state for the current session (if cached)
+	const restoreState = useMemo(() => virtuosoStateCache.get(activeSessionId), [activeSessionId]);
 
 	const virtuosoComponents = useMemo(
 		() => ({
@@ -307,29 +334,37 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 	);
 
 	// MutationObserver fallback: keep exactly one pending rAF-based bottom settle.
-	// We only react to structural DOM changes and only when already near bottom,
-	// which avoids repeated smooth-scroll passes during streaming token updates.
+	// Throttled to avoid layout thrashing during rapid token streaming.
 	useEffect(() => {
 		const el = scrollerRef.current;
 		if (!isProcessing || !el) return;
 
 		let rafId: number | null = null;
 		let lastKnownScrollHeight = 0;
+		let lastExecutionTime = 0;
+		const THROTTLE_MS = 100;
+
 		const nudgeScroll = () => {
 			if (userScrolledUpRef.current) return;
-			if (rafId !== null) return; // already scheduled
+			if (rafId !== null) return;
+			const now = performance.now();
+			if (now - lastExecutionTime < THROTTLE_MS) return;
+
 			rafId = requestAnimationFrame(() => {
 				rafId = null;
 				const scroller = scrollerRef.current;
 				if (!scroller || userScrolledUpRef.current) return;
-				const distanceFromBottom =
-					scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
 				const nextScrollHeight = scroller.scrollHeight;
 				const grew = nextScrollHeight !== lastKnownScrollHeight;
 				lastKnownScrollHeight = nextScrollHeight;
-				if (grew && distanceFromBottom < 96) {
-					scroller.scrollTo({ top: nextScrollHeight, behavior: 'auto' });
+				if (grew) {
+					const distanceFromBottom =
+						scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+					if (distanceFromBottom < 120) {
+						scroller.scrollTo({ top: nextScrollHeight, behavior: 'auto' });
+					}
 				}
+				lastExecutionTime = performance.now();
 			});
 		};
 
@@ -368,12 +403,10 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 		[activeSessionId],
 	);
 
-	// Scroll to bottom on session switch. Uses a two-phase approach:
-	// Phase 1: mark that a switch happened.
-	// Phase 2: on next render with sections, scroll to bottom.
-	// Also handles the case where sectionCount hasn't changed (session already loaded).
+	// Scroll to bottom on session switch ONLY if there's no cached scroll state.
+	// If restoreStateFrom is available, Virtuoso will restore the scroll position itself.
 	useEffect(() => {
-		if (activeSessionId) {
+		if (activeSessionId && !restoreState) {
 			sessionSwitchRef.current = true;
 			// Reset scroll-up flag so auto-scroll works on the new session
 			userScrolledUpRef.current = false;
@@ -386,7 +419,7 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 				}
 			});
 		}
-	}, [activeSessionId]);
+	}, [activeSessionId, restoreState]);
 
 	const sectionCount = sections.length;
 	useEffect(() => {
@@ -436,7 +469,7 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 			return () => cancelAnimationFrame(raf);
 		}
 		return undefined;
-	}, [sectionCount, lastSectionUserMsgId]);
+	}, [lastSectionUserMsgId, sectionCount]);
 
 	const handleScrollerRef = useCallback((el: HTMLElement | Window | null) => {
 		const div = el instanceof HTMLElement ? (el as HTMLDivElement) : null;
@@ -444,22 +477,9 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 		setScrollerEl(div);
 	}, []);
 
-	const scrollTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
-
-	useEffect(() => {
-		return () => {
-			scrollTimersRef.current.forEach(clearTimeout);
-		};
-	}, []);
-
 	const handleScrollToBottom = useCallback(() => {
 		userScrolledUpRef.current = false;
-		const scrollOnce = () =>
-			virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end', behavior: 'smooth' });
-		scrollOnce();
-		// Virtuoso renders lazily — retry after content settles to ensure we reach true bottom
-		scrollTimersRef.current.forEach(clearTimeout);
-		scrollTimersRef.current = [setTimeout(scrollOnce, 150), setTimeout(scrollOnce, 400)];
+		virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end', behavior: 'auto' });
 	}, []);
 
 	return (
@@ -485,8 +505,9 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 						followOutput={handleFollowOutput}
 						atBottomStateChange={handleAtBottomStateChange}
 						atBottomThreshold={40}
-						defaultItemHeight={300}
-						increaseViewportBy={{ top: 400, bottom: 400 }}
+						defaultItemHeight={500}
+						increaseViewportBy={{ top: 800, bottom: 800 }}
+						restoreStateFrom={restoreState}
 						itemContent={renderItem}
 						components={virtuosoComponents}
 					/>
@@ -502,21 +523,18 @@ const ChatArea = React.memo<{ activeSessionId: string }>(({ activeSessionId }) =
 
 				{sections.length > 0 && isAtBottom && <SessionStatisticsPanel />}
 
-				{sections.length > 0 && (
+				{sections.length > 0 && showScrollToBottom && (
 					<button
 						type="button"
 						onClick={handleScrollToBottom}
 						aria-label="Scroll to bottom"
-						className="absolute bottom-2 left-1/2 z-10 flex items-center justify-center rounded-md cursor-pointer border-none transition-all duration-300 ease-out"
+						className="absolute bottom-2 left-1/2 z-10 flex items-center justify-center rounded-md cursor-pointer border-none -translate-x-1/2"
 						style={{
-							transform: 'translateX(-50%)',
 							width: 28,
 							height: 28,
 							backgroundColor: 'var(--vscode-editor-background)',
 							color: 'var(--vscode-foreground)',
 							boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
-							opacity: showScrollToBottom ? 1 : 0,
-							pointerEvents: showScrollToBottom ? 'auto' : 'none',
 						}}
 						title="Scroll to bottom"
 					>
@@ -610,18 +628,7 @@ export const App: React.FC = () => {
 			</div>
 
 			<div className="flex-1 min-h-0 relative">
-				<AnimatePresence mode="popLayout" initial={false}>
-					<motion.div
-						key={activeSessionId}
-						className="h-full"
-						initial={{ opacity: 0 }}
-						animate={{ opacity: 1 }}
-						exit={{ opacity: 0 }}
-						transition={{ duration: 0.15, ease: 'easeOut' }}
-					>
-						<ChatArea activeSessionId={activeSessionId} />
-					</motion.div>
-				</AnimatePresence>
+				<ChatArea key={activeSessionId} activeSessionId={activeSessionId} />
 			</div>
 
 			<div

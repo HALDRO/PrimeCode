@@ -48,10 +48,18 @@ const CharacterWaveText: React.FC<{ text: string; isRetrying?: boolean }> = ({
 	text,
 	isRetrying = false,
 }) => {
+	const chars = Array.from(text);
+	const charCount = chars.length;
+	// Scale animation duration based on text length so the wave traverses evenly.
+	// Each character gets a staggered delay; total duration = wave travel time + single char highlight time.
+	const perCharDelay = 70; // ms between each character's animation start
+	const highlightDuration = 600; // ms for a single character's highlight phase
+	const totalDuration = charCount * perCharDelay + highlightDuration;
+
 	const occurrenceByChar = new Map<string, number>();
 	return (
 		<>
-			{Array.from(text).map((char, index) => {
+			{chars.map((char, index) => {
 				const nextOccurrence = (occurrenceByChar.get(char) ?? 0) + 1;
 				occurrenceByChar.set(char, nextOccurrence);
 				return (
@@ -59,13 +67,14 @@ const CharacterWaveText: React.FC<{ text: string; isRetrying?: boolean }> = ({
 						key={`${char}-${nextOccurrence}`}
 						className={cn(
 							'relative inline-block whitespace-pre',
-							!isRetrying && 'animate-[statusCharWave_1.95s_ease-in-out_infinite]',
+							!isRetrying && 'animate-[statusCharWave_ease-in-out_infinite]',
 						)}
 						style={
 							isRetrying
 								? undefined
 								: {
-										animationDelay: `${index * 90}ms`,
+										animationDuration: `${totalDuration}ms`,
+										animationDelay: `${index * perCharDelay}ms`,
 										willChange: 'color, opacity, text-shadow',
 									}
 						}

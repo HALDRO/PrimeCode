@@ -726,9 +726,8 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 		const [manualExpanded, setManualExpanded] = useState<boolean | null>(null);
 		const [delayedStreamingPreviewVisible, setDelayedStreamingPreviewVisible] = useState(false);
 		const wasRunningRef = useRef(isRunning);
-		const shouldDelayStreamingPreview = isBash && isRunning && hasBody && !expanded;
-		const streamingPreviewVisible =
-			expanded || (isRunning && hasBody && !isBash) || delayedStreamingPreviewVisible;
+		const shouldDelayStreamingPreview = isRunning && hasBody && !expanded;
+		const streamingPreviewVisible = expanded || delayedStreamingPreviewVisible;
 
 		// Auto-scroll during streaming preview using the same MutationObserver approach
 		// as SimpleToolGroup and TaskCardItem — reliable across all overflow/animation modes.
@@ -877,7 +876,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 					: formatToolName(toolName);
 		// For MCP tools, show server name and tool name as secondary labels: "MCP · context7-mcp · resolve-library-id"
 		const mcpServerLabel = isMcp ? (mcpInfo?.server ?? '') : '';
-		const mcpToolLabel = isMcp ? (mcpInfo?.tool ?? toolName) : '';
+		const mcpToolLabel = isMcp ? formatToolName(mcpInfo?.tool ?? toolName) : '';
 		const displayLabel = isBash ? '' : isSummarize && isRunning ? `${label}...` : label;
 
 		const needsExpand = lineCount > 6;
@@ -966,7 +965,7 @@ export const ToolCardMessage: React.FC<ToolCardMessageProps> = React.memo(
 								className="bg-(--tool-bg-header)"
 								scrollRef={streamingScrollerRef}
 							>
-								<div className="p-(--tool-content-padding)">
+								<div className="p-(--tool-content-padding) overflow-x-auto">
 									<pre
 										className={cn(
 											'm-0 text-sm leading-(--line-height-code) whitespace-pre',

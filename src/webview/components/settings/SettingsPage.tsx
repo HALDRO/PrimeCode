@@ -9,7 +9,7 @@
  *              of OpenCode providers/available providers when switching to OpenCode CLI.
  */
 
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { TIMEOUTS } from '../../../common';
 import { PERMISSION_CATEGORIES } from '../../../common/permissions';
 import { SETTINGS_NAV_ITEMS, type SettingsTab } from '../../constants';
@@ -288,6 +288,16 @@ const PermissionsSettings: React.FC = () => {
 
 // Proxy Models Test & Selection component - MOVED TO ProviderManager.tsx
 
+const POPULAR_PROVIDER_IDS = new Set([
+	'opencode',
+	'anthropic',
+	'github-copilot',
+	'openai',
+	'google',
+	'openrouter',
+	'vercel',
+]);
+
 // Main settings tab
 const MainSettings: React.FC = () => {
 	useMainSettings();
@@ -336,19 +346,14 @@ const MainSettings: React.FC = () => {
 	// Show task-specific models when we have any models available
 	const hasAnyModels = hasEnabledProxyModels;
 
-	const popularProviderIds = new Set([
-		'opencode',
-		'anthropic',
-		'github-copilot',
-		'openai',
-		'google',
-		'openrouter',
-		'vercel',
-	]);
-
-	const availableForConnection = availableProviders
-		.filter(ap => !opencodeProviders.some(cp => cp.id === ap.id))
-		.filter(ap => !popularProviderIds.has(ap.id));
+	const availableForConnection = useMemo(
+		() =>
+			availableProviders
+				.filter(ap => !opencodeProviders.some(cp => cp.id === ap.id))
+				.filter(ap => !POPULAR_PROVIDER_IDS.has(ap.id))
+				.sort((a, b) => a.name.localeCompare(b.name)),
+		[availableProviders, opencodeProviders],
+	);
 
 	const handleConnectProvider = (providerId: string) => {
 		if (!apiKeyInput.trim()) return;

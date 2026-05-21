@@ -188,6 +188,7 @@ function ThumbUI({
 	orientation,
 	alwaysVisible,
 	thumbColor,
+	noHoverExpand,
 }: {
 	thumb: ReturnType<typeof useScrollThumb>;
 	thumbWidth: number;
@@ -195,13 +196,16 @@ function ThumbUI({
 	orientation: 'vertical' | 'horizontal';
 	alwaysVisible?: boolean;
 	thumbColor?: string;
+	noHoverExpand?: boolean;
 }) {
 	if (!thumb.thumbState.show) return null;
-	const activeWidth = alwaysVisible
-		? thumbWidth + 2
-		: thumb.hovered || thumb.dragging
+	const activeWidth = noHoverExpand
+		? thumbWidth
+		: alwaysVisible
 			? thumbWidth + 2
-			: thumbWidth;
+			: thumb.hovered || thumb.dragging
+				? thumbWidth + 2
+				: thumbWidth;
 	return (
 		<div
 			ref={thumb.trackRef}
@@ -244,7 +248,8 @@ function ThumbUI({
 				style={{
 					position: 'absolute',
 					right: orientation === 'horizontal' ? 'auto' : 1,
-					top: orientation === 'horizontal' ? 1 : thumb.thumbState.top,
+					top: orientation === 'horizontal' ? 'auto' : thumb.thumbState.top,
+					bottom: orientation === 'horizontal' ? 1 : 'auto',
 					left: orientation === 'horizontal' ? thumb.thumbState.top : 'auto',
 					width: orientation === 'horizontal' ? `${thumb.thumbState.height}px` : `${activeWidth}px`,
 					height:
@@ -315,6 +320,8 @@ interface ScrollContainerProps {
 	autoHideDelay?: number;
 	orientation?: 'vertical' | 'horizontal';
 	trackGutter?: number;
+	/** Disable thumb width expansion on hover. */
+	noHoverExpand?: boolean;
 }
 
 export const ScrollContainer = React.forwardRef<HTMLDivElement, ScrollContainerProps>(
@@ -329,6 +336,7 @@ export const ScrollContainer = React.forwardRef<HTMLDivElement, ScrollContainerP
 			autoHideDelay = 1200,
 			orientation = 'vertical',
 			trackGutter = 0,
+			noHoverExpand = false,
 		},
 		forwardedRef,
 	) => {
@@ -386,8 +394,10 @@ export const ScrollContainer = React.forwardRef<HTMLDivElement, ScrollContainerP
 				)}
 				style={{
 					boxSizing: 'border-box',
-					paddingBottom: orientation === 'horizontal' ? `${trackGutter}px` : undefined,
-					paddingRight: orientation === 'vertical' ? `${trackGutter}px` : undefined,
+					paddingBottom:
+						orientation === 'horizontal' && trackGutter > 0 ? `${trackGutter}px` : undefined,
+					paddingRight:
+						orientation === 'vertical' && trackGutter > 0 ? `${trackGutter}px` : undefined,
 					...style,
 				}}
 			>
@@ -409,6 +419,7 @@ export const ScrollContainer = React.forwardRef<HTMLDivElement, ScrollContainerP
 					thumbWidth={thumbWidth}
 					scrollerRef={scrollerRef}
 					orientation={orientation}
+					noHoverExpand={noHoverExpand}
 				/>
 			</div>
 		);

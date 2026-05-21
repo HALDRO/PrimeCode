@@ -37,6 +37,87 @@ interface TabInfo {
 	id: string;
 }
 
+/** Session tab — extracted outside Header to prevent remount on every Header render. */
+const SessionTab = React.memo<{
+	sessionId: string;
+	index: number;
+	activeSessionId: string | undefined;
+	onSwitch: (id: string) => void;
+	onClose: (id: string) => void;
+}>(({ sessionId, index, activeSessionId, onSwitch, onClose }) => {
+	const isProcessing = useChatStore((state: SessionStore) => isSessionProcessing(state, sessionId));
+	const isActive = sessionId === activeSessionId;
+	const [hasFinishedWhileInactive, setHasFinishedWhileInactive] = useState(false);
+	const prevProcessingRef = useRef(isProcessing);
+
+	useEffect(() => {
+		const wasProcessing = prevProcessingRef.current;
+		if (isProcessing) {
+			setHasFinishedWhileInactive(false);
+		}
+		if (wasProcessing && !isProcessing && !isActive) {
+			setHasFinishedWhileInactive(true);
+		}
+		prevProcessingRef.current = isProcessing;
+	}, [isProcessing, isActive]);
+
+	useEffect(() => {
+		if (isActive) {
+			setHasFinishedWhileInactive(false);
+		}
+	}, [isActive]);
+
+	const iconColor = hasFinishedWhileInactive
+		? 'text-success'
+		: isActive
+			? 'text-vscode-foreground'
+			: 'text-vscode-descriptionForeground';
+	const iconOpacity = isActive ? 'opacity-100' : 'opacity-60';
+	const showAnimation = isProcessing && !isActive;
+
+	return (
+		<div
+			data-session-id={sessionId}
+			onClick={() => onSwitch(sessionId)}
+			onMouseDown={e => {
+				if (e.button === 1) {
+					e.preventDefault();
+				}
+			}}
+			onAuxClick={e => {
+				if (e.button === 1) {
+					e.preventDefault();
+					onClose(sessionId);
+				}
+			}}
+			className={cn(
+				'group flex items-center h-(--tab-height) px-(--gap-2) gap-(--gap-1-5) rounded transition-all duration-150 cursor-pointer select-none border border-transparent',
+				isActive
+					? 'bg-(--alpha-10) text-vscode-foreground border-(--alpha-5)'
+					: 'text-vscode-descriptionForeground hover:bg-(--alpha-10) hover:text-vscode-foreground',
+			)}
+			title={`Chat ${index + 1}`}
+		>
+			<MessageIcon
+				size={16}
+				className={cn('shrink-0', iconColor, iconOpacity, showAnimation && 'header-tab-processing')}
+			/>
+			<span className="text-sm font-medium shrink-0">{index + 1}</span>
+			<button
+				type="button"
+				onClick={e => {
+					e.stopPropagation();
+					onClose(sessionId);
+				}}
+				className="opacity-0 group-hover:opacity-100 shrink-0 w-5 h-5 flex items-center justify-center rounded transition-opacity duration-150 hover:bg-(--alpha-20)"
+			>
+				<CloseIcon size={16} />
+			</button>
+		</div>
+	);
+});
+SessionTab.displayName = 'SessionTab';
+
 /** Connection status dropdown menu with actions — rendered via portal to escape stacking context. */
 const ConnectionStatusMenu: React.FC<{
 	serverStatus: 'connected' | 'disconnected' | 'error';
@@ -276,7 +357,7 @@ export const Header: React.FC = React.memo(() => {
 		updateOverflowState();
 
 		const resizeObserver = new ResizeObserver(() => {
-			updateOverflowState();
+			requestAnimationFrame(updateOverflowState);
 		});
 		resizeObserver.observe(scroller);
 
@@ -329,86 +410,6 @@ export const Header: React.FC = React.memo(() => {
 		setShowStatusMenu(false);
 	}, []);
 
-	const SessionTab: React.FC<{ sessionId: string; index: number }> = ({ sessionId, index }) => {
-		const isProcessing = useChatStore((state: SessionStore) =>
-			isSessionProcessing(state, sessionId),
-		);
-		const isActive = sessionId === activeSessionId;
-		const [hasFinishedWhileInactive, setHasFinishedWhileInactive] = useState(false);
-		const prevProcessingRef = useRef(isProcessing);
-
-		useEffect(() => {
-			const wasProcessing = prevProcessingRef.current;
-			if (isProcessing) {
-				setHasFinishedWhileInactive(false);
-			}
-			if (wasProcessing && !isProcessing && !isActive) {
-				setHasFinishedWhileInactive(true);
-			}
-			prevProcessingRef.current = isProcessing;
-		}, [isProcessing, isActive]);
-
-		useEffect(() => {
-			if (isActive) {
-				setHasFinishedWhileInactive(false);
-			}
-		}, [isActive]);
-
-		const iconColor = hasFinishedWhileInactive
-			? 'text-success'
-			: isActive
-				? 'text-vscode-foreground'
-				: 'text-vscode-descriptionForeground';
-		const iconOpacity = isActive ? 'opacity-100' : 'opacity-60';
-		const showAnimation = isProcessing && !isActive;
-
-		return (
-			<div
-				data-session-id={sessionId}
-				onClick={() => handleSwitchSession(sessionId)}
-				onMouseDown={e => {
-					if (e.button === 1) {
-						e.preventDefault();
-					}
-				}}
-				onAuxClick={e => {
-					if (e.button === 1) {
-						e.preventDefault();
-						handleCloseSession(sessionId);
-					}
-				}}
-				className={cn(
-					'group flex items-center h-(--tab-height) px-(--gap-2) gap-(--gap-1-5) rounded transition-all duration-150 cursor-pointer select-none border border-transparent',
-					isActive
-						? 'bg-(--alpha-10) text-vscode-foreground border-(--alpha-5)'
-						: 'text-vscode-descriptionForeground hover:bg-(--alpha-10) hover:text-vscode-foreground',
-				)}
-				title={`Chat ${index + 1}`}
-			>
-				<MessageIcon
-					size={16}
-					className={cn(
-						'shrink-0',
-						iconColor,
-						iconOpacity,
-						showAnimation && 'header-tab-processing',
-					)}
-				/>
-				<span className="text-sm font-medium shrink-0">{index + 1}</span>
-				<button
-					type="button"
-					onClick={e => {
-						e.stopPropagation();
-						handleCloseSession(sessionId);
-					}}
-					className="opacity-0 group-hover:opacity-100 shrink-0 w-5 h-5 flex items-center justify-center rounded transition-opacity duration-150 hover:bg-(--alpha-20)"
-				>
-					<CloseIcon size={16} />
-				</button>
-			</div>
-		);
-	};
-
 	return (
 		<>
 			<style>{`@keyframes headerTabProcessing {
@@ -426,11 +427,19 @@ export const Header: React.FC = React.memo(() => {
 						thumbWidth={4}
 						trackGutter={tabsOverflowing ? 8 : 0}
 						autoHideDelay={800}
+						noHoverExpand
 						className="h-full"
 					>
 						<div className="flex items-center h-full max-w-full min-w-fit gap-(--gap-0-5)">
 							{sessions.map((session, index) => (
-								<SessionTab key={session.id} sessionId={session.id} index={index} />
+								<SessionTab
+									key={session.id}
+									sessionId={session.id}
+									index={index}
+									activeSessionId={activeSessionId}
+									onSwitch={handleSwitchSession}
+									onClose={handleCloseSession}
+								/>
 							))}
 						</div>
 					</ScrollContainer>

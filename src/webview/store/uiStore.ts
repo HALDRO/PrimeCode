@@ -8,6 +8,9 @@
 import { create } from 'zustand';
 import type { ConversationIndexEntry, ExtensionMessage, WorkspaceFile } from '../../common';
 import { generateId } from '../../common';
+import { webviewLogger } from '../utils/logger';
+
+const log = webviewLogger.forComponent('UIStore');
 
 // Re-export types from chatStore for backward compatibility
 export type { ChangedFile } from './chatStore';
@@ -209,6 +212,15 @@ export const useUIStore = create<UIState>((set, get) => ({
 			// Protocol-provided severity takes precedence over inference
 			const severity =
 				notification.severity ?? inferSeverity(notification.type, notification.content);
+
+			// Forward notification to VS Code Output channel
+			const logFn = notification.type === 'error' ? log.error : log.warn;
+			logFn('Notification', {
+				type: notification.type,
+				content: notification.content,
+				sessionId: notification.sessionId,
+				reason: notification.reason,
+			});
 			set(state => {
 				// Deduplicate within the same session/global scope only.
 				const existingIdx = state.notifications.findIndex(
@@ -218,16 +230,18 @@ export const useUIStore = create<UIState>((set, get) => ({
 						n.sessionId === notification.sessionId,
 				);
 				if (existingIdx !== -1) {
-					const updated = [...state.notifications];
-					updated[existingIdx] = {
-						...updated[existingIdx],
-						count: updated[existingIdx].count + 1,
+					const target = state.notifications[existingIdx];
+					const updatedItem = {
+						...target,
+						count: target.count + 1,
 						createdAt,
 						timestamp: notification.timestamp,
-						errorCode: notification.errorCode ?? updated[existingIdx].errorCode,
-						sessionId: notification.sessionId ?? updated[existingIdx].sessionId,
+						errorCode: notification.errorCode ?? target.errorCode,
+						sessionId: notification.sessionId ?? target.sessionId,
 					};
-					return { notifications: updated };
+					// Move repeated notification to top so it's visible to the user
+					const filtered = state.notifications.filter((_, idx) => idx !== existingIdx);
+					return { notifications: [updatedItem, ...filtered] };
 				}
 
 				return {

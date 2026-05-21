@@ -149,7 +149,7 @@ export const getMcpToolDisplayInfo = (
 
 export const TOOL_CARD_PREVIEW_MAX_HEIGHT = 120;
 
-export const TOOL_CARD_PREVIEW_SHOW_DELAY_MS = 500;
+export const TOOL_CARD_PREVIEW_SHOW_DELAY_MS = 700;
 
 export const STREAM_PREVIEW_MAX_HEIGHT = TOOL_CARD_PREVIEW_MAX_HEIGHT;
 

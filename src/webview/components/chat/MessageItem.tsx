@@ -9,7 +9,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { extractCanonicalTaskResult } from '../../../common';
-import { STREAM_PREVIEW_MAX_HEIGHT, TOOL_CARD_EXPANDED_MAX_HEIGHT_PX } from '../../constants';
+import { getMcpToolDisplayInfo, TOOL_CARD_EXPANDED_MAX_HEIGHT_PX } from '../../constants';
 import { useContainerAutoScroll } from '../../hooks/useContainerAutoScroll';
 import { cn } from '../../lib/cn';
 import {
@@ -448,7 +448,7 @@ const TaskCardItem = React.memo<{
 						>
 							<div
 								ref={bodyRef}
-								className="px-(--tool-content-padding) py-2 relative overflow-x-hidden overflow-y-auto"
+								className="px-(--tool-content-padding) py-2 relative overflow-x-hidden overflow-y-auto overscroll-contain"
 								style={{ scrollbarWidth: 'none' }}
 							>
 								{metaBlock}
@@ -528,6 +528,8 @@ const SimpleToolGroup = React.memo<{
 	sessionId: string;
 }>(({ messages, shouldCollapse, sessionId }) => {
 	const isLive = (messages as ToolGroup).isLive ?? false;
+	const mcpServers = useMcpServers();
+	const mcpServerNames = useMemo(() => Object.keys(mcpServers || {}), [mcpServers]);
 	const toolUseMessages = useMemo(
 		() => messages.filter((m): m is RenderToolUseMessage => m.kind === 'tool_use'),
 		[messages],
@@ -538,8 +540,11 @@ const SimpleToolGroup = React.memo<{
 		const order: string[] = [];
 
 		for (const msg of toolUseMessages) {
-			let name = formatToolName(msg.toolName || 'Tool');
+			// For MCP tools, strip the server prefix to avoid duplication (e.g. "codegraph_context" → "Context")
+			const mcpInfo = getMcpToolDisplayInfo(msg.toolName, mcpServerNames);
+			let name = formatToolName(mcpInfo?.tool ?? (msg.toolName || 'Tool'));
 			if ((msg.toolName || '').toLowerCase() === 'skill') {
+				// Read parts snapshot without reactive subscription to avoid re-renders on every streaming token
 				const partsByMessageId = useChatStore.getState().parts;
 				let skillName: string | undefined;
 				for (const messageParts of Object.values(partsByMessageId)) {
@@ -571,7 +576,7 @@ const SimpleToolGroup = React.memo<{
 		}
 
 		return order.map(name => `${name} x${counts.get(name) ?? 0}`).join(', ');
-	}, [toolUseMessages]);
+	}, [toolUseMessages, mcpServerNames]);
 
 	/** Ordered list of renderable items: tool_use, task_result, and bridge messages (assistant/thinking) */
 	const renderItems = useMemo(
@@ -610,14 +615,6 @@ const SimpleToolGroup = React.memo<{
 		prevIsLiveRef.current = isLive;
 	}, [isLive, manualExpanded]);
 
-	// Unified auto-scroll with detach support (mirrors main session behavior)
-	const {
-		scrollerRef: bodyRef,
-		scrollerObjectRef: bodyObjectRef2,
-		showScrollToBottom: showToolGroupScrollBtn,
-		scrollToBottom: toolGroupScrollToBottom,
-	} = useContainerAutoScroll({ active: isLive });
-
 	if (toolUseMessages.length === 0) return null;
 
 	return (
@@ -627,7 +624,7 @@ const SimpleToolGroup = React.memo<{
 			meta={toolCountsLabel}
 			expanded={expanded}
 			onToggle={() => setManualExpanded(prev => !(prev ?? autoExpanded))}
-			showCollapseOverlay
+			maxExpandedHeight="none"
 			contentClassName="pl-0 ml-0 border-none mt-1 py-0 overflow-x-visible"
 			rightContent={
 				<ChevronDownIcon
@@ -638,20 +635,7 @@ const SimpleToolGroup = React.memo<{
 			className="mb-(--tool-block-margin)"
 		>
 			<div className="relative">
-				<div
-					ref={bodyRef}
-					className="pl-2 border-l border-(--border-subtle)"
-					style={
-						isLive
-							? {
-									maxHeight: STREAM_PREVIEW_MAX_HEIGHT,
-									overflowX: 'hidden',
-									overflowY: 'auto',
-									scrollbarWidth: 'none' as const,
-								}
-							: undefined
-					}
-				>
+				<div className="pl-2 border-l border-(--border-subtle)">
 					{renderItems.map((msg, idx) => {
 						const previousMsg = idx > 0 ? renderItems[idx - 1] : undefined;
 						if (msg.kind === 'task_result') {
@@ -689,22 +673,6 @@ const SimpleToolGroup = React.memo<{
 						return <ToolCardMessage key={toolMsg.id} toolUse={toolMsg} sessionId={sessionId} />;
 					})}
 				</div>
-				{isLive && (
-					<>
-						<ScrollThumb scrollerRef={bodyObjectRef2} autoHideDelay={800} />
-						{showToolGroupScrollBtn && (
-							<button
-								type="button"
-								onClick={toolGroupScrollToBottom}
-								aria-label="Scroll to bottom"
-								className={SCROLL_TO_BOTTOM_BUTTON_CLASS_NAME}
-								title="Scroll to bottom"
-							>
-								<ChevronDownIcon size={10} />
-							</button>
-						)}
-					</>
-				)}
 			</div>
 		</SimpleTool>
 	);
