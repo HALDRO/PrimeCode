@@ -28,6 +28,20 @@ const CLI_COMMANDS_UI_BLOCKLIST = new Set([
 	'unshare',
 ]);
 
+/**
+ * Built-in session commands that are not part of the runtime command.list API
+ * but are handled directly by the extension (ChatProvider).
+ */
+const SESSION_COMMANDS: CommandItem[] = [
+	{
+		id: 'compact',
+		name: 'compact',
+		description: 'Summarize conversation to reduce context size',
+		type: 'cli' as const,
+		source: 'command',
+	},
+];
+
 const getTypeLabel = (type: string, source?: string) => {
 	switch (type) {
 		case 'cli':
@@ -88,15 +102,18 @@ export const SlashCommandsDropdown: React.FC<SlashCommandsDropdownProps> = ({
 				prompt: `@${agent.name}`,
 			}));
 
-		const runtimeCommands: CommandItem[] = commandResources
-			.filter(command => !CLI_COMMANDS_UI_BLOCKLIST.has(command.name))
-			.map(command => ({
-				id: command.name,
-				name: command.name,
-				description: command.description ?? '',
-				type: 'cli' as const,
-				source: command.source,
-			}));
+		const runtimeCommands: CommandItem[] = [
+			...SESSION_COMMANDS,
+			...commandResources
+				.filter(command => !CLI_COMMANDS_UI_BLOCKLIST.has(command.name))
+				.map(command => ({
+					id: command.name,
+					name: command.name,
+					description: command.description ?? '',
+					type: 'cli' as const,
+					source: command.source,
+				})),
+		];
 
 		return [
 			{ title: 'CLI', items: runtimeCommands },
