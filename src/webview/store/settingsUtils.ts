@@ -71,17 +71,6 @@ export const handleSettingsData = (
 				} satisfies ProxyEndpointState;
 			});
 	}
-	if (settings['proxy.useSingleModel'] !== undefined)
-		mappedSettings.proxyUseSingleModel = settings['proxy.useSingleModel'];
-	if (settings['proxy.haikuModel'] !== undefined)
-		mappedSettings.proxyHaikuModel = settings['proxy.haikuModel'];
-	if (settings['proxy.sonnetModel'] !== undefined)
-		mappedSettings.proxySonnetModel = settings['proxy.sonnetModel'];
-	if (settings['proxy.opusModel'] !== undefined)
-		mappedSettings.proxyOpusModel = settings['proxy.opusModel'];
-	if (settings['proxy.subagentModel'] !== undefined)
-		mappedSettings.proxySubagentModel = settings['proxy.subagentModel'];
-
 	if (settings['promptImprove.model'] !== undefined)
 		mappedSettings.promptImproveModel = settings['promptImprove.model'];
 	if (settings['promptImprove.template'] !== undefined)
@@ -94,6 +83,14 @@ export const handleSettingsData = (
 	}
 	if (settings['opencode.providerModelVisibility'] !== undefined) {
 		mappedSettings.providerModelVisibility = settings['opencode.providerModelVisibility'];
+	}
+
+	// Model preferences from primecode.json
+	if (settings.lastSelectedModel !== undefined) {
+		mappedSettings.lastSelectedModel = settings.lastSelectedModel;
+	}
+	if (settings.modelVariants !== undefined) {
+		mappedSettings.modelVariants = settings.modelVariants;
 	}
 
 	actions.setSettings(mappedSettings);

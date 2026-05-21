@@ -11,7 +11,6 @@ export interface CLIConfig {
 	/** Optional stable message ID for OpenCode prompts (used for edit/revert flows). */
 	messageID?: string;
 	workspaceRoot: string;
-	yoloMode?: boolean;
 	agent?: string;
 	/** Thinking effort variant (e.g. 'high', 'max', 'low'). Sent to CLI as-is. */
 	variant?: string;

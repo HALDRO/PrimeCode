@@ -12,6 +12,7 @@ import type {
 	WebviewCommand,
 } from '../../common/protocol';
 import type { ParsedCommand, ParsedSkill } from '../../common/schemas';
+import { updateConfig } from '../../core/executor/primecodeConfig';
 import type { PrimeCodeSettings } from '../../core/Settings';
 import type { RulesService } from '../../services/RulesService';
 import { parseFrontmatter, stringifyFrontmatter } from '../../utils/frontmatter';
@@ -299,21 +300,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 	private async applyWebviewSettingsPatch(patch: Record<string, unknown>): Promise<void> {
 		const booleanKeys = new Set<keyof PrimeCodeSettings>([
 			'access.autoApprove',
-			'proxy.useSingleModel',
 			'opencode.autoStart',
-		]);
-		const nullableStringKeys = new Set<keyof PrimeCodeSettings>([
-			'proxy.haikuModel',
-			'proxy.sonnetModel',
-			'proxy.opusModel',
-			'proxy.subagentModel',
-			'opencode.agent',
-			'promptImprove.model',
-			'promptImprove.template',
-		]);
-		const stringArrayKeys = new Set<keyof PrimeCodeSettings>([
-			'opencode.enabledModels',
-			'providers.disabled',
 		]);
 
 		const isValidProxyEndpointList = (
@@ -336,18 +323,53 @@ export class SettingsHandler implements WebviewMessageHandler {
 				);
 			});
 
+		// Accumulate model changes for a single batched disk write
+		const modelPatch: Parameters<typeof updateConfig>[0]['models'] & object = {};
+		let hasModelUpdates = false;
+
+		// Accumulate app settings for a single batched disk write
+		const appPatch: Partial<import('../../core/executor/primecodeConfig').AppSettings> = {};
+		let hasAppUpdates = false;
+
 		for (const [rawKey, value] of Object.entries(patch)) {
 			if (rawKey === 'model') {
 				logger.debug('[SettingsHandler] Ignored settings patch for opencode project model');
 				continue;
 			}
 
-			if (rawKey === 'opencode.providerModelVisibility') {
-				if (value && typeof value === 'object' && !Array.isArray(value)) {
-					await this.context.settings.set('opencode.providerModelVisibility', value);
+			// ─── Model-related keys → batched primecodeConfig update ─────────
+			if (rawKey === 'lastSelectedModel') {
+				if (typeof value === 'string') {
+					modelPatch.lastSelected = value;
+					hasModelUpdates = true;
 				}
 				continue;
 			}
+
+			if (rawKey === 'modelVariants') {
+				if (value && typeof value === 'object' && !Array.isArray(value)) {
+					modelPatch.modelVariants = value as Record<string, string | undefined>;
+					hasModelUpdates = true;
+				}
+				continue;
+			}
+
+			if (rawKey === 'opencode.providerModelVisibility') {
+				if (value && typeof value === 'object' && !Array.isArray(value)) {
+					modelPatch.providerModelVisibility = value as Record<string, boolean | undefined>;
+					hasModelUpdates = true;
+				}
+				continue;
+			}
+
+			if (rawKey === 'opencode.enabledModels') {
+				if (Array.isArray(value) && value.every(item => typeof item === 'string')) {
+					modelPatch.enabledModels = value;
+					hasModelUpdates = true;
+				}
+				continue;
+			}
+			// ─── End model-related keys ──────────────────────────────────────
 
 			if (rawKey === 'provider') {
 				if (value === 'opencode') {
@@ -363,12 +385,41 @@ export class SettingsHandler implements WebviewMessageHandler {
 				continue;
 			}
 
+			// ─── App settings → batched primecodeConfig update ─────────────
 			if (rawKey === 'proxy.endpoints') {
 				if (isValidProxyEndpointList(value)) {
-					await this.context.settings.set('proxy.endpoints', value);
+					appPatch.proxyEndpoints = value;
+					hasAppUpdates = true;
 				}
 				continue;
 			}
+
+			if (rawKey === 'providers.disabled') {
+				if (Array.isArray(value) && value.every(item => typeof item === 'string')) {
+					appPatch.providersDisabled = value;
+					hasAppUpdates = true;
+				}
+				continue;
+			}
+
+			if (rawKey === 'promptImprove.model') {
+				appPatch.promptImproveModel = typeof value === 'string' ? value : '';
+				hasAppUpdates = true;
+				continue;
+			}
+
+			if (rawKey === 'promptImprove.template') {
+				appPatch.promptImproveTemplate = typeof value === 'string' ? value : '';
+				hasAppUpdates = true;
+				continue;
+			}
+
+			if (rawKey === 'opencode.agent') {
+				appPatch.opencodeAgent = typeof value === 'string' ? value : '';
+				hasAppUpdates = true;
+				continue;
+			}
+			// ─── End app settings ────────────────────────────────────────────
 
 			if (rawKey === 'opencode.serverTimeout') {
 				if (typeof value === 'number' && Number.isFinite(value)) {
@@ -383,23 +434,15 @@ export class SettingsHandler implements WebviewMessageHandler {
 				if (typeof value === 'boolean') {
 					await this.context.settings.set(key, value);
 				}
-				continue;
 			}
+		}
 
-			if (nullableStringKeys.has(key)) {
-				if (typeof value === 'string') {
-					await this.context.settings.set(key, value);
-				} else if (value === null || value === undefined) {
-					await this.context.settings.set(key, undefined);
-				}
-				continue;
-			}
-
-			if (stringArrayKeys.has(key)) {
-				if (Array.isArray(value) && value.every(item => typeof item === 'string')) {
-					await this.context.settings.set(key, value);
-				}
-			}
+		// Single batched disk write for all primecode.json changes
+		if (hasModelUpdates || hasAppUpdates) {
+			updateConfig({
+				...(hasModelUpdates ? { models: modelPatch } : {}),
+				...(hasAppUpdates ? { app: appPatch } : {}),
+			});
 		}
 	}
 

@@ -392,7 +392,14 @@ describe('ToolHandler', () => {
 			const replyMock = vi.fn().mockResolvedValue({});
 			const listMock = vi.fn().mockResolvedValue({
 				data: [
-					{ id: 'perm-1', sessionID: 'sess-1', permission: 'edit', patterns: [], metadata: {}, always: [] },
+					{
+						id: 'perm-1',
+						sessionID: 'sess-1',
+						permission: 'edit',
+						patterns: [],
+						metadata: {},
+						always: [],
+					},
 				],
 			});
 			const ctx = createMockHandlerContext({
@@ -418,7 +425,14 @@ describe('ToolHandler', () => {
 			const replyMock = vi.fn().mockResolvedValue({});
 			const listMock = vi.fn().mockResolvedValue({
 				data: [
-					{ id: 'perm-2', sessionID: 'sess-2', permission: 'bash', patterns: [], metadata: {}, always: [] },
+					{
+						id: 'perm-2',
+						sessionID: 'sess-2',
+						permission: 'bash',
+						patterns: [],
+						metadata: {},
+						always: [],
+					},
 				],
 			});
 			const ctx = createMockHandlerContext({
@@ -447,7 +461,14 @@ describe('ToolHandler', () => {
 			const replyMock = vi.fn().mockResolvedValue({});
 			const listMock = vi.fn().mockResolvedValue({
 				data: [
-					{ id: 'perm-3', sessionID: 'sess-3', permission: 'write', patterns: [], metadata: {}, always: [] },
+					{
+						id: 'perm-3',
+						sessionID: 'sess-3',
+						permission: 'write',
+						patterns: [],
+						metadata: {},
+						always: [],
+					},
 				],
 			});
 			const ctx = createMockHandlerContext({
@@ -474,7 +495,14 @@ describe('ToolHandler', () => {
 			const replyMock = vi.fn().mockResolvedValue({});
 			const listMock = vi.fn().mockResolvedValue({
 				data: [
-					{ id: 'perm-4', sessionID: 'sess-4', permission: 'bash', patterns: [], metadata: {}, always: [] },
+					{
+						id: 'perm-4',
+						sessionID: 'sess-4',
+						permission: 'bash',
+						patterns: [],
+						metadata: {},
+						always: [],
+					},
 				],
 			});
 			const ctx = createMockHandlerContext({
@@ -508,8 +536,22 @@ describe('ToolHandler', () => {
 			const replyMock = vi.fn().mockResolvedValue({});
 			const listMock = vi.fn().mockResolvedValue({
 				data: [
-					{ id: 'perm-a', sessionID: 'sess-a', permission: 'edit', patterns: [], metadata: {}, always: [] },
-					{ id: 'perm-b', sessionID: 'sess-b', permission: 'edit', patterns: [], metadata: {}, always: [] },
+					{
+						id: 'perm-a',
+						sessionID: 'sess-a',
+						permission: 'edit',
+						patterns: [],
+						metadata: {},
+						always: [],
+					},
+					{
+						id: 'perm-b',
+						sessionID: 'sess-b',
+						permission: 'edit',
+						patterns: [],
+						metadata: {},
+						always: [],
+					},
 				],
 			});
 			const ctx = createMockHandlerContext({

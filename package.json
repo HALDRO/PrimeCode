@@ -285,17 +285,6 @@
 		"configuration": {
 			"title": "PrimeCode",
 			"properties": {
-				"primeCode.provider": {
-					"type": "string",
-					"enum": [
-						"opencode"
-					],
-					"default": "opencode",
-					"description": "CLI provider used by PrimeCode.",
-					"enumDescriptions": [
-						"OpenCode CLI - open source AI coding assistant with multi-agent support"
-					]
-				},
 				"primeCode.opencode.autoStart": {
 					"type": "boolean",
 					"default": true,
@@ -311,136 +300,10 @@
 					"default": "",
 					"description": "URL of an existing OpenCode server to connect to (e.g. http://127.0.0.1:3000). If set, the extension will not start a new server."
 				},
-				"primeCode.opencode.agent": {
-					"type": "string",
-					"default": "",
-					"description": "Default agent to use with OpenCode (leave empty for default agent). Available agents depend on your OpenCode configuration."
-				},
-				"primeCode.opencode.enabledModels": {
-					"type": "array",
-					"items": {
-						"type": "string"
-					},
-					"default": [],
-					"description": "List of enabled OpenCode model IDs (format: providerId/modelId) for selection in chat"
-				},
-				"primeCode.opencode.providerModelVisibility": {
-					"type": "object",
-					"default": {},
-					"description": "Provider visibility state for model dropdown. Keys are provider/endpoint IDs, values are booleans. Synced across VS Code windows."
-				},
-				"primeCode.providers.disabled": {
-					"type": "array",
-					"items": {
-						"type": "string"
-					},
-					"default": [],
-					"description": "List of provider IDs that are hidden from the model dropdown (but keep their model selection). Works for all providers including oai."
-				},
 				"primeCode.access.autoApprove": {
 					"type": "boolean",
 					"default": false,
 					"description": "Automatically approve all file edit and creation requests without showing permission dialogs."
-				},
-				"primeCode.access.yoloMode": {
-					"type": "boolean",
-					"default": false,
-					"description": "Enable Yolo Mode to skip all access checks. Use with caution as OpenCode can execute any command without asking."
-				},
-				"primeCode.proxy.baseUrl": {
-					"type": "string",
-					"default": "http://localhost:11434",
-					"description": "Base URL of the OpenAI-compatible proxy server"
-				},
-				"primeCode.proxy.apiKey": {
-					"type": "string",
-					"default": "",
-					"description": "API key for the proxy server (leave empty if not required)"
-				},
-				"primeCode.proxy.enabledModels": {
-					"type": "array",
-					"items": {
-						"type": "string"
-					},
-					"default": [],
-					"description": "List of enabled model IDs from the proxy server"
-				},
-				"primeCode.proxy.endpoints": {
-					"type": "array",
-					"items": {
-						"type": "object",
-						"properties": {
-							"id": {
-								"type": "string"
-							},
-							"name": {
-								"type": "string"
-							},
-							"baseUrl": {
-								"type": "string"
-							},
-							"apiKey": {
-								"type": "string"
-							},
-							"enabledModels": {
-								"type": "array",
-								"items": {
-									"type": "string"
-								}
-							},
-							"headers": {
-								"type": "object",
-								"additionalProperties": {
-									"type": "string"
-								}
-							}
-						},
-						"required": [
-							"id",
-							"name",
-							"baseUrl",
-							"apiKey",
-							"enabledModels"
-						]
-					},
-					"default": [],
-					"description": "Additional custom OpenAI-compatible endpoints"
-				},
-				"primeCode.proxy.useSingleModel": {
-					"type": "boolean",
-					"default": true,
-					"description": "Use only the main selected model for all tasks. When disabled, you can configure separate models for Haiku/Sonnet/Opus task types."
-				},
-				"primeCode.proxy.haikuModel": {
-					"type": "string",
-					"default": "",
-					"description": "Model for fast/simple tasks (Explore agent, quick checks). Leave empty to use main model."
-				},
-				"primeCode.proxy.sonnetModel": {
-					"type": "string",
-					"default": "",
-					"description": "Model for standard tasks. Leave empty to use main model."
-				},
-				"primeCode.proxy.opusModel": {
-					"type": "string",
-					"default": "",
-					"description": "Model for complex tasks (plan mode). Leave empty to use main model."
-				},
-				"primeCode.proxy.subagentModel": {
-					"type": "string",
-					"default": "",
-					"description": "Model for subagents (Explore, etc.). Leave empty to use main model."
-				},
-				"primeCode.promptImprove.model": {
-					"type": "string",
-					"default": "",
-					"description": "Model for Prompt Improver. Leave empty to use main model."
-				},
-				"primeCode.promptImprove.template": {
-					"type": "string",
-					"editPresentation": "multilineText",
-					"default": "",
-					"description": "System prompt template for Prompt Improver."
 				}
 			}
 		}

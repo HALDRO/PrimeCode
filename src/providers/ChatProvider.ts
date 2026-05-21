@@ -4,6 +4,7 @@ import { generateId, parseModelId } from '../common';
 import { policiesToServerFormat } from '../common/permissions.js';
 import type { SendMessageAttachments, WebviewCommand } from '../common/protocol';
 import { OpenCodeExecutor } from '../core/executor/OpenCode';
+import { CONFIG_PATH, invalidateConfigCache } from '../core/executor/primecodeConfig';
 import { buildPromptParts } from '../core/promptParts';
 import type { ServiceRegistry } from '../core/ServiceRegistry';
 import { Settings } from '../core/Settings';
@@ -78,7 +79,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		private services: ServiceRegistry,
 	) {
 		this.settings = new Settings();
-		this.cli = new OpenCodeExecutor(this.context);
+		this.cli = new OpenCodeExecutor();
 
 		// Initialize Handlers — single shared context
 		const baseContext = {
@@ -144,6 +145,22 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				if (e.affectsConfiguration('primeCode')) {
 					this.handleSettingsChange();
 				}
+			}),
+		);
+
+		// Watch primecode.json for cross-window sync
+		const configDir = vscode.Uri.file(CONFIG_PATH).fsPath;
+		const configWatcher = vscode.workspace.createFileSystemWatcher(
+			new vscode.RelativePattern(
+				configDir.slice(0, configDir.lastIndexOf(require('node:path').sep)),
+				require('node:path').basename(CONFIG_PATH),
+			),
+		);
+		this.disposables.push(configWatcher);
+		this.disposables.push(
+			configWatcher.onDidChange(() => {
+				invalidateConfigCache();
+				this.handleSettingsChange();
 			}),
 		);
 
@@ -1038,7 +1055,19 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				attempt: consecutiveFailures,
 				backoff,
 			});
-			await new Promise(resolve => setTimeout(resolve, backoff));
+			// Abortable sleep — instantly resolves on signal abort, preventing leaked timers
+			await new Promise<void>(resolve => {
+				if (signal.aborted) return resolve();
+				const timer = setTimeout(() => {
+					signal.removeEventListener('abort', onAbort);
+					resolve();
+				}, backoff);
+				const onAbort = () => {
+					clearTimeout(timer);
+					resolve();
+				};
+				signal.addEventListener('abort', onAbort);
+			});
 		}
 	}
 

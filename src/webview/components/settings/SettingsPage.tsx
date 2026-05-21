@@ -26,15 +26,7 @@ import {
 	ShieldIcon,
 	SparklesIcon,
 } from '../icons';
-import {
-	Button,
-	IconButton,
-	ScrollContainer,
-	SegmentedControl,
-	Select,
-	Switch,
-	Tooltip,
-} from '../ui';
+import { Button, IconButton, ScrollContainer, SegmentedControl, Tooltip } from '../ui';
 import { McpSettingsPanel } from './McpSettingsPanel';
 import { PromptImproverSettings } from './PromptImproverSettings';
 import { AddProviderSection, ProviderManager } from './ProviderManager';
@@ -345,50 +337,10 @@ const POPULAR_PROVIDER_IDS = new Set([
 // Main settings tab
 const MainSettings: React.FC = () => {
 	useMainSettings();
-	const {
-		opencodeProviders,
-		availableProviders,
-		providerAuthState,
-		proxyUseSingleModel,
-		proxyHaikuModel,
-		proxySonnetModel,
-		proxyOpusModel,
-		proxySubagentModel,
-		proxyEndpoints,
-	} = useSettingsStore();
-	const { setSettings } = useSettingsActions();
+	const { opencodeProviders, availableProviders, providerAuthState } = useSettingsStore();
 	const { postMessage } = useVSCode();
 	const [selectedNewProvider, setSelectedNewProvider] = useState('');
 	const [apiKeyInput, setApiKeyInput] = useState('');
-
-	// Save task-specific model settings
-	const saveTaskModels = (key: string, value: string) => {
-		setSettings({ [key]: value } as Record<string, string>);
-		postMessage({
-			type: 'updateSettings',
-			settings: {
-				[`proxy.${key.replace('proxy', '').charAt(0).toLowerCase()}${key.replace('proxy', '').slice(1)}`]:
-					value,
-			},
-		});
-	};
-
-	// Check if any proxy endpoint has enabled models
-	const hasEnabledProxyModels = proxyEndpoints.some(ep => ep.enabledModels.length > 0);
-
-	// Build model options for Select component from all proxy endpoints
-	const modelOptions = [
-		{ value: '', label: 'Use main model' },
-		...proxyEndpoints.flatMap(ep =>
-			ep.enabledModels.map(id => {
-				const model = ep.models.find(m => m.id === id);
-				return { value: id, label: model?.name || id };
-			}),
-		),
-	];
-
-	// Show task-specific models when we have any models available
-	const hasAnyModels = hasEnabledProxyModels;
 
 	const availableForConnection = useMemo(
 		() =>
@@ -435,67 +387,6 @@ const MainSettings: React.FC = () => {
 			<OpenCodeProvidersSection />
 
 			<PromptImproverSettings />
-
-			{/* Task-Specific Models - disabled, OpenCode handles model selection */}
-			{false && hasAnyModels && (
-				<>
-					<GroupTitle>Task-Specific Models</GroupTitle>
-					<SettingsGroup>
-						<SettingRow
-							title="Use Single Model"
-							tooltip="When enabled, only the main selected model is used for all tasks. Disable to configure separate models for different task types."
-							last={proxyUseSingleModel}
-						>
-							<Switch
-								checked={proxyUseSingleModel}
-								onChange={() => {
-									const newValue = !proxyUseSingleModel;
-									setSettings({ proxyUseSingleModel: newValue });
-									postMessage({
-										type: 'updateSettings',
-										settings: { 'proxy.useSingleModel': newValue },
-									});
-								}}
-							/>
-						</SettingRow>
-						{!proxyUseSingleModel && (
-							<>
-								<SettingRow title="Haiku (Fast)" tooltip="Model for quick tasks like Explore agent">
-									<Select
-										value={proxyHaikuModel}
-										onChange={e => saveTaskModels('proxyHaikuModel', e.target.value)}
-										options={modelOptions}
-									/>
-								</SettingRow>
-								<SettingRow title="Sonnet (Standard)" tooltip="Model for standard coding tasks">
-									<Select
-										value={proxySonnetModel}
-										onChange={e => saveTaskModels('proxySonnetModel', e.target.value)}
-										options={modelOptions}
-									/>
-								</SettingRow>
-								<SettingRow
-									title="Opus (Complex)"
-									tooltip="Model for plan mode and complex analysis"
-								>
-									<Select
-										value={proxyOpusModel}
-										onChange={e => saveTaskModels('proxyOpusModel', e.target.value)}
-										options={modelOptions}
-									/>
-								</SettingRow>
-								<SettingRow title="Subagent" tooltip="Model for subagents (Explore, etc.)" last>
-									<Select
-										value={proxySubagentModel}
-										onChange={e => saveTaskModels('proxySubagentModel', e.target.value)}
-										options={modelOptions}
-									/>
-								</SettingRow>
-							</>
-						)}
-					</SettingsGroup>
-				</>
-			)}
 
 			{/* CLI Status at the bottom */}
 		</div>

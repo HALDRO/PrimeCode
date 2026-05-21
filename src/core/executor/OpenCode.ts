@@ -8,10 +8,15 @@ import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk/v2/client';
 import launch from 'cross-spawn';
-import type * as vscode from 'vscode';
 
 import { logger } from '../../utils/logger';
 import { normalizeDriveLetter } from '../../utils/path';
+import {
+	addRuntime,
+	getRuntimesForWorkspace,
+	isProcessAlive,
+	removeRuntime,
+} from './primecodeConfig';
 import type { CLIConfig, CLIExecutor } from './types';
 
 class TtlCache<T> {
@@ -34,20 +39,6 @@ class TtlCache<T> {
 		this.data = null;
 	}
 }
-
-type RuntimeRecord = {
-	runtimeId: string;
-	serverUrl: string;
-	authorization: string;
-	workspaceRoot: string;
-	createdAt: number;
-	ownerSessionId: string;
-	pid: number | null;
-	provider: 'opencode';
-	kind: 'managed-local';
-};
-
-const RUNTIME_RECORD_KEY = 'primecode.managedOpenCodeRuntime';
 
 export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	private serverUrl: string | null = null;
@@ -72,24 +63,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 	private static readonly LOCAL_SERVER_HOST = '127.0.0.1';
 
-	constructor(private readonly extensionContext?: vscode.ExtensionContext) {
-		super();
-	}
-
 	private static normalizeDriveLetter(dir: string): string {
 		return normalizeDriveLetter(dir);
-	}
-
-	private readRuntimeRecord(): RuntimeRecord | null {
-		const value = this.extensionContext?.workspaceState.get<RuntimeRecord>(RUNTIME_RECORD_KEY);
-		if (!value) return null;
-		if (value.provider !== 'opencode' || value.kind !== 'managed-local') return null;
-		return value;
-	}
-
-	private async writeRuntimeRecord(record: RuntimeRecord | null): Promise<void> {
-		if (!this.extensionContext) return;
-		await this.extensionContext.workspaceState.update(RUNTIME_RECORD_KEY, record);
 	}
 
 	private createAuthorizationHeader(password: string): string {
@@ -164,51 +139,64 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	}
 
 	private async tryReattach(config: CLIConfig): Promise<boolean> {
-		const record = this.readRuntimeRecord();
-		if (!record) return false;
 		const workspaceRoot = OpenCodeExecutor.normalizeDriveLetter(config.workspaceRoot);
-		const isMatchingWorkspace = record.workspaceRoot === workspaceRoot;
-		if (!isMatchingWorkspace) return false;
-		if (!(await this.isOpenCodeServer(record.serverUrl, record.authorization))) {
-			await this.writeRuntimeRecord(null);
-			return false;
+		const entries = getRuntimesForWorkspace(workspaceRoot);
+		if (entries.length === 0) return false;
+
+		for (const entry of entries) {
+			if (await this.isOpenCodeServer(entry.serverUrl, entry.authorization)) {
+				this.serverUrl = entry.serverUrl;
+				this.authorizationHeader = entry.authorization;
+				this.runtimeId = entry.runtimeId;
+				this.directory = workspaceRoot;
+				this.isServerOwner = entry.ownerPid === process.pid;
+				this.serverStartedAt = entry.createdAt;
+				this.serverInstance = null;
+				this.initSdkClient();
+				logger.info('[OpenCode] Reattached to managed local runtime', {
+					serverUrl: this.serverUrl,
+					runtimeId: this.runtimeId,
+					pid: entry.pid,
+					isOwner: this.isServerOwner,
+				});
+				void this.preloadMetadata();
+				return true;
+			}
 		}
 
-		this.serverUrl = record.serverUrl;
-		this.authorizationHeader = record.authorization;
-		this.runtimeId = record.runtimeId;
-		this.directory = workspaceRoot;
-		this.isServerOwner = false;
-		this.serverStartedAt = record.createdAt;
-		this.serverInstance = null;
-		this.initSdkClient();
-		logger.info('[OpenCode] Reattached to managed local runtime', {
-			serverUrl: this.serverUrl,
-			runtimeId: this.runtimeId,
-		});
-		void this.preloadMetadata();
-		return true;
+		return false;
 	}
 
-	private async cleanupRecordedRuntime(config: CLIConfig): Promise<void> {
-		const record = this.readRuntimeRecord();
-		if (!record) return;
+	private async cleanupOrphanRuntimes(config: CLIConfig): Promise<void> {
 		const workspaceRoot = OpenCodeExecutor.normalizeDriveLetter(config.workspaceRoot);
-		if (record.workspaceRoot !== workspaceRoot) return;
+		const entries = getRuntimesForWorkspace(workspaceRoot);
 
-		const isAlive = await this.isOpenCodeServer(record.serverUrl, record.authorization);
-		if (isAlive) return;
+		for (const entry of entries) {
+			const serverAlive = await this.isOpenCodeServer(entry.serverUrl, entry.authorization);
 
-		logger.info('[OpenCode] Cleaning up stale managed runtime record', {
-			serverUrl: record.serverUrl,
-			runtimeId: record.runtimeId,
-			pid: record.pid,
-		});
+			if (!serverAlive) {
+				// Server not responding — kill process if still running, remove entry
+				logger.info('[OpenCode] Removing dead runtime entry', {
+					runtimeId: entry.runtimeId,
+					pid: entry.pid,
+				});
+				if (entry.pid && isProcessAlive(entry.pid)) {
+					await this.killProcess(entry.pid);
+				}
+				removeRuntime(entry.runtimeId);
+				continue;
+			}
 
-		if (record.pid) {
-			await this.killProcess(record.pid);
+			// Server alive but owner process dead — orphan
+			if (!isProcessAlive(entry.ownerPid)) {
+				logger.info('[OpenCode] Found orphan runtime (owner dead), keeping for reattach', {
+					runtimeId: entry.runtimeId,
+					pid: entry.pid,
+					ownerPid: entry.ownerPid,
+				});
+				// Don't kill — tryReattach will pick it up
+			}
 		}
-		await this.writeRuntimeRecord(null);
 	}
 
 	async ensureServer(config: CLIConfig): Promise<void> {
@@ -240,7 +228,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			return;
 		}
 
-		await this.cleanupRecordedRuntime(config);
+		await this.cleanupOrphanRuntimes(config);
 		if (await this.tryReattach(config)) return;
 		await this.spawnServer(config.workspaceRoot, config);
 	}
@@ -288,16 +276,14 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			this.isServerOwner = true;
 			this.serverStartedAt = Date.now();
 
-			await this.writeRuntimeRecord({
+			addRuntime({
 				runtimeId,
 				serverUrl,
 				authorization,
 				workspaceRoot: normalizedWorkspaceRoot,
 				createdAt: this.serverStartedAt,
-				ownerSessionId: `${process.pid}`,
 				pid,
-				provider: 'opencode',
-				kind: 'managed-local',
+				ownerPid: process.pid,
 			});
 
 			this.initSdkClient();
@@ -512,21 +498,23 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			return true;
 		}
 
-		const record = this.readRuntimeRecord();
-		if (!record) return false;
-		if (record.workspaceRoot !== directory) return false;
-		if (!(await this.isOpenCodeServer(record.serverUrl, record.authorization))) return false;
+		const entries = getRuntimesForWorkspace(directory);
+		for (const entry of entries) {
+			if (await this.isOpenCodeServer(entry.serverUrl, entry.authorization)) {
+				this.serverUrl = entry.serverUrl;
+				this.authorizationHeader = entry.authorization;
+				this.runtimeId = entry.runtimeId;
+				this.directory = directory;
+				this.isServerOwner = entry.ownerPid === process.pid;
+				this.serverStartedAt = entry.createdAt;
+				this.serverInstance = null;
+				this.initSdkClient();
+				logger.info('[OpenCode] Reconnected to managed runtime', { url: entry.serverUrl });
+				return true;
+			}
+		}
 
-		this.serverUrl = record.serverUrl;
-		this.authorizationHeader = record.authorization;
-		this.runtimeId = record.runtimeId;
-		this.directory = directory;
-		this.isServerOwner = false;
-		this.serverStartedAt = record.createdAt;
-		this.serverInstance = null;
-		this.initSdkClient();
-		logger.info('[OpenCode] Reconnected to managed runtime', { url: record.serverUrl });
-		return true;
+		return false;
 	}
 
 	getAuthorizationHeader(): string | null {
@@ -559,12 +547,10 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 				this.serverInstance.close();
 			} catch {}
 		}
-		const record = this.readRuntimeRecord();
-		if (!this.serverInstance && record?.pid) {
-			await this.killProcess(record.pid);
+		if (this.runtimeId) {
+			removeRuntime(this.runtimeId);
 		}
 		this.serverInstance = null;
-		await this.writeRuntimeRecord(null);
 		this.serverUrl = null;
 		this.directory = null;
 		this.sdkClient = null;

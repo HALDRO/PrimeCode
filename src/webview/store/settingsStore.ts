@@ -58,10 +58,10 @@ import { vscode } from '../utils/vscode';
 import { useChatStore } from './chatStore';
 import { handleSettingsData } from './settingsUtils';
 
-type PersistedSelectionState = {
-	modelVariants?: Record<string, string | undefined>;
-	providerModelVisibility?: Record<string, boolean | undefined>;
-};
+/** Persist model selection state to primecode.json via extension bridge. */
+function persistModelPreferences(patch: Record<string, unknown>): void {
+	vscode.postMessage({ type: 'updateSettings', settings: patch });
+}
 
 type ResourceState<T extends ManagedResource = ManagedResource> = {
 	items: T[];
@@ -83,57 +83,6 @@ const emptyResourceState = <T extends ManagedResource>(): ResourceState<T> => ({
 	isLoading: false,
 	error: undefined,
 });
-
-function readPersistedSelectionState(): PersistedSelectionState {
-	const raw = vscode.getState();
-	if (!raw || typeof raw !== 'object') return {};
-	const state = raw as {
-		modelVariants?: unknown;
-		providerModelVisibility?: unknown;
-	};
-	let modelVariants: Record<string, string | undefined> | undefined;
-	let providerModelVisibility: Record<string, boolean | undefined> | undefined;
-	if (
-		state.modelVariants &&
-		typeof state.modelVariants === 'object' &&
-		!Array.isArray(state.modelVariants)
-	) {
-		modelVariants = Object.fromEntries(
-			Object.entries(state.modelVariants as Record<string, unknown>).filter(
-				([, value]) => typeof value === 'string' || value === undefined,
-			),
-		) as Record<string, string | undefined>;
-	}
-	if (
-		state.providerModelVisibility &&
-		typeof state.providerModelVisibility === 'object' &&
-		!Array.isArray(state.providerModelVisibility)
-	) {
-		providerModelVisibility = Object.fromEntries(
-			Object.entries(state.providerModelVisibility as Record<string, unknown>).filter(
-				([, value]) => typeof value === 'boolean' || value === undefined,
-			),
-		) as Record<string, boolean | undefined>;
-	}
-	return {
-		modelVariants,
-		providerModelVisibility,
-	};
-}
-
-function writePersistedSelectionState(input: PersistedSelectionState): void {
-	const current = vscode.getState();
-	const next =
-		current && typeof current === 'object' ? { ...(current as Record<string, unknown>) } : {};
-	delete next.selectedModel;
-	if (input.modelVariants !== undefined) next.modelVariants = input.modelVariants;
-	if (input.providerModelVisibility !== undefined) {
-		next.providerModelVisibility = input.providerModelVisibility;
-	}
-	vscode.setState(next);
-}
-
-const persistedSelection = readPersistedSelectionState();
 
 // Extracted helpers to reduce cognitive complexity of handleExtensionMessage
 
@@ -487,18 +436,6 @@ export interface SettingsState {
 	provider: CLIProviderType;
 	accessAutoApprove: boolean;
 
-	// Proxy Configuration
-	/** When true, only main model is used for all tasks */
-	proxyUseSingleModel: boolean;
-	/** Model for fast/simple tasks (Explore agent). Empty = use main model */
-	proxyHaikuModel: string;
-	/** Model for standard tasks. Empty = use main model */
-	proxySonnetModel: string;
-	/** Model for complex tasks (plan mode). Empty = use main model */
-	proxyOpusModel: string;
-	/** Model for subagents (Explore, etc.). Empty = use main model */
-	proxySubagentModel: string;
-
 	// Prompt Improver
 	promptImproveModel: string;
 	promptImproveTemplate: string;
@@ -582,12 +519,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 	provider: 'opencode',
 	accessAutoApprove: false,
 
-	proxyUseSingleModel: true,
-	proxyHaikuModel: '',
-	proxySonnetModel: '',
-	proxyOpusModel: '',
-	proxySubagentModel: '',
-
 	promptImproveModel: '',
 	promptImproveTemplate: '',
 
@@ -608,7 +539,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 	availableProviders: [],
 	providerAuthState: null,
 	enabledOpenCodeModels: [],
-	providerModelVisibility: persistedSelection.providerModelVisibility ?? {},
+	providerModelVisibility: {},
 	sessionDisconnectedProviders: [],
 
 	discoveryStatus: {
@@ -651,7 +582,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 	},
 
 	lastSelectedModel: 'default',
-	modelVariants: persistedSelection.modelVariants ?? {},
+	modelVariants: {},
 	proxyEndpoints: [],
 
 	mcpServers: {},
@@ -700,10 +631,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 	actions: {
 		setSettings: settings => set(state => ({ ...state, ...settings })),
 		setLastSelectedModel: lastSelectedModel => {
-			writePersistedSelectionState({
-				modelVariants: get().modelVariants,
-				providerModelVisibility: get().providerModelVisibility,
-			});
+			persistModelPreferences({ lastSelectedModel });
 			set({ lastSelectedModel });
 			useChatStore.getState().actions.syncProjectModel(lastSelectedModel);
 		},
@@ -712,10 +640,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 				const next = { ...state.modelVariants };
 				if (variant) next[modelId] = variant;
 				else delete next[modelId];
-				writePersistedSelectionState({
-					modelVariants: next,
-					providerModelVisibility: state.providerModelVisibility,
-				});
+				persistModelPreferences({ modelVariants: next });
 				return { modelVariants: next };
 			}),
 		getModelVariant: modelId => {
@@ -725,9 +650,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 		setProviderModelVisibility: (providerId, visible) =>
 			set(state => {
 				const next = { ...state.providerModelVisibility, [providerId]: visible };
-				writePersistedSelectionState({
-					modelVariants: state.modelVariants,
-					providerModelVisibility: next,
+				persistModelPreferences({
+					'opencode.providerModelVisibility': next,
 				});
 				return { providerModelVisibility: next };
 			}),

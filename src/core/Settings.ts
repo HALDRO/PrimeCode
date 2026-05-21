@@ -1,11 +1,21 @@
 /**
  * @file Settings
  * @description Unified settings manager for PrimeCode.
- * Manages VS Code workspace/user settings.
+ * Manages VS Code workspace/user settings for non-model preferences.
+ * Model-related preferences (lastSelected, enabledModels, taskModels, variants,
+ * visibility) are stored in ~/.config/primecode.json via primecodeConfig module
+ * and injected into getAll() for seamless webview consumption.
  */
 
 import * as vscode from 'vscode';
 import { normalizeDriveLetter } from '../utils/path';
+import {
+	type AppSettings,
+	getAppSettings,
+	getModelSettings,
+	updateAppSettings,
+	updateModelSettings,
+} from './executor/primecodeConfig';
 
 // =============================================================================
 // Types
@@ -27,11 +37,6 @@ export interface PrimeCodeSettings {
 		headers?: Record<string, string>;
 		modelVariants?: Record<string, string[]>;
 	}>;
-	'proxy.useSingleModel'?: boolean;
-	'proxy.haikuModel'?: string;
-	'proxy.sonnetModel'?: string;
-	'proxy.opusModel'?: string;
-	'proxy.subagentModel'?: string;
 
 	'opencode.autoStart'?: boolean;
 	'opencode.serverTimeout'?: number;
@@ -44,6 +49,9 @@ export interface PrimeCodeSettings {
 
 	'promptImprove.model'?: string;
 	'promptImprove.template'?: string;
+
+	lastSelectedModel?: string;
+	modelVariants?: Record<string, string | undefined>;
 }
 
 // =============================================================================
@@ -78,13 +86,83 @@ export class Settings implements ISettings {
 	// =============================================================================
 
 	get<T>(key: keyof PrimeCodeSettings): T | undefined {
-		return this.config.get<T>(key);
+		// Migrated model keys — read from primecodeConfig
+		const models = getModelSettings();
+		switch (key) {
+			case 'opencode.enabledModels':
+				return models.enabledModels as T;
+			case 'opencode.providerModelVisibility':
+				return models.providerModelVisibility as T;
+			case 'lastSelectedModel':
+				return (models.lastSelected || undefined) as T | undefined;
+			case 'modelVariants':
+				return models.modelVariants as T;
+			default:
+				break;
+		}
+
+		// Migrated app keys — read from primecodeConfig
+		const app = getAppSettings();
+		switch (key) {
+			case 'proxy.endpoints':
+				return app.proxyEndpoints as T;
+			case 'providers.disabled':
+				return app.providersDisabled as T;
+			case 'promptImprove.model':
+				return (app.promptImproveModel || undefined) as T | undefined;
+			case 'promptImprove.template':
+				return (app.promptImproveTemplate || undefined) as T | undefined;
+			case 'opencode.agent':
+				return (app.opencodeAgent || undefined) as T | undefined;
+			default:
+				return this.config.get<T>(key);
+		}
 	}
 
 	async update<T>(key: keyof PrimeCodeSettings, value: T): Promise<void> {
-		// Always write to Global settings to avoid polluting project-specific .vscode/settings.json
+		// Model keys → primecodeConfig
+		switch (key) {
+			case 'opencode.enabledModels':
+				updateModelSettings({ enabledModels: value as string[] });
+				return;
+			case 'opencode.providerModelVisibility':
+				updateModelSettings({
+					providerModelVisibility: value as Record<string, boolean | undefined>,
+				});
+				return;
+			case 'lastSelectedModel':
+				updateModelSettings({ lastSelected: (value as string) || '' });
+				return;
+			case 'modelVariants':
+				updateModelSettings({ modelVariants: value as Record<string, string | undefined> });
+				return;
+			default:
+				break;
+		}
+
+		// App keys → primecodeConfig
+		switch (key) {
+			case 'proxy.endpoints':
+				updateAppSettings({ proxyEndpoints: value as AppSettings['proxyEndpoints'] });
+				return;
+			case 'providers.disabled':
+				updateAppSettings({ providersDisabled: value as string[] });
+				return;
+			case 'promptImprove.model':
+				updateAppSettings({ promptImproveModel: (value as string) || '' });
+				return;
+			case 'promptImprove.template':
+				updateAppSettings({ promptImproveTemplate: (value as string) || '' });
+				return;
+			case 'opencode.agent':
+				updateAppSettings({ opencodeAgent: (value as string) || '' });
+				return;
+			default:
+				break;
+		}
+
+		// VS Code settings (autoStart, serverTimeout, serverUrl, access.autoApprove, mcpServers)
 		await this.config.update(key, value, vscode.ConfigurationTarget.Global);
-		// Refresh cached config to reflect the update immediately
 		this.config = vscode.workspace.getConfiguration('primeCode');
 	}
 
@@ -93,30 +171,30 @@ export class Settings implements ISettings {
 	}
 
 	getAll(): PrimeCodeSettings {
+		const models = getModelSettings();
+		const app = getAppSettings();
 		return {
 			provider: 'opencode',
-			model: this.get('model'),
-			'access.autoApprove': this.get('access.autoApprove') || false,
-			mcpServers: this.get('mcpServers') ?? {},
+			model: this.config.get('model'),
+			'access.autoApprove': this.config.get('access.autoApprove') || false,
+			mcpServers: this.config.get('mcpServers') ?? {},
 
-			'proxy.endpoints': this.get('proxy.endpoints') ?? [],
-			'proxy.useSingleModel': this.get('proxy.useSingleModel'),
-			'proxy.haikuModel': this.get('proxy.haikuModel'),
-			'proxy.sonnetModel': this.get('proxy.sonnetModel'),
-			'proxy.opusModel': this.get('proxy.opusModel'),
-			'proxy.subagentModel': this.get('proxy.subagentModel'),
+			'proxy.endpoints': app.proxyEndpoints,
 
-			'opencode.autoStart': this.get('opencode.autoStart'),
-			'opencode.serverTimeout': this.get('opencode.serverTimeout'),
-			'opencode.serverUrl': this.get('opencode.serverUrl'),
-			'opencode.agent': this.get('opencode.agent'),
-			'opencode.enabledModels': this.get('opencode.enabledModels') ?? [],
-			'opencode.providerModelVisibility': this.get('opencode.providerModelVisibility'),
+			'opencode.autoStart': this.config.get('opencode.autoStart'),
+			'opencode.serverTimeout': this.config.get('opencode.serverTimeout'),
+			'opencode.serverUrl': this.config.get('opencode.serverUrl'),
+			'opencode.agent': app.opencodeAgent || undefined,
+			'opencode.enabledModels': models.enabledModels,
+			'opencode.providerModelVisibility': models.providerModelVisibility,
 
-			'providers.disabled': this.get('providers.disabled') ?? [],
+			'providers.disabled': app.providersDisabled,
 
-			'promptImprove.model': this.get('promptImprove.model'),
-			'promptImprove.template': this.get('promptImprove.template'),
+			'promptImprove.model': app.promptImproveModel || undefined,
+			'promptImprove.template': app.promptImproveTemplate || undefined,
+
+			lastSelectedModel: models.lastSelected || undefined,
+			modelVariants: models.modelVariants,
 		};
 	}
 
