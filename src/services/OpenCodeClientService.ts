@@ -179,10 +179,14 @@ export class OpenCodeClientService {
 	private async fetchRuntimeCollection(
 		baseUrl: string,
 		directory: string,
+		authorization: string | null,
 		path: 'permission' | 'question',
 	): Promise<unknown[]> {
 		const response = await fetch(`${baseUrl}/${path}`, {
-			headers: { 'x-opencode-directory': directory },
+			headers: {
+				'x-opencode-directory': directory,
+				...(authorization ? { authorization } : {}),
+			},
 		});
 		if (!response.ok) return [];
 		return (await response.json()) as unknown[];
@@ -326,9 +330,15 @@ export class OpenCodeClientService {
 	async getSessionPermissions(
 		baseUrl: string,
 		directory: string,
+		authorization: string | null,
 		sessionId: string,
 	): Promise<import('../common').SessionPermissionRequest[]> {
-		const result = await this.fetchRuntimeCollection(baseUrl, directory, 'permission');
+		const result = await this.fetchRuntimeCollection(
+			baseUrl,
+			directory,
+			authorization,
+			'permission',
+		);
 		return result.flatMap(value => {
 			const request = parseSessionPermissionRequest(value, sessionId);
 			return request ? [request] : [];
@@ -338,9 +348,10 @@ export class OpenCodeClientService {
 	async getSessionQuestions(
 		baseUrl: string,
 		directory: string,
+		authorization: string | null,
 		sessionId: string,
 	): Promise<import('../common').SessionQuestionRequest[]> {
-		const result = await this.fetchRuntimeCollection(baseUrl, directory, 'question');
+		const result = await this.fetchRuntimeCollection(baseUrl, directory, authorization, 'question');
 		return result.flatMap(value => {
 			const request =
 				parseSessionQuestionRequest(value, sessionId) ||

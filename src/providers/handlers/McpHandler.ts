@@ -156,11 +156,11 @@ export class McpHandler implements WebviewMessageHandler {
 	 * Fetch MCP tool IDs from the experimental API.
 	 * Returns tool IDs in format "servername_toolname".
 	 */
-	private async fetchMcpToolIds(baseUrl: string, directory: string): Promise<string[]> {
+	private async fetchMcpToolIds(_baseUrl: string, directory: string): Promise<string[]> {
 		try {
-			const response = await fetch(`${baseUrl}/experimental/tool/ids`, {
-				headers: { 'x-opencode-directory': directory },
-			});
+			const response = await this.context.cli.request?.(
+				`/experimental/tool/ids?directory=${encodeURIComponent(directory)}`,
+			);
 			if (!response.ok) return [];
 			const data = (await response.json()) as string[];
 			return Array.isArray(data) ? data : [];
@@ -174,13 +174,13 @@ export class McpHandler implements WebviewMessageHandler {
 	 * Returns resources with their owning client name.
 	 */
 	private async fetchMcpResources(
-		baseUrl: string,
+		_baseUrl: string,
 		directory: string,
 	): Promise<Array<{ name: string; uri: string; description?: string; client: string }>> {
 		try {
-			const response = await fetch(`${baseUrl}/experimental/resource`, {
-				headers: { 'x-opencode-directory': directory },
-			});
+			const response = await this.context.cli.request?.(
+				`/experimental/resource?directory=${encodeURIComponent(directory)}`,
+			);
 			if (!response.ok) return [];
 			const data = (await response.json()) as Record<
 				string,
@@ -235,12 +235,9 @@ export class McpHandler implements WebviewMessageHandler {
 		if (!serverConfig) return;
 
 		try {
-			const response = await fetch(`${admin.baseUrl}/mcp`, {
+			const response = await this.context.cli.request?.('/mcp', {
 				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-					'x-opencode-directory': admin.directory,
-				},
+				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ name, config: serverConfig }),
 			});
 			if (!response.ok) {
@@ -262,13 +259,13 @@ export class McpHandler implements WebviewMessageHandler {
 
 		const action = enabled ? 'connect' : 'disconnect';
 		try {
-			const response = await fetch(`${admin.baseUrl}/mcp/${encodeURIComponent(name)}/${action}`, {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-					'x-opencode-directory': admin.directory,
+			const response = await this.context.cli.request?.(
+				`/mcp/${encodeURIComponent(name)}/${action}`,
+				{
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
 				},
-			});
+			);
 			if (!response.ok) {
 				logger.warn(`[McpHandler] POST /mcp/${name}/${action} failed`, {
 					status: response.status,

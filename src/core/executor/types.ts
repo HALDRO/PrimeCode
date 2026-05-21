@@ -32,6 +32,10 @@ export interface CLIConfig {
 export interface CLIExecutor extends EventEmitter {
 	ensureServer(config: CLIConfig): Promise<void>;
 	getAdminInfo(): { baseUrl: string; directory: string } | null;
+	getAuthorizationHeader?(): string | null;
+	restartServer?(config: CLIConfig): Promise<void>;
+	isServerHealthy?(): Promise<boolean>;
+	request?(path: string, init?: RequestInit): Promise<Response>;
 	/** Returns the SDK client instance if available (OpenCode only). */
 	getSdkClient?(): import('@opencode-ai/sdk/v2/client').OpencodeClient | null;
 	/** Fetch skills from the OpenCode server (GET /skill). */
@@ -48,6 +52,7 @@ export interface CLIExecutor extends EventEmitter {
 		isServerOwner: boolean;
 		port: number | null;
 		uptime: number | null;
+		runtimeId?: string | null;
 	};
 	/** Invalidate the skills cache so the next listSkills() call fetches fresh data. */
 	clearSkillsCache?(): void;

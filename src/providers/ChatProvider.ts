@@ -77,7 +77,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		private services: ServiceRegistry,
 	) {
 		this.settings = new Settings();
-		this.cli = new OpenCodeExecutor();
+		this.cli = new OpenCodeExecutor(this.context);
 
 		// Initialize Handlers — single shared context
 		const baseContext = {
@@ -116,9 +116,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			refreshAfterServerRestart: async () => {
 				this.restartBackendStatusBridge();
 				this.sendServerInfo();
+				this.sendServerStatus(this.cli.getAdminInfo()?.baseUrl ? 'connected' : 'disconnected');
 				this.hasSynced = false;
 				await this.syncAllOrDefer('manual-server-restart');
 			},
+			restartManagedRuntime: async (source: string) => this.restartManagedRuntime(source),
 			reloadOpenCodeRuntime: source => this.reloadOpenCodeRuntime(source),
 		};
 
@@ -194,6 +196,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private async reloadOpenCodeRuntime(source: string): Promise<void> {
 		logger.debug('[ChatProvider] Disposing OpenCode instance for reload', { source });
 		this.stopBackendStatusBridge();
+		this.sendServerStatus('disconnected');
 		this.clearLocalCaches();
 		const sdkClient = this.cli.getSdkClient();
 		if (!sdkClient) return;
@@ -202,6 +205,44 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		} catch (err) {
 			logger.warn('[ChatProvider] instance.dispose() failed during reload', { source, err });
 		}
+	}
+
+	private async restartManagedRuntime(source: string): Promise<void> {
+		const workspaceRoot = this.settings.getWorkspaceRoot();
+		if (!workspaceRoot) {
+			throw new Error('Workspace root is unavailable for OpenCode restart');
+		}
+		const config = await this.buildServerConfig(workspaceRoot);
+
+		logger.info('[ChatProvider] Restarting managed OpenCode runtime', { source, workspaceRoot });
+		this.stopBackendStatusBridge();
+		this.sendServerStatus('disconnected');
+		this.clearLocalCaches();
+
+		await this.cli.restartServer?.(config);
+	}
+
+	private async buildServerConfig(workspaceRoot: string) {
+		const opencodeAgent = this.settings.get('opencode.agent');
+		const opencodeServerTimeout = this.settings.get('opencode.serverTimeout');
+		const opencodeServerUrl = this.settings.get('opencode.serverUrl');
+		const policies = await this.toolHandler.getPermissionPoliciesAsync();
+
+		return {
+			provider: 'opencode' as const,
+			workspaceRoot,
+			agent: typeof opencodeAgent === 'string' ? opencodeAgent : undefined,
+			autoApprove: Boolean(this.settings.get('access.autoApprove') || false),
+			policies: { ...policies },
+			serverTimeoutMs:
+				typeof opencodeServerTimeout === 'number' && Number.isFinite(opencodeServerTimeout)
+					? Math.max(0, opencodeServerTimeout) * 1000
+					: undefined,
+			serverUrl:
+				typeof opencodeServerUrl === 'string' && opencodeServerUrl.trim().length > 0
+					? opencodeServerUrl.trim()
+					: undefined,
+		};
 	}
 
 	/** Clear local TTL caches so next fetch hits the server. */
@@ -299,32 +340,14 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			return;
 		}
 
-		const opencodeAgent = this.settings.get('opencode.agent');
-		const opencodeServerTimeout = this.settings.get('opencode.serverTimeout');
-		const opencodeServerUrl = this.settings.get('opencode.serverUrl');
-		const policies = await this.toolHandler.getPermissionPoliciesAsync();
-
-		const config = {
-			provider: 'opencode' as const,
-			workspaceRoot,
-			agent: typeof opencodeAgent === 'string' ? opencodeAgent : undefined,
-			autoApprove: Boolean(this.settings.get('access.autoApprove') || false),
-			policies: { ...policies },
-			serverTimeoutMs:
-				typeof opencodeServerTimeout === 'number' && Number.isFinite(opencodeServerTimeout)
-					? Math.max(0, opencodeServerTimeout) * 1000
-					: undefined,
-			serverUrl:
-				typeof opencodeServerUrl === 'string' && opencodeServerUrl.trim().length > 0
-					? opencodeServerUrl.trim()
-					: undefined,
-		};
+		const config = await this.buildServerConfig(workspaceRoot);
 
 		try {
 			await this.cli.ensureServer(config);
 			await this.reloadOpenCodeRuntimeOnStartup();
 
 			this.startBackendStatusBridge();
+			this.sendServerStatus('connected');
 
 			// Notify webview only after the backend event bridge is ready.
 			// Extension should expose attach information here, not runtime recovery policy.
@@ -334,6 +357,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			await this.syncAllOrDefer('opencode-start');
 		} catch (error) {
 			logger.warn('[ChatProvider] Failed to start OpenCode:', error);
+			this.sendServerStatus('error');
 			this.bridge.showNotification({
 				notification: {
 					id: `system_notice-${Date.now()}`,
@@ -874,11 +898,28 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.backendStatusAbort = null;
 		this.backendStatusRun = null;
 		this.backendStatusKey = null;
+		this.sendServerStatus('disconnected');
 	}
 
 	private resolveBackendStatusWaiters(): void {
 		const waiters = this.backendStatusWaiters.splice(0);
 		for (const resolve of waiters) resolve();
+	}
+
+	private sendServerStatus(status: 'connected' | 'disconnected' | 'error'): void {
+		this.bridge.data('serverStatus', { status });
+	}
+
+	private async recoverManagedRuntime(directory: string): Promise<void> {
+		const reconnected = await this.cli.tryReconnect(directory);
+		if (reconnected) {
+			this.sendServerInfo();
+			return;
+		}
+
+		logger.info('[ChatProvider] Reconnection offline, attempting managed runtime recovery...');
+		await this.restartManagedRuntime('auto-recovery');
+		this.sendServerInfo();
 	}
 
 	// ─── Server Health Monitor & Reconnect ──────────────────────────────
@@ -888,13 +929,20 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		directory: string,
 		signal: AbortSignal,
 	): Promise<void> {
-		const client = createOpencodeClient({ baseUrl, directory });
 		const RECONNECT_DELAY_MS = 250;
 		const MAX_RETRY_MS = 30_000;
 		const HEARTBEAT_TIMEOUT_MS = 35_000;
 		let consecutiveFailures = 0;
 
 		while (!signal.aborted) {
+			const activeAdmin = this.cli.getAdminInfo();
+			const activeBaseUrl = activeAdmin?.baseUrl ?? baseUrl;
+			const authorization = this.cli.getAuthorizationHeader?.() ?? null;
+			const client = createOpencodeClient({
+				baseUrl: activeBaseUrl,
+				directory,
+				headers: authorization ? { authorization } : undefined,
+			});
 			// Child controller per iteration prevents abort-listener accumulation on the parent signal.
 			const iterationController = new AbortController();
 			const onParentAbort = () => iterationController.abort();
@@ -916,7 +964,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			};
 
 			try {
-				logger.info('[ChatProvider] SSE bridge: subscribing to global events...', { baseUrl });
+				logger.info('[ChatProvider] SSE bridge: subscribing to global events...', {
+					baseUrl: activeBaseUrl,
+				});
 				const subscription = await client.global.event({
 					signal: iterationController.signal,
 					onSseError: () => {
@@ -924,6 +974,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					},
 				});
 				this.resolveBackendStatusWaiters();
+				this.sendServerStatus('connected');
 				resetHeartbeat();
 
 				for await (const event of subscription.stream as AsyncGenerator<unknown>) {
@@ -935,12 +986,22 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			} catch (error) {
 				if (signal.aborted) break;
 				consecutiveFailures++;
+				this.sendServerStatus('error');
 				logger.warn('[ChatProvider] Backend status bridge stream failed', {
-					baseUrl,
+					baseUrl: activeBaseUrl,
 					directory,
 					error,
 					attempt: consecutiveFailures,
 				});
+				if (consecutiveFailures >= 3) {
+					try {
+						await this.recoverManagedRuntime(directory);
+					} catch (restartError) {
+						logger.warn('[ChatProvider] Failed to recover managed OpenCode runtime', {
+							restartError,
+						});
+					}
+				}
 			} finally {
 				signal.removeEventListener('abort', onParentAbort);
 				clearHeartbeat();
@@ -954,7 +1015,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 					? RECONNECT_DELAY_MS
 					: Math.min(RECONNECT_DELAY_MS * 2 ** (consecutiveFailures - 1), MAX_RETRY_MS);
 			logger.info('[ChatProvider] Backend status bridge scheduling reconnect', {
-				baseUrl,
+				baseUrl: activeBaseUrl,
 				directory,
 				attempt: consecutiveFailures,
 				backoff,
@@ -1068,12 +1129,16 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.postMessage({ type: 'requestNewSession' });
 	}
 
-	dispose(): void {
+	async disposeAsync(): Promise<void> {
 		this.stopBackendStatusBridge();
 		for (const disposable of this.disposables) {
 			disposable.dispose();
 		}
-		this.cli.dispose();
+		await this.cli.dispose();
 		this.mcpHandler.dispose();
+	}
+
+	dispose(): void {
+		void this.disposeAsync();
 	}
 }

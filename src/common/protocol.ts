@@ -464,6 +464,11 @@ export type ServerInfoMessage = BaseExtensionMessage<
 	{ url: string; workspaceRoot: string }
 >;
 
+export type ServerStatusMessage = BaseExtensionMessage<
+	'serverStatus',
+	{ status: 'connected' | 'disconnected' | 'error' }
+>;
+
 export type OpencodeEventMessage = BaseExtensionMessage<'opencodeEvent', unknown>;
 
 // =============================================================================
@@ -555,6 +560,7 @@ export type ExtensionMessage =
 	| ProjectUpdatedMessage
 	| EditorSelectionMessage
 	| ServerInfoMessage
+	| ServerStatusMessage
 	| OpencodeEventMessage
 	| ExtensionVersionMessage
 	| ConnectionDetailsMessage

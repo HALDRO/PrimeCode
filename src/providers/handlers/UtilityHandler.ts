@@ -98,16 +98,22 @@ export class UtilityHandler implements WebviewMessageHandler {
 		const timer = setTimeout(() => controller.abort(), timeoutMs);
 
 		try {
+			const adminInfo = this.context.cli.getAdminInfo();
+			const authHeader = this.context.cli.getAuthorizationHeader?.();
+			const requestHeaders: Record<string, string> = { ...(options?.headers ?? {}) };
+			if (adminInfo?.baseUrl && url.startsWith(adminInfo.baseUrl) && authHeader) {
+				requestHeaders.authorization = authHeader;
+			}
 			const response = await fetch(url, {
 				method: options?.method,
-				headers: options?.headers,
+				headers: requestHeaders,
 				body: options?.body,
 				signal: controller.signal,
 			});
 			if (timer) clearTimeout(timer);
-			const headers: Record<string, string> = {};
+			const responseHeaders: Record<string, string> = {};
 			response.headers.forEach((value, key) => {
-				headers[key] = value;
+				responseHeaders[key] = value;
 			});
 
 			if (isEventStreamRequest) {
@@ -117,7 +123,7 @@ export class UtilityHandler implements WebviewMessageHandler {
 					ok: response.ok,
 					status: response.status,
 					statusText: response.statusText,
-					headers,
+					headers: responseHeaders,
 					isStream: true,
 				});
 
@@ -153,7 +159,7 @@ export class UtilityHandler implements WebviewMessageHandler {
 				ok: response.ok,
 				status: response.status,
 				statusText: response.statusText,
-				headers,
+				headers: responseHeaders,
 				bodyText,
 			});
 		} catch (error) {
@@ -220,11 +226,8 @@ export class UtilityHandler implements WebviewMessageHandler {
 		const results = await Promise.all(
 			sessionIds.map(async sessionId => {
 				try {
-					const res = await fetch(`${admin.baseUrl}/session/${sessionId}/abort`, {
+					const res = await this.context.cli.request?.(`/session/${sessionId}/abort`, {
 						method: 'POST',
-						headers: {
-							'x-opencode-directory': encodeURIComponent(admin.directory),
-						},
 						signal: AbortSignal.timeout(10_000),
 					});
 					if (!res.ok) {
@@ -434,8 +437,8 @@ export class UtilityHandler implements WebviewMessageHandler {
 	// ─── Connection Status ─────────────────────────────────────────────
 
 	private async handleRestartOpenCode(): Promise<void> {
-		logger.info('[UtilityHandler] Reloading OpenCode runtime via instance.dispose()...');
-		await this.context.reloadOpenCodeRuntime?.('manual-reload');
+		logger.info('[UtilityHandler] Restarting managed OpenCode runtime...');
+		await this.context.restartManagedRuntime?.('manual-restart');
 		await this.context.refreshAfterServerRestart?.();
 	}
 

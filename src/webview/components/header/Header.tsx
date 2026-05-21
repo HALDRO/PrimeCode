@@ -23,7 +23,6 @@ import { webviewLogger } from '../../utils/logger';
 const log = webviewLogger.forComponent('Header');
 
 import { useUIStore } from '../../store/uiStore';
-import { proxyFetch } from '../../utils/proxyFetch';
 import { useVSCode } from '../../utils/vscode';
 import { CloseIcon, MessageIcon } from '../icons';
 import { ScrollContainer } from '../ui';
@@ -241,18 +240,10 @@ const ConnectionStatusMenu: React.FC<{
 	);
 };
 
-/** Module-level health check cache to prevent duplicate requests within 750ms window. */
-let healthCachePromise: Promise<boolean> | null = null;
-let healthCacheAt = 0;
-const HEALTH_CACHE_MS = 750;
-
 export const Header: React.FC = React.memo(() => {
-	const HEALTH_POLL_INTERVAL_MS = 10_000;
-	const HEALTH_FETCH_TIMEOUT_MS = 3_000;
-
 	// Optimized selectors
 	const { showHistoryDropdown } = useHistoryDropdownState();
-	const { setServerStatus, showConfirmDialog } = useUIActions();
+	const { showConfirmDialog } = useUIActions();
 	const { postMessage } = useVSCode();
 
 	// PERF: Only subscribe to sessionOrder and activeSessionId — NOT sessionsById.
@@ -264,7 +255,6 @@ export const Header: React.FC = React.memo(() => {
 			activeSessionId: state.activeSessionId,
 		})),
 	);
-	const serverUrl = useUIStore(state => state.serverUrl);
 	const serverStatus = useUIStore(state => state.serverStatus);
 	const connectionDetails = useUIStore(state => state.connectionDetails);
 	const lspStatus = useSettingsStore(state => state.lspStatus);
@@ -300,135 +290,6 @@ export const Header: React.FC = React.memo(() => {
 		};
 	}, []);
 
-	useEffect(() => {
-		if (!serverUrl) return;
-
-		let disposed = false;
-		let timer: number | null = null;
-		let consecutiveFailures = 0;
-		const MAX_BACKOFF_MS = 60_000;
-		const RETRY_COUNT = 2;
-		const RETRY_DELAY_MS = 100;
-
-		const getNextInterval = () => {
-			if (consecutiveFailures === 0) return HEALTH_POLL_INTERVAL_MS;
-			return Math.min(HEALTH_POLL_INTERVAL_MS * 2 ** consecutiveFailures, MAX_BACKOFF_MS);
-		};
-
-		const scheduleNext = () => {
-			if (disposed) return;
-			if (timer !== null) window.clearTimeout(timer);
-			timer = window.setTimeout(() => {
-				void runCheck();
-			}, getNextInterval());
-		};
-
-		const isRetryable = (error: unknown): boolean => {
-			if (!(error instanceof Error)) return false;
-			if (error.name === 'AbortError' || error.name === 'TimeoutError') return false;
-			if (error instanceof TypeError) return true;
-			return /network|fetch|econnreset|econnrefused|enotfound|timedout/i.test(error.message);
-		};
-
-		const wait = (ms: number) => new Promise<void>(resolve => window.setTimeout(resolve, ms));
-
-		const attemptHealthCheck = async (retryCount: number): Promise<boolean | null> => {
-			log.debug('Health check attempt starting', {
-				serverUrl,
-				retryCount,
-				consecutiveFailures,
-				fetchTimeoutMs: HEALTH_FETCH_TIMEOUT_MS,
-			});
-			try {
-				const controller = new AbortController();
-				const timeout = window.setTimeout(() => controller.abort(), HEALTH_FETCH_TIMEOUT_MS);
-				const response = await proxyFetch(`${serverUrl}/global/health`, {
-					method: 'GET',
-					signal: controller.signal,
-				});
-				window.clearTimeout(timeout);
-				if (disposed) return null;
-
-				if (!response.ok) {
-					log.warn('Health check returned non-OK response', {
-						serverUrl,
-						retryCount,
-						status: response.status,
-						statusText: response.statusText,
-					});
-					if (retryCount < RETRY_COUNT) {
-						await wait(RETRY_DELAY_MS * (retryCount + 1));
-						if (disposed) return null;
-						return attemptHealthCheck(retryCount + 1);
-					}
-					return false;
-				}
-
-				const payload = (await response.json()) as { healthy?: boolean };
-				if (disposed) return null;
-				log.debug('Health check completed', {
-					serverUrl,
-					retryCount,
-					healthy: payload.healthy === true,
-				});
-				return payload.healthy === true;
-			} catch (error: unknown) {
-				if (disposed) return null;
-				log.warn('Health check failed', {
-					serverUrl,
-					retryCount,
-					consecutiveFailures,
-					error,
-				});
-				if (retryCount < RETRY_COUNT && isRetryable(error)) {
-					await wait(RETRY_DELAY_MS * (retryCount + 1));
-					if (disposed) return null;
-					return attemptHealthCheck(retryCount + 1);
-				}
-				return false;
-			}
-		};
-
-		const runCheck = async () => {
-			const now = Date.now();
-			let resultPromise: Promise<boolean>;
-			if (healthCachePromise && now - healthCacheAt < HEALTH_CACHE_MS) {
-				resultPromise = healthCachePromise;
-			} else {
-				healthCacheAt = now;
-				healthCachePromise = attemptHealthCheck(0).then(r => r ?? false);
-				resultPromise = healthCachePromise;
-			}
-			const result = await resultPromise;
-			if (disposed) return;
-			if (result) {
-				consecutiveFailures = 0;
-				setServerStatus('connected');
-				log.info('Header marked server connected', {
-					serverUrl,
-					consecutiveFailures,
-				});
-			} else {
-				consecutiveFailures++;
-				setServerStatus('error');
-				log.warn('Header marked server error', {
-					serverUrl,
-					consecutiveFailures,
-				});
-			}
-			scheduleNext();
-		};
-
-		void runCheck();
-
-		return () => {
-			disposed = true;
-			if (timer !== null) {
-				window.clearTimeout(timer);
-			}
-		};
-	}, [serverUrl, setServerStatus]);
-
 	const handleSwitchSession = useCallback((sessionId: string) => {
 		log.info('User switched session', { sessionId });
 		openCodeRuntime.switchSession(sessionId);
@@ -460,7 +321,6 @@ export const Header: React.FC = React.memo(() => {
 
 	const handleStatusClick = useCallback(() => {
 		// Request structural details (owner/uptime/port) when opening the menu.
-		// Health/status are tracked directly in the webview.
 		postMessage({ type: 'getConnectionDetails' });
 		setShowStatusMenu(prev => !prev);
 	}, [postMessage]);

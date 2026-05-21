@@ -236,7 +236,6 @@ export async function proxyFetch(input: RequestInfo | URL, init?: RequestInit): 
 		} else if (reqHeaders) {
 			Object.assign(headers, reqHeaders as Record<string, string>);
 		}
-
 		// Send request to extension host
 		vscode.postMessage({
 			type: 'proxyFetch',

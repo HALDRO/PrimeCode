@@ -6,6 +6,9 @@ import { logger } from './utils/logger';
 export { logger } from './utils/logger';
 
 let serviceRegistry: ServiceRegistry | undefined;
+let provider: ChatProvider | undefined;
+let providerError: Error | undefined;
+let providerPromise: Promise<ChatProvider | undefined> | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
 	// Create output channel first for logging
@@ -19,10 +22,6 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(serviceRegistry);
 
 	// Track provider for lazy initialization — shared promise prevents double-init race
-	let provider: ChatProvider | undefined;
-	let providerError: Error | undefined;
-	let providerPromise: Promise<ChatProvider | undefined> | undefined;
-
 	// Register command FIRST to ensure it's always available
 	const disposable = vscode.commands.registerCommand(
 		'primecode.openChat',
@@ -249,4 +248,18 @@ export function activate(context: vscode.ExtensionContext) {
 		});
 }
 
-export async function deactivate(): Promise<void> {}
+export async function deactivate(): Promise<void> {
+	if (provider) {
+		await provider.disposeAsync();
+		provider = undefined;
+	}
+	if (providerPromise) {
+		const resolved = await providerPromise.catch(() => undefined);
+		if (resolved && resolved !== provider) {
+			await resolved.disposeAsync();
+		}
+		providerPromise = undefined;
+	}
+	providerError = undefined;
+	serviceRegistry = undefined;
+}

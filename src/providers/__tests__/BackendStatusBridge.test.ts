@@ -163,4 +163,15 @@ describe('forwardBackendStatusEvent', () => {
 
 		expect(postedMessages).toContainEqual({ type: 'opencodeEvent', data: event });
 	});
+
+	it('pushes explicit server status messages to the webview', () => {
+		const { provider, postedMessages } = createBridgeProvider();
+
+		(provider as any).sendServerStatus('connected');
+
+		expect(postedMessages).toContainEqual({
+			type: 'serverStatus',
+			data: { status: 'connected' },
+		});
+	});
 });

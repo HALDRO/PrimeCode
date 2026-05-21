@@ -29,11 +29,18 @@ function createProvider(promptAsyncImpl?: PromptAsyncMock, summarizeImpl?: Summa
 
 	const provider: any = Object.assign(Object.create(ChatProvider.prototype), {
 		bridge: new OutboundBridge(),
+		buildServerConfig: vi.fn(async (workspaceRoot: string) => ({
+			provider: 'opencode',
+			workspaceRoot,
+			autoApprove: false,
+		})),
 		cli: {
 			getSdkClient: vi.fn(() => ({
 				instance: { dispose },
 				session: { promptAsync, summarize },
 			})),
+			getAuthorizationHeader: vi.fn(() => null),
+			restartServer: vi.fn(async () => {}),
 			clearAgentsCache,
 			clearCommandsCache,
 			clearSkillsCache,
@@ -140,26 +147,29 @@ describe('ChatProvider send pipeline', () => {
 	it('restartOpenCode path reloads runtime state and resyncs the webview', async () => {
 		const { provider } = createProvider();
 		provider.sendServerInfo = vi.fn();
+		provider.sendServerStatus = vi.fn();
 		provider.syncAllOrDefer = vi.fn(async () => {});
 		provider.hasSynced = true;
-		const reloadOpenCodeRuntime = vi.fn(async () => {});
+		const restartManagedRuntime = vi.fn(async () => {});
 
 		const utility: any = {
 			context: {
-				reloadOpenCodeRuntime,
+				restartManagedRuntime,
 				refreshAfterServerRestart: async () => {
 					provider.sendServerInfo();
+					provider.sendServerStatus('connected');
 					provider.hasSynced = false;
 					await provider.syncAllOrDefer('manual-server-restart');
 				},
 			},
 		};
 
-		await utility.context.reloadOpenCodeRuntime('manual-header');
+		await utility.context.restartManagedRuntime('manual-header');
 		await utility.context.refreshAfterServerRestart();
 
-		expect(reloadOpenCodeRuntime).toHaveBeenCalledWith('manual-header');
+		expect(restartManagedRuntime).toHaveBeenCalledWith('manual-header');
 		expect(provider.sendServerInfo).toHaveBeenCalled();
+		expect(provider.sendServerStatus).toHaveBeenCalledWith('connected');
 		expect(provider.syncAllOrDefer).toHaveBeenCalledWith('manual-server-restart');
 	});
 
@@ -214,15 +224,33 @@ describe('ChatProvider send pipeline', () => {
 		provider.cli.ensureServer = vi.fn(async () => {});
 		provider.reloadOpenCodeRuntimeOnStartup = vi.fn(async () => {});
 		provider.startBackendStatusBridge = vi.fn();
+		provider.sendServerStatus = vi.fn();
 		provider.sendServerInfo = vi.fn();
 		provider.syncAllOrDefer = vi.fn(async () => {});
 
 		await provider.doStartOpenCode('C:\\repo');
 
 		expect(provider.startBackendStatusBridge).toHaveBeenCalledTimes(1);
+		expect(provider.sendServerStatus).toHaveBeenCalledWith('connected');
 		expect(provider.sendServerInfo).toHaveBeenCalled();
 		expect(provider.startBackendStatusBridge.mock.invocationCallOrder[0]).toBeLessThan(
 			provider.sendServerInfo.mock.invocationCallOrder[0],
 		);
+	});
+
+	it('recoverManagedRuntime reuses buildServerConfig for full restart config', async () => {
+		const { provider } = createProvider();
+		provider.settings = { getWorkspaceRoot: vi.fn(() => 'C:\repo') };
+		provider.cli.tryReconnect = vi.fn(async () => false);
+		provider.cli.restartServer = vi.fn(async () => {});
+		provider.sendServerInfo = vi.fn();
+
+		await provider.recoverManagedRuntime('C:\repo');
+
+		expect(provider.buildServerConfig).toHaveBeenCalledWith('C:\repo');
+		expect(provider.cli.restartServer).toHaveBeenCalledWith(
+			expect.objectContaining({ workspaceRoot: 'C:\repo' }),
+		);
+		expect(provider.sendServerInfo).toHaveBeenCalled();
 	});
 });

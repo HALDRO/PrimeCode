@@ -301,6 +301,12 @@ export const useUIStore = create<UIState>((set, get) => ({
 					}
 					break;
 
+				case 'serverStatus':
+					if (message.data && typeof message.data.status === 'string') {
+						actions.setServerStatus(message.data.status as UIState['serverStatus']);
+					}
+					break;
+
 				case 'connectionDetails':
 					set({ connectionDetails: message.data as UIState['connectionDetails'] });
 					break;
