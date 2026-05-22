@@ -87,17 +87,6 @@ export function generateId(prefix: string): string {
 
 	return `${prefix}_${hex}${secureRandomBase62(14)}`;
 }
-export function asRecord(value: unknown): Record<string, unknown> {
-	return value && typeof value === 'object' && !Array.isArray(value)
-		? (value as Record<string, unknown>)
-		: {};
-}
-
-export function getStringField(record: unknown, key: string, fallback = ''): string {
-	const value = asRecord(record)[key];
-	return typeof value === 'string' ? value : fallback;
-}
-
 function findTaskResultContentOutsideCodeFence(raw: string): string | undefined {
 	let inFence = false;
 	let lineStart = 0;

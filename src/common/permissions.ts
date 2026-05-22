@@ -89,7 +89,7 @@ export const DEFAULT_POLICIES: PermissionPolicies = {
 // Validation
 // =============================================================================
 
-export const VALID_POLICY_VALUES = new Set<PermissionPolicyValue>(['ask', 'allow', 'deny']);
+const VALID_POLICY_VALUES = new Set<PermissionPolicyValue>(['ask', 'allow', 'deny']);
 
 /**
  * Type guard to check if a value is a valid permission policy value.

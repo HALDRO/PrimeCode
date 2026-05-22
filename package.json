@@ -29,6 +29,11 @@
 	"knip": {
 		"entry": [
 			"src/extension.ts",
+			"src/common/index.ts",
+			"src/webview/store/index.ts",
+			"src/webview/components/ui/index.ts",
+			"src/webview/components/icons/index.tsx",
+			"src/webview/constants.ts",
 			"src/**/*.test.ts",
 			"tests/**/*.ts"
 		],

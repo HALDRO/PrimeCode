@@ -27,19 +27,17 @@ export interface ReconstructedPrompt {
 	images: ReconstructedImage[];
 }
 
-export function getPrimaryUserText(parts: Part[] | undefined): string {
+function getPrimaryUserText(parts: Part[] | undefined): string {
 	if (!parts || parts.length === 0) return '';
 
-	const textParts = parts.filter(
-		(part): part is Part & { text: string; synthetic?: boolean; ignored?: boolean } =>
-			part.type === 'text' &&
-			'text' in part &&
-			!(part as { synthetic?: boolean }).synthetic &&
-			!(part as { ignored?: boolean }).ignored,
-	);
-	if (textParts.length === 0) return '';
-
-	return textParts.reduce((best, part) => (part.text.length > best.text.length ? part : best)).text;
+	let bestText = '';
+	for (const part of parts) {
+		if (part.type !== 'text' || !('text' in part)) continue;
+		const p = part as { text: string; synthetic?: boolean; ignored?: boolean };
+		if (p.synthetic || p.ignored) continue;
+		if (p.text.length > bestText.length) bestText = p.text;
+	}
+	return bestText;
 }
 
 interface TextSource {

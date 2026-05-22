@@ -143,40 +143,6 @@ export function isFileEditTool(toolName: string): boolean {
  * For edits, shared prefix/suffix are skipped; remaining old lines are
  * "removed" and remaining new lines are "added".
  */
-export function computeDiffLineStats(
-	oldContent: string,
-	newContent: string,
-): { added: number; removed: number } {
-	if (!oldContent && !newContent) return { added: 0, removed: 0 };
-	if (!oldContent) return { added: newContent.split('\n').length, removed: 0 };
-	if (!newContent) return { added: 0, removed: oldContent.split('\n').length };
-	if (oldContent === newContent) return { added: 0, removed: 0 };
-
-	const oldLines = oldContent.split('\n');
-	const newLines = newContent.split('\n');
-
-	// Common prefix
-	let prefixLen = 0;
-	const minLen = Math.min(oldLines.length, newLines.length);
-	while (prefixLen < minLen && oldLines[prefixLen] === newLines[prefixLen]) {
-		prefixLen++;
-	}
-
-	// Common suffix (not overlapping with prefix)
-	let suffixLen = 0;
-	while (
-		suffixLen < minLen - prefixLen &&
-		oldLines[oldLines.length - 1 - suffixLen] === newLines[newLines.length - 1 - suffixLen]
-	) {
-		suffixLen++;
-	}
-
-	return {
-		added: Math.max(0, newLines.length - prefixLen - suffixLen),
-		removed: Math.max(0, oldLines.length - prefixLen - suffixLen),
-	};
-}
-
 /**
  * Extract file paths from an `apply_patch` tool input.
  * Supports both `patch` and `patchText` input fields.
@@ -207,7 +173,8 @@ export function extractPatchFilePaths(input: Record<string, unknown>): string[] 
 		const CONTROL_WORDS = new Set(['Begin', 'End', 'Move']);
 		for (const match of patch.matchAll(/^\*{3}\s+(.+?)$/gm)) {
 			const raw = match[1].trim();
-			const firstWord = raw.split(/\s/)[0];
+			const spaceIdx = raw.search(/\s/);
+			const firstWord = spaceIdx === -1 ? raw : raw.slice(0, spaceIdx);
 			if (!raw || raw === '/dev/null' || CONTROL_WORDS.has(firstWord) || raw.includes(':'))
 				continue;
 			paths.push(raw);

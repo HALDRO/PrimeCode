@@ -366,18 +366,3 @@ export function updateModelSettings(patch: ModelSettingsPatch): void {
 export function updateAppSettings(patch: Partial<AppSettings>): void {
 	updateConfig({ app: patch });
 }
-
-export function setEnabledModels(models: string[]): void {
-	updateConfig({ models: { enabledModels: models } });
-}
-
-export function setProviderModelVisibility(visibility: Record<string, boolean | undefined>): void {
-	updateConfig({ models: { providerModelVisibility: visibility } });
-}
-
-export function setModelVariant(modelId: string, variant: string | undefined): void {
-	const current = { ...getModelSettings().modelVariants };
-	if (variant) current[modelId] = variant;
-	else delete current[modelId];
-	updateConfig({ models: { modelVariants: current } });
-}

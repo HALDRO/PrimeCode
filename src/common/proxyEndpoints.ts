@@ -25,7 +25,7 @@ const CUSTOM_ENDPOINT_DEFAULT_NAME_BY_PROTOCOL: Record<ProxyEndpointProtocol, st
  *   http://host:port/v1/models  -> http://host:port/v1
  *   http://host:port/v1/chat/completions -> http://host:port/v1
  */
-export function normalizeProxyBaseUrl(raw: string): string {
+function normalizeProxyBaseUrl(raw: string): string {
 	return `${raw
 		.trim()
 		.replace(/\/+$/, '')

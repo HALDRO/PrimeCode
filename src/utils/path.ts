@@ -23,15 +23,15 @@ export function normalizeComparablePath(input: string): string {
 	return normalizeToPosixPath(input).replace(/^[A-Z]:/, drive => drive.toLowerCase());
 }
 
-export function trimLeadingSlashes(input: string): string {
+function trimLeadingSlashes(input: string): string {
 	return input.replace(/^[\\/]+/, '');
 }
 
-export function trimTrailingSlashes(input: string): string {
+function trimTrailingSlashes(input: string): string {
 	return input.replace(/[\\/]+$/, '');
 }
 
-export function joinPathSegments(base: string, next: string): string {
+function joinPathSegments(base: string, next: string): string {
 	if (!base) return normalizeToPosixPath(next);
 	if (!next) return normalizeToPosixPath(base);
 	return `${trimTrailingSlashes(normalizeToPosixPath(base))}/${trimLeadingSlashes(normalizeToPosixPath(next))}`;

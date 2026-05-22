@@ -129,8 +129,6 @@ import type {
 export type PermissionPolicies = _PermissionPolicies;
 export type PermissionPolicyValue = _PermissionPolicyValue;
 export type PermissionCategory = _PermissionCategory;
-export { DEFAULT_POLICIES, PERMISSION_CATEGORIES } from './permissions';
-
 export type PermissionsUpdatedMessage = BaseExtensionMessage<
 	'permissionsUpdated',
 	{ policies: PermissionPolicies }

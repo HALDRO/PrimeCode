@@ -1,5 +1,3 @@
-import { pathsReferToSameFile } from '../utils/path';
-
 /**
  * @file Normalized Event Types
  * @description Pure type definitions for normalized log entries.
@@ -115,43 +113,6 @@ export function extractLspDiagnostics(
 	}
 
 	return Object.keys(result).length > 0 ? result : undefined;
-}
-
-function findDiagnosticMatch(
-	diagnostics: LspDiagnosticsByFile,
-	filePath: string,
-	workspaceRoot?: string,
-): LspDiagnostic[] | undefined {
-	for (const [diagnosticPath, items] of Object.entries(diagnostics)) {
-		if (pathsReferToSameFile(diagnosticPath, filePath, workspaceRoot)) {
-			return items;
-		}
-	}
-
-	return undefined;
-}
-
-export function remapLspDiagnosticsToFilePaths(
-	metadata: Record<string, unknown> | undefined,
-	filePaths: string[],
-	workspaceRoot?: string,
-): Record<string, unknown> | undefined {
-	const diagnostics = extractLspDiagnostics(metadata);
-	if (!metadata || !diagnostics || filePaths.length === 0) return metadata;
-
-	const remapped: LspDiagnosticsByFile = {};
-	for (const filePath of filePaths) {
-		const match = findDiagnosticMatch(diagnostics, filePath, workspaceRoot);
-		if (match && match.length > 0) {
-			remapped[filePath] = match;
-		}
-	}
-
-	if (Object.keys(remapped).length === 0) return metadata;
-	return {
-		...metadata,
-		diagnostics: remapped,
-	};
 }
 
 // ---------------------------------------------------------------------------

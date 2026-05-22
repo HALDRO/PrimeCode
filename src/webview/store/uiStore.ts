@@ -12,8 +12,7 @@ import { webviewLogger } from '../utils/logger';
 
 const log = webviewLogger.forComponent('UIStore');
 
-// Re-export types from chatStore for backward compatibility
-export type { ChangedFile } from './chatStore';
+// Re-export types from common for barrel convenience
 export type { ConversationIndexEntry, WorkspaceFile };
 
 export type ModalType = 'settings' | 'history' | 'access' | 'mcp' | null;
@@ -89,6 +88,11 @@ type TransientNotificationInput = Omit<
 	severity?: NotificationSeverity;
 };
 
+// Static RegExp for severity inference — compiled once at module load
+const CRITICAL_ERROR_REGEX =
+	/\b(auth|api[_ ]?key|context[_ ]?(length[_ ]?exceeded|overflow)|quota|insufficient[_ ]?quota)\b|providerautherror|contextoverflowerror/i;
+const WARNING_ERROR_REGEX = /\b(output[_ ]?length|rate[_ ]?limit)\b|too many requests/i;
+
 /**
  * Infer severity from notification type and content.
  * Based on OpenCode's error categorization:
@@ -100,25 +104,8 @@ type TransientNotificationInput = Omit<
 function inferSeverity(type: TransientNotification['type'], content: string): NotificationSeverity {
 	if (type === 'system_notice') return 'info';
 	const lower = content.toLowerCase();
-	// Critical: auth failures, context overflow, quota exhausted
-	if (
-		/\bauth\b/.test(lower) ||
-		/\bapi[_ ]?key\b/.test(lower) ||
-		/\bcontext[_ ]?(length[_ ]?exceeded|overflow)\b/.test(lower) ||
-		/\b(quota|insufficient[_ ]?quota)\b/.test(lower) ||
-		lower.includes('providerautherror') ||
-		lower.includes('contextoverflowerror')
-	) {
-		return 'critical';
-	}
-	// Warning: output length, rate limits
-	if (
-		/\boutput[_ ]?length\b/.test(lower) ||
-		/\brate[_ ]?limit\b/.test(lower) ||
-		lower.includes('too many requests')
-	) {
-		return 'warning';
-	}
+	if (CRITICAL_ERROR_REGEX.test(lower)) return 'critical';
+	if (WARNING_ERROR_REGEX.test(lower)) return 'warning';
 	return 'error';
 }
 
@@ -308,10 +295,13 @@ export const useUIStore = create<UIState>((set, get) => ({
 							url: string;
 							workspaceRoot?: string;
 						};
-						actions.setServerUrl(url);
-						if (typeof workspaceRoot === 'string') {
-							actions.setWorkspaceRoot(workspaceRoot || null);
-						}
+						const nextUrl = url && url.trim().length > 0 ? url : null;
+						set(state => ({
+							serverUrl: nextUrl,
+							workspaceRoot:
+								typeof workspaceRoot === 'string' ? workspaceRoot || null : state.workspaceRoot,
+							connectionDetails: nextUrl === null ? null : state.connectionDetails,
+						}));
 					}
 					break;
 

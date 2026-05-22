@@ -38,15 +38,15 @@ export interface TimeBounds {
 }
 
 export function getSnapshotTotal(tokens: TokenSnapshotInput): number {
+	if (typeof tokens.total === 'number' && tokens.total > 0) {
+		return tokens.total;
+	}
+
 	const input = Math.max(0, tokens.input ?? 0);
 	const output = Math.max(0, tokens.output ?? 0);
 	const reasoning = Math.max(0, tokens.reasoning ?? 0);
 	const cacheRead = Math.max(0, tokens.cache?.read ?? 0);
 	const cacheWrite = Math.max(0, tokens.cache?.write ?? 0);
-
-	if (typeof tokens.total === 'number' && tokens.total > 0) {
-		return tokens.total;
-	}
 
 	return input + output + reasoning + cacheRead + cacheWrite;
 }
@@ -74,12 +74,6 @@ export function computeTurnUsage(
 		usageTokens: Math.max(0, totalTokens - baseline),
 		nextSessionSnapshotTotal: totalTokens,
 	};
-}
-
-export function getCompletedDurationMs(created?: number, completed?: number): number {
-	if (typeof created !== 'number' || typeof completed !== 'number') return 0;
-	if (created <= 0 || completed < created) return 0;
-	return completed - created;
 }
 
 export function getTurnUsageTokenCount(turn?: TurnUsageLike | null): number | null {
@@ -119,27 +113,4 @@ export function sumUsageValues(values: Iterable<number | null | undefined>): num
 		if (typeof value === 'number' && value > 0) total += value;
 	}
 	return total;
-}
-
-export function addTimestamp(bounds: TimeBounds, timestamp?: number): TimeBounds {
-	if (typeof timestamp !== 'number' || timestamp <= 0) {
-		return bounds;
-	}
-	return {
-		earliestTs:
-			typeof bounds.earliestTs === 'number' ? Math.min(bounds.earliestTs, timestamp) : timestamp,
-		latestTs:
-			typeof bounds.latestTs === 'number' ? Math.max(bounds.latestTs, timestamp) : timestamp,
-	};
-}
-
-export function getBoundsDurationMs(bounds: TimeBounds): number | undefined {
-	if (
-		typeof bounds.earliestTs !== 'number' ||
-		typeof bounds.latestTs !== 'number' ||
-		bounds.latestTs <= bounds.earliestTs
-	) {
-		return undefined;
-	}
-	return bounds.latestTs - bounds.earliestTs;
 }

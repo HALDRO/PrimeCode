@@ -13,7 +13,7 @@ import { Value } from '@sinclair/typebox/value';
 // CLI Provider Types
 // =============================================================================
 
-export const CLIProviderTypeSchema = Type.Literal('opencode');
+const CLIProviderTypeSchema = Type.Literal('opencode');
 export type CLIProviderType = Static<typeof CLIProviderTypeSchema>;
 
 // =============================================================================
@@ -30,7 +30,7 @@ export type CLIProviderType = Static<typeof CLIProviderTypeSchema>;
  * OpenCode also allows override-only entries: `{ enabled: boolean }`
  * (no type field) to toggle a server defined elsewhere in the config chain.
  */
-export const McpServerSchema = Type.Object({
+const McpServerSchema = Type.Object({
 	type: Type.Optional(Type.Union([Type.Literal('local'), Type.Literal('remote')])),
 	command: Type.Optional(Type.Array(Type.String())),
 	url: Type.Optional(Type.String()),
@@ -70,7 +70,7 @@ export type McpConfig = Static<typeof McpConfigSchema>;
  */
 const MCPServerTypeSchema = Type.Union([Type.Literal('local'), Type.Literal('remote')]);
 
-export const MCPServerConfigSchema = Type.Object({
+const MCPServerConfigSchema = Type.Object({
 	command: Type.Optional(Type.String()),
 	args: Type.Optional(Type.Array(Type.String())),
 	env: Type.Optional(Type.Record(Type.String(), Type.String())),
@@ -82,14 +82,14 @@ export const MCPServerConfigSchema = Type.Object({
 });
 export type MCPServerConfig = Static<typeof MCPServerConfigSchema>;
 
-export const MCPServersMapSchema = Type.Record(Type.String(), MCPServerConfigSchema);
+const MCPServersMapSchema = Type.Record(Type.String(), MCPServerConfigSchema);
 export type MCPServersMap = Static<typeof MCPServersMapSchema>;
 
 // =============================================================================
 // MCP Installed Metadata (UI layer)
 // =============================================================================
 
-export const InstalledMcpServerMetadataSchema = Type.Object({
+const InstalledMcpServerMetadataSchema = Type.Object({
 	source: Type.Union([Type.Literal('custom'), Type.Literal('runtime')]),
 	displayName: Type.Optional(Type.String()),
 	description: Type.Optional(Type.String()),
@@ -105,7 +105,7 @@ export type InstalledMcpServerMetadata = Static<typeof InstalledMcpServerMetadat
  * CLI returns absolute values per request; we store the latest snapshot.
  * Only `requestCount`, `totalDuration`, `totalCost` and subagent counters are truly cumulative.
  */
-export const TotalStatsSchema = Type.Object({
+const TotalStatsSchema = Type.Object({
 	contextTokens: Type.Number(), // Current context window size (last API input tokens).
 	outputTokens: Type.Number(), // Current output tokens (last API response).
 	totalTokens: Type.Number(), // Current total tokens (input + output) from CLI — context window usage.
@@ -128,13 +128,13 @@ export type TotalStats = Static<typeof TotalStatsSchema>;
 // Question Types (SSE question.asked → webview)
 // =============================================================================
 
-export const QuestionOptionSchema = Type.Object({
+const QuestionOptionSchema = Type.Object({
 	label: Type.String(),
 	description: Type.String(),
 	recommended: Type.Optional(Type.Boolean()),
 });
 
-export const QuestionInfoSchema = Type.Object({
+const QuestionInfoSchema = Type.Object({
 	question: Type.String(),
 	header: Type.String(),
 	options: Type.Array(QuestionOptionSchema),
@@ -143,14 +143,14 @@ export const QuestionInfoSchema = Type.Object({
 });
 export type QuestionInfo = Static<typeof QuestionInfoSchema>;
 
-export const QuestionToolRefSchema = Type.Object({
+const QuestionToolRefSchema = Type.Object({
 	messageID: Type.String(),
 	callID: Type.String(),
 });
 
 const UnknownRecordSchema = Type.Record(Type.String(), Type.Unknown());
 
-export const SessionTodoStatusSchema = Type.Union([
+const SessionTodoStatusSchema = Type.Union([
 	Type.Literal('pending'),
 	Type.Literal('in_progress'),
 	Type.Literal('completed'),
@@ -158,7 +158,7 @@ export const SessionTodoStatusSchema = Type.Union([
 ]);
 export type SessionTodoStatus = Static<typeof SessionTodoStatusSchema>;
 
-export const SessionTodoItemSchema = Type.Object({
+const SessionTodoItemSchema = Type.Object({
 	id: Type.String(),
 	content: Type.String(),
 	status: SessionTodoStatusSchema,
@@ -166,7 +166,7 @@ export const SessionTodoItemSchema = Type.Object({
 });
 export type SessionTodoItemSchemaType = Static<typeof SessionTodoItemSchema>;
 
-export const SessionPermissionRequestSchema = Type.Object({
+const SessionPermissionRequestSchema = Type.Object({
 	id: Type.String(),
 	sessionID: Type.String(),
 	permission: Type.String(),
@@ -177,7 +177,7 @@ export const SessionPermissionRequestSchema = Type.Object({
 });
 export type SessionPermissionRequestSchemaType = Static<typeof SessionPermissionRequestSchema>;
 
-export const SessionQuestionRequestSchema = Type.Object({
+const SessionQuestionRequestSchema = Type.Object({
 	id: Type.String(),
 	sessionID: Type.String(),
 	questions: Type.Array(QuestionInfoSchema),
@@ -185,7 +185,7 @@ export const SessionQuestionRequestSchema = Type.Object({
 });
 export type SessionQuestionRequestSchemaType = Static<typeof SessionQuestionRequestSchema>;
 
-export const PermissionRuntimePayloadSchema = Type.Object({
+const PermissionRuntimePayloadSchema = Type.Object({
 	id: Type.Optional(Type.String()),
 	requestId: Type.Optional(Type.String()),
 	sessionID: Type.Optional(Type.String()),
@@ -201,7 +201,7 @@ export const PermissionRuntimePayloadSchema = Type.Object({
 });
 export type PermissionRuntimePayload = Static<typeof PermissionRuntimePayloadSchema>;
 
-export const QuestionRuntimePayloadSchema = Type.Object({
+const QuestionRuntimePayloadSchema = Type.Object({
 	id: Type.Optional(Type.String()),
 	requestId: Type.Optional(Type.String()),
 	sessionID: Type.Optional(Type.String()),
@@ -210,7 +210,7 @@ export const QuestionRuntimePayloadSchema = Type.Object({
 });
 export type QuestionRuntimePayload = Static<typeof QuestionRuntimePayloadSchema>;
 
-export const SessionUpdatedRuntimePayloadSchema = Type.Object({
+const SessionUpdatedRuntimePayloadSchema = Type.Object({
 	sessionId: Type.Optional(Type.String()),
 	modelID: Type.Optional(Type.String()),
 	providerID: Type.Optional(Type.String()),
@@ -229,16 +229,12 @@ function asObjectRecord(value: unknown): Record<string, unknown> | undefined {
 	return value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
 }
 
-export function asRuntimeRecord(value: unknown): Record<string, unknown> | undefined {
-	return asObjectRecord(value);
-}
-
-export function getStringProp(record: Record<string, unknown>, key: string): string | undefined {
+function getStringProp(record: Record<string, unknown>, key: string): string | undefined {
 	const value = record[key];
 	return typeof value === 'string' ? value : undefined;
 }
 
-export function isSessionTodoStatus(value: string): value is SessionTodoStatus {
+function isSessionTodoStatus(value: string): value is SessionTodoStatus {
 	return Value.Check(SessionTodoStatusSchema, value);
 }
 
@@ -276,41 +272,6 @@ export function parseSessionQuestionRequest(
 	return value;
 }
 
-export function mapPermissionRuntimePayloadToRequest(
-	value: unknown,
-	sessionId: string,
-): SessionPermissionRequestSchemaType | undefined {
-	const raw = Value.Cast(PermissionRuntimePayloadSchema, asObjectRecord(value) ?? {});
-	const requestId = raw.requestId ?? raw.id;
-	if (!requestId) return undefined;
-	const permission =
-		typeof raw.tool === 'string' && raw.tool.length > 0
-			? raw.tool
-			: raw.permission && raw.permission.length > 0
-				? raw.permission
-				: 'tool';
-	const toolUseId = raw.toolUseId ?? raw.toolCallId;
-	const metadata = raw.metadata ?? raw.input ?? raw.toolInput ?? {};
-	const request = {
-		id: requestId,
-		sessionID: sessionId,
-		permission,
-		patterns: raw.patterns ?? [],
-		metadata,
-		always: raw.always ?? [],
-		tool:
-			toolUseId && toolUseId.length > 0
-				? {
-						messageID: typeof metadata.messageID === 'string' ? metadata.messageID : requestId,
-						callID: toolUseId,
-					}
-				: typeof raw.tool === 'object' && raw.tool
-					? raw.tool
-					: undefined,
-	};
-	return Value.Check(SessionPermissionRequestSchema, request) ? request : undefined;
-}
-
 export function mapQuestionRuntimePayloadToRequest(
 	value: unknown,
 	sessionId: string,
@@ -335,22 +296,11 @@ export function mapQuestionRuntimePayloadToRequest(
 	return Value.Check(SessionQuestionRequestSchema, request) ? request : undefined;
 }
 
-export function parseSessionUpdatedRuntimePayload(value: unknown): SessionUpdatedRuntimePayload {
-	return Value.Cast(SessionUpdatedRuntimePayloadSchema, asObjectRecord(value) ?? {});
-}
-
-/** Shape of the SSE question.asked payload after validation. */
-export const QuestionRequestSchema = Type.Object({
-	id: Type.String(),
-	questions: Type.Array(QuestionInfoSchema),
-	tool: Type.Optional(QuestionToolRefSchema),
-});
-
 // =============================================================================
 // Access Types
 // =============================================================================
 
-export const AccessSchema = Type.Object({
+const AccessSchema = Type.Object({
 	toolName: Type.String(),
 	commands: Type.Optional(Type.Array(Type.String())),
 	allowAll: Type.Optional(Type.Boolean()),
@@ -361,7 +311,7 @@ export type Access = Static<typeof AccessSchema>;
 // Workspace & Files
 // =============================================================================
 
-export const WorkspaceFileSchema = Type.Object({
+const WorkspaceFileSchema = Type.Object({
 	name: Type.String(),
 	path: Type.String(),
 	fsPath: Type.String(),
@@ -372,7 +322,7 @@ export type WorkspaceFile = Static<typeof WorkspaceFileSchema>;
 // Conversation History
 // =============================================================================
 
-export const ConversationMessageSchema = Type.Union([
+const ConversationMessageSchema = Type.Union([
 	Type.Object({
 		id: Type.Optional(Type.String()),
 		timestamp: Type.String(),
@@ -554,7 +504,7 @@ export const ConversationMessageSchema = Type.Union([
 
 export type ConversationMessage = Static<typeof ConversationMessageSchema>;
 
-export const ConversationIndexEntrySchema = Type.Object({
+const ConversationIndexEntrySchema = Type.Object({
 	filename: Type.String(),
 	sessionId: Type.String(),
 	startTime: Type.String(),
@@ -571,7 +521,7 @@ export type ConversationIndexEntry = Static<typeof ConversationIndexEntrySchema>
 // Platform Info
 // =============================================================================
 
-export const PlatformInfoSchema = Type.Object({
+const PlatformInfoSchema = Type.Object({
 	platform: Type.String(),
 	isWindows: Type.Boolean(),
 });
@@ -601,7 +551,7 @@ const OpenCodeModelDataSchema = Type.Object({
 	variants: Type.Optional(Type.Array(Type.String())),
 });
 
-export const OpenCodeProviderDataSchema = Type.Object({
+const OpenCodeProviderDataSchema = Type.Object({
 	id: Type.String(),
 	name: Type.String(),
 	npm: Type.Optional(Type.String()),
@@ -623,7 +573,7 @@ export type OpenCodeProviderData = Static<typeof OpenCodeProviderDataSchema>;
 // Rules
 // =============================================================================
 
-export const RuleSchema = Type.Object({
+const RuleSchema = Type.Object({
 	name: Type.String(),
 	path: Type.String(),
 	source: Type.Union([Type.Literal('opencode')]),
@@ -640,7 +590,7 @@ export type Rule = Static<typeof RuleSchema>;
  * ParsedCommand — matches OpenCode Command schema.
  * OpenCode uses 'template' field, but we support 'prompt' as alias for backward compat.
  */
-export const ParsedCommandSchema = Type.Object({
+const ParsedCommandSchema = Type.Object({
 	name: Type.String(),
 	description: Type.Optional(Type.String()),
 	template: Type.String(),
@@ -651,7 +601,7 @@ export const ParsedCommandSchema = Type.Object({
 });
 export type ParsedCommand = Static<typeof ParsedCommandSchema>;
 
-export const ParsedSkillSchema = Type.Object({
+const ParsedSkillSchema = Type.Object({
 	name: Type.String(),
 	description: Type.String(),
 	content: Type.String(),
@@ -674,7 +624,7 @@ const PermissionLevel = Type.Union([
 	Type.Literal('allow'),
 	Type.Literal('deny'),
 ]);
-export const ParsedSubagentSchema = Type.Object({
+const ParsedSubagentSchema = Type.Object({
 	name: Type.String(),
 	prompt: Type.String(),
 	path: Type.String(),
@@ -706,20 +656,11 @@ export const ParsedSubagentSchema = Type.Object({
 });
 export type ParsedSubagent = Static<typeof ParsedSubagentSchema>;
 
-// Resource management messages are protocol-typed in protocol.ts.
-export const ResourceKindSchema = Type.Union([
-	Type.Literal('agent'),
-	Type.Literal('command'),
-	Type.Literal('skill'),
-	Type.Literal('plugin'),
-]);
-export const ResourceActionSchema = Type.Union([Type.Literal('setDisabled')]);
-
 // =============================================================================
 // Discovery Status
 // =============================================================================
 
-export const DiscoveryStatusSchema = Type.Object({
+const DiscoveryStatusSchema = Type.Object({
 	rules: Type.Object({
 		hasAgentsMd: Type.Boolean(),
 		ruleFiles: Type.Array(Type.String()),
