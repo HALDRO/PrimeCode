@@ -264,14 +264,6 @@ describe('chatStore restore', () => {
 		expect(state.sessionModel['session-2']).toBe('openai/gpt-5');
 	});
 
-	it('initializes already-created empty sessions when global model is restored', () => {
-		expect(useChatStore.getState().sessionModel[SESSION_ID]).toBeUndefined();
-
-		useSettingsStore.getState().actions.setLastSelectedModel('anthropic/claude-sonnet-4');
-
-		expect(useChatStore.getState().sessionModel[SESSION_ID]).toBe('anthropic/claude-sonnet-4');
-	});
-
 	it('does not overwrite an explicit session model when global model is restored', () => {
 		useChatStore.getState().actions.updateSessionModel('openai/gpt-5', SESSION_ID);
 
@@ -293,52 +285,6 @@ describe('chatStore restore', () => {
 				properties: {
 					sessionID: SESSION_ID,
 					info: restored.message,
-				},
-			} as never,
-		]);
-
-		expect(useChatStore.getState().sessionModel[SESSION_ID]).toBe('openai/gpt-5');
-	});
-
-	it('syncs project model over history-derived session models', () => {
-		const restored = createUserMessageWithModel('msg-restored', 'restored', {
-			providerID: 'oai-oai',
-			modelID: '[Codex] gpt-5.4',
-		});
-
-		restoreFromEvents([
-			{
-				type: 'message.updated',
-				properties: {
-					sessionID: SESSION_ID,
-					info: restored.message,
-				},
-			} as never,
-		]);
-
-		useSettingsStore.getState().actions.setLastSelectedModel('OpenAI Compatible/[Codex] gpt-5.5');
-
-		expect(useChatStore.getState().sessionModel[SESSION_ID]).toBe(
-			'OpenAI Compatible/[Codex] gpt-5.5',
-		);
-	});
-
-	it('seeds restored sessions from the global model when history has no model yet', () => {
-		useSettingsStore.getState().actions.setLastSelectedModel('openai/gpt-5');
-		const first = createUserMessage('msg-1', 'first');
-
-		restoreFromEvents([
-			{
-				type: 'message.updated',
-				properties: {
-					sessionID: SESSION_ID,
-					info: first.message,
-				},
-			} as never,
-			{
-				type: 'message.part.updated',
-				properties: {
-					part: first.part,
 				},
 			} as never,
 		]);

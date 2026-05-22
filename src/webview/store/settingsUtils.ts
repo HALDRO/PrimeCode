@@ -86,9 +86,6 @@ export const handleSettingsData = (
 	}
 
 	// Model preferences from primecode.json
-	if (settings.lastSelectedModel !== undefined) {
-		mappedSettings.lastSelectedModel = settings.lastSelectedModel;
-	}
 	if (settings.modelVariants !== undefined) {
 		mappedSettings.modelVariants = settings.modelVariants;
 	}

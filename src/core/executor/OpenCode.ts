@@ -1,11 +1,15 @@
 /**
  * @file OpenCodeExecutor
  * @description Managed OpenCode runtime bridge with dynamic port, auth, and reattach support.
+ *              Spawns `opencode serve --port=0` per workspace, persists runtime records in
+ *              ~/.config/opencode/primecode.json for cross-window reattach, and guarantees
+ *              owned runtime cleanup with explicit process-tree termination on restart/dispose.
  */
 
 import { type ChildProcess, execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { promisify } from 'node:util';
 import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk/v2/client';
 import launch from 'cross-spawn';
 
@@ -13,11 +17,20 @@ import { logger } from '../../utils/logger';
 import { normalizeDriveLetter } from '../../utils/path';
 import {
 	addRuntime,
+	getAllRuntimes,
 	getRuntimesForWorkspace,
 	isProcessAlive,
 	removeRuntime,
 } from './primecodeConfig';
 import type { CLIConfig, CLIExecutor } from './types';
+
+// ─── Constants ───────────────────────────────────────────────────────────────
+
+const AUTH_USERNAME = 'opencode';
+const LOCAL_SERVER_HOST = '127.0.0.1';
+const execFileAsync = promisify(execFile);
+
+// ─── TTL Cache ───────────────────────────────────────────────────────────────
 
 class TtlCache<T> {
 	private data: T | null = null;
@@ -40,6 +53,55 @@ class TtlCache<T> {
 	}
 }
 
+// ─── Process Kill ─────────────────────────────────────────────────────────────
+
+/**
+ * Kill a process tree asynchronously. On Windows uses `taskkill /T /F`.
+ * On Unix it tries to signal the full process group first, then falls back to the parent PID.
+ */
+async function killProcessTree(pid: number | null, proc?: ChildProcess): Promise<void> {
+	if (!pid) {
+		if (proc && !proc.killed) {
+			try {
+				proc.kill('SIGTERM');
+			} catch {}
+		}
+		return;
+	}
+
+	if (process.platform === 'win32') {
+		try {
+			await execFileAsync('taskkill', ['/pid', String(pid), '/T', '/F'], {
+				windowsHide: true,
+			});
+			return;
+		} catch {}
+		if (proc && !proc.killed) {
+			try {
+				proc.kill();
+			} catch {}
+		}
+		return;
+	}
+
+	try {
+		process.kill(-pid, 'SIGTERM');
+		return;
+	} catch {}
+
+	if (proc && !proc.killed) {
+		try {
+			proc.kill('SIGTERM');
+			return;
+		} catch {}
+	}
+	try {
+		process.kill(pid, 'SIGTERM');
+	} catch {}
+}
+
+// ─── Executor ────────────────────────────────────────────────────────────────
+
 export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	private serverUrl: string | null = null;
 	private directory: string | null = null;
@@ -55,20 +117,17 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		mcp: new TtlCache<unknown>(30 * 1000),
 	};
 
-	private serverInstance: { close(): void } | null = null;
+	private serverProc: ChildProcess | null = null;
+	private serverPid: number | null = null;
 	private isServerOwner = false;
 	private serverStartedAt: number | null = null;
 	private runtimeId: string | null = null;
 	private authorizationHeader: string | null = null;
 
-	private static readonly LOCAL_SERVER_HOST = '127.0.0.1';
+	// ─── Helpers ─────────────────────────────────────────────────────────
 
 	private static normalizeDriveLetter(dir: string): string {
 		return normalizeDriveLetter(dir);
-	}
-
-	private createAuthorizationHeader(password: string): string {
-		return `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`;
 	}
 
 	private buildFetchHeaders(directory?: string, authorization?: string | null): Headers {
@@ -94,27 +153,26 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 	private createRuntimeFetch(directory?: string, authorization?: string | null) {
 		return (input: Request | URL | string, init?: RequestInit) => {
+			const initCopy = { ...init };
+			const headers = new Headers(input instanceof Request ? input.headers : initCopy.headers);
+			const runtimeHeaders = this.buildFetchHeaders(directory, authorization);
+			runtimeHeaders.forEach((value, key) => {
+				if (!headers.has(key)) headers.set(key, value);
+			});
+
 			if (input instanceof Request) {
-				const headers = this.buildFetchHeaders(directory, authorization);
-				input.headers.forEach((value, key) => {
-					if (!headers.has(key)) headers.set(key, value);
-				});
-				headers.forEach((value, key) => {
+				runtimeHeaders.forEach((value, key) => {
 					if (!input.headers.has(key)) input.headers.set(key, value);
 				});
 				return fetch(input);
 			}
 
-			const initCopy = { ...init };
-			const headers = new Headers(initCopy.headers);
-			const runtimeHeaders = this.buildFetchHeaders(directory, authorization);
-			runtimeHeaders.forEach((value, key) => {
-				if (!headers.has(key)) headers.set(key, value);
-			});
 			initCopy.headers = headers;
 			return fetch(input, initCopy);
 		};
 	}
+
+	// ─── Health Check ────────────────────────────────────────────────────
 
 	private async isOpenCodeServer(
 		baseUrl: string,
@@ -138,6 +196,35 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 	}
 
+	// ─── Attach / Reconnect ──────────────────────────────────────────────
+
+	/**
+	 * Attach to an existing runtime from the registry.
+	 * Used both during initial startup (tryReattach) and for reconnection after
+	 * transient failures (tryReconnect). Unified to avoid code duplication.
+	 */
+	private attachToEntry(
+		entry: {
+			serverUrl: string;
+			authorization: string;
+			runtimeId: string;
+			ownerPid: number;
+			pid: number | null;
+			createdAt: number;
+		},
+		directory: string,
+	): void {
+		this.serverUrl = entry.serverUrl;
+		this.authorizationHeader = entry.authorization;
+		this.runtimeId = entry.runtimeId;
+		this.directory = directory;
+		this.isServerOwner = entry.ownerPid === process.pid;
+		this.serverPid = entry.pid;
+		this.serverStartedAt = entry.createdAt;
+		this.serverProc = null;
+		this.initSdkClient();
+	}
+
 	private async tryReattach(config: CLIConfig): Promise<boolean> {
 		const workspaceRoot = OpenCodeExecutor.normalizeDriveLetter(config.workspaceRoot);
 		const entries = getRuntimesForWorkspace(workspaceRoot);
@@ -145,14 +232,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 
 		for (const entry of entries) {
 			if (await this.isOpenCodeServer(entry.serverUrl, entry.authorization)) {
-				this.serverUrl = entry.serverUrl;
-				this.authorizationHeader = entry.authorization;
-				this.runtimeId = entry.runtimeId;
-				this.directory = workspaceRoot;
-				this.isServerOwner = entry.ownerPid === process.pid;
-				this.serverStartedAt = entry.createdAt;
-				this.serverInstance = null;
-				this.initSdkClient();
+				this.attachToEntry(entry, workspaceRoot);
 				logger.info('[OpenCode] Reattached to managed local runtime', {
 					serverUrl: this.serverUrl,
 					runtimeId: this.runtimeId,
@@ -167,37 +247,67 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		return false;
 	}
 
-	private async cleanupOrphanRuntimes(config: CLIConfig): Promise<void> {
-		const workspaceRoot = OpenCodeExecutor.normalizeDriveLetter(config.workspaceRoot);
-		const entries = getRuntimesForWorkspace(workspaceRoot);
+	async tryReconnect(workspaceRoot?: string): Promise<boolean> {
+		const directory = workspaceRoot
+			? OpenCodeExecutor.normalizeDriveLetter(workspaceRoot)
+			: this.directory;
+		if (!directory) return false;
 
+		// Check if current connection is still alive
+		if (this.serverUrl && (await this.isOpenCodeServer(this.serverUrl, this.authorizationHeader))) {
+			return true;
+		}
+
+		// Try to find a live runtime in the registry
+		const entries = getRuntimesForWorkspace(directory);
 		for (const entry of entries) {
+			if (await this.isOpenCodeServer(entry.serverUrl, entry.authorization)) {
+				this.attachToEntry(entry, directory);
+				logger.info('[OpenCode] Reconnected to managed runtime', { url: entry.serverUrl });
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	// ─── Orphan Cleanup ──────────────────────────────────────────────────
+
+	private async cleanupOrphanRuntimes(): Promise<void> {
+		const allEntries = getAllRuntimes();
+
+		for (const entry of allEntries) {
 			const serverAlive = await this.isOpenCodeServer(entry.serverUrl, entry.authorization);
 
 			if (!serverAlive) {
-				// Server not responding — kill process if still running, remove entry
 				logger.info('[OpenCode] Removing dead runtime entry', {
 					runtimeId: entry.runtimeId,
 					pid: entry.pid,
 				});
 				if (entry.pid && isProcessAlive(entry.pid)) {
-					await this.killProcess(entry.pid);
+					await killProcessTree(entry.pid);
 				}
 				removeRuntime(entry.runtimeId);
 				continue;
 			}
 
-			// Server alive but owner process dead — orphan
+			// Server alive but owner process dead — orphan, kill it
 			if (!isProcessAlive(entry.ownerPid)) {
-				logger.info('[OpenCode] Found orphan runtime (owner dead), keeping for reattach', {
+				logger.info('[OpenCode] Killing orphan runtime (owner dead)', {
 					runtimeId: entry.runtimeId,
 					pid: entry.pid,
 					ownerPid: entry.ownerPid,
+					workspaceRoot: entry.workspaceRoot,
 				});
-				// Don't kill — tryReattach will pick it up
+				if (entry.pid) {
+					await killProcessTree(entry.pid);
+				}
+				removeRuntime(entry.runtimeId);
 			}
 		}
 	}
+
+	// ─── Server Lifecycle ────────────────────────────────────────────────
 
 	async ensureServer(config: CLIConfig): Promise<void> {
 		if (this.serverUrl) return;
@@ -222,13 +332,13 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			this.isServerOwner = false;
 			this.serverStartedAt = null;
 			this.directory = OpenCodeExecutor.normalizeDriveLetter(config.workspaceRoot);
-			this.serverInstance = null;
+			this.serverProc = null;
 			this.initSdkClient();
 			logger.info(`[OpenCode] Connected to configured server at ${this.serverUrl}`);
 			return;
 		}
 
-		await this.cleanupOrphanRuntimes(config);
+		await this.cleanupOrphanRuntimes();
 		if (await this.tryReattach(config)) return;
 		await this.spawnServer(config.workspaceRoot, config);
 	}
@@ -236,7 +346,6 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 	private async spawnServer(workspaceRoot: string, config: CLIConfig): Promise<void> {
 		if (this.serverUrl) return;
 
-		// Ensure no stale OPENCODE_PERMISSION env var overrides opencode.json policies.
 		// Permissions are managed exclusively via the project config file.
 		delete process.env.OPENCODE_PERMISSION;
 
@@ -247,7 +356,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			NODE_NO_WARNINGS: '1',
 			NO_COLOR: '1',
 			NPM_CONFIG_LOGLEVEL: 'error',
-			OPENCODE_SERVER_USERNAME: 'opencode',
+			OPENCODE_SERVER_USERNAME: AUTH_USERNAME,
 			OPENCODE_SERVER_PASSWORD: password,
 			OPENCODE_CONFIG_CONTENT:
 				!process.env.OPENCODE_CONFIG_CONTENT && config.autoCompact !== false
@@ -258,21 +367,22 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		logger.info('[OpenCodeExecutor] Starting managed OpenCode runtime...');
 
 		try {
-			const { serverUrl, close, pid } = await this.launchManagedServer(
-				OpenCodeExecutor.LOCAL_SERVER_HOST,
+			const { serverUrl, proc, pid } = await this.launchManagedServer(
+				LOCAL_SERVER_HOST,
 				config.serverTimeoutMs ?? 15_000,
 				workspaceRoot,
 				processEnv,
 			);
 			const runtimeId = randomUUID();
-			const authorization = this.createAuthorizationHeader(password);
+			const authorization = `Basic ${Buffer.from(`${AUTH_USERNAME}:${password}`).toString('base64')}`;
 			const normalizedWorkspaceRoot = OpenCodeExecutor.normalizeDriveLetter(workspaceRoot);
 
-			this.serverInstance = { close };
+			this.serverProc = proc;
 			this.serverUrl = serverUrl;
 			this.authorizationHeader = authorization;
 			this.directory = normalizedWorkspaceRoot;
 			this.runtimeId = runtimeId;
+			this.serverPid = pid;
 			this.isServerOwner = true;
 			this.serverStartedAt = Date.now();
 
@@ -290,6 +400,7 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			logger.info('[OpenCode] Managed runtime started', {
 				serverUrl: this.serverUrl,
 				runtimeId: this.runtimeId,
+				pid,
 			});
 			void this.preloadMetadata();
 		} catch (error) {
@@ -309,13 +420,14 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			env,
 			stdio: ['ignore', 'pipe', 'pipe'],
 			windowsHide: true,
+			detached: process.platform !== 'win32',
 		});
 
 		const pid = typeof proc.pid === 'number' ? proc.pid : null;
 		let output = '';
 		const serverUrl = await new Promise<string>((resolve, reject) => {
 			const timer = setTimeout(() => {
-				void this.killProcess(pid);
+				void killProcessTree(pid, proc);
 				reject(new Error(`Timeout waiting for server to start after ${timeoutMs}ms`));
 			}, timeoutMs);
 			let resolved = false;
@@ -347,36 +459,79 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 			});
 		});
 
-		return {
-			serverUrl,
-			pid,
-			close: () => {
-				void this.killProcess(pid, proc);
-			},
-		};
+		return { serverUrl, proc, pid };
 	}
 
-	private async killProcess(pid: number | null, proc?: ChildProcess): Promise<void> {
-		let terminated = false;
-		if (proc && !proc.killed) {
+	// ─── Shutdown (unified for restart and dispose) ──────────────────────
+
+	/**
+	 * Graceful shutdown: POST /global/dispose to let the server clean up,
+	 * then force-kill the process tree.
+	 * Used by restartServer() where we have time for the REST call.
+	 */
+	private async shutdownGraceful(): Promise<void> {
+		if (this.serverUrl) {
 			try {
-				terminated = proc.kill('SIGTERM');
-			} catch {}
+				await this.request('/global/dispose', {
+					method: 'POST',
+					signal: AbortSignal.timeout(3_000),
+				});
+			} catch (error) {
+				logger.debug('[OpenCode] REST dispose failed, falling back to process kill', { error });
+			}
 		}
-		if (!pid) return;
-		if (!terminated) {
-			try {
-				process.kill(pid, 'SIGTERM');
-				terminated = true;
-			} catch {}
-		}
-		if (terminated || process.platform !== 'win32') return;
-		await new Promise<void>(resolve => {
-			execFile('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true }, () =>
-				resolve(),
-			);
-		});
+		await this.killOwnedProcess();
+		this.clearState();
 	}
+
+	/**
+	 * Immediate shutdown: kill the process tree without REST.
+	 * Used by dispose() where VS Code gives minimal time for deactivate().
+	 */
+	private async shutdownImmediate(): Promise<void> {
+		await this.killOwnedProcess();
+		this.clearState();
+	}
+
+	private async killOwnedProcess(): Promise<void> {
+		if (!this.isServerOwner) return;
+		await killProcessTree(this.serverPid, this.serverProc ?? undefined);
+		if (this.runtimeId) {
+			removeRuntime(this.runtimeId);
+		}
+	}
+
+	private clearState(): void {
+		this.serverProc = null;
+		this.serverPid = null;
+		this.serverUrl = null;
+		this.directory = null;
+		this.sdkClient = null;
+		this.isServerOwner = false;
+		this.serverStartedAt = null;
+		this.runtimeId = null;
+		this.authorizationHeader = null;
+	}
+
+	async restartServer(config: CLIConfig): Promise<void> {
+		await this.shutdownGraceful();
+		await this.ensureServer(config);
+	}
+
+	async isServerHealthy(): Promise<boolean> {
+		if (!this.serverUrl) return false;
+		return this.isOpenCodeServer(this.serverUrl, this.authorizationHeader);
+	}
+
+	/**
+	 * Called during VS Code deactivate(). Must be fast and synchronous where possible.
+	 * No REST calls — just kill the process tree and clean up the registry.
+	 */
+	async dispose(): Promise<void> {
+		await this.shutdownImmediate();
+	}
+
+	// ─── SDK Client ──────────────────────────────────────────────────────
 
 	private initSdkClient(): void {
 		if (!this.serverUrl) return;
@@ -398,6 +553,8 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		if (!this.sdkClient) throw new Error('OpenCode SDK client not initialized');
 		return this.sdkClient;
 	}
+
+	// ─── Metadata ────────────────────────────────────────────────────────
 
 	private async preloadMetadata(): Promise<void> {
 		if (!this.directory) return;
@@ -488,87 +645,10 @@ export class OpenCodeExecutor extends EventEmitter implements CLIExecutor {
 		}
 	}
 
-	async tryReconnect(workspaceRoot?: string): Promise<boolean> {
-		const directory = workspaceRoot
-			? OpenCodeExecutor.normalizeDriveLetter(workspaceRoot)
-			: this.directory;
-		if (!directory) return false;
-
-		if (this.serverUrl && (await this.isOpenCodeServer(this.serverUrl, this.authorizationHeader))) {
-			return true;
-		}
-
-		const entries = getRuntimesForWorkspace(directory);
-		for (const entry of entries) {
-			if (await this.isOpenCodeServer(entry.serverUrl, entry.authorization)) {
-				this.serverUrl = entry.serverUrl;
-				this.authorizationHeader = entry.authorization;
-				this.runtimeId = entry.runtimeId;
-				this.directory = directory;
-				this.isServerOwner = entry.ownerPid === process.pid;
-				this.serverStartedAt = entry.createdAt;
-				this.serverInstance = null;
-				this.initSdkClient();
-				logger.info('[OpenCode] Reconnected to managed runtime', { url: entry.serverUrl });
-				return true;
-			}
-		}
-
-		return false;
-	}
+	// ─── Public API ──────────────────────────────────────────────────────
 
 	getAuthorizationHeader(): string | null {
 		return this.authorizationHeader;
-	}
-
-	async restartServer(config: CLIConfig): Promise<void> {
-		await this.stopManagedRuntime();
-		await this.ensureServer(config);
-	}
-
-	async isServerHealthy(): Promise<boolean> {
-		if (!this.serverUrl) return false;
-		return this.isOpenCodeServer(this.serverUrl, this.authorizationHeader);
-	}
-
-	private async stopManagedRuntime(): Promise<void> {
-		if (this.serverUrl) {
-			try {
-				await this.request('/global/dispose', {
-					method: 'POST',
-					signal: AbortSignal.timeout(3_000),
-				});
-			} catch (error) {
-				logger.debug('[OpenCode] REST dispose failed, falling back to process kill', { error });
-			}
-		}
-		if (this.serverInstance) {
-			try {
-				this.serverInstance.close();
-			} catch {}
-		}
-		if (this.runtimeId) {
-			removeRuntime(this.runtimeId);
-		}
-		this.serverInstance = null;
-		this.serverUrl = null;
-		this.directory = null;
-		this.sdkClient = null;
-		this.isServerOwner = false;
-		this.serverStartedAt = null;
-		this.runtimeId = null;
-		this.authorizationHeader = null;
-	}
-
-	async dispose(): Promise<void> {
-		this.serverInstance = null;
-		this.serverUrl = null;
-		this.directory = null;
-		this.sdkClient = null;
-		this.isServerOwner = false;
-		this.serverStartedAt = null;
-		this.runtimeId = null;
-		this.authorizationHeader = null;
 	}
 
 	getAdminInfo(): { baseUrl: string; directory: string } | null {

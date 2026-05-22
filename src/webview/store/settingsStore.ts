@@ -55,10 +55,9 @@ export type {
 };
 
 import { vscode } from '../utils/vscode';
-import { useChatStore } from './chatStore';
 import { handleSettingsData } from './settingsUtils';
 
-/** Persist model selection state to primecode.json via extension bridge. */
+/** Persist model-related preferences to primecode.json via extension bridge. */
 function persistModelPreferences(patch: Record<string, unknown>): void {
 	vscode.postMessage({ type: 'updateSettings', settings: patch });
 }
@@ -631,9 +630,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 	actions: {
 		setSettings: settings => set(state => ({ ...state, ...settings })),
 		setLastSelectedModel: lastSelectedModel => {
-			persistModelPreferences({ lastSelectedModel });
 			set({ lastSelectedModel });
-			useChatStore.getState().actions.syncProjectModel(lastSelectedModel);
 		},
 		setModelVariant: (modelId, variant) =>
 			set(state => {

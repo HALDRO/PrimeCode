@@ -658,6 +658,13 @@ async function createSession(): Promise<string> {
 			if (!state.sessionOrder.includes(session.id)) {
 				state.sessionOrder.push(session.id);
 			}
+			// Inherit model from the previously active session
+			if (!state.sessionModel[session.id] && state.activeSessionId) {
+				const previousModel = state.sessionModel[state.activeSessionId];
+				if (previousModel) {
+					state.sessionModel[session.id] = previousModel;
+				}
+			}
 			state.activeSessionId = session.id;
 		}),
 	);

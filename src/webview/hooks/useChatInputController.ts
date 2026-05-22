@@ -129,7 +129,6 @@ export function useChatInputController(
 	const currentImproveRequestId = useImprovingPromptRequestId();
 	const promptVersions = usePromptVersions();
 	const agentResources = useSettingsStore(s => s.resources.agent.items);
-	const lastSelectedModel = useSettingsStore(s => s.lastSelectedModel);
 	const pushNotification = useUIStore(s => s.actions.pushNotification);
 	// Use reactive selector so the button re-renders immediately when agent changes.
 	// getSessionAgent() is an imperative getter that doesn't subscribe to store updates.
@@ -301,8 +300,7 @@ export function useChatInputController(
 		if (!targetSessionId) return;
 		const sessionModelId =
 			useChatStore.getState().sessionModel[targetSessionId] ??
-			(sessionModel && sessionModel !== 'default' ? sessionModel : undefined) ??
-			(lastSelectedModel && lastSelectedModel !== 'default' ? lastSelectedModel : undefined);
+			(sessionModel && sessionModel !== 'default' ? sessionModel : undefined);
 		updateSessionInput('');
 		attachments.clearAll();
 		clearPromptVersions();
@@ -328,7 +326,6 @@ export function useChatInputController(
 		validSessionVariant,
 		updateSessionInput,
 		clearPromptVersions,
-		lastSelectedModel,
 		sessionModel,
 		availableAgentNames,
 		ensureSessionForSend,

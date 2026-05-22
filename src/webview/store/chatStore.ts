@@ -20,7 +20,6 @@ import type { SessionMessageEntry } from '../services/opencodeRuntime';
 import { webviewLogger } from '../utils/logger';
 import { eventReducer, reconcileSessionGraph, type WebviewSdkEvent } from './eventReducer';
 import { rebuildSessionOwnedFiles } from './fileOwnership';
-import { useSettingsStore } from './settingsStore';
 import { useUIStore } from './uiStore';
 
 const log = webviewLogger.forComponent('ChatStore');
@@ -85,9 +84,7 @@ function getNewSessionSeedModel(state?: SessionStore): string | undefined {
 	const activeSessionModel = state?.activeSessionId
 		? state.sessionModel[state.activeSessionId]
 		: undefined;
-	if (activeSessionModel) return activeSessionModel;
-	const model = useSettingsStore.getState().lastSelectedModel;
-	return model && model !== 'default' ? model : undefined;
+	return activeSessionModel;
 }
 
 function getSessionErrorMessage(error: unknown): string | null {
@@ -481,7 +478,7 @@ export interface SessionActions {
 	appendInput: (text: string, sessionId?: string) => void;
 	updateSessionAgent: (agent: string | undefined, sessionId?: string) => void;
 	updateSessionModel: (model: string | undefined, sessionId?: string) => void;
-	syncProjectModel: (model: string | undefined) => void;
+
 	addOptimisticMessage: (input: { sessionId: string; message: Message; parts: Part[] }) => void;
 	removeOptimisticMessage: (input: { sessionId: string; messageId: string }) => void;
 	truncateSessionMessages: (sessionId: string, messageId: string, includeTarget?: boolean) => void;
@@ -758,22 +755,24 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 		updateSessionInput: (input, sessionId) => {
 			const sid = resolveSessionId(get(), sessionId);
 			if (sid) {
-				set(
-					produce((s: SessionStore) => {
-						s.sessionInput[sid] = input;
-					}),
-				);
+				set(state => ({
+					sessionInput: {
+						...state.sessionInput,
+						[sid]: input,
+					},
+				}));
 			}
 		},
 
 		appendInput: (text, sessionId) => {
 			const sid = resolveSessionId(get(), sessionId);
 			if (sid) {
-				set(
-					produce((s: SessionStore) => {
-						s.sessionInput[sid] = (s.sessionInput[sid] || '') + text;
-					}),
-				);
+				set(state => ({
+					sessionInput: {
+						...state.sessionInput,
+						[sid]: (state.sessionInput[sid] || '') + text,
+					},
+				}));
 			}
 		},
 
@@ -809,25 +808,6 @@ export const useChatStore = create<SessionStore>()((set, get) => ({
 			}
 		},
 
-		syncProjectModel: model => {
-			const projectModel = model && model !== 'default' ? model : undefined;
-			set(
-				produce((s: SessionStore) => {
-					const sessionIds = new Set<string>(s.sessionOrder);
-					if (s.activeSessionId) sessionIds.add(s.activeSessionId);
-					for (const sessionId of sessionIds) {
-						if (s.sessionModelSource[sessionId] === 'user') continue;
-						if (projectModel) {
-							s.sessionModel[sessionId] = projectModel;
-							delete s.sessionModelSource[sessionId];
-						} else {
-							delete s.sessionModel[sessionId];
-							delete s.sessionModelSource[sessionId];
-						}
-					}
-				}),
-			);
-		},
 		addOptimisticMessage: ({ sessionId, message, parts }) => {
 			set(
 				produce((state: SessionStore) => {

@@ -27,7 +27,6 @@ export interface RuntimeEntry {
 }
 
 export interface ModelSettings {
-	lastSelected: string;
 	enabledModels: string[];
 	providerModelVisibility: Record<string, boolean | undefined>;
 	modelVariants: Record<string, string | undefined>;
@@ -61,7 +60,6 @@ export interface PrimeCodeConfig {
 // ─── Defaults ────────────────────────────────────────────────────────────────
 
 const DEFAULT_MODEL_SETTINGS: ModelSettings = {
-	lastSelected: '',
 	enabledModels: [],
 	providerModelVisibility: {},
 	modelVariants: {},
@@ -143,7 +141,6 @@ function parseModelSettings(raw: unknown): ModelSettings {
 	if (!raw || typeof raw !== 'object') return configCache.models;
 	const obj = raw as Record<string, unknown>;
 	return {
-		lastSelected: typeof obj.lastSelected === 'string' ? obj.lastSelected : '',
 		enabledModels: Array.isArray(obj.enabledModels)
 			? obj.enabledModels.filter((v): v is string => typeof v === 'string')
 			: [],
@@ -188,8 +185,8 @@ export function flushWrites(): Promise<void> {
 
 /**
  * Async atomic write with sequential queue.
- * Multiple concurrent writes are serialized — each sees the result of the previous.
- * Uses temp file + rename for atomicity.
+ * Reads raw JSON from disk, updates ONLY models/app sections, writes back.
+ * Never touches runtimes. If file is corrupted, does not write to disk.
  */
 function enqueueWrite(config: PrimeCodeConfig): void {
 	// Update cache immediately so subsequent sync reads see the new state
@@ -198,10 +195,23 @@ function enqueueWrite(config: PrimeCodeConfig): void {
 	writeQueue = writeQueue.then(async () => {
 		try {
 			ensureConfigDir();
+			let fileData: Record<string, unknown> = {};
+			if (existsSync(CONFIG_PATH)) {
+				try {
+					const raw = readFileSync(CONFIG_PATH, 'utf-8');
+					fileData = JSON.parse(raw) as Record<string, unknown>;
+				} catch {
+					logger.warn(
+						'[PrimeCodeConfig] Cannot parse primecode.json for settings write, skipping disk write',
+					);
+					return;
+				}
+			}
+			fileData.models = config.models;
+			fileData.app = config.app;
 			const tempPath = `${CONFIG_PATH}.tmp`;
-			await writeFile(tempPath, JSON.stringify(config, null, '\t'), 'utf-8');
+			await writeFile(tempPath, JSON.stringify(fileData, null, 2), 'utf-8');
 			await rename(tempPath, CONFIG_PATH);
-			// Update mtime after successful write
 			try {
 				const stat = statSync(CONFIG_PATH);
 				configMtime = stat.mtimeMs;
@@ -215,30 +225,53 @@ function enqueueWrite(config: PrimeCodeConfig): void {
 }
 
 /**
- * Synchronous atomic write — used only for runtime registry operations
- * that must complete before process exit (e.g. spawnServer recording PID).
+ * Partial write: reads raw JSON from disk, updates ONLY the runtimes section,
+ * writes back. Never touches models/app. If file is corrupted, does not write.
  */
-function writeConfigSync(config: PrimeCodeConfig): void {
+function writeRuntimesSync(runtimes: RuntimeEntry[]): void {
 	try {
 		ensureConfigDir();
+		let fileData: Record<string, unknown> = {};
+		if (existsSync(CONFIG_PATH)) {
+			try {
+				const raw = readFileSync(CONFIG_PATH, 'utf-8');
+				fileData = JSON.parse(raw) as Record<string, unknown>;
+			} catch {
+				// File corrupted — do not overwrite, just update in-memory cache
+				logger.warn(
+					'[PrimeCodeConfig] Cannot parse primecode.json for runtime write, skipping disk write',
+				);
+				configCache.runtimes = runtimes;
+				return;
+			}
+		}
+		fileData.runtimes = runtimes;
 		const tempPath = `${CONFIG_PATH}.tmp`;
-		writeFileSync(tempPath, JSON.stringify(config, null, '\t'), 'utf-8');
+		writeFileSync(tempPath, JSON.stringify(fileData, null, 2), 'utf-8');
 		renameSync(tempPath, CONFIG_PATH);
 		const stat = statSync(CONFIG_PATH);
-		configCache = config;
+		configCache.runtimes = runtimes;
 		configMtime = stat.mtimeMs;
 	} catch (error) {
-		logger.error('[PrimeCodeConfig] Failed to write primecode.json (sync):', error);
+		logger.error('[PrimeCodeConfig] Failed to write runtimes:', error);
 	}
 }
 
 // ─── Runtime Registry (sync — must persist before process continues) ─────────
 
 export function addRuntime(entry: RuntimeEntry): void {
-	const config = readConfig();
-	config.runtimes = config.runtimes.filter(r => r.runtimeId !== entry.runtimeId);
-	config.runtimes.push(entry);
-	writeConfigSync(config);
+	// Read fresh runtimes from disk to avoid stale cache
+	let currentRuntimes: RuntimeEntry[] = [];
+	if (existsSync(CONFIG_PATH)) {
+		try {
+			const raw = readFileSync(CONFIG_PATH, 'utf-8');
+			const parsed = JSON.parse(raw) as Record<string, unknown>;
+			currentRuntimes = Array.isArray(parsed.runtimes) ? parsed.runtimes : [];
+		} catch {}
+	}
+	currentRuntimes = currentRuntimes.filter(r => r.runtimeId !== entry.runtimeId);
+	currentRuntimes.push(entry);
+	writeRuntimesSync(currentRuntimes);
 	logger.info('[PrimeCodeConfig] Added runtime entry', {
 		runtimeId: entry.runtimeId,
 		pid: entry.pid,
@@ -247,11 +280,18 @@ export function addRuntime(entry: RuntimeEntry): void {
 }
 
 export function removeRuntime(runtimeId: string): void {
-	const config = readConfig();
-	const before = config.runtimes.length;
-	config.runtimes = config.runtimes.filter(r => r.runtimeId !== runtimeId);
-	if (config.runtimes.length < before) {
-		writeConfigSync(config);
+	let currentRuntimes: RuntimeEntry[] = [];
+	if (existsSync(CONFIG_PATH)) {
+		try {
+			const raw = readFileSync(CONFIG_PATH, 'utf-8');
+			const parsed = JSON.parse(raw) as Record<string, unknown>;
+			currentRuntimes = Array.isArray(parsed.runtimes) ? parsed.runtimes : [];
+		} catch {}
+	}
+	const before = currentRuntimes.length;
+	currentRuntimes = currentRuntimes.filter(r => r.runtimeId !== runtimeId);
+	if (currentRuntimes.length < before) {
+		writeRuntimesSync(currentRuntimes);
 		logger.info('[PrimeCodeConfig] Removed runtime entry', { runtimeId });
 	}
 }
@@ -260,12 +300,16 @@ export function getRuntimesForWorkspace(workspaceRoot: string): RuntimeEntry[] {
 	return readConfig().runtimes.filter(r => r.workspaceRoot === workspaceRoot);
 }
 
+export function getAllRuntimes(): RuntimeEntry[] {
+	return readConfig().runtimes;
+}
+
 export function isProcessAlive(pid: number): boolean {
 	try {
 		process.kill(pid, 0);
 		return true;
-	} catch {
-		return false;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === 'EPERM';
 	}
 }
 
@@ -294,7 +338,6 @@ export function updateConfig(patch: {
 	if (patch.models) {
 		const m = patch.models;
 		const models = config.models;
-		if (m.lastSelected !== undefined) models.lastSelected = m.lastSelected;
 		if (m.enabledModels !== undefined) models.enabledModels = m.enabledModels;
 		if (m.providerModelVisibility !== undefined) {
 			models.providerModelVisibility = {
@@ -322,10 +365,6 @@ export function updateModelSettings(patch: ModelSettingsPatch): void {
 
 export function updateAppSettings(patch: Partial<AppSettings>): void {
 	updateConfig({ app: patch });
-}
-
-export function setLastSelectedModel(model: string): void {
-	updateConfig({ models: { lastSelected: model } });
 }
 
 export function setEnabledModels(models: string[]): void {

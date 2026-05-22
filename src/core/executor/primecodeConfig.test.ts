@@ -38,7 +38,6 @@ describe('primecodeConfig', () => {
 	describe('readConfig / defaults', () => {
 		it('returns defaults when file does not exist', () => {
 			const models = getModelSettings();
-			expect(models.lastSelected).toBe('');
 			expect(models.enabledModels).toEqual([]);
 			expect(models.providerModelVisibility).toEqual({});
 			expect(models.modelVariants).toEqual({});
@@ -55,7 +54,6 @@ describe('primecodeConfig', () => {
 			const config = {
 				runtimes: [],
 				models: {
-					lastSelected: 'anthropic/claude-sonnet-4',
 					enabledModels: ['anthropic/claude-sonnet-4', 'openai/gpt-4o'],
 					providerModelVisibility: { anthropic: true },
 					modelVariants: { 'anthropic/claude-sonnet-4': 'extended-thinking' },
@@ -81,7 +79,6 @@ describe('primecodeConfig', () => {
 			invalidateConfigCache();
 
 			const models = getModelSettings();
-			expect(models.lastSelected).toBe('anthropic/claude-sonnet-4');
 			expect(models.enabledModels).toEqual(['anthropic/claude-sonnet-4', 'openai/gpt-4o']);
 			expect(models.modelVariants['anthropic/claude-sonnet-4']).toBe('extended-thinking');
 
@@ -100,39 +97,33 @@ describe('primecodeConfig', () => {
 			// Should return cached/default state, not crash
 			const models = getModelSettings();
 			expect(models).toBeDefined();
-			expect(typeof models.lastSelected).toBe('string');
+			expect(Array.isArray(models.enabledModels)).toBe(true);
 		});
 	});
 
 	describe('stat-based cache', () => {
 		it('returns cached data without re-reading file', () => {
-			updateModelSettings({ lastSelected: 'test/model' });
-			// Modify file directly (simulating external change without mtime change)
+			updateModelSettings({ enabledModels: ['test/model'] });
 			const models = getModelSettings();
-			expect(models.lastSelected).toBe('test/model');
+			expect(models.enabledModels).toEqual(['test/model']);
 		});
 
 		it('invalidateConfigCache forces re-read from disk', async () => {
-			updateModelSettings({ lastSelected: 'original' });
+			updateModelSettings({ enabledModels: ['original'] });
 			await flushWrites();
 
 			// Write directly to disk bypassing cache
 			const raw = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
-			raw.models.lastSelected = 'modified-externally';
+			raw.models.enabledModels = ['modified-externally'];
 			writeFileSync(CONFIG_PATH, JSON.stringify(raw), 'utf-8');
 
 			// After invalidation, reads fresh from disk
 			invalidateConfigCache();
-			expect(getModelSettings().lastSelected).toBe('modified-externally');
+			expect(getModelSettings().enabledModels).toEqual(['modified-externally']);
 		});
 	});
 
 	describe('updateModelSettings', () => {
-		it('updates lastSelected', () => {
-			updateModelSettings({ lastSelected: 'openai/gpt-4o' });
-			expect(getModelSettings().lastSelected).toBe('openai/gpt-4o');
-		});
-
 		it('updates enabledModels', () => {
 			updateModelSettings({ enabledModels: ['a', 'b', 'c'] });
 			expect(getModelSettings().enabledModels).toEqual(['a', 'b', 'c']);
@@ -189,21 +180,21 @@ describe('primecodeConfig', () => {
 	describe('updateConfig (batched)', () => {
 		it('updates models and app in a single call', () => {
 			updateConfig({
-				models: { lastSelected: 'batch/model', enabledModels: ['x'] },
+				models: { enabledModels: ['x'], providerModelVisibility: { test: true } },
 				app: { opencodeAgent: 'batch-agent', providersDisabled: ['p1'] },
 			});
 
-			expect(getModelSettings().lastSelected).toBe('batch/model');
 			expect(getModelSettings().enabledModels).toEqual(['x']);
+			expect(getModelSettings().providerModelVisibility.test).toBe(true);
 			expect(getAppSettings().opencodeAgent).toBe('batch-agent');
 			expect(getAppSettings().providersDisabled).toEqual(['p1']);
 		});
 
 		it('only updates models when app is not provided', () => {
 			updateAppSettings({ opencodeAgent: 'original' });
-			updateConfig({ models: { lastSelected: 'new' } });
+			updateConfig({ models: { enabledModels: ['new'] } });
 
-			expect(getModelSettings().lastSelected).toBe('new');
+			expect(getModelSettings().enabledModels).toEqual(['new']);
 			expect(getAppSettings().opencodeAgent).toBe('original');
 		});
 	});
@@ -268,7 +259,7 @@ describe('primecodeConfig', () => {
 
 	describe('atomic write safety', () => {
 		it('does not leave .tmp file after successful write', async () => {
-			updateModelSettings({ lastSelected: 'test' });
+			updateModelSettings({ enabledModels: ['test'] });
 			await flushWrites();
 			expect(existsSync(`${CONFIG_PATH}.tmp`)).toBe(false);
 			expect(existsSync(CONFIG_PATH)).toBe(true);
@@ -276,13 +267,13 @@ describe('primecodeConfig', () => {
 
 		it('file contains valid JSON after write', async () => {
 			updateConfig({
-				models: { lastSelected: 'x', enabledModels: ['a', 'b'] },
+				models: { enabledModels: ['a', 'b'] },
 				app: { opencodeAgent: 'y' },
 			});
 			await flushWrites();
 			const raw = readFileSync(CONFIG_PATH, 'utf-8');
 			const parsed = JSON.parse(raw);
-			expect(parsed.models.lastSelected).toBe('x');
+			expect(parsed.models.enabledModels).toEqual(['a', 'b']);
 			expect(parsed.app.opencodeAgent).toBe('y');
 		});
 	});

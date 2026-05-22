@@ -15,6 +15,8 @@ import { logger } from '../../utils/logger';
 import type { HandlerContext, WebviewMessageHandler } from './types';
 
 export class ProviderHandler implements WebviewMessageHandler {
+	private static readonly LAST_SELECTED_MODEL_KEY = 'primeCode.lastSelectedModel';
+
 	constructor(private context: HandlerContext) {}
 
 	private static readonly PROXY_MODELS_CACHE_KEY = 'primecode.proxyModels.cache';
@@ -39,6 +41,10 @@ export class ProviderHandler implements WebviewMessageHandler {
 	}
 
 	private async readSelectedModel(): Promise<string | undefined> {
+		const selectedModel = this.context.extensionContext.workspaceState.get<string>(
+			ProviderHandler.LAST_SELECTED_MODEL_KEY,
+		);
+		if (selectedModel && parseModelId(selectedModel)) return selectedModel;
 		return this.readProjectConfiguredModel();
 	}
 
@@ -261,6 +267,10 @@ export class ProviderHandler implements WebviewMessageHandler {
 			if (!workspaceRoot) return;
 			const result = await this.context.services.openCodeClient.setProjectDefaultModel(
 				workspaceRoot,
+				model,
+			);
+			await this.context.extensionContext.workspaceState.update(
+				ProviderHandler.LAST_SELECTED_MODEL_KEY,
 				model,
 			);
 			this.context.services.mcpConfigWatcher.notifyUiSave(result.contentHash);

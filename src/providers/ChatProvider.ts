@@ -157,11 +157,14 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			),
 		);
 		this.disposables.push(configWatcher);
+		const handlePrimeCodeConfigChange = () => {
+			invalidateConfigCache();
+			this.handleSettingsChange();
+		};
 		this.disposables.push(
-			configWatcher.onDidChange(() => {
-				invalidateConfigCache();
-				this.handleSettingsChange();
-			}),
+			configWatcher.onDidChange(handlePrimeCodeConfigChange),
+			configWatcher.onDidCreate(handlePrimeCodeConfigChange),
+			configWatcher.onDidDelete(handlePrimeCodeConfigChange),
 		);
 
 		// Wire up MCP messages from registry
@@ -244,11 +247,15 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		const opencodeAgent = this.settings.get('opencode.agent');
 		const opencodeServerTimeout = this.settings.get('opencode.serverTimeout');
 		const opencodeServerUrl = this.settings.get('opencode.serverUrl');
+		const autoApprove = Boolean(this.settings.get('access.autoApprove') || false);
+		const policies = await this.toolHandler.getPermissionPoliciesAsync();
 
 		return {
 			provider: 'opencode' as const,
 			workspaceRoot,
 			agent: typeof opencodeAgent === 'string' ? opencodeAgent : undefined,
+			autoApprove,
+			policies: { ...policies },
 			serverTimeoutMs:
 				typeof opencodeServerTimeout === 'number' && Number.isFinite(opencodeServerTimeout)
 					? Math.max(0, opencodeServerTimeout) * 1000
@@ -1008,16 +1015,26 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 						// Webview owns connection chrome; this bridge is only for backend-owned session status.
 					},
 				});
+				if (signal.aborted) {
+					await subscription.stream.return?.(undefined);
+					break;
+				}
+				const stream = subscription.stream as AsyncGenerator<unknown>;
+				const closeStream = () => {
+					void stream.return?.(undefined);
+				};
+				iterationController.signal.addEventListener('abort', closeStream, { once: true });
 				this.resolveBackendStatusWaiters();
 				this.sendServerStatus('connected');
 				resetHeartbeat();
 
-				for await (const event of subscription.stream as AsyncGenerator<unknown>) {
+				for await (const event of stream) {
 					if (signal.aborted) break;
 					consecutiveFailures = 0;
 					resetHeartbeat();
 					this.forwardBackendStatusEvent(event);
 				}
+				iterationController.signal.removeEventListener('abort', closeStream);
 			} catch (error) {
 				if (signal.aborted) break;
 				consecutiveFailures++;

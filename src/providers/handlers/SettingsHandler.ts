@@ -338,14 +338,6 @@ export class SettingsHandler implements WebviewMessageHandler {
 			}
 
 			// ─── Model-related keys → batched primecodeConfig update ─────────
-			if (rawKey === 'lastSelectedModel') {
-				if (typeof value === 'string') {
-					modelPatch.lastSelected = value;
-					hasModelUpdates = true;
-				}
-				continue;
-			}
-
 			if (rawKey === 'modelVariants') {
 				if (value && typeof value === 'object' && !Array.isArray(value)) {
 					modelPatch.modelVariants = value as Record<string, string | undefined>;

@@ -50,7 +50,6 @@ export interface PrimeCodeSettings {
 	'promptImprove.model'?: string;
 	'promptImprove.template'?: string;
 
-	lastSelectedModel?: string;
 	modelVariants?: Record<string, string | undefined>;
 }
 
@@ -93,8 +92,6 @@ export class Settings implements ISettings {
 				return models.enabledModels as T;
 			case 'opencode.providerModelVisibility':
 				return models.providerModelVisibility as T;
-			case 'lastSelectedModel':
-				return (models.lastSelected || undefined) as T | undefined;
 			case 'modelVariants':
 				return models.modelVariants as T;
 			default:
@@ -129,9 +126,6 @@ export class Settings implements ISettings {
 				updateModelSettings({
 					providerModelVisibility: value as Record<string, boolean | undefined>,
 				});
-				return;
-			case 'lastSelectedModel':
-				updateModelSettings({ lastSelected: (value as string) || '' });
 				return;
 			case 'modelVariants':
 				updateModelSettings({ modelVariants: value as Record<string, string | undefined> });
@@ -193,7 +187,6 @@ export class Settings implements ISettings {
 			'promptImprove.model': app.promptImproveModel || undefined,
 			'promptImprove.template': app.promptImproveTemplate || undefined,
 
-			lastSelectedModel: models.lastSelected || undefined,
 			modelVariants: models.modelVariants,
 		};
 	}
