@@ -58,7 +58,7 @@ export class McpManagementService {
 
 	/**
 	 * Set callback to be called when MCP config is saved via UI.
-	 * Used by McpConfigWatcherService to suppress redundant file watcher triggers.
+	 * Used by ConfigFileWatcherService to suppress redundant file watcher triggers.
 	 */
 	public setOnConfigSaved(callback: OnConfigSaved): void {
 		this._onConfigSaved = callback;

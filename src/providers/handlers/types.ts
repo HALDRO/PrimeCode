@@ -41,8 +41,10 @@ export interface HandlerContext {
 	refreshAfterServerRestart?: () => Promise<void>;
 	/** Full managed runtime restart (stop old server, start a new one, then resync). */
 	restartManagedRuntime?: (source: string) => Promise<void>;
-	/** Hot-reload OpenCode runtime state so config/resources are re-read without killing the process. */
-	reloadOpenCodeRuntime?: (source: string) => Promise<void>;
+	/** Request a runtime reload (deferred if sessions are busy). */
+	requestRuntimeReload?: (source: string) => void;
+	/** Force immediate runtime reload regardless of busy state (explicit user action). */
+	forceRuntimeReload?: (source: string) => void;
 }
 
 export interface WebviewMessageHandler {

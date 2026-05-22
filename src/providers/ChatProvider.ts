@@ -1,3 +1,4 @@
+import * as path from 'node:path';
 import { createOpencodeClient } from '@opencode-ai/sdk/v2/client';
 import * as vscode from 'vscode';
 import { generateId, parseModelId } from '../common';
@@ -123,7 +124,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				await this.syncAllOrDefer('manual-server-restart');
 			},
 			restartManagedRuntime: async (source: string) => this.restartManagedRuntime(source),
-			reloadOpenCodeRuntime: source => this.reloadOpenCodeRuntime(source),
+			requestRuntimeReload: source => this.services.runtimeReload.requestReload(source),
+			forceRuntimeReload: source => this.services.runtimeReload.forceReload(source),
 		};
 
 		this.settingsHandler = new SettingsHandler(handlerContext);
@@ -132,6 +134,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		this.toolHandler = new ToolHandler(handlerContext);
 		this.fileHandler = new FileHandler(handlerContext);
 		this.utilityHandler = new UtilityHandler(handlerContext);
+
+		// Wire RuntimeReloadService executor
+		this.services.runtimeReload.setReloadExecutor(source => this.reloadOpenCodeRuntime(source));
 
 		// Build declarative command router
 		this.buildRouter();
@@ -151,10 +156,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		// Watch primecode.json for cross-window sync
 		const configDir = vscode.Uri.file(CONFIG_PATH).fsPath;
 		const configWatcher = vscode.workspace.createFileSystemWatcher(
-			new vscode.RelativePattern(
-				configDir.slice(0, configDir.lastIndexOf(require('node:path').sep)),
-				require('node:path').basename(CONFIG_PATH),
-			),
+			new vscode.RelativePattern(path.dirname(configDir), path.basename(CONFIG_PATH)),
 		);
 		this.disposables.push(configWatcher);
 		const handlePrimeCodeConfigChange = () => {
@@ -174,7 +176,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			}),
 		);
 
-		this.services.mcpConfigWatcher.start(source => this.handleConfigFileChange(source));
+		this.services.configFileWatcher.start(source => this.handleConfigFileChange(source));
 
 		this.services.resourceWatcher.start(resourceType => this.handleResourceChange(resourceType));
 
@@ -191,28 +193,26 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	}
 
 	private restartWorkspaceWatchers(): void {
-		this.services.mcpConfigWatcher.dispose();
+		this.services.configFileWatcher.dispose();
 		this.services.resourceWatcher.dispose();
-		this.services.mcpConfigWatcher.start(source => this.handleConfigFileChange(source));
+		this.services.configFileWatcher.start(source => this.handleConfigFileChange(source));
 		this.services.resourceWatcher.start(resourceType => this.handleResourceChange(resourceType));
 	}
 
 	/**
 	 * Handle opencode.json file change detected by the watcher.
-	 * Uses a soft reload (cache clear + UI resync) to avoid disrupting active sessions.
-	 * Full instance.dispose() only happens on explicit user actions (Reload button, UI saves).
+	 * Triggers a runtime reload (instance.dispose) so the server re-reads config,
+	 * including MCP servers. Deferred if sessions are busy.
 	 */
-	private async handleConfigFileChange(source: 'file-watcher' | 'manual'): Promise<void> {
-		this.hasSynced = false;
-		this.clearLocalCaches();
-		await this.mcpHandler.handleMessage({ type: 'loadMCPServers' });
-		await this.syncAllOrDefer(`opencode-config-${source}`);
+	private handleConfigFileChange(source: 'file-watcher' | 'manual'): void {
+		this.services.runtimeReload.requestReload(`opencode-config-${source}`);
 	}
 
 	/**
 	 * Dispose the OpenCode server instance so it re-reads config from disk
 	 * on the next request. This is the canonical way to reload runtime state
 	 * (MCP servers, providers, agents, skills, permissions, plugins).
+	 * Used as the executor for RuntimeReloadService.
 	 */
 	private async reloadOpenCodeRuntime(source: string): Promise<void> {
 		logger.debug('[ChatProvider] Disposing OpenCode instance for reload', { source });
@@ -226,6 +226,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		} catch (err) {
 			logger.warn('[ChatProvider] instance.dispose() failed during reload', { source, err });
 		}
+		// Resync UI state after dispose
+		this.hasSynced = false;
+		this.restartBackendStatusBridge();
+		await this.syncAllOrDefer(`reload-${source}`);
 	}
 
 	private async restartManagedRuntime(source: string): Promise<void> {
@@ -288,22 +292,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
 			// All other resource types require instance dispose so the server
 			// re-reads config and rebuilds its InstanceState
-			await this.reloadOpenCodeRuntime(`resource:${resourceType}`);
-
-			switch (resourceType) {
-				case 'commands':
-					await this.settingsHandler.handleMessage({ type: 'getResources', kind: 'command' });
-					return;
-				case 'skills':
-					await this.settingsHandler.handleMessage({ type: 'getResources', kind: 'skill' });
-					return;
-				case 'subagents':
-					await this.settingsHandler.handleMessage({ type: 'getResources', kind: 'agent' });
-					return;
-				case 'plugins':
-					await this.settingsHandler.handleMessage({ type: 'getResources', kind: 'plugin' });
-					return;
-			}
+			this.services.runtimeReload.requestReload(`resource:${resourceType}`);
 		} catch (error) {
 			logger.error(`[ChatProvider] Failed to refresh ${resourceType}:`, error);
 		}
@@ -972,8 +961,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		signal: AbortSignal,
 	): Promise<void> {
 		const RECONNECT_DELAY_MS = 250;
-		const MAX_RETRY_MS = 30_000;
-		const HEARTBEAT_TIMEOUT_MS = 35_000;
+		const HEARTBEAT_TIMEOUT_MS = 15_000;
 		let consecutiveFailures = 0;
 
 		while (!signal.aborted) {
@@ -1061,16 +1049,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			}
 
 			if (signal.aborted) break;
-			// Fast reconnect on first failure (250ms), exponential backoff after
-			const backoff =
-				consecutiveFailures <= 1
-					? RECONNECT_DELAY_MS
-					: Math.min(RECONNECT_DELAY_MS * 2 ** (consecutiveFailures - 1), MAX_RETRY_MS);
 			logger.info('[ChatProvider] Backend status bridge scheduling reconnect', {
 				baseUrl: activeBaseUrl,
 				directory,
 				attempt: consecutiveFailures,
-				backoff,
+				backoff: RECONNECT_DELAY_MS,
 			});
 			// Abortable sleep — instantly resolves on signal abort, preventing leaked timers
 			await new Promise<void>(resolve => {
@@ -1078,7 +1061,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				const timer = setTimeout(() => {
 					signal.removeEventListener('abort', onAbort);
 					resolve();
-				}, backoff);
+				}, RECONNECT_DELAY_MS);
 				const onAbort = () => {
 					clearTimeout(timer);
 					resolve();
@@ -1099,6 +1082,27 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				normalizeComparablePath(workspaceRoot).toLowerCase()
 		) {
 			return;
+		}
+
+		// Track session busy/idle state for deferred runtime reload
+		if (eventRecord?.type === 'session.status') {
+			const properties = eventRecord.properties as Record<string, unknown> | undefined;
+			const sessionID = properties?.sessionID;
+			const status = properties?.status as { type?: string } | undefined;
+			if (typeof sessionID === 'string' && status?.type) {
+				this.services.runtimeReload.updateSessionStatus(sessionID, {
+					type: status.type,
+				});
+			}
+		}
+
+		// Clean up tracking when a session is deleted
+		if (eventRecord?.type === 'session.deleted') {
+			const properties = eventRecord.properties as Record<string, unknown> | undefined;
+			const sessionID = properties?.sessionID;
+			if (typeof sessionID === 'string') {
+				this.services.runtimeReload.removeSession(sessionID);
+			}
 		}
 
 		// Auto-respond to permission requests from extension side (works even when webview is hidden)

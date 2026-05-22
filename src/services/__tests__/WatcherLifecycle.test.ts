@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('vscode', async () => await import('../../__mocks__/vscode.js'));
 
 import * as vscode from 'vscode';
-import { McpConfigWatcherService } from '../McpConfigWatcherService';
+import { ConfigFileWatcherService } from '../ConfigFileWatcherService';
 import { ResourceWatcherService } from '../ResourceWatcherService';
 
 describe('watcher lifecycle', () => {
@@ -30,7 +30,7 @@ describe('watcher lifecycle', () => {
 
 	it('mcp watcher can restart after missing initial workspace root', () => {
 		(vscode.workspace as unknown as { workspaceFolders: unknown[] }).workspaceFolders = [];
-		const service = new McpConfigWatcherService();
+		const service = new ConfigFileWatcherService();
 		const spy = vi.spyOn(vscode.workspace, 'createFileSystemWatcher');
 
 		service.start(() => {});

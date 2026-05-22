@@ -971,33 +971,9 @@ export const openCodeRuntime = {
 			abortTargets: sessionIds,
 		});
 		vscode.postMessage({ type: 'abortSession', sessionIds });
-		scheduleBusyStatusRecheck(allIds, 3000);
-
-		// Wait until the entire subtree is idle (max 10s).
-		return new Promise<void>(resolve => {
-			const check = () => getProcessingSessionIds(useChatStore.getState(), sessionId).length === 0;
-			if (check()) {
-				log.info('abortSession: subtree already idle', { sessionId });
-				resolve();
-				return;
-			}
-			const timeout = window.setTimeout(() => {
-				const stillProcessing = getProcessingSessionIds(useChatStore.getState(), sessionId);
-				log.warn('abortSession: timed out waiting for idle', {
-					sessionId,
-					stillProcessing,
-				});
-				unsub();
-				resolve();
-			}, 10_000);
-			const unsub = useChatStore.subscribe(() => {
-				if (!check()) return;
-				log.info('abortSession: subtree fully idle', { sessionId });
-				clearTimeout(timeout);
-				unsub();
-				resolve();
-			});
-		});
+		// Session status will be updated via SSE events (session.status / session.idle).
+		// No need to poll or wait — fire-and-forget, same as the official OpenCode app.
+		return Promise.resolve();
 	},
 
 	async restoreMessage(sessionId: string, messageId: string): Promise<void> {

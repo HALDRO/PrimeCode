@@ -6,7 +6,7 @@ const DEBOUNCE_MS = 500;
 const OPENCODE_CONFIG_FILES = ['opencode.json', 'opencode.jsonc'] as const;
 const STARTUP_GRACE_MS = 3000;
 
-export class McpConfigWatcherService implements vscode.Disposable {
+export class ConfigFileWatcherService implements vscode.Disposable {
 	private _debounceTimer: ReturnType<typeof setTimeout> | undefined;
 	private readonly _disposables: vscode.Disposable[] = [];
 	private _isReloading = false;
@@ -23,7 +23,7 @@ export class McpConfigWatcherService implements vscode.Disposable {
 
 		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 		if (!workspaceRoot) {
-			logger.warn('[McpConfigWatcherService] No workspace root, cannot start watcher');
+			logger.warn('[ConfigFileWatcherService] No workspace root, cannot start watcher');
 			return;
 		}
 
@@ -45,13 +45,21 @@ export class McpConfigWatcherService implements vscode.Disposable {
 			d.dispose();
 		}
 		this._disposables.length = 0;
-		logger.info('[McpConfigWatcherService] Disposed');
+		logger.info('[ConfigFileWatcherService] Disposed');
 	}
 
+	/**
+	 * Notify that the UI just wrote to opencode.json.
+	 * Records the content hash so the file watcher ignores the resulting
+	 * filesystem event (we already know about this change).
+	 * Does NOT trigger a reload — the server reads model/config per-request,
+	 * so instance.dispose() is unnecessary for UI-initiated writes like model changes.
+	 */
 	public notifyUiSave(contentHash?: string): void {
 		this._lastUiSaveHash = contentHash;
-		logger.debug('[McpConfigWatcherService] UI save notified', { hash: contentHash ?? 'none' });
-		void this._performReload('manual');
+		logger.debug('[ConfigFileWatcherService] UI save notified (suppressing watcher)', {
+			hash: contentHash ?? 'none',
+		});
 	}
 
 	private _watchConfigFiles(basePath: string): void {
@@ -67,7 +75,7 @@ export class McpConfigWatcherService implements vscode.Disposable {
 	}
 
 	private _handleFileChange(uri: vscode.Uri, eventType: 'change' | 'create' | 'delete'): void {
-		logger.debug(`[McpConfigWatcherService] File ${eventType}: ${uri.fsPath}`);
+		logger.debug(`[ConfigFileWatcherService] File ${eventType}: ${uri.fsPath}`);
 
 		if (this._startedAt && Date.now() - this._startedAt < STARTUP_GRACE_MS) {
 			return;
@@ -107,7 +115,7 @@ export class McpConfigWatcherService implements vscode.Disposable {
 
 	private async _performReload(source: 'file-watcher' | 'manual'): Promise<void> {
 		if (this._isReloading) {
-			logger.debug('[McpConfigWatcherService] Reload already in progress, skipping');
+			logger.debug('[ConfigFileWatcherService] Reload already in progress, skipping');
 			return;
 		}
 
@@ -119,7 +127,7 @@ export class McpConfigWatcherService implements vscode.Disposable {
 
 			void startTime;
 		} catch (error) {
-			logger.error('[McpConfigWatcherService] Failed to reload MCP config:', error);
+			logger.error('[ConfigFileWatcherService] Failed to reload config:', error);
 		} finally {
 			this._isReloading = false;
 		}

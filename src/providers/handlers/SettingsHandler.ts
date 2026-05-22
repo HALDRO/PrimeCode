@@ -103,11 +103,11 @@ export class SettingsHandler implements WebviewMessageHandler {
 				}),
 				create: async name => {
 					await this.context.services.openCodeConfig.addProjectPlugin(name);
-					this.context.services.mcpConfigWatcher.notifyUiSave();
+					this.context.services.configFileWatcher.notifyUiSave();
 				},
 				delete: async name => {
 					await this.context.services.openCodeConfig.removeProjectPlugin(name);
-					this.context.services.mcpConfigWatcher.notifyUiSave();
+					this.context.services.configFileWatcher.notifyUiSave();
 				},
 			},
 		};
@@ -465,7 +465,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 				this.context.cli,
 				resource,
 				msg.value,
-				this.context.reloadOpenCodeRuntime,
+				this.context.requestRuntimeReload,
 			);
 			this.context.bridge.data('resourceOperation', {
 				operationId: msg.operationId,
@@ -498,7 +498,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 		cli: HandlerContext['cli'],
 		resource: AgentResource,
 		disabled: boolean,
-		reloadRuntime?: (source: string) => Promise<void>,
+		requestReload?: (source: string) => void,
 	): Promise<{
 		result: ResourceActionResult;
 		message?: string;
@@ -520,7 +520,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 					resource.name,
 					disabled,
 				);
-				this.context.services.mcpConfigWatcher.notifyUiSave(result.contentHash);
+				this.context.services.configFileWatcher.notifyUiSave(result.contentHash);
 			} else if (target.type === 'project-file') {
 				await setAgentFileDisabled(target.path, disabled);
 			}
@@ -535,7 +535,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 				);
 			}
 
-			await reloadRuntime?.('settings:agent:setDisabled');
+			requestReload?.('settings:agent:setDisabled');
 			cli.clearAgentsCache();
 
 			const refreshed = await this.context.services.agentResources.buildAgentResources(cli);
@@ -763,7 +763,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 			else await adapter.create?.(name, payload ?? {});
 			logger.info(`[SettingsHandler] ${action} ${kind}: ${name}`);
 			adapter.refresh?.();
-			await this.context.reloadOpenCodeRuntime?.(`settings:${kind}:${action}`);
+			this.context.requestRuntimeReload?.(`settings:${kind}:${action}`);
 			await this.sendResourceList(kind);
 		} catch (error) {
 			logger.error(`[SettingsHandler] Failed to ${action} ${kind}:`, error);
@@ -777,7 +777,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 
 		try {
 			await this.rulesService.createRule(name, content ?? '');
-			await this.context.reloadOpenCodeRuntime?.('settings:rules:create');
+			this.context.requestRuntimeReload?.('settings:rules:create');
 			await this.onGetRules();
 		} catch (error) {
 			logger.error('[SettingsHandler] createRule failed:', error);
@@ -794,7 +794,7 @@ export class SettingsHandler implements WebviewMessageHandler {
 
 		try {
 			await this.rulesService.deleteRule(rulePath);
-			await this.context.reloadOpenCodeRuntime?.('settings:rules:delete');
+			this.context.requestRuntimeReload?.('settings:rules:delete');
 			await this.onGetRules();
 		} catch (error) {
 			logger.error('[SettingsHandler] deleteRule failed:', error);

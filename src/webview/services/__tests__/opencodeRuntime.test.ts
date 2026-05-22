@@ -63,7 +63,7 @@ describe('openCodeRuntime status recovery', () => {
 		});
 	});
 
-	it('re-polls session status after abort when UI still shows busy', async () => {
+	it('resolves immediately without polling after abort (fire-and-forget)', async () => {
 		useChatStore.setState(state => ({
 			...state,
 			sessionStatus: {
@@ -78,20 +78,12 @@ describe('openCodeRuntime status recovery', () => {
 			type: 'abortSession',
 			sessionIds: ['ses-1'],
 		});
-		expect(statusMock).not.toHaveBeenCalled();
 
-		await vi.advanceTimersByTimeAsync(3000);
-
-		expect(statusMock).toHaveBeenCalledWith({ directory: 'C:\\repo' });
-
-		useChatStore.setState(state => ({
-			...state,
-			sessionStatus: {
-				...state.sessionStatus,
-				'ses-1': { type: 'idle' },
-			},
-		}));
+		// abortSession resolves immediately — no waiting for idle
 		await abortPromise;
+
+		// No status polling triggered from abort
+		expect(statusMock).not.toHaveBeenCalled();
 	});
 
 	it('aborts the parent subtree when parent session is stopped', async () => {
@@ -107,21 +99,12 @@ describe('openCodeRuntime status recovery', () => {
 			},
 		}));
 
-		const abortPromise = openCodeRuntime.abortSession('root');
+		await openCodeRuntime.abortSession('root');
 
 		expect(postMessageMock).toHaveBeenCalledWith({
 			type: 'abortSession',
 			sessionIds: ['root', 'child'],
 		});
-
-		useChatStore.setState(state => ({
-			...state,
-			sessionStatus: {
-				...state.sessionStatus,
-				child: { type: 'idle' },
-			},
-		}));
-		await abortPromise;
 	});
 
 	it('does not abort historical descendants that are not processing', async () => {

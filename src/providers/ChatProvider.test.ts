@@ -54,6 +54,9 @@ function createProvider(promptAsyncImpl?: PromptAsyncMock, summarizeImpl?: Summa
 		backendStatusKey: null,
 		backendStatusRun: null,
 		backendStatusWaiters: [],
+		sendServerStatus: vi.fn(),
+		stopBackendStatusBridge: vi.fn(),
+		hasSynced: false,
 	});
 
 	return {
@@ -176,6 +179,8 @@ describe('ChatProvider send pipeline', () => {
 	it('reloadOpenCodeRuntime calls instance.dispose() when SDK client is available', async () => {
 		const { provider, dispose, clearAgentsCache } = createProvider();
 		provider.backendStatusRun = Promise.resolve();
+		provider.restartBackendStatusBridge = vi.fn();
+		provider.syncAllOrDefer = vi.fn(async () => {});
 
 		await provider.reloadOpenCodeRuntime('opencode-config:manual');
 
@@ -185,6 +190,8 @@ describe('ChatProvider send pipeline', () => {
 
 	it('reloadOpenCodeRuntime calls instance.dispose() regardless of bridge state', async () => {
 		const { provider, dispose, clearAgentsCache } = createProvider();
+		provider.restartBackendStatusBridge = vi.fn();
+		provider.syncAllOrDefer = vi.fn(async () => {});
 
 		await provider.reloadOpenCodeRuntime('opencode-config:manual');
 
@@ -195,6 +202,8 @@ describe('ChatProvider send pipeline', () => {
 	it('skips instance.dispose() when SDK client is unavailable', async () => {
 		const { provider, dispose, clearAgentsCache } = createProvider();
 		provider.cli.getSdkClient.mockReturnValue(null);
+		provider.restartBackendStatusBridge = vi.fn();
+		provider.syncAllOrDefer = vi.fn(async () => {});
 
 		await provider.reloadOpenCodeRuntime('opencode-config:manual');
 

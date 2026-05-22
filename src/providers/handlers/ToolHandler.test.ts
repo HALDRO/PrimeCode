@@ -577,13 +577,13 @@ describe('ToolHandler', () => {
 	describe('debounced policy sync', () => {
 		it('should debounce multiple rapid policy changes into one sync', async () => {
 			const setProjectFieldMock = vi.fn().mockResolvedValue({ path: '/mock', contentHash: 'abc' });
-			const reloadMock = vi.fn().mockResolvedValue(undefined);
+			const reloadMock = vi.fn();
 			const ctx = createMockHandlerContext({
 				services: {
 					openCodeConfig: { setProjectField: setProjectFieldMock },
-					mcpConfigWatcher: { notifyUiSave: vi.fn() },
+					configFileWatcher: { notifyUiSave: vi.fn() },
 				} as any,
-				reloadOpenCodeRuntime: reloadMock,
+				requestRuntimeReload: reloadMock,
 			});
 			const handler = new ToolHandler(ctx);
 

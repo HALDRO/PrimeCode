@@ -207,7 +207,7 @@ export class McpHandler implements WebviewMessageHandler {
 				entry.enabled = msg.enabled;
 				return config;
 			});
-			this.context.services.mcpConfigWatcher.notifyUiSave(result.contentHash);
+			this.context.services.configFileWatcher.notifyUiSave(result.contentHash);
 			this.context.cli.clearMcpCache?.();
 
 			// Use targeted connect/disconnect instead of full instance dispose

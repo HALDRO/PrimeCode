@@ -260,8 +260,8 @@ export class ToolHandler implements WebviewMessageHandler {
 				'permission',
 				serverPermission,
 			);
-			this.context.services.mcpConfigWatcher.notifyUiSave(result.contentHash);
-			await this.context.reloadOpenCodeRuntime?.('permissions:sync');
+			this.context.services.configFileWatcher.notifyUiSave(result.contentHash);
+			this.context.requestRuntimeReload?.('permissions:sync');
 			logger.info('[ToolHandler] Policies written to opencode.json', serverPermission);
 		} catch (e) {
 			logger.warn('[ToolHandler] Failed to write opencode.json:', e);
