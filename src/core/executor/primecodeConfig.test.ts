@@ -12,6 +12,7 @@ import {
 	invalidateConfigCache,
 	isProcessAlive,
 	removeRuntime,
+	resetConfigForTesting,
 	updateAppSettings,
 	updateConfig,
 	updateModelSettings,
@@ -23,7 +24,7 @@ const TEST_DIR = path.dirname(CONFIG_PATH);
 function cleanConfig(): void {
 	if (existsSync(CONFIG_PATH)) rmSync(CONFIG_PATH);
 	if (existsSync(`${CONFIG_PATH}.tmp`)) rmSync(`${CONFIG_PATH}.tmp`);
-	invalidateConfigCache();
+	resetConfigForTesting();
 }
 
 describe('primecodeConfig', () => {
@@ -275,6 +276,268 @@ describe('primecodeConfig', () => {
 			const parsed = JSON.parse(raw);
 			expect(parsed.models.enabledModels).toEqual(['a', 'b']);
 			expect(parsed.app.opencodeAgent).toBe('y');
+		});
+	});
+
+	describe('runtime and settings independence', () => {
+		it('addRuntime does not overwrite settings', async () => {
+			// Write settings first
+			updateConfig({
+				models: { enabledModels: ['model-a', 'model-b'] },
+				app: { providersDisabled: ['openai'], opencodeAgent: 'coder' },
+			});
+			await flushWrites();
+
+			// Add runtime — should only touch runtimes section
+			addRuntime({
+				runtimeId: 'rt-1',
+				serverUrl: 'http://127.0.0.1:5000',
+				authorization: 'Bearer x',
+				workspaceRoot: 'D:\\Test',
+				createdAt: Date.now(),
+				pid: 1234,
+				ownerPid: process.pid,
+			});
+
+			// Verify settings are intact
+			const raw = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
+			expect(raw.models.enabledModels).toEqual(['model-a', 'model-b']);
+			expect(raw.app.providersDisabled).toEqual(['openai']);
+			expect(raw.app.opencodeAgent).toBe('coder');
+			expect(raw.runtimes).toHaveLength(1);
+		});
+
+		it('removeRuntime does not overwrite settings', async () => {
+			// Setup: settings + runtime
+			updateConfig({
+				models: { enabledModels: ['keep-me'] },
+				app: {
+					proxyEndpoints: [
+						{ id: 'ep1', name: 'Test', baseUrl: 'http://x', apiKey: 'k', enabledModels: ['m1'] },
+					],
+				},
+			});
+			await flushWrites();
+			addRuntime({
+				runtimeId: 'rt-1',
+				serverUrl: 'http://127.0.0.1:5000',
+				authorization: 'Bearer x',
+				workspaceRoot: 'D:\\Test',
+				createdAt: Date.now(),
+				pid: 1234,
+				ownerPid: process.pid,
+			});
+
+			// Remove runtime
+			removeRuntime('rt-1');
+
+			// Verify settings are intact
+			const raw = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
+			expect(raw.models.enabledModels).toEqual(['keep-me']);
+			expect(raw.app.proxyEndpoints).toHaveLength(1);
+			expect(raw.runtimes).toHaveLength(0);
+		});
+
+		it('settings write does not overwrite runtimes', async () => {
+			// Add runtime first
+			addRuntime({
+				runtimeId: 'rt-1',
+				serverUrl: 'http://127.0.0.1:5000',
+				authorization: 'Bearer x',
+				workspaceRoot: 'D:\\Test',
+				createdAt: Date.now(),
+				pid: 1234,
+				ownerPid: process.pid,
+			});
+
+			// Write settings — should not touch runtimes
+			updateConfig({
+				models: { enabledModels: ['new-model'] },
+				app: { opencodeAgent: 'new-agent' },
+			});
+			await flushWrites();
+
+			// Verify runtimes are intact
+			const raw = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
+			expect(raw.runtimes).toHaveLength(1);
+			expect(raw.runtimes[0].runtimeId).toBe('rt-1');
+			expect(raw.models.enabledModels).toEqual(['new-model']);
+		});
+
+		it('multiple rapid runtime writes preserve settings', async () => {
+			updateConfig({
+				models: { enabledModels: ['preserved'] },
+				app: { providersDisabled: ['keep'] },
+			});
+			await flushWrites();
+
+			// Rapid add/remove cycle
+			addRuntime({
+				runtimeId: 'rt-1',
+				serverUrl: 'http://a',
+				authorization: 'x',
+				workspaceRoot: 'D:\\A',
+				createdAt: 1,
+				pid: 1,
+				ownerPid: process.pid,
+			});
+			addRuntime({
+				runtimeId: 'rt-2',
+				serverUrl: 'http://b',
+				authorization: 'y',
+				workspaceRoot: 'D:\\B',
+				createdAt: 2,
+				pid: 2,
+				ownerPid: process.pid,
+			});
+			removeRuntime('rt-1');
+			addRuntime({
+				runtimeId: 'rt-3',
+				serverUrl: 'http://c',
+				authorization: 'z',
+				workspaceRoot: 'D:\\C',
+				createdAt: 3,
+				pid: 3,
+				ownerPid: process.pid,
+			});
+
+			const raw = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
+			expect(raw.models.enabledModels).toEqual(['preserved']);
+			expect(raw.app.providersDisabled).toEqual(['keep']);
+			expect(raw.runtimes).toHaveLength(2);
+			expect(raw.runtimes.map((r: { runtimeId: string }) => r.runtimeId).sort()).toEqual([
+				'rt-2',
+				'rt-3',
+			]);
+		});
+	});
+
+	describe('parse resilience', () => {
+		it('partial models section preserves existing cache values', async () => {
+			// First, set real values in cache and disk
+			updateConfig({
+				models: { enabledModels: ['cached-model'], providerModelVisibility: { prov: true } },
+				app: { providersDisabled: ['cached-provider'] },
+			});
+			await flushWrites();
+
+			// Now write a file with partial models (missing providerModelVisibility)
+			const partial = {
+				models: { enabledModels: ['from-disk'] },
+				app: { providersDisabled: ['from-disk-provider'] },
+			};
+			writeFileSync(CONFIG_PATH, JSON.stringify(partial), 'utf-8');
+			invalidateConfigCache();
+
+			// providerModelVisibility should fall back to cached value { prov: true }
+			const models = getModelSettings();
+			expect(models.enabledModels).toEqual(['from-disk']);
+			expect(models.providerModelVisibility.prov).toBe(true);
+		});
+
+		it('missing app section preserves cached app settings', async () => {
+			updateAppSettings({ providersDisabled: ['important-provider'], opencodeAgent: 'my-agent' });
+			await flushWrites();
+
+			// Write file without app section
+			writeFileSync(CONFIG_PATH, JSON.stringify({ models: { enabledModels: ['x'] } }), 'utf-8');
+			invalidateConfigCache();
+
+			const app = getAppSettings();
+			expect(app.providersDisabled).toEqual(['important-provider']);
+			expect(app.opencodeAgent).toBe('my-agent');
+		});
+
+		it('empty file does not reset settings', async () => {
+			updateConfig({
+				models: { enabledModels: ['should-survive'] },
+				app: { providersDisabled: ['should-survive-too'] },
+			});
+			await flushWrites();
+
+			// Simulate truncated/empty file
+			writeFileSync(CONFIG_PATH, '', 'utf-8');
+			invalidateConfigCache();
+
+			// Should return cached values, not defaults
+			expect(getModelSettings().enabledModels).toEqual(['should-survive']);
+			expect(getAppSettings().providersDisabled).toEqual(['should-survive-too']);
+		});
+
+		it('corrupted JSON does not reset settings', async () => {
+			updateConfig({
+				models: { enabledModels: ['protected'] },
+				app: { opencodeAgent: 'protected-agent' },
+			});
+			await flushWrites();
+
+			// Corrupt the file
+			writeFileSync(CONFIG_PATH, '{"models": {broken', 'utf-8');
+			invalidateConfigCache();
+
+			expect(getModelSettings().enabledModels).toEqual(['protected']);
+			expect(getAppSettings().opencodeAgent).toBe('protected-agent');
+		});
+
+		it('settings write skipped when file is corrupted on disk', async () => {
+			updateConfig({ models: { enabledModels: ['original'] } });
+			await flushWrites();
+
+			// Corrupt file on disk
+			writeFileSync(CONFIG_PATH, 'not json at all', 'utf-8');
+
+			// Try to write settings — should skip disk write, keep cache
+			updateModelSettings({ enabledModels: ['new-value'] });
+			await flushWrites();
+
+			// Cache should have new value
+			expect(getModelSettings().enabledModels).toEqual(['new-value']);
+
+			// Disk should still be corrupted (write was skipped)
+			const diskContent = readFileSync(CONFIG_PATH, 'utf-8');
+			expect(diskContent).toBe('not json at all');
+		});
+	});
+
+	describe('concurrent settings writes', () => {
+		it('sequential updateConfig calls produce correct final state', async () => {
+			updateConfig({ models: { enabledModels: ['first'] } });
+			updateConfig({ models: { enabledModels: ['second'] } });
+			updateConfig({ app: { opencodeAgent: 'final-agent' } });
+			await flushWrites();
+
+			const raw = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
+			expect(raw.models.enabledModels).toEqual(['second']);
+			expect(raw.app.opencodeAgent).toBe('final-agent');
+		});
+
+		it('interleaved runtime and settings writes are consistent', async () => {
+			updateConfig({ models: { enabledModels: ['settings-1'] } });
+			addRuntime({
+				runtimeId: 'rt-1',
+				serverUrl: 'http://a',
+				authorization: 'x',
+				workspaceRoot: 'D:\\A',
+				createdAt: 1,
+				pid: 1,
+				ownerPid: process.pid,
+			});
+			updateConfig({ app: { opencodeAgent: 'settings-2' } });
+			addRuntime({
+				runtimeId: 'rt-2',
+				serverUrl: 'http://b',
+				authorization: 'y',
+				workspaceRoot: 'D:\\B',
+				createdAt: 2,
+				pid: 2,
+				ownerPid: process.pid,
+			});
+			await flushWrites();
+
+			const raw = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
+			expect(raw.models.enabledModels).toEqual(['settings-1']);
+			expect(raw.app.opencodeAgent).toBe('settings-2');
+			expect(raw.runtimes).toHaveLength(2);
 		});
 	});
 });

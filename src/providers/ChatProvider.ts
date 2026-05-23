@@ -1,11 +1,21 @@
 import * as path from 'node:path';
 import { createOpencodeClient } from '@opencode-ai/sdk/v2/client';
 import * as vscode from 'vscode';
-import { generateId, parseModelId } from '../common';
+import {
+	generateId,
+	getCustomEndpointNpm,
+	getProxyEndpointProtocol,
+	getProxyEndpointProviderId,
+	parseModelId,
+} from '../common';
 import { policiesToServerFormat } from '../common/permissions.js';
 import type { SendMessageAttachments, WebviewCommand } from '../common/protocol';
 import { OpenCodeExecutor } from '../core/executor/OpenCode';
-import { CONFIG_PATH, invalidateConfigCache } from '../core/executor/primecodeConfig';
+import {
+	CONFIG_PATH,
+	getAppSettings,
+	invalidateConfigCache,
+} from '../core/executor/primecodeConfig';
 import { buildPromptParts } from '../core/promptParts';
 import type { ServiceRegistry } from '../core/ServiceRegistry';
 import { Settings } from '../core/Settings';
@@ -299,9 +309,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	}
 
 	/**
-	 * Write current permission policies to opencode.json before server startup.
+	 * Write current permission policies and proxy providers to opencode.json before server startup.
 	 * Since we don't use OPENCODE_PERMISSION env var, the server reads permissions
 	 * exclusively from the project config file.
+	 * Proxy providers from primecode.json are synced so the runtime knows about all
+	 * configured models — otherwise models visible in the UI dropdown would fail at send time.
 	 */
 	private async syncPoliciesToFileBeforeStart(): Promise<void> {
 		try {
@@ -312,6 +324,49 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		} catch (e) {
 			logger.warn('[ChatProvider] Pre-start: failed to write policies to opencode.json', e);
 		}
+
+		// Sync proxy providers from primecode.json → opencode.json so runtime knows about them
+		try {
+			const app = getAppSettings();
+			if (app.proxyEndpoints.length > 0) {
+				const workspaceRoot = this.settings.getWorkspaceRoot();
+				if (workspaceRoot) {
+					await this.syncProxyProvidersToProject(workspaceRoot, app.proxyEndpoints);
+				}
+			}
+		} catch (e) {
+			logger.warn('[ChatProvider] Pre-start: failed to sync proxy providers to opencode.json', e);
+		}
+	}
+
+	/**
+	 * Write proxy endpoints from primecode.json into the project's opencode.json
+	 * so the OpenCode runtime can resolve these models at send time.
+	 * Only upserts providers that have enabled models — does not remove existing ones.
+	 */
+	private async syncProxyProvidersToProject(
+		workspaceRoot: string,
+		endpoints: import('../core/executor/primecodeConfig').ProxyEndpoint[],
+	): Promise<void> {
+		for (const endpoint of endpoints) {
+			if (!endpoint.baseUrl?.trim() || endpoint.enabledModels.length === 0) continue;
+			const protocol = getProxyEndpointProtocol(endpoint.protocol);
+			const providerId = getProxyEndpointProviderId(endpoint.id);
+			const npm = getCustomEndpointNpm(protocol);
+
+			await this.services.openCodeClient.upsertCustomProvider(workspaceRoot, {
+				providerId,
+				name: endpoint.name,
+				npm,
+				baseUrl: endpoint.baseUrl,
+				apiKey: endpoint.apiKey,
+				headers: endpoint.headers,
+				models: endpoint.enabledModels.map(id => ({ id, name: id })),
+			});
+		}
+		logger.info('[ChatProvider] Pre-start: proxy providers synced to opencode.json', {
+			count: endpoints.filter(ep => ep.enabledModels.length > 0).length,
+		});
 	}
 
 	private async reloadOpenCodeRuntimeOnStartup(): Promise<void> {
@@ -1014,6 +1069,14 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 				iterationController.signal.addEventListener('abort', closeStream, { once: true });
 				this.resolveBackendStatusWaiters();
 				this.sendServerStatus('connected');
+				// After reconnect, push a synthetic server.connected event to the webview
+				// so it can resync stale session statuses (events lost during disconnect).
+				if (consecutiveFailures > 0) {
+					this.bridge.data('opencodeEvent', {
+						type: 'server.connected',
+						properties: {},
+					});
+				}
 				resetHeartbeat();
 
 				for await (const event of stream) {
@@ -1114,7 +1177,47 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			}
 		}
 
+		// Intercept ProviderModelNotFoundError: sync provider to opencode.json and reload runtime.
+		// The error is still forwarded to webview so the user sees it, but the provider sync
+		// ensures the model will be available on the next attempt without manual intervention.
+		if (eventRecord?.type === 'session.error') {
+			const properties = eventRecord.properties as Record<string, unknown> | undefined;
+			const message = typeof properties?.message === 'string' ? properties.message : '';
+			if (message.includes('Model not found') || message.includes('ProviderModelNotFound')) {
+				void this.handleModelNotFoundRecovery();
+			}
+		}
+
 		this.bridge.data('opencodeEvent', event);
+	}
+
+	/**
+	 * Recovery handler for ProviderModelNotFoundError.
+	 * Syncs proxy providers from primecode.json → opencode.json and reloads runtime
+	 * so the model becomes available on the next user attempt.
+	 * Debounced: only runs once per 10 seconds to avoid reload loops.
+	 */
+	private modelNotFoundRecoveryInFlight = false;
+	private async handleModelNotFoundRecovery(): Promise<void> {
+		if (this.modelNotFoundRecoveryInFlight) return;
+		this.modelNotFoundRecoveryInFlight = true;
+
+		try {
+			const app = getAppSettings();
+			const workspaceRoot = this.settings.getWorkspaceRoot();
+			if (workspaceRoot && app.proxyEndpoints.length > 0) {
+				logger.info('[ChatProvider] Model not found — syncing proxy providers to opencode.json');
+				await this.syncProxyProvidersToProject(workspaceRoot, app.proxyEndpoints);
+				this.services.runtimeReload.requestReload('model-not-found-recovery');
+			}
+		} catch (e) {
+			logger.warn('[ChatProvider] Model not found recovery failed:', e);
+		} finally {
+			// Cooldown: prevent rapid re-triggers
+			setTimeout(() => {
+				this.modelNotFoundRecoveryInFlight = false;
+			}, 10_000);
+		}
 	}
 
 	private async sendInitialState(): Promise<void> {

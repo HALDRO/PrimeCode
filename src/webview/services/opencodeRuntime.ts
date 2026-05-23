@@ -14,12 +14,12 @@ import { IMPROVE_PROMPT_DEFAULT_TEMPLATE } from '../../common/promptImprover';
 import type { SessionDiffSnapshot } from '../store/chatStore';
 import {
 	collectSessionSubtreeIds,
-	getProcessingSessionIds,
 	getSessionRuntimeStatus,
 	type SessionStore,
 	useChatStore,
 } from '../store/chatStore';
 import { clearSessionViewCache } from '../store/derived';
+import type { WebviewSdkEvent } from '../store/eventReducer';
 import { useSettingsStore } from '../store/settingsStore';
 import { useUIStore } from '../store/uiStore';
 import { webviewLogger } from '../utils/logger';
@@ -767,6 +767,58 @@ export const openCodeRuntime = {
 		);
 	},
 
+	/**
+	 * Merge missing messages from server after SSE reconnect.
+	 * Fetches recent messages for each session and adds any that
+	 * are missing from the store — recovering events lost during
+	 * the disconnect window (e.g. message.updated for a user message
+	 * sent just before the bridge reconnected).
+	 */
+	async syncMessagesAfterReconnect(sessionIds: string[]): Promise<void> {
+		const client = getClient();
+		const directory = getWorkspaceRoot();
+
+		for (const sessionId of sessionIds) {
+			try {
+				const messagesResult = await client.session.messages({
+					sessionID: sessionId,
+					directory,
+					limit: 80,
+				});
+				const messageEntries = (messagesResult.data ?? []) as SessionMessageEntry[];
+
+				const storeState = useChatStore.getState();
+				const existingMessages = storeState.messages[sessionId] ?? [];
+				const existingIds = new Set(existingMessages.map(m => m.id));
+
+				const events: WebviewSdkEvent[] = [];
+				for (const entry of messageEntries) {
+					if (!existingIds.has(entry.info.id)) {
+						events.push({
+							type: 'message.updated',
+							properties: { sessionID: sessionId, info: entry.info },
+						} as WebviewSdkEvent);
+					}
+					const existingParts = storeState.parts[entry.info.id];
+					for (const part of entry.parts) {
+						if (SKIP_PARTS.has(part.type)) continue;
+						if (existingParts?.some(p => p.id === part.id)) continue;
+						events.push({
+							type: 'message.part.updated',
+							properties: { part },
+						} as WebviewSdkEvent);
+					}
+				}
+
+				if (events.length > 0) {
+					useChatStore.getState().actions.applyBatch(events);
+				}
+			} catch (error) {
+				log.warn('syncMessagesAfterReconnect: failed for session', { sessionId, error });
+			}
+		}
+	},
+
 	async autoRespondPendingPermissions(sessionId: string): Promise<void> {
 		if (!sessionId) return;
 
@@ -962,17 +1014,14 @@ export const openCodeRuntime = {
 		for (const id of allIds) {
 			state.actions.clearQueuedMessages(id);
 		}
-		const processingIds = getProcessingSessionIds(state, sessionId);
-		const sessionIds = [...new Set([sessionId, ...processingIds])];
 		log.info('abortSession: sending abort', {
 			rootSessionId: sessionId,
 			subtreeSize: allIds.length,
-			processingCount: processingIds.length,
-			abortTargets: sessionIds,
 		});
-		vscode.postMessage({ type: 'abortSession', sessionIds });
-		// Session status will be updated via SSE events (session.status / session.idle).
-		// No need to poll or wait — fire-and-forget, same as the official OpenCode app.
+		// Simple SDK abort call — matches official OpenCode app pattern.
+		// Server handles subtree abort internally. Fire-and-forget.
+		const client = getClient();
+		client.session.abort?.({ sessionID: sessionId }).catch(() => {});
 		return Promise.resolve();
 	},
 

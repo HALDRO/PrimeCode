@@ -1,30 +1,38 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { statusMock, revertMock, unrevertMock, createClientMock, postMessageMock, proxyFetchMock } =
-	vi.hoisted(() => {
-		const abortMock = vi.fn(async () => {});
-		const statusMock = vi.fn(async () => ({ data: {} }));
-		const revertMock = vi.fn(async () => ({}));
-		const unrevertMock = vi.fn(async () => ({}));
-		const proxyFetchMock = vi.fn(async () => new Response('', { status: 200, statusText: 'OK' }));
-		const createClientMock = vi.fn(() => ({
-			session: {
-				abort: abortMock,
-				status: statusMock,
-				revert: revertMock,
-				unrevert: unrevertMock,
-			},
-		}));
-		const postMessageMock = vi.fn();
-		return {
-			statusMock,
-			revertMock,
-			unrevertMock,
-			createClientMock,
-			postMessageMock,
-			proxyFetchMock,
-		};
-	});
+const {
+	statusMock,
+	revertMock,
+	unrevertMock,
+	abortMock,
+	createClientMock,
+	postMessageMock,
+	proxyFetchMock,
+} = vi.hoisted(() => {
+	const abortMock = vi.fn(async () => {});
+	const statusMock = vi.fn(async () => ({ data: {} }));
+	const revertMock = vi.fn(async () => ({}));
+	const unrevertMock = vi.fn(async () => ({}));
+	const proxyFetchMock = vi.fn(async () => new Response('', { status: 200, statusText: 'OK' }));
+	const createClientMock = vi.fn(() => ({
+		session: {
+			abort: abortMock,
+			status: statusMock,
+			revert: revertMock,
+			unrevert: unrevertMock,
+		},
+	}));
+	const postMessageMock = vi.fn();
+	return {
+		statusMock,
+		revertMock,
+		unrevertMock,
+		abortMock,
+		createClientMock,
+		postMessageMock,
+		proxyFetchMock,
+	};
+});
 
 vi.mock('@opencode-ai/sdk/v2/client', () => ({
 	createOpencodeClient: createClientMock,
@@ -74,10 +82,7 @@ describe('openCodeRuntime status recovery', () => {
 
 		const abortPromise = openCodeRuntime.abortSession('ses-1');
 
-		expect(postMessageMock).toHaveBeenCalledWith({
-			type: 'abortSession',
-			sessionIds: ['ses-1'],
-		});
+		expect(abortMock).toHaveBeenCalledWith({ sessionID: 'ses-1' });
 
 		// abortSession resolves immediately — no waiting for idle
 		await abortPromise;
@@ -101,10 +106,9 @@ describe('openCodeRuntime status recovery', () => {
 
 		await openCodeRuntime.abortSession('root');
 
-		expect(postMessageMock).toHaveBeenCalledWith({
-			type: 'abortSession',
-			sessionIds: ['root', 'child'],
-		});
+		// SDK abort is called with the root session ID only —
+		// server handles subtree abort internally.
+		expect(abortMock).toHaveBeenCalledWith({ sessionID: 'root' });
 	});
 
 	it('does not abort historical descendants that are not processing', async () => {
@@ -118,10 +122,7 @@ describe('openCodeRuntime status recovery', () => {
 
 		await openCodeRuntime.abortSession('root');
 
-		expect(postMessageMock).toHaveBeenCalledWith({
-			type: 'abortSession',
-			sessionIds: ['root'],
-		});
+		expect(abortMock).toHaveBeenCalledWith({ sessionID: 'root' });
 	});
 
 	it('restores the selected message by calling session.revert with the same message ID', async () => {

@@ -24,15 +24,27 @@ type QueuedEvent = WebviewSdkEvent;
 
 const queue: QueuedEvent[] = [];
 const coalesced = new Map<string, number>();
+const staleDeltas = new Set<string>();
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
 let currentKey: string | null = null;
 let lastEventAt = Date.now();
 
+function deltaKey(messageID: string, partID: string): string {
+	return `${messageID}:${partID}`;
+}
+
 function coalescingKey(event: WebviewSdkEvent): string | null {
 	switch (event.type) {
 		case 'session.status':
 			return `session.status:${event.properties.sessionID}`;
+		case 'message.part.updated': {
+			const part = (event.properties as { part?: { messageID?: string; id?: string } }).part;
+			if (part?.messageID && part?.id) {
+				return `message.part.updated:${part.messageID}:${part.id}`;
+			}
+			return null;
+		}
 		default:
 			return null;
 	}
@@ -44,14 +56,28 @@ function flushQueuedEvents(): void {
 	if (queue.length === 0) return;
 
 	const events = queue.slice();
+	const skip = staleDeltas.size > 0 ? new Set(staleDeltas) : undefined;
 	queue.length = 0;
 	coalesced.clear();
+	staleDeltas.clear();
 
 	try {
-		if (events.length > 0) {
-			useChatStore.getState().actions.applyBatch(events);
+		// Filter out stale delta events that have been superseded by message.part.updated
+		const filtered = skip
+			? events.filter(event => {
+					if (event.type !== 'message.part.delta') return true;
+					const props = event.properties as { messageID?: string; partID?: string };
+					if (props.messageID && props.partID) {
+						return !skip.has(deltaKey(props.messageID, props.partID));
+					}
+					return true;
+				})
+			: events;
+
+		if (filtered.length > 0) {
+			useChatStore.getState().actions.applyBatch(filtered);
 			const completedSessionIds = new Set<string>();
-			for (const event of events) {
+			for (const event of filtered) {
 				if (event.type === 'session.idle') {
 					for (const sessionId of collectSessionLineageIds(
 						useChatStore.getState(),
@@ -90,6 +116,13 @@ function enqueue(event: WebviewSdkEvent): void {
 		const existing = coalesced.get(key);
 		if (existing !== undefined) {
 			queue[existing] = event;
+			// When message.part.updated coalesces, mark its delta as stale
+			if (event.type === 'message.part.updated') {
+				const part = (event.properties as { part?: { messageID?: string; id?: string } }).part;
+				if (part?.messageID && part?.id) {
+					staleDeltas.add(deltaKey(part.messageID, part.id));
+				}
+			}
 			return;
 		}
 		coalesced.set(key, queue.length);
@@ -112,9 +145,15 @@ function handleGlobalEnvelope(
 	if (maybeEnvelope?.payload && typeof maybeEnvelope.payload === 'object') {
 		if (maybeEnvelope.payload.type === 'sync') return;
 		if (maybeEnvelope.payload.type === 'server.connected') {
-			// server.connected is a heartbeat signal — no action needed.
-			// Session data arrives via individual SSE events (message.updated, session.status, etc.)
-			// Full reconcile only happens on bootstrap or explicit user reload.
+			// After SSE reconnect, resync all active session statuses AND messages.
+			// Events may have been lost during the disconnect window
+			// (e.g. session.idle, message.updated), leaving the UI in stale state.
+			const state = useChatStore.getState();
+			const activeIds = state.sessionOrder.filter(Boolean);
+			if (activeIds.length > 0) {
+				void openCodeRuntime.refreshRuntimeState(activeIds[0], activeIds).catch(() => {});
+				void openCodeRuntime.syncMessagesAfterReconnect(activeIds).catch(() => {});
+			}
 			return;
 		}
 		enqueue(maybeEnvelope.payload as WebviewSdkEvent);
@@ -124,6 +163,12 @@ function handleGlobalEnvelope(
 	const parsed = event as StreamEnvelope | WebviewSdkEvent;
 	if (parsed && typeof parsed === 'object' && 'type' in parsed) {
 		if (parsed.type === 'server.connected') {
+			// Same resync logic as the envelope path above
+			const state = useChatStore.getState();
+			const activeIds = state.sessionOrder.filter(Boolean);
+			if (activeIds.length > 0) {
+				void openCodeRuntime.refreshRuntimeState(activeIds[0], activeIds).catch(() => {});
+			}
 			return;
 		}
 		enqueue(parsed as WebviewSdkEvent);
