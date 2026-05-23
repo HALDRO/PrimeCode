@@ -1,13 +1,7 @@
 import * as path from 'node:path';
 import { createOpencodeClient } from '@opencode-ai/sdk/v2/client';
 import * as vscode from 'vscode';
-import {
-	generateId,
-	getCustomEndpointNpm,
-	getProxyEndpointProtocol,
-	getProxyEndpointProviderId,
-	parseModelId,
-} from '../common';
+import { generateId, parseModelId } from '../common';
 import { policiesToServerFormat } from '../common/permissions.js';
 import type { SendMessageAttachments, WebviewCommand } from '../common/protocol';
 import { OpenCodeExecutor } from '../core/executor/OpenCode';
@@ -308,65 +302,30 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
-	/**
-	 * Write current permission policies and proxy providers to opencode.json before server startup.
-	 * Since we don't use OPENCODE_PERMISSION env var, the server reads permissions
-	 * exclusively from the project config file.
-	 * Proxy providers from primecode.json are synced so the runtime knows about all
-	 * configured models — otherwise models visible in the UI dropdown would fail at send time.
-	 */
-	private async syncPoliciesToFileBeforeStart(): Promise<void> {
+	private async syncFromPrimeCode(): Promise<void> {
+		const workspaceRoot = this.settings.getWorkspaceRoot();
+		if (!workspaceRoot) return;
+
 		try {
 			const policies = await this.toolHandler.getPermissionPoliciesAsync();
 			const serverPermission = policiesToServerFormat(policies);
-			await this.services.openCodeConfig.setProjectField('permission', serverPermission);
+			await this.services.openCodeClient.syncPermissionPolicy(workspaceRoot, serverPermission);
 			logger.info('[ChatProvider] Pre-start: policies written to opencode.json');
 		} catch (e) {
 			logger.warn('[ChatProvider] Pre-start: failed to write policies to opencode.json', e);
 		}
 
-		// Sync proxy providers from primecode.json → opencode.json so runtime knows about them
 		try {
 			const app = getAppSettings();
 			if (app.proxyEndpoints.length > 0) {
-				const workspaceRoot = this.settings.getWorkspaceRoot();
-				if (workspaceRoot) {
-					await this.syncProxyProvidersToProject(workspaceRoot, app.proxyEndpoints);
-				}
+				await this.services.openCodeClient.syncProxyProvidersFromPrimeCode(
+					workspaceRoot,
+					app.proxyEndpoints,
+				);
 			}
 		} catch (e) {
 			logger.warn('[ChatProvider] Pre-start: failed to sync proxy providers to opencode.json', e);
 		}
-	}
-
-	/**
-	 * Write proxy endpoints from primecode.json into the project's opencode.json
-	 * so the OpenCode runtime can resolve these models at send time.
-	 * Only upserts providers that have enabled models — does not remove existing ones.
-	 */
-	private async syncProxyProvidersToProject(
-		workspaceRoot: string,
-		endpoints: import('../core/executor/primecodeConfig').ProxyEndpoint[],
-	): Promise<void> {
-		for (const endpoint of endpoints) {
-			if (!endpoint.baseUrl?.trim() || endpoint.enabledModels.length === 0) continue;
-			const protocol = getProxyEndpointProtocol(endpoint.protocol);
-			const providerId = getProxyEndpointProviderId(endpoint.id);
-			const npm = getCustomEndpointNpm(protocol);
-
-			await this.services.openCodeClient.upsertCustomProvider(workspaceRoot, {
-				providerId,
-				name: endpoint.name,
-				npm,
-				baseUrl: endpoint.baseUrl,
-				apiKey: endpoint.apiKey,
-				headers: endpoint.headers,
-				models: endpoint.enabledModels.map(id => ({ id, name: id })),
-			});
-		}
-		logger.info('[ChatProvider] Pre-start: proxy providers synced to opencode.json', {
-			count: endpoints.filter(ep => ep.enabledModels.length > 0).length,
-		});
 	}
 
 	private async reloadOpenCodeRuntimeOnStartup(): Promise<void> {
@@ -422,9 +381,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			return;
 		}
 
-		// Write current permission policies to opencode.json BEFORE server starts.
+		// Write current permission policies & proxy providers to opencode.json BEFORE server starts.
 		// The server reads permissions from this file (no env var override).
-		await this.syncPoliciesToFileBeforeStart();
+		await this.syncFromPrimeCode();
 
 		const config = await this.buildServerConfig(workspaceRoot);
 
@@ -1207,7 +1166,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			const workspaceRoot = this.settings.getWorkspaceRoot();
 			if (workspaceRoot && app.proxyEndpoints.length > 0) {
 				logger.info('[ChatProvider] Model not found — syncing proxy providers to opencode.json');
-				await this.syncProxyProvidersToProject(workspaceRoot, app.proxyEndpoints);
+				await this.services.openCodeClient.syncProxyProvidersFromPrimeCode(
+					workspaceRoot,
+					app.proxyEndpoints,
+				);
 				this.services.runtimeReload.requestReload('model-not-found-recovery');
 			}
 		} catch (e) {

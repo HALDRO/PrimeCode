@@ -4,7 +4,6 @@ import {
 	getCustomEndpointModelsUrl,
 	getCustomEndpointNpm,
 	getProxyEndpointProtocol,
-	getProxyEndpointProviderId,
 	normalizeCustomEndpointBaseUrl,
 	type OpenCodeProviderData,
 	parseModelId,
@@ -455,9 +454,7 @@ export class ProviderHandler implements WebviewMessageHandler {
 			// which may contain stale/merged data from OpenCode CLI global config.
 			const enabledModelIds = (rawEnabledIds ?? []).filter(Boolean);
 
-			const resolvedProviderId = (
-				providerId?.trim() || (endpointId ? getProxyEndpointProviderId(endpointId) : '')
-			).trim();
+			const resolvedProviderId = (providerId?.trim() || endpointId?.trim() || '').trim();
 			if (!resolvedProviderId) return;
 			if (!enabledModelIds?.length) {
 				const result = await this.context.services.openCodeClient.upsertCustomProvider(

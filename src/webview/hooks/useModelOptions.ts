@@ -8,7 +8,6 @@
 import { useMemo } from 'react';
 import {
 	getProxyEndpointProviderIdFromName,
-	isProxyEndpointProviderId,
 	OPENAI_COMPATIBLE_PROVIDER_ID,
 	type OpenCodeProviderData,
 } from '../../common';
@@ -41,9 +40,12 @@ export function buildModelOptions({
 	if (includeDefault) opts.push({ value: '', label: 'Default (inherit)' });
 
 	const enabledSet = new Set(enabledOpenCodeModels);
+	const proxyProviderIds = new Set(
+		proxyEndpoints.map(ep => getProxyEndpointProviderIdFromName(ep.name, ep.id)),
+	);
 
 	for (const provider of opencodeProviders) {
-		if (provider.id === OPENAI_COMPATIBLE_PROVIDER_ID || isProxyEndpointProviderId(provider.id)) {
+		if (provider.id === OPENAI_COMPATIBLE_PROVIDER_ID || proxyProviderIds.has(provider.id)) {
 			continue;
 		}
 		for (const model of provider.models) {

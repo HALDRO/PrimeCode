@@ -7,17 +7,15 @@
  */
 
 import type React from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
 	getProxyEndpointProtocol,
-	getProxyEndpointProviderId,
 	getProxyEndpointProviderIdFromName,
 	isNonDisconnectableProviderId,
-	isProxyEndpointProviderId,
 	OPENAI_COMPATIBLE_PROVIDER_ID,
 	type OpenCodeProviderData,
 } from '../../../common';
-import { useSettingsActions, useSettingsStore } from '../../store';
+import { useSettingsActions, useSettingsStore, useUIActions } from '../../store';
 import { useVSCode } from '../../utils/vscode';
 import { BrainSideIcon, RefreshIcon } from '../icons';
 import { Button, Select, Switch, TextInput } from '../ui';
@@ -200,21 +198,14 @@ export const ProviderManager: React.FC = () => {
 		if (!isOpenCodeCLI) return [];
 
 		const proxyProviderIds = new Set(
-			proxyEndpoints.flatMap(endpoint => [
-				endpoint.id,
-				getProxyEndpointProviderId(endpoint.id),
+			proxyEndpoints.map(endpoint =>
 				getProxyEndpointProviderIdFromName(endpoint.name, endpoint.id),
-			]),
+			),
 		);
 
 		// Connected system providers (exclude custom endpoint providers)
 		const connected: ProviderItemData[] = opencodeProviders
-			.filter(
-				p =>
-					p.id !== OPENAI_COMPATIBLE_PROVIDER_ID &&
-					!proxyProviderIds.has(p.id) &&
-					!isProxyEndpointProviderId(p.id),
-			)
+			.filter(p => p.id !== OPENAI_COMPATIBLE_PROVIDER_ID && !proxyProviderIds.has(p.id))
 			.map(p => ({
 				id: p.id,
 				name: p.name,
@@ -399,9 +390,7 @@ export const ProviderManager: React.FC = () => {
 			.proxyEndpoints.find(item => item.id === endpointId);
 		postMessage({
 			type: 'removeProxyEndpoint',
-			providerId: endpoint
-				? resolveEndpointProviderId(endpoint)
-				: getProxyEndpointProviderId(endpointId),
+			providerId: endpoint ? resolveEndpointProviderId(endpoint) : endpointId,
 			baseUrl: endpoint?.baseUrl,
 		});
 		const nextEndpoints = useSettingsStore
@@ -624,8 +613,11 @@ export const ProviderManager: React.FC = () => {
 				<div className="border border-vscode-panel-border rounded overflow-hidden mb-(--gap-6) mx-(--gap-1)">
 					{proxyEndpoints.map((endpoint, idx) => {
 						const providerKey = `endpoint:${endpoint.id}`;
-						const enabledCount = endpoint.enabledModels.length;
 						const modelCount = endpoint.models.length;
+						const availableModelIds = new Set(endpoint.models.map(m => m.id));
+						const enabledCount = endpoint.enabledModels.filter(id =>
+							availableModelIds.has(id),
+						).length;
 						const endpointProviderId = resolveEndpointProviderId(endpoint);
 						return (
 							<ExpandableRow
@@ -706,7 +698,19 @@ const CustomEndpointConfig: React.FC<CustomEndpointConfigProps> = ({
 	onToggleModel,
 	onRemove,
 }) => {
+	const { showConfirmDialog } = useUIActions();
 	const [modelSearch, setModelSearch] = useState('');
+	const [showEnabledOnly, setShowEnabledOnly] = useState(false);
+	const enabledSet = useMemo(() => new Set(endpoint.enabledModels), [endpoint.enabledModels]);
+	const handleRemove = useCallback(() => {
+		showConfirmDialog({
+			title: 'Disconnect Endpoint',
+			message: `Are you sure you want to disconnect "${endpoint.name || endpoint.id}"? This will remove all models from this endpoint.`,
+			confirmLabel: 'Disconnect',
+			cancelLabel: 'Cancel',
+			onConfirm: onRemove,
+		});
+	}, [showConfirmDialog, onRemove, endpoint.name, endpoint.id]);
 	const [headerKey, setHeaderKey] = useState('');
 	const [headerValue, setHeaderValue] = useState('');
 	const baseUrlError =
@@ -720,13 +724,14 @@ const CustomEndpointConfig: React.FC<CustomEndpointConfigProps> = ({
 			: endpoint.testStatus.error
 				? 'error'
 				: 'idle';
-	const filteredModels = modelSearch
-		? endpoint.models.filter(
-				m =>
-					m.name.toLowerCase().includes(modelSearch.toLowerCase()) ||
-					m.id.toLowerCase().includes(modelSearch.toLowerCase()),
-			)
-		: endpoint.models;
+	const filteredModels = endpoint.models
+		.filter(m => !showEnabledOnly || enabledSet.has(m.id))
+		.filter(
+			m =>
+				!modelSearch ||
+				m.name.toLowerCase().includes(modelSearch.toLowerCase()) ||
+				m.id.toLowerCase().includes(modelSearch.toLowerCase()),
+		);
 
 	const headers = endpoint.headers ?? {};
 	const headerEntries = Object.entries(headers);
@@ -755,7 +760,7 @@ const CustomEndpointConfig: React.FC<CustomEndpointConfigProps> = ({
 				<div className="flex items-center gap-2">
 					<button
 						type="button"
-						onClick={onRemove}
+						onClick={handleRemove}
 						className="text-sm text-vscode-errorForeground/70 hover:text-vscode-errorForeground transition-colors"
 					>
 						Disconnect
@@ -860,9 +865,15 @@ const CustomEndpointConfig: React.FC<CustomEndpointConfigProps> = ({
 				<div className="flex items-center gap-1.5">
 					<span className="text-sm text-vscode-foreground">Models</span>
 					{endpoint.models.length > 0 && (
-						<SettingsBadge>{endpoint.models.length} found</SettingsBadge>
+						<SettingsBadge>
+							{showEnabledOnly ? `${enabledSet.size} enabled` : `${endpoint.models.length} found`}
+						</SettingsBadge>
 					)}
 					{status !== 'idle' && <SettingsBadge variant="blue">{status}</SettingsBadge>}
+				</div>
+				<div className="flex items-center gap-2">
+					<Switch checked={showEnabledOnly} onChange={setShowEnabledOnly} />
+					<span className="text-xs text-vscode-foreground/60">Enabled only</span>
 				</div>
 				<Button
 					size="sm"

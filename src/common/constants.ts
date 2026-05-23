@@ -23,20 +23,13 @@ export const TIMEOUTS = {
 
 /** Canonical provider ID for OpenAI-compatible APIs (OpenCode provider id). */
 export const OPENAI_COMPATIBLE_PROVIDER_ID = 'oai' as const;
+
+/** Returns provider ID for a proxy endpoint: name or ID as-is. */
 export const getProxyEndpointProviderIdFromName = (
 	endpointName: string | undefined,
 	endpointId: string | undefined,
 ): string => {
-	const trimmedName = endpointName?.trim();
-	if (trimmedName) return trimmedName;
-	return endpointId ? getProxyEndpointProviderId(endpointId) : '';
-};
-export const getProxyEndpointProviderId = (endpointId: string): string => {
-	return `${OPENAI_COMPATIBLE_PROVIDER_ID}-${endpointId}`;
-};
-
-export const isProxyEndpointProviderId = (providerId: string): boolean => {
-	return providerId.startsWith(`${OPENAI_COMPATIBLE_PROVIDER_ID}-`);
+	return endpointName?.trim() || endpointId?.trim() || '';
 };
 
 /**
@@ -115,7 +108,6 @@ export const resolveModelDisplayName = (
 	const parsed = parseModelId(compositeId);
 
 	if (!parsed) {
-		// No slash — check proxy models by raw ID
 		if (proxyModels) {
 			const pm = proxyModels.find(m => m.id === compositeId);
 			if (pm) return pm.name || compositeId;
@@ -123,21 +115,15 @@ export const resolveModelDisplayName = (
 		return compositeId;
 	}
 
-	// For proxy/oai providers: use the modelId directly as display name.
-	// The modelId is what the server returned and may contain meaningful
-	// namespace prefixes (e.g. "kiro/opus 4.5", "[Kiro] claude-opus-4-6").
-	if (
-		parsed.providerId === 'proxy' ||
-		parsed.providerId === 'oai' ||
-		isProxyEndpointProviderId(parsed.providerId)
-	) {
-		return parsed.modelId;
+	// Look up in system providers first
+	const provider = providers.find(p => p.id === parsed.providerId);
+	if (provider) {
+		const model = provider.models.find(m => m.id === parsed.modelId);
+		return model?.name || parsed.modelId;
 	}
 
-	// For system providers: look up human-readable name, fall back to modelId.
-	const provider = providers.find(p => p.id === parsed.providerId);
-	const model = provider?.models.find(m => m.id === parsed.modelId);
-	return model?.name || parsed.modelId;
+	// Not a system provider — proxy/custom endpoint. Use modelId as display name.
+	return parsed.modelId;
 };
 
 /**

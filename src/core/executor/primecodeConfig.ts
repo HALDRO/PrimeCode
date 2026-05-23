@@ -1,13 +1,15 @@
 /**
  * @file PrimeCode Config
- * @description Single source of truth for PrimeCode-specific persistent state.
- * Stored at ~/.config/opencode/primecode.json — survives VS Code crashes, reloads, and window switches.
- * Read: synchronous from in-memory cache with stat-based mtime validation (non-blocking for callers).
- * Write: async with sequential queue to prevent race conditions between concurrent writes.
- * On parse errors: returns cached/default values in memory WITHOUT overwriting the file on disk.
+ * @description Persistent config for PrimeCode stored at ~/.config/opencode/primecode.json.
+ * Architecture: in-memory cache is the single source of truth. File is just persistence.
+ * - On startup: load file into cache (once).
+ * - On mutation: update cache, then dump entire cache to disk synchronously.
+ * - On external change (file watcher): reload file into cache.
+ * No read-modify-write. No partial patches to disk. No async queues.
+ * Every write is the full cache serialized to disk.
  */
 
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
@@ -80,19 +82,16 @@ function defaultConfig(): PrimeCodeConfig {
 	};
 }
 
-// ─── File I/O ────────────────────────────────────────────────────────────────
+// ─── State ───────────────────────────────────────────────────────────────────
 
 export const CONFIG_PATH = path.join(homedir(), '.config', 'opencode', 'primecode.json');
 
-let configCache: PrimeCodeConfig = defaultConfig();
-let configMtime = 0;
+let cache: PrimeCodeConfig = defaultConfig();
 
-/**
- * Write guard: set to true while we are writing to CONFIG_PATH.
- * When true, readConfig() skips re-reading from disk to avoid
- * reading a partially-written file (file watcher fires mid-write).
- */
-let isWriting = false;
+// Load from disk on module init
+loadFromDisk();
+
+// ─── Disk I/O ────────────────────────────────────────────────────────────────
 
 function ensureConfigDir(): void {
 	const dir = path.dirname(CONFIG_PATH);
@@ -102,214 +101,128 @@ function ensureConfigDir(): void {
 }
 
 /**
- * Synchronous read with stat-based cache validation.
- * Returns cached config if file mtime hasn't changed.
- * On parse error: retries once after a short delay, then returns cache — never overwrites the file.
+ * Load config from disk into cache. Called once at startup and on external file changes.
+ * If file doesn't exist or is corrupted — keeps current cache intact.
  */
-function readConfig(): PrimeCodeConfig {
-	// If we are currently writing, return cache to avoid reading partial data
-	if (isWriting) return configCache;
-
+function loadFromDisk(): void {
 	try {
-		if (!existsSync(CONFIG_PATH)) {
-			// No file yet — return defaults but don't write anything
-			if (configMtime === 0) return configCache;
-			configMtime = 0;
-			return configCache;
-		}
-
-		const stat = statSync(CONFIG_PATH);
-		if (stat.mtimeMs === configMtime) {
-			return configCache;
-		}
-
+		if (!existsSync(CONFIG_PATH)) return;
 		const raw = readFileSync(CONFIG_PATH, 'utf-8');
+		if (!raw.trim()) return;
 		const parsed = JSON.parse(raw) as Partial<PrimeCodeConfig>;
-		configCache = {
-			runtimes: Array.isArray(parsed.runtimes) ? parsed.runtimes : configCache.runtimes,
-			models: parseModelSettings(parsed.models),
-			app: parseAppSettings(parsed.app),
+		// Merge parsed data into cache, preserving cache values for missing fields
+		cache = {
+			runtimes: Array.isArray(parsed.runtimes) ? parsed.runtimes : cache.runtimes,
+			models: mergeModelSettings(parsed.models),
+			app: mergeAppSettings(parsed.app),
 		};
-		configMtime = stat.mtimeMs;
-		return configCache;
 	} catch (error) {
-		// Parse error or disk error — return current cache, do NOT reset or overwrite file
-		logger.warn('[PrimeCodeConfig] Failed to read primecode.json, using cached state:', error);
-		return configCache;
+		logger.warn('[PrimeCodeConfig] Failed to load primecode.json, using cached state:', error);
 	}
 }
 
-/** Force re-read from disk on next access (e.g. after external file change). */
-export function invalidateConfigCache(): void {
-	// If we are currently writing, ignore the invalidation — our own write triggered it
-	if (isWriting) return;
-	configMtime = 0;
-}
-
-/** Reset all in-memory state to defaults. For tests only. */
-export function resetConfigForTesting(): void {
-	configCache = defaultConfig();
-	configMtime = 0;
-}
-
-// ─── Parsers ─────────────────────────────────────────────────────────────────
-
-function parseModelSettings(raw: unknown): ModelSettings {
-	if (!raw || typeof raw !== 'object') return configCache.models;
+function mergeModelSettings(raw: unknown): ModelSettings {
+	if (!raw || typeof raw !== 'object') return cache.models;
 	const obj = raw as Record<string, unknown>;
+
+	// Clean up legacy "oai-" prefixed keys from providerModelVisibility
+	let visibility = cache.models.providerModelVisibility;
+	if (
+		obj.providerModelVisibility &&
+		typeof obj.providerModelVisibility === 'object' &&
+		!Array.isArray(obj.providerModelVisibility)
+	) {
+		const raw = obj.providerModelVisibility as Record<string, boolean | undefined>;
+		visibility = {};
+		for (const [key, value] of Object.entries(raw)) {
+			// Strip all "oai-" prefixes from keys (legacy data cleanup)
+			let cleanKey = key;
+			while (cleanKey.startsWith('oai-')) {
+				cleanKey = cleanKey.slice(4);
+			}
+			// Keep the most permissive value if duplicates exist after normalization
+			if (visibility[cleanKey] === undefined || value === true) {
+				visibility[cleanKey] = value;
+			}
+		}
+	}
+
 	return {
 		enabledModels: Array.isArray(obj.enabledModels)
 			? obj.enabledModels.filter((v): v is string => typeof v === 'string')
-			: configCache.models.enabledModels,
-		providerModelVisibility:
-			obj.providerModelVisibility &&
-			typeof obj.providerModelVisibility === 'object' &&
-			!Array.isArray(obj.providerModelVisibility)
-				? (obj.providerModelVisibility as Record<string, boolean | undefined>)
-				: configCache.models.providerModelVisibility,
+			: cache.models.enabledModels,
+		providerModelVisibility: visibility,
 		modelVariants:
 			obj.modelVariants &&
 			typeof obj.modelVariants === 'object' &&
 			!Array.isArray(obj.modelVariants)
 				? (obj.modelVariants as Record<string, string | undefined>)
-				: configCache.models.modelVariants,
+				: cache.models.modelVariants,
 	};
 }
 
-function parseAppSettings(raw: unknown): AppSettings {
-	if (!raw || typeof raw !== 'object') return configCache.app;
+function mergeAppSettings(raw: unknown): AppSettings {
+	if (!raw || typeof raw !== 'object') return cache.app;
 	const obj = raw as Record<string, unknown>;
 	return {
 		proxyEndpoints: Array.isArray(obj.proxyEndpoints)
 			? obj.proxyEndpoints
-			: configCache.app.proxyEndpoints,
+			: cache.app.proxyEndpoints,
 		providersDisabled: Array.isArray(obj.providersDisabled)
 			? obj.providersDisabled.filter((v): v is string => typeof v === 'string')
-			: configCache.app.providersDisabled,
+			: cache.app.providersDisabled,
 		promptImproveModel:
 			typeof obj.promptImproveModel === 'string'
 				? obj.promptImproveModel
-				: configCache.app.promptImproveModel,
+				: cache.app.promptImproveModel,
 		promptImproveTemplate:
 			typeof obj.promptImproveTemplate === 'string'
 				? obj.promptImproveTemplate
-				: configCache.app.promptImproveTemplate,
+				: cache.app.promptImproveTemplate,
 		opencodeAgent:
-			typeof obj.opencodeAgent === 'string' ? obj.opencodeAgent : configCache.app.opencodeAgent,
+			typeof obj.opencodeAgent === 'string' ? obj.opencodeAgent : cache.app.opencodeAgent,
 	};
 }
 
-// ─── Unified Write Queue ─────────────────────────────────────────────────────
-
-let writeQueue: Promise<void> = Promise.resolve();
-
-/** Wait for all pending writes to complete. Useful for tests. */
-export function flushWrites(): Promise<void> {
-	return writeQueue;
-}
-
 /**
- * Unified write with sequential queue.
- * All writes (runtimes, models, app) go through this single queue to prevent race conditions.
- * Reads raw JSON from disk, updates specified sections, writes back.
- * Uses writeFileSync wrapped in isWriting guard so file watcher events triggered
- * mid-write are ignored (prevents reading partially-written content).
- * If file is corrupted, does not write to disk.
+ * Persist entire cache to disk. Synchronous. Always writes the full state.
+ * This is the ONLY function that writes to the file.
  */
-function enqueueWrite(patch: {
-	runtimes?: RuntimeEntry[];
-	models?: ModelSettings;
-	app?: AppSettings;
-}): void {
-	// Update cache immediately so subsequent sync reads see the new state
-	if (patch.runtimes !== undefined) configCache.runtimes = patch.runtimes;
-	if (patch.models !== undefined) configCache.models = patch.models;
-	if (patch.app !== undefined) configCache.app = patch.app;
-
-	writeQueue = writeQueue.then(async () => {
-		try {
-			ensureConfigDir();
-			let fileData: Record<string, unknown> = {};
-			if (existsSync(CONFIG_PATH)) {
-				try {
-					const raw = readFileSync(CONFIG_PATH, 'utf-8');
-					fileData = JSON.parse(raw) as Record<string, unknown>;
-				} catch {
-					logger.warn(
-						'[PrimeCodeConfig] Cannot parse primecode.json for write, skipping disk write',
-					);
-					return;
-				}
-			}
-
-			// Apply patches to file data
-			if (patch.runtimes !== undefined) fileData.runtimes = patch.runtimes;
-			if (patch.models !== undefined) fileData.models = patch.models;
-			if (patch.app !== undefined) fileData.app = patch.app;
-
-			// Write with guard: prevents file watcher from reading partial content.
-			// writeFileSync ensures the entire content is flushed before returning,
-			// so the file is never in a half-written state on disk.
-			isWriting = true;
-			try {
-				writeFileSync(CONFIG_PATH, JSON.stringify(fileData, null, 2), 'utf-8');
-				const stat = statSync(CONFIG_PATH);
-				configMtime = stat.mtimeMs;
-			} finally {
-				isWriting = false;
-			}
-		} catch (error) {
-			logger.error('[PrimeCodeConfig] Failed to write primecode.json:', error);
-		}
-	});
-}
-
-// ─── Runtime Registry (sync — independent of settings write queue) ────────────
-
-/**
- * Synchronous write of ONLY the runtimes section.
- * Reads the file, patches only `runtimes`, writes back immediately.
- * This is safe alongside the async settings queue because:
- * - Both use writeFileSync (blocks the thread, no interleaving)
- * - The async queue's .then() callback cannot execute while this runs
- * - Each function reads the full file before writing, preserving other sections
- * If file is corrupted, updates only in-memory cache without disk write.
- */
-function writeRuntimesSync(runtimes: RuntimeEntry[]): void {
-	configCache.runtimes = runtimes;
+function persistToDisk(): void {
 	try {
 		ensureConfigDir();
-		let fileData: Record<string, unknown> = {};
-		if (existsSync(CONFIG_PATH)) {
-			try {
-				const raw = readFileSync(CONFIG_PATH, 'utf-8');
-				fileData = JSON.parse(raw) as Record<string, unknown>;
-			} catch {
-				logger.warn(
-					'[PrimeCodeConfig] Cannot parse primecode.json for runtime write, skipping disk write',
-				);
-				return;
-			}
-		}
-		fileData.runtimes = runtimes;
-		isWriting = true;
-		try {
-			writeFileSync(CONFIG_PATH, JSON.stringify(fileData, null, 2), 'utf-8');
-			const stat = statSync(CONFIG_PATH);
-			configMtime = stat.mtimeMs;
-		} finally {
-			isWriting = false;
-		}
+		writeFileSync(CONFIG_PATH, JSON.stringify(cache, null, 2), 'utf-8');
 	} catch (error) {
-		logger.error('[PrimeCodeConfig] Failed to write runtimes:', error);
+		logger.error('[PrimeCodeConfig] Failed to persist primecode.json:', error);
 	}
 }
 
+// ─── Public API: Cache Invalidation ──────────────────────────────────────────
+
+/**
+ * Reload config from disk (e.g. after external file change from another VS Code window).
+ * Forces a re-read regardless of mtime — the caller already knows the file changed.
+ */
+export function invalidateConfigCache(): void {
+	loadFromDisk();
+}
+
+/** Reset all in-memory state to defaults. For tests only. */
+export function resetConfigForTesting(): void {
+	cache = defaultConfig();
+}
+
+/** Wait for all pending writes to complete. No-op in sync architecture, kept for API compat. */
+export function flushWrites(): Promise<void> {
+	return Promise.resolve();
+}
+
+// ─── Public API: Runtime Registry ────────────────────────────────────────────
+
 export function addRuntime(entry: RuntimeEntry): void {
-	let currentRuntimes = [...configCache.runtimes];
-	currentRuntimes = currentRuntimes.filter(r => r.runtimeId !== entry.runtimeId);
-	currentRuntimes.push(entry);
-	writeRuntimesSync(currentRuntimes);
+	cache.runtimes = cache.runtimes.filter(r => r.runtimeId !== entry.runtimeId);
+	cache.runtimes.push(entry);
+	persistToDisk();
 	logger.info('[PrimeCodeConfig] Added runtime entry', {
 		runtimeId: entry.runtimeId,
 		pid: entry.pid,
@@ -318,19 +231,20 @@ export function addRuntime(entry: RuntimeEntry): void {
 }
 
 export function removeRuntime(runtimeId: string): void {
-	const currentRuntimes = configCache.runtimes.filter(r => r.runtimeId !== runtimeId);
-	if (currentRuntimes.length < configCache.runtimes.length) {
-		writeRuntimesSync(currentRuntimes);
+	const before = cache.runtimes.length;
+	cache.runtimes = cache.runtimes.filter(r => r.runtimeId !== runtimeId);
+	if (cache.runtimes.length < before) {
+		persistToDisk();
 		logger.info('[PrimeCodeConfig] Removed runtime entry', { runtimeId });
 	}
 }
 
 export function getRuntimesForWorkspace(workspaceRoot: string): RuntimeEntry[] {
-	return readConfig().runtimes.filter(r => r.workspaceRoot === workspaceRoot);
+	return cache.runtimes.filter(r => r.workspaceRoot === workspaceRoot);
 }
 
 export function getAllRuntimes(): RuntimeEntry[] {
-	return readConfig().runtimes;
+	return cache.runtimes;
 }
 
 export function isProcessAlive(pid: number): boolean {
@@ -342,54 +256,45 @@ export function isProcessAlive(pid: number): boolean {
 	}
 }
 
-// ─── Settings (async write, sync read from cache) ────────────────────────────
+// ─── Public API: Settings ────────────────────────────────────────────────────
 
 export type ModelSettingsPatch = Partial<ModelSettings>;
 
 export function getModelSettings(): ModelSettings {
-	return readConfig().models;
+	return cache.models;
 }
 
 export function getAppSettings(): AppSettings {
-	return readConfig().app;
+	return cache.app;
 }
 
 /**
- * Batch update — merges model and app changes, writes async.
- * Cache is updated immediately for instant sync reads.
+ * Batch update — merges model and app changes into cache, persists to disk.
  */
 export function updateConfig(patch: {
 	models?: ModelSettingsPatch;
 	app?: Partial<AppSettings>;
 }): void {
-	const config = readConfig();
-
 	if (patch.models) {
 		const m = patch.models;
-		const models = config.models;
-		if (m.enabledModels !== undefined) models.enabledModels = m.enabledModels;
+		if (m.enabledModels !== undefined) cache.models.enabledModels = m.enabledModels;
 		if (m.providerModelVisibility !== undefined) {
-			models.providerModelVisibility = {
-				...models.providerModelVisibility,
+			cache.models.providerModelVisibility = {
+				...cache.models.providerModelVisibility,
 				...m.providerModelVisibility,
 			};
 		}
 		if (m.modelVariants !== undefined) {
-			models.modelVariants = { ...models.modelVariants, ...m.modelVariants };
+			cache.models.modelVariants = { ...cache.models.modelVariants, ...m.modelVariants };
 		}
 	}
 
 	if (patch.app) {
-		config.app = { ...config.app, ...patch.app };
+		cache.app = { ...cache.app, ...patch.app };
 	}
 
-	enqueueWrite({
-		...(patch.models ? { models: config.models } : {}),
-		...(patch.app ? { app: config.app } : {}),
-	});
+	persistToDisk();
 }
-
-// Convenience wrappers
 
 export function updateModelSettings(patch: ModelSettingsPatch): void {
 	updateConfig({ models: patch });

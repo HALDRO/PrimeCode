@@ -8,7 +8,9 @@ import type { Model as ModelV2, OpencodeClient } from '@opencode-ai/sdk/v2/clien
 import * as vscode from 'vscode';
 import {
 	formatModelId,
+	getCustomEndpointNpm,
 	getCustomEndpointProtocolFromNpm,
+	getProxyEndpointProtocol,
 	isCustomEndpointNpm,
 	normalizeCustomEndpointBaseUrl,
 	type ProxyEndpointProtocol,
@@ -493,6 +495,57 @@ export class OpenCodeClientService {
 		const { error } = await client.auth.remove({ providerID: providerId });
 		if (error) {
 			throw new Error(`OpenCode auth delete failed: ${JSON.stringify(error)}`);
+		}
+	}
+
+	/**
+	 * Write pre-formatted permission policy to the project's opencode.json
+	 * so the OpenCode runtime reads it on next start.
+	 * Called before server starts — server reads permissions from file, not env.
+	 */
+	async syncPermissionPolicy(
+		workspaceRoot: string,
+		permissionConfig: Record<string, string>,
+	): Promise<void> {
+		this.setWorkspaceRoot(workspaceRoot);
+		await this.projectConfig.setProjectField('permission', permissionConfig);
+	}
+
+	/**
+	 * Synchronise proxy endpoints from primecode.json into the project's opencode.json.
+	 * Removes stale proxy providers that no longer appear in the active endpoints list,
+	 * then upserts active ones so the runtime resolves the correct models at send time.
+	 */
+	async syncProxyProvidersFromPrimeCode(
+		workspaceRoot: string,
+		endpoints: import('../core/executor/primecodeConfig').ProxyEndpoint[],
+	): Promise<void> {
+		this.setWorkspaceRoot(workspaceRoot);
+
+		// Remove stale proxy providers no longer present in PrimeCode config
+		const activeIds = new Set(endpoints.map(ep => ep.id));
+		const currentProxyProviders = await this.getAllProjectProxyProviders(workspaceRoot);
+		for (const provider of currentProxyProviders) {
+			if (!activeIds.has(provider.id)) {
+				await this.deleteCustomProvider(workspaceRoot, { providerId: provider.id });
+			}
+		}
+
+		// Upsert active endpoints
+		for (const endpoint of endpoints) {
+			if (!endpoint.baseUrl?.trim() || endpoint.enabledModels.length === 0) continue;
+			const protocol = getProxyEndpointProtocol(endpoint.protocol);
+			const npm = getCustomEndpointNpm(protocol);
+
+			await this.upsertCustomProvider(workspaceRoot, {
+				providerId: endpoint.id,
+				name: endpoint.name,
+				npm,
+				baseUrl: endpoint.baseUrl,
+				apiKey: endpoint.apiKey,
+				headers: endpoint.headers,
+				models: endpoint.enabledModels.map(id => ({ id, name: id })),
+			});
 		}
 	}
 

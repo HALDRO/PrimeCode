@@ -5,13 +5,15 @@ import { getGlobalOpenCodeDir } from './opencode/OpenCodeConfigService';
 const DEBOUNCE_MS = 500;
 const OPENCODE_CONFIG_FILES = ['opencode.json', 'opencode.jsonc'] as const;
 const STARTUP_GRACE_MS = 3000;
+/** After a UI-initiated save, suppress watcher events for this duration. */
+const UI_SAVE_SUPPRESS_MS = 2000;
 
 export class ConfigFileWatcherService implements vscode.Disposable {
 	private _debounceTimer: ReturnType<typeof setTimeout> | undefined;
 	private readonly _disposables: vscode.Disposable[] = [];
 	private _isReloading = false;
 	private _startedAt = 0;
-	private _lastUiSaveHash: string | undefined;
+	private _suppressUntil = 0;
 	private _onReload: ((source: 'file-watcher' | 'manual') => Promise<void> | void) | undefined;
 
 	public start(onReload: (source: 'file-watcher' | 'manual') => Promise<void> | void): void {
@@ -50,15 +52,14 @@ export class ConfigFileWatcherService implements vscode.Disposable {
 
 	/**
 	 * Notify that the UI just wrote to opencode.json.
-	 * Records the content hash so the file watcher ignores the resulting
-	 * filesystem event (we already know about this change).
-	 * Does NOT trigger a reload — the server reads model/config per-request,
-	 * so instance.dispose() is unnecessary for UI-initiated writes like model changes.
+	 * Suppresses all file watcher events for a short period after the write,
+	 * preventing reload loops when multiple writes happen in quick succession
+	 * (e.g. syncing multiple proxy providers at startup).
 	 */
-	public notifyUiSave(contentHash?: string): void {
-		this._lastUiSaveHash = contentHash;
+	public notifyUiSave(_contentHash?: string): void {
+		this._suppressUntil = Date.now() + UI_SAVE_SUPPRESS_MS;
 		logger.debug('[ConfigFileWatcherService] UI save notified (suppressing watcher)', {
-			hash: contentHash ?? 'none',
+			suppressUntil: new Date(this._suppressUntil).toISOString(),
 		});
 	}
 
@@ -81,36 +82,19 @@ export class ConfigFileWatcherService implements vscode.Disposable {
 			return;
 		}
 
+		// Suppress events caused by our own writes (time-based window)
+		if (Date.now() < this._suppressUntil) {
+			logger.debug('[ConfigFileWatcherService] Suppressed (within UI save window)');
+			return;
+		}
+
 		if (this._debounceTimer) {
 			clearTimeout(this._debounceTimer);
 		}
 
 		this._debounceTimer = setTimeout(async () => {
-			if (this._lastUiSaveHash && eventType !== 'delete') {
-				try {
-					const bytes = await vscode.workspace.fs.readFile(uri);
-					const content = new TextDecoder().decode(bytes);
-					if (this._simpleHash(content) === this._lastUiSaveHash) {
-						this._lastUiSaveHash = undefined;
-						return;
-					}
-				} catch {
-					// File read failed — proceed with reload
-				}
-				this._lastUiSaveHash = undefined;
-			}
-
 			void this._performReload('file-watcher');
 		}, DEBOUNCE_MS);
-	}
-
-	private _simpleHash(str: string): string {
-		let hash = 0;
-		for (let i = 0; i < str.length; i++) {
-			const ch = str.charCodeAt(i);
-			hash = ((hash << 5) - hash + ch) | 0;
-		}
-		return hash.toString(36);
 	}
 
 	private async _performReload(source: 'file-watcher' | 'manual'): Promise<void> {

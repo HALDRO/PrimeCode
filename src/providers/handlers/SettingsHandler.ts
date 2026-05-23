@@ -237,13 +237,13 @@ export class SettingsHandler implements WebviewMessageHandler {
 				const existingByBaseUrl = baseUrlKey ? existingByBaseUrlKey.get(baseUrlKey) : undefined;
 				if (existingByBaseUrl) {
 					const previousEndpointId = existingByBaseUrl.id;
+					// Update metadata from opencode.json but preserve enabledModels from primecode.json
 					Object.assign(existingByBaseUrl, {
 						id: endpointId,
 						name: provider.name,
 						baseUrl: provider.baseUrl,
 						apiKey: provider.apiKey,
 						protocol,
-						enabledModels: provider.models.map(m => m.id),
 						modelVariants: Object.fromEntries(
 							provider.models.flatMap(m =>
 								m.variants && m.variants.length > 0 ? [[m.id, m.variants] as const] : [],

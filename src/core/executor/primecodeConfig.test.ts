@@ -479,23 +479,24 @@ describe('primecodeConfig', () => {
 			expect(getAppSettings().opencodeAgent).toBe('protected-agent');
 		});
 
-		it('settings write skipped when file is corrupted on disk', async () => {
+		it('settings write overwrites corrupted file with valid cache', async () => {
 			updateConfig({ models: { enabledModels: ['original'] } });
 			await flushWrites();
 
 			// Corrupt file on disk
 			writeFileSync(CONFIG_PATH, 'not json at all', 'utf-8');
 
-			// Try to write settings — should skip disk write, keep cache
+			// Write settings — should overwrite corrupted file with full cache
 			updateModelSettings({ enabledModels: ['new-value'] });
 			await flushWrites();
 
 			// Cache should have new value
 			expect(getModelSettings().enabledModels).toEqual(['new-value']);
 
-			// Disk should still be corrupted (write was skipped)
+			// Disk should now have valid JSON (cache was persisted over corruption)
 			const diskContent = readFileSync(CONFIG_PATH, 'utf-8');
-			expect(diskContent).toBe('not json at all');
+			const parsed = JSON.parse(diskContent);
+			expect(parsed.models.enabledModels).toEqual(['new-value']);
 		});
 	});
 

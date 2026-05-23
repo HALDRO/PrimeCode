@@ -213,7 +213,13 @@ describe('ChatProvider send pipeline', () => {
 
 	it('starts backend status bridge before notifying webview on startup', async () => {
 		const { provider } = createProvider();
-		provider.services = { setWorkspaceRoot: vi.fn() };
+		provider.services = {
+			setWorkspaceRoot: vi.fn(),
+			openCodeClient: {
+				syncPermissionPolicy: vi.fn(async () => {}),
+				syncProxyProvidersFromPrimeCode: vi.fn(async () => {}),
+			},
+		};
 		provider.settings = {
 			get: vi.fn((key: string) => {
 				if (key === 'opencode.agent') return undefined;
@@ -222,6 +228,7 @@ describe('ChatProvider send pipeline', () => {
 				if (key === 'access.autoApprove') return false;
 				return undefined;
 			}),
+			getWorkspaceRoot: vi.fn(() => 'C:\\repo'),
 		};
 		provider.toolHandler = {
 			getPermissionPoliciesAsync: vi.fn(async () => ({})),
