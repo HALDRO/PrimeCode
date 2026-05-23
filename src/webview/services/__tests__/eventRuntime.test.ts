@@ -100,7 +100,7 @@ describe('eventRuntime', () => {
 	});
 
 	describe('handleExtensionMessage', () => {
-		it('does not force serverStatus to connected on opencodeEvent', () => {
+		it('ignores opencodeEvent messages (webview uses direct SSE)', () => {
 			useUIStore.getState().actions.setServerStatus('disconnected');
 
 			eventRuntime.handleExtensionMessage({
@@ -108,6 +108,7 @@ describe('eventRuntime', () => {
 				data: { payload: { type: 'server.connected' } },
 			});
 
+			// opencodeEvent is ignored — serverStatus unchanged
 			expect(useUIStore.getState().serverStatus).toBe('disconnected');
 		});
 
@@ -125,30 +126,21 @@ describe('eventRuntime', () => {
 
 	describe('event filtering (handleGlobalEnvelope)', () => {
 		it('filters out server.connected in envelope format', async () => {
-			eventRuntime.handleExtensionMessage({
-				type: 'opencodeEvent',
-				data: { payload: { type: 'server.connected' } },
-			});
+			eventRuntime._injectEvent({ payload: { type: 'server.connected' } });
 			await flushQueuedTimers();
 
 			expect(appliedBatches).toHaveLength(0);
 		});
 
 		it('filters out server.connected in direct format', async () => {
-			eventRuntime.handleExtensionMessage({
-				type: 'opencodeEvent',
-				data: { type: 'server.connected' },
-			});
+			eventRuntime._injectEvent({ type: 'server.connected' });
 			await flushQueuedTimers();
 
 			expect(appliedBatches).toHaveLength(0);
 		});
 
 		it('filters out sync events', async () => {
-			eventRuntime.handleExtensionMessage({
-				type: 'opencodeEvent',
-				data: { payload: { type: 'sync' } },
-			});
+			eventRuntime._injectEvent({ payload: { type: 'sync' } });
 			await flushQueuedTimers();
 
 			expect(appliedBatches).toHaveLength(0);
@@ -160,10 +152,7 @@ describe('eventRuntime', () => {
 				properties: { sessionID: 'ses-1', info: { id: 'msg-1', role: 'assistant' } },
 			};
 
-			eventRuntime.handleExtensionMessage({
-				type: 'opencodeEvent',
-				data: { directory: 'C:\\Project', payload: event },
-			});
+			eventRuntime._injectEvent({ directory: 'C:\\Project', payload: event });
 			await flushQueuedTimers();
 
 			expect(appliedBatches).toHaveLength(1);
@@ -176,10 +165,7 @@ describe('eventRuntime', () => {
 				properties: { part: { id: 'p-1', messageID: 'msg-1', sessionID: 'ses-1' } },
 			};
 
-			eventRuntime.handleExtensionMessage({
-				type: 'opencodeEvent',
-				data: event,
-			});
+			eventRuntime._injectEvent(event);
 			await flushQueuedTimers();
 
 			expect(appliedBatches).toHaveLength(1);
@@ -192,10 +178,7 @@ describe('eventRuntime', () => {
 				properties: { sessionID: 'ses-1', status: { type: 'busy' } },
 			};
 
-			eventRuntime.handleExtensionMessage({
-				type: 'opencodeEvent',
-				data: { payload: event },
-			});
+			eventRuntime._injectEvent({ payload: event });
 			await flushQueuedTimers();
 
 			expect(appliedBatches).toHaveLength(1);
@@ -209,10 +192,7 @@ describe('eventRuntime', () => {
 				properties: { sessionID: 'ses-1' },
 			};
 
-			eventRuntime.handleExtensionMessage({
-				type: 'opencodeEvent',
-				data: { payload: event },
-			});
+			eventRuntime._injectEvent({ payload: event });
 			await flushQueuedTimers();
 
 			expect(appliedBatches).toHaveLength(1);
@@ -226,10 +206,7 @@ describe('eventRuntime', () => {
 				properties: { sessionID: 'ses-1', status: { type: 'idle' } },
 			};
 
-			eventRuntime.handleExtensionMessage({
-				type: 'opencodeEvent',
-				data: { payload: event },
-			});
+			eventRuntime._injectEvent({ payload: event });
 			await flushQueuedTimers();
 
 			expect(appliedBatches).toHaveLength(1);
@@ -252,10 +229,7 @@ describe('eventRuntime', () => {
 				properties: { sessionID: 'grandchild' },
 			};
 
-			eventRuntime.handleExtensionMessage({
-				type: 'opencodeEvent',
-				data: { payload: event },
-			});
+			eventRuntime._injectEvent({ payload: event });
 			await flushQueuedTimers();
 
 			expect(flushQueuedMessagesMock).toHaveBeenCalledWith('grandchild');
@@ -274,10 +248,7 @@ describe('eventRuntime', () => {
 				},
 			};
 
-			eventRuntime.handleExtensionMessage({
-				type: 'opencodeEvent',
-				data: { payload: event },
-			});
+			eventRuntime._injectEvent({ payload: event });
 			await flushQueuedTimers();
 
 			expect(appliedBatches).toHaveLength(1);
@@ -296,8 +267,8 @@ describe('eventRuntime', () => {
 				properties: { sessionID: 'ses-1', status: { type: 'idle' } },
 			};
 
-			eventRuntime.handleExtensionMessage({ type: 'opencodeEvent', data: { payload: event1 } });
-			eventRuntime.handleExtensionMessage({ type: 'opencodeEvent', data: { payload: event2 } });
+			eventRuntime._injectEvent({ payload: event1 });
+			eventRuntime._injectEvent({ payload: event2 });
 			await flushQueuedTimers();
 
 			expect(appliedBatches).toHaveLength(1);
@@ -315,8 +286,8 @@ describe('eventRuntime', () => {
 				properties: { sessionID: 'ses-2', status: { type: 'busy' } },
 			};
 
-			eventRuntime.handleExtensionMessage({ type: 'opencodeEvent', data: { payload: event1 } });
-			eventRuntime.handleExtensionMessage({ type: 'opencodeEvent', data: { payload: event2 } });
+			eventRuntime._injectEvent({ payload: event1 });
+			eventRuntime._injectEvent({ payload: event2 });
 			await flushQueuedTimers();
 
 			expect(appliedBatches).toHaveLength(1);
@@ -333,8 +304,8 @@ describe('eventRuntime', () => {
 				properties: { sessionID: 'ses-1', info: { id: 'msg-2' } },
 			};
 
-			eventRuntime.handleExtensionMessage({ type: 'opencodeEvent', data: { payload: event1 } });
-			eventRuntime.handleExtensionMessage({ type: 'opencodeEvent', data: { payload: event2 } });
+			eventRuntime._injectEvent({ payload: event1 });
+			eventRuntime._injectEvent({ payload: event2 });
 			await flushQueuedTimers();
 
 			expect(appliedBatches).toHaveLength(1);
@@ -344,10 +315,7 @@ describe('eventRuntime', () => {
 
 	describe('getLastEventAge', () => {
 		it('returns time since last SSE event', () => {
-			eventRuntime.handleExtensionMessage({
-				type: 'opencodeEvent',
-				data: { payload: { type: 'server.connected' } },
-			});
+			eventRuntime._injectEvent({ payload: { type: 'server.connected' } });
 
 			const age = eventRuntime.getLastEventAge();
 			expect(age).toBeGreaterThanOrEqual(0);

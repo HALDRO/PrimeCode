@@ -173,8 +173,14 @@ function sanitizeSnapshotDiffs(rawDiffs: SnapshotFileDiff[] | undefined): Sessio
 		.filter((diff): diff is SessionDiffSnapshot => diff !== null);
 }
 
+/**
+ * Check if a session is actively processing — used for message dispatch gating.
+ * Mirrors official OpenCode app's `busy()` logic: checks only the direct session status
+ * (NOT the subtree). Subtree-aware status is used only for UI indicators (Stop button).
+ */
 function isSessionActive(sessionId: string): boolean {
-	const status = getSessionRuntimeStatus(useChatStore.getState(), sessionId);
+	const state = useChatStore.getState();
+	const status = state.sessionStatus[sessionId];
 	return status?.type === 'busy' || status?.type === 'retry';
 }
 

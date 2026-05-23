@@ -1,5 +1,4 @@
 import * as path from 'node:path';
-import { createOpencodeClient } from '@opencode-ai/sdk/v2/client';
 import * as vscode from 'vscode';
 import { generateId, parseModelId } from '../common';
 import { policiesToServerFormat } from '../common/permissions.js';
@@ -18,7 +17,6 @@ import { CommandRouter } from '../transport/CommandRouter';
 import { OutboundBridge } from '../transport/OutboundBridge';
 import { extractErrorInfo } from '../utils/errorInfo';
 import { logger } from '../utils/logger';
-import { normalizeComparablePath } from '../utils/path';
 import { getHtml } from '../utils/webviewHtml';
 import { FileHandler } from './handlers/FileHandler';
 import { McpHandler } from './handlers/McpHandler';
@@ -48,10 +46,6 @@ function isCompactionCommand(text: string): boolean {
 	return slashCommand === 'compact' || slashCommand === 'summarize';
 }
 
-function toRecord(value: unknown): Record<string, unknown> | null {
-	return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null;
-}
-
 export class ChatProvider implements vscode.WebviewViewProvider {
 	private view?: vscode.WebviewView;
 	private webviewDidLaunch = false;
@@ -59,11 +53,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	private cli: OpenCodeExecutor;
 	private settings: Settings;
 	private disposables: vscode.Disposable[] = [];
-
-	private backendStatusAbort: AbortController | null = null;
-	private backendStatusRun: Promise<void> | null = null;
-	private backendStatusKey: string | null = null;
-	private backendStatusWaiters: Array<() => void> = [];
 
 	// Handlers
 	private settingsHandler: SettingsHandler;
@@ -121,7 +110,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			clearSessionAutoAccept: (sessionId: string) =>
 				this.toolHandler.clearSessionAutoAccept(sessionId),
 			refreshAfterServerRestart: async () => {
-				this.restartBackendStatusBridge();
 				this.sendServerInfo();
 				this.sendServerStatus(this.cli.getAdminInfo()?.baseUrl ? 'connected' : 'disconnected');
 				this.hasSynced = false;
@@ -220,7 +208,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	 */
 	private async reloadOpenCodeRuntime(source: string): Promise<void> {
 		logger.debug('[ChatProvider] Disposing OpenCode instance for reload', { source });
-		this.stopBackendStatusBridge();
 		this.sendServerStatus('disconnected');
 		this.clearLocalCaches();
 		const sdkClient = this.cli.getSdkClient();
@@ -232,7 +219,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		}
 		// Resync UI state after dispose
 		this.hasSynced = false;
-		this.restartBackendStatusBridge();
+		this.sendServerInfo();
 		await this.syncAllOrDefer(`reload-${source}`);
 	}
 
@@ -244,7 +231,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		const config = await this.buildServerConfig(workspaceRoot);
 
 		logger.info('[ChatProvider] Restarting managed OpenCode runtime', { source, workspaceRoot });
-		this.stopBackendStatusBridge();
 		this.sendServerStatus('disconnected');
 		this.clearLocalCaches();
 
@@ -391,11 +377,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			await this.cli.ensureServer(config);
 			await this.reloadOpenCodeRuntimeOnStartup();
 
-			this.startBackendStatusBridge();
 			this.sendServerStatus('connected');
 
-			// Notify webview only after the backend event bridge is ready.
-			// Extension should expose attach information here, not runtime recovery policy.
+			// Notify webview with server info so it can establish direct SSE connection.
 			this.sendServerInfo();
 
 			// Hydrate all UI-visible state after server connection (providers, proxy models, MCP, etc.)
@@ -541,6 +525,19 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 			],
 			'utility',
 		);
+
+		// Forwarded SSE events from webview (permission auto-respond, session tracking)
+		r.register(
+			{
+				handleMessage: async (msg: WebviewCommand) => {
+					if (msg.type === 'forwardedEvent') {
+						this.handleForwardedEvent(msg.event);
+					}
+				},
+			},
+			['forwardedEvent'],
+			'forwarded-events',
+		);
 	}
 
 	private async syncAllOrDefer(source: string): Promise<void> {
@@ -569,7 +566,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		logger.debug('[ChatProvider] syncAll started');
 		const startedAt = Date.now();
 
-		this.startBackendStatusBridge();
 		this.sendServerInfo();
 
 		await this.providerHandler.handleMessage({ type: 'reloadAllProviders' });
@@ -898,219 +894,15 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		void this.settingsHandler.handleMessage({ type: 'getSettings' });
 	}
 
-	private startBackendStatusBridge(): void {
-		const admin = this.cli.getAdminInfo();
-		if (!admin?.baseUrl || !admin.directory) return;
-
-		const nextKey = `${admin.baseUrl}::${admin.directory}`;
-		if (this.backendStatusKey === nextKey && this.backendStatusRun) return;
-
-		logger.info('[ChatProvider] Backend status bridge starting', {
-			baseUrl: admin.baseUrl,
-			directory: admin.directory,
-			previousKey: this.backendStatusKey,
-			nextKey,
-		});
-
-		this.stopBackendStatusBridge();
-		this.backendStatusKey = nextKey;
-		this.backendStatusAbort = new AbortController();
-		this.backendStatusRun = this.runBackendStatusBridge(
-			admin.baseUrl,
-			admin.directory,
-			this.backendStatusAbort.signal,
-		).finally(() => {
-			this.resolveBackendStatusWaiters();
-			this.backendStatusRun = null;
-			this.backendStatusAbort = null;
-			this.backendStatusKey = null;
-		});
-	}
-
-	private restartBackendStatusBridge(): void {
-		this.stopBackendStatusBridge();
-		this.startBackendStatusBridge();
-	}
-
-	private stopBackendStatusBridge(): void {
-		logger.info('[ChatProvider] Backend status bridge stopping', {
-			key: this.backendStatusKey,
-			hadAbortController: Boolean(this.backendStatusAbort),
-			hadRun: Boolean(this.backendStatusRun),
-		});
-		this.backendStatusAbort?.abort();
-		this.resolveBackendStatusWaiters();
-		this.backendStatusAbort = null;
-		this.backendStatusRun = null;
-		this.backendStatusKey = null;
-		this.sendServerStatus('disconnected');
-	}
-
-	private resolveBackendStatusWaiters(): void {
-		const waiters = this.backendStatusWaiters.splice(0);
-		for (const resolve of waiters) resolve();
-	}
-
 	private sendServerStatus(status: 'connected' | 'disconnected' | 'error'): void {
 		this.bridge.data('serverStatus', { status });
 	}
 
-	private async recoverManagedRuntime(directory: string): Promise<void> {
-		const reconnected = await this.cli.tryReconnect(directory);
-		if (reconnected) {
-			this.sendServerInfo();
-			return;
-		}
-
-		logger.info('[ChatProvider] Reconnection offline, attempting managed runtime recovery...');
-		await this.restartManagedRuntime('auto-recovery');
-		this.sendServerInfo();
-	}
-
-	// ─── Server Health Monitor & Reconnect ──────────────────────────────
-
-	private async runBackendStatusBridge(
-		baseUrl: string,
-		directory: string,
-		signal: AbortSignal,
-	): Promise<void> {
-		const RECONNECT_DELAY_MS = 250;
-		const HEARTBEAT_TIMEOUT_MS = 15_000;
-		let consecutiveFailures = 0;
-
-		while (!signal.aborted) {
-			const activeAdmin = this.cli.getAdminInfo();
-			const activeBaseUrl = activeAdmin?.baseUrl ?? baseUrl;
-			const authorization = this.cli.getAuthorizationHeader?.() ?? null;
-			const client = createOpencodeClient({
-				baseUrl: activeBaseUrl,
-				directory,
-				headers: authorization ? { authorization } : undefined,
-			});
-			// Child controller per iteration prevents abort-listener accumulation on the parent signal.
-			const iterationController = new AbortController();
-			const onParentAbort = () => iterationController.abort();
-			signal.addEventListener('abort', onParentAbort);
-
-			// Heartbeat: abort stream if no events received within timeout
-			let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
-			const resetHeartbeat = () => {
-				if (heartbeatTimer) clearTimeout(heartbeatTimer);
-				heartbeatTimer = setTimeout(() => {
-					iterationController.abort();
-				}, HEARTBEAT_TIMEOUT_MS);
-			};
-			const clearHeartbeat = () => {
-				if (heartbeatTimer) {
-					clearTimeout(heartbeatTimer);
-					heartbeatTimer = null;
-				}
-			};
-
-			try {
-				logger.info('[ChatProvider] SSE bridge: subscribing to global events...', {
-					baseUrl: activeBaseUrl,
-				});
-				const subscription = await client.global.event({
-					signal: iterationController.signal,
-					onSseError: () => {
-						// Webview owns connection chrome; this bridge is only for backend-owned session status.
-					},
-				});
-				if (signal.aborted) {
-					await subscription.stream.return?.(undefined);
-					break;
-				}
-				const stream = subscription.stream as AsyncGenerator<unknown>;
-				const closeStream = () => {
-					void stream.return?.(undefined);
-				};
-				iterationController.signal.addEventListener('abort', closeStream, { once: true });
-				this.resolveBackendStatusWaiters();
-				this.sendServerStatus('connected');
-				// After reconnect, push a synthetic server.connected event to the webview
-				// so it can resync stale session statuses (events lost during disconnect).
-				if (consecutiveFailures > 0) {
-					this.bridge.data('opencodeEvent', {
-						type: 'server.connected',
-						properties: {},
-					});
-				}
-				resetHeartbeat();
-
-				for await (const event of stream) {
-					if (signal.aborted) break;
-					consecutiveFailures = 0;
-					resetHeartbeat();
-					this.forwardBackendStatusEvent(event);
-				}
-				iterationController.signal.removeEventListener('abort', closeStream);
-			} catch (error) {
-				if (signal.aborted) break;
-				consecutiveFailures++;
-				this.sendServerStatus('error');
-				logger.warn('[ChatProvider] Backend status bridge stream failed', {
-					baseUrl: activeBaseUrl,
-					directory,
-					error,
-					attempt: consecutiveFailures,
-				});
-				if (consecutiveFailures >= 3) {
-					try {
-						await this.recoverManagedRuntime(directory);
-					} catch (restartError) {
-						logger.warn('[ChatProvider] Failed to recover managed OpenCode runtime', {
-							restartError,
-						});
-					}
-				}
-			} finally {
-				signal.removeEventListener('abort', onParentAbort);
-				clearHeartbeat();
-				iterationController.abort();
-			}
-
-			if (signal.aborted) break;
-			logger.info('[ChatProvider] Backend status bridge scheduling reconnect', {
-				baseUrl: activeBaseUrl,
-				directory,
-				attempt: consecutiveFailures,
-				backoff: RECONNECT_DELAY_MS,
-			});
-			// Abortable sleep — instantly resolves on signal abort, preventing leaked timers
-			await new Promise<void>(resolve => {
-				if (signal.aborted) return resolve();
-				const timer = setTimeout(() => {
-					signal.removeEventListener('abort', onAbort);
-					resolve();
-				}, RECONNECT_DELAY_MS);
-				const onAbort = () => {
-					clearTimeout(timer);
-					resolve();
-				};
-				signal.addEventListener('abort', onAbort);
-			});
-		}
-	}
-
-	private forwardBackendStatusEvent(event: unknown): void {
-		const eventRecord = toRecord(event);
-		const eventDirectory = eventRecord?.directory;
-		const workspaceRoot = this.settings.getWorkspaceRoot();
-		if (
-			typeof eventDirectory === 'string' &&
-			workspaceRoot &&
-			normalizeComparablePath(eventDirectory).toLowerCase() !==
-				normalizeComparablePath(workspaceRoot).toLowerCase()
-		) {
-			return;
-		}
-
+	private handleForwardedEvent(event: { type: string; properties: Record<string, unknown> }): void {
 		// Track session busy/idle state for deferred runtime reload
-		if (eventRecord?.type === 'session.status') {
-			const properties = eventRecord.properties as Record<string, unknown> | undefined;
-			const sessionID = properties?.sessionID;
-			const status = properties?.status as { type?: string } | undefined;
+		if (event.type === 'session.status') {
+			const sessionID = event.properties.sessionID;
+			const status = event.properties.status as { type?: string } | undefined;
 			if (typeof sessionID === 'string' && status?.type) {
 				this.services.runtimeReload.updateSessionStatus(sessionID, {
 					type: status.type,
@@ -1119,35 +911,28 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 		}
 
 		// Clean up tracking when a session is deleted
-		if (eventRecord?.type === 'session.deleted') {
-			const properties = eventRecord.properties as Record<string, unknown> | undefined;
-			const sessionID = properties?.sessionID;
+		if (event.type === 'session.deleted') {
+			const sessionID = event.properties.sessionID;
 			if (typeof sessionID === 'string') {
 				this.services.runtimeReload.removeSession(sessionID);
 			}
 		}
 
 		// Auto-respond to permission requests from extension side (works even when webview is hidden)
-		if (eventRecord?.type === 'permission.asked') {
-			const properties = eventRecord.properties as Record<string, unknown> | undefined;
-			const sessionID = properties?.sessionID;
+		if (event.type === 'permission.asked') {
+			const sessionID = event.properties.sessionID;
 			if (typeof sessionID === 'string') {
 				void this.toolHandler.autoRespondToSessionPermissions(sessionID);
 			}
 		}
 
 		// Intercept ProviderModelNotFoundError: sync provider to opencode.json and reload runtime.
-		// The error is still forwarded to webview so the user sees it, but the provider sync
-		// ensures the model will be available on the next attempt without manual intervention.
-		if (eventRecord?.type === 'session.error') {
-			const properties = eventRecord.properties as Record<string, unknown> | undefined;
-			const message = typeof properties?.message === 'string' ? properties.message : '';
+		if (event.type === 'session.error') {
+			const message = typeof event.properties.message === 'string' ? event.properties.message : '';
 			if (message.includes('Model not found') || message.includes('ProviderModelNotFound')) {
 				void this.handleModelNotFoundRecovery();
 			}
 		}
-
-		this.bridge.data('opencodeEvent', event);
 	}
 
 	/**
@@ -1272,7 +1057,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 	}
 
 	async disposeAsync(): Promise<void> {
-		this.stopBackendStatusBridge();
 		for (const disposable of this.disposables) {
 			disposable.dispose();
 		}

@@ -1,3 +1,9 @@
+/**
+ * @file BackendStatusBridge tests
+ * @description Tests for extension host event handling: handleForwardedEvent (events forwarded
+ *              from webview SSE) and sendServerStatus.
+ */
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('vscode', async () => await import('../../__mocks__/vscode.js'));
@@ -12,6 +18,11 @@ function createBridgeProvider() {
 		postedMessages.push(msg);
 	});
 
+	const autoRespondMock = vi.fn();
+	const updateSessionStatusMock = vi.fn();
+	const removeSessionMock = vi.fn();
+	const handleModelNotFoundRecoveryMock = vi.fn();
+
 	const provider: any = Object.assign(Object.create(ChatProvider.prototype), {
 		bridge,
 		settings: {
@@ -23,145 +34,93 @@ function createBridgeProvider() {
 				directory: 'C:\\repo',
 			})),
 		},
+		toolHandler: {
+			autoRespondToSessionPermissions: autoRespondMock,
+		},
+		services: {
+			runtimeReload: {
+				updateSessionStatus: updateSessionStatusMock,
+				removeSession: removeSessionMock,
+			},
+		},
+		handleModelNotFoundRecovery: handleModelNotFoundRecoveryMock,
 	});
 
-	return { provider, postedMessages, bridge };
+	return {
+		provider,
+		postedMessages,
+		bridge,
+		autoRespondMock,
+		updateSessionStatusMock,
+		removeSessionMock,
+		handleModelNotFoundRecoveryMock,
+	};
 }
 
-describe('forwardBackendStatusEvent', () => {
+describe('handleForwardedEvent', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 	});
 
-	it('forwards all events to webview as opencodeEvent', () => {
-		const { provider, postedMessages } = createBridgeProvider();
-		const event = { payload: { type: 'message.updated', properties: { sessionID: 'ses-1' } } };
+	it('tracks session.status for runtime reload', () => {
+		const { provider, updateSessionStatusMock } = createBridgeProvider();
 
-		(provider as any).forwardBackendStatusEvent(event);
+		(provider as any).handleForwardedEvent({
+			type: 'session.status',
+			properties: { sessionID: 'ses-1', status: { type: 'busy' } },
+		});
 
-		expect(postedMessages).toContainEqual({ type: 'opencodeEvent', data: event });
+		expect(updateSessionStatusMock).toHaveBeenCalledWith('ses-1', { type: 'busy' });
 	});
 
-	it('extracts session.status with busy and forwards canonical event only', () => {
-		const { provider, postedMessages } = createBridgeProvider();
-		const event = {
-			payload: {
-				type: 'session.status',
-				properties: {
-					sessionID: 'ses-1',
-					status: { type: 'busy' },
-				},
-			},
-		};
+	it('removes session tracking on session.deleted', () => {
+		const { provider, removeSessionMock } = createBridgeProvider();
 
-		(provider as any).forwardBackendStatusEvent(event);
+		(provider as any).handleForwardedEvent({
+			type: 'session.deleted',
+			properties: { sessionID: 'ses-1' },
+		});
 
-		expect(postedMessages).toContainEqual({ type: 'opencodeEvent', data: event });
+		expect(removeSessionMock).toHaveBeenCalledWith('ses-1');
 	});
 
-	it('extracts session.status with retry and preserves metadata in canonical event', () => {
-		const { provider, postedMessages } = createBridgeProvider();
-		const event = {
-			payload: {
-				type: 'session.status',
-				properties: {
-					sessionID: 'ses-1',
-					status: { type: 'retry', attempt: 3, message: 'Rate limited', next: 1700000000 },
-				},
-			},
-		};
+	it('auto-responds to permission.asked', () => {
+		const { provider, autoRespondMock } = createBridgeProvider();
 
-		(provider as any).forwardBackendStatusEvent(event);
+		(provider as any).handleForwardedEvent({
+			type: 'permission.asked',
+			properties: { sessionID: 'ses-1' },
+		});
 
-		expect(postedMessages).toContainEqual({ type: 'opencodeEvent', data: event });
+		expect(autoRespondMock).toHaveBeenCalledWith('ses-1');
 	});
 
-	it('forwards session.error through canonical opencodeEvent without showNotification', () => {
-		const { provider, postedMessages } = createBridgeProvider();
-		const event = {
-			payload: {
-				type: 'session.error',
-				properties: {
-					sessionID: 'ses-1',
-					error: { name: 'ModelUnavailableError', message: 'Model is down' },
-				},
-			},
-		};
+	it('triggers model recovery on session.error with ProviderModelNotFound', () => {
+		const { provider, handleModelNotFoundRecoveryMock } = createBridgeProvider();
 
-		(provider as any).forwardBackendStatusEvent(event);
+		(provider as any).handleForwardedEvent({
+			type: 'session.error',
+			properties: { sessionID: 'ses-1', message: 'ProviderModelNotFound: model xyz' },
+		});
 
-		expect(postedMessages).toContainEqual({ type: 'opencodeEvent', data: event });
-		expect(postedMessages.filter((msg: any) => msg.type === 'showNotification')).toHaveLength(0);
+		expect(handleModelNotFoundRecoveryMock).toHaveBeenCalled();
 	});
 
-	it('forwards aborted session.error without direct notification side-channel', () => {
-		const { provider, postedMessages } = createBridgeProvider();
-		const event = {
-			payload: {
-				type: 'session.error',
-				properties: {
-					sessionID: 'ses-1',
-					error: { name: 'MessageAbortedError', message: 'Aborted by user' },
-				},
-			},
-		};
+	it('does not trigger model recovery for other session errors', () => {
+		const { provider, handleModelNotFoundRecoveryMock } = createBridgeProvider();
 
-		(provider as any).forwardBackendStatusEvent(event);
+		(provider as any).handleForwardedEvent({
+			type: 'session.error',
+			properties: { sessionID: 'ses-1', message: 'Rate limit exceeded' },
+		});
 
-		expect(postedMessages).toContainEqual({ type: 'opencodeEvent', data: event });
-		const notifications = postedMessages.filter((msg: any) => msg.type === 'showNotification');
-		expect(notifications).toHaveLength(0);
+		expect(handleModelNotFoundRecoveryMock).not.toHaveBeenCalled();
 	});
+});
 
-	it('forwards events without payload.type without parsing status', () => {
-		const { provider, postedMessages } = createBridgeProvider();
-		const event = { someField: 'value' };
-
-		(provider as any).forwardBackendStatusEvent(event);
-
-		expect(postedMessages).toHaveLength(1);
-		expect(postedMessages[0]).toEqual({ type: 'opencodeEvent', data: event });
-	});
-
-	it('forwards session.idle for untracked sessions without local mutation', () => {
-		const { provider, postedMessages } = createBridgeProvider();
-		const event = {
-			payload: { type: 'session.idle', properties: { sessionID: 'ses-unknown' } },
-		};
-
-		(provider as any).forwardBackendStatusEvent(event);
-
-		expect(postedMessages).toContainEqual({ type: 'opencodeEvent', data: event });
-	});
-
-	it('forwards tracked session idle without local normalization', () => {
-		const { provider, postedMessages } = createBridgeProvider();
-		const event = {
-			payload: { type: 'session.idle', properties: { sessionID: 'ses-1' } },
-		};
-
-		(provider as any).forwardBackendStatusEvent(event);
-
-		expect(postedMessages).toContainEqual({ type: 'opencodeEvent', data: event });
-	});
-
-	it('forwards session.updated events carrying revert metadata', () => {
-		const { provider, postedMessages } = createBridgeProvider();
-		const event = {
-			payload: {
-				type: 'session.updated',
-				properties: {
-					info: {
-						id: 'ses-1',
-						revert: { messageID: 'msg-2' },
-					},
-				},
-			},
-		};
-
-		(provider as any).forwardBackendStatusEvent(event);
-
-		expect(postedMessages).toContainEqual({ type: 'opencodeEvent', data: event });
+describe('sendServerStatus', () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
 	});
 
 	it('pushes explicit server status messages to the webview', () => {

@@ -799,6 +799,18 @@ export interface WebviewLogCommand {
 }
 
 // =============================================================================
+// Webview → Extension: Forwarded SSE events (for extension-side reactions)
+// =============================================================================
+
+export interface ForwardedEventCommand {
+	type: 'forwardedEvent';
+	event: {
+		type: string;
+		properties: Record<string, unknown>;
+	};
+}
+
+// =============================================================================
 // Webview → Extension Union
 // =============================================================================
 // File Commands
@@ -985,7 +997,8 @@ export type WebviewCommand =
 	| ReloadExtensionCommand
 	| GetConnectionDetailsCommand
 	| AbortSessionCommand
-	| WebviewLogCommand;
+	| WebviewLogCommand
+	| ForwardedEventCommand;
 
 // =============================================================================
 // Utility

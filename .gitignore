@@ -35,3 +35,4 @@ scripts/.*
 cli-sources/
 _wgun/
 .codegraph/
+.sisyphus/

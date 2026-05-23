@@ -50,12 +50,10 @@ function createProvider(promptAsyncImpl?: PromptAsyncMock, summarizeImpl?: Summa
 				directory: 'C:\\repo',
 			})),
 		},
-		backendStatusAbort: null,
-		backendStatusKey: null,
-		backendStatusRun: null,
-		backendStatusWaiters: [],
 		sendServerStatus: vi.fn(),
-		stopBackendStatusBridge: vi.fn(),
+		settings: {
+			getWorkspaceRoot: vi.fn(() => 'C:\\repo'),
+		},
 		hasSynced: false,
 	});
 
@@ -178,8 +176,7 @@ describe('ChatProvider send pipeline', () => {
 
 	it('reloadOpenCodeRuntime calls instance.dispose() when SDK client is available', async () => {
 		const { provider, dispose, clearAgentsCache } = createProvider();
-		provider.backendStatusRun = Promise.resolve();
-		provider.restartBackendStatusBridge = vi.fn();
+		provider.sendServerInfo = vi.fn();
 		provider.syncAllOrDefer = vi.fn(async () => {});
 
 		await provider.reloadOpenCodeRuntime('opencode-config:manual');
@@ -190,7 +187,7 @@ describe('ChatProvider send pipeline', () => {
 
 	it('reloadOpenCodeRuntime calls instance.dispose() regardless of bridge state', async () => {
 		const { provider, dispose, clearAgentsCache } = createProvider();
-		provider.restartBackendStatusBridge = vi.fn();
+		provider.sendServerInfo = vi.fn();
 		provider.syncAllOrDefer = vi.fn(async () => {});
 
 		await provider.reloadOpenCodeRuntime('opencode-config:manual');
@@ -202,7 +199,7 @@ describe('ChatProvider send pipeline', () => {
 	it('skips instance.dispose() when SDK client is unavailable', async () => {
 		const { provider, dispose, clearAgentsCache } = createProvider();
 		provider.cli.getSdkClient.mockReturnValue(null);
-		provider.restartBackendStatusBridge = vi.fn();
+		provider.sendServerInfo = vi.fn();
 		provider.syncAllOrDefer = vi.fn(async () => {});
 
 		await provider.reloadOpenCodeRuntime('opencode-config:manual');
@@ -211,7 +208,7 @@ describe('ChatProvider send pipeline', () => {
 		expect(clearAgentsCache).toHaveBeenCalledTimes(1);
 	});
 
-	it('starts backend status bridge before notifying webview on startup', async () => {
+	it('sends server status and info before syncing on startup', async () => {
 		const { provider } = createProvider();
 		provider.services = {
 			setWorkspaceRoot: vi.fn(),
@@ -239,34 +236,13 @@ describe('ChatProvider send pipeline', () => {
 		});
 		provider.cli.ensureServer = vi.fn(async () => {});
 		provider.reloadOpenCodeRuntimeOnStartup = vi.fn(async () => {});
-		provider.startBackendStatusBridge = vi.fn();
 		provider.sendServerStatus = vi.fn();
 		provider.sendServerInfo = vi.fn();
 		provider.syncAllOrDefer = vi.fn(async () => {});
 
 		await provider.doStartOpenCode('C:\\repo');
 
-		expect(provider.startBackendStatusBridge).toHaveBeenCalledTimes(1);
 		expect(provider.sendServerStatus).toHaveBeenCalledWith('connected');
-		expect(provider.sendServerInfo).toHaveBeenCalled();
-		expect(provider.startBackendStatusBridge.mock.invocationCallOrder[0]).toBeLessThan(
-			provider.sendServerInfo.mock.invocationCallOrder[0],
-		);
-	});
-
-	it('recoverManagedRuntime reuses buildServerConfig for full restart config', async () => {
-		const { provider } = createProvider();
-		provider.settings = { getWorkspaceRoot: vi.fn(() => 'C:\repo') };
-		provider.cli.tryReconnect = vi.fn(async () => false);
-		provider.cli.restartServer = vi.fn(async () => {});
-		provider.sendServerInfo = vi.fn();
-
-		await provider.recoverManagedRuntime('C:\repo');
-
-		expect(provider.buildServerConfig).toHaveBeenCalledWith('C:\repo');
-		expect(provider.cli.restartServer).toHaveBeenCalledWith(
-			expect.objectContaining({ workspaceRoot: 'C:\repo' }),
-		);
 		expect(provider.sendServerInfo).toHaveBeenCalled();
 	});
 });

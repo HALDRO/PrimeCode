@@ -18,7 +18,7 @@ export const getHtml = (
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' ${cspSource}; script-src 'unsafe-inline' 'unsafe-eval' ${cspSource}; img-src data: https: blob: ${cspSource}; font-src data: https: ${cspSource}; worker-src 'self' blob: ${cspSource}; connect-src https: wss: localhost:* http://localhost:*;">
+	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' ${cspSource}; script-src 'unsafe-inline' 'unsafe-eval' ${cspSource}; img-src data: https: blob: ${cspSource}; font-src data: https: ${cspSource}; worker-src 'self' blob: ${cspSource}; connect-src https: wss: ws: localhost:* http://localhost:* http://127.0.0.1:*;">
 	<title>PrimeCode</title>
 	<link href="${styleUri}" rel="stylesheet">
 </head>

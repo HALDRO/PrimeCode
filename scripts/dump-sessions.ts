@@ -1,18 +1,21 @@
 /**
  * @file Dumps OpenCode sessions to docs/debug.
- * @description Discovers a running OpenCode server, collects sessions, and exports
+ * @description Spawns a temporary `opencode serve` instance, collects sessions, and exports
  * session payloads/messages/children as JSON snapshots for debugging workflows.
+ * Server shuts down when the script exits (Ctrl-C or normal completion).
  * "Download from last 10 sessions" aggregates sessions across all known workspaces
  * using the `/project` worktree list, then sorts globally by recency.
  */
 
-import { execFile } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
-import { promisify } from 'node:util';
 
-const execFileAsync = promisify(execFile);
+// ─── State ────────────────────────────────────────────────────────────────────
+
+let serverProc: ChildProcess | null = null;
+let baseUrl = '';
 
 const WORKSPACE = process.cwd();
 const DEBUG_DIR = path.join(WORKSPACE, 'docs', 'debug');
@@ -79,6 +82,8 @@ type DumpedSessionNode = {
 	};
 };
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
 function toComparableTime(session: OpenCodeSession): number {
 	return Number(session.time?.updated ?? session.time?.created ?? 0);
 }
@@ -117,135 +122,85 @@ function ask(q: string): Promise<string> {
 	);
 }
 
-function getBaseUrl(): string {
-	const port = process.env.OPENCODE_PORT ?? '4096';
-	return `http://127.0.0.1:${port}`;
-}
+// ─── Server Lifecycle ─────────────────────────────────────────────────────────
 
-/**
- * Check if a real OpenCode server is running at the given URL.
- */
-async function isOpenCodeServer(baseUrl: string): Promise<boolean> {
-	try {
-		const controller = new AbortController();
-		const timeout = setTimeout(() => controller.abort(), 2000);
-		const res = await fetch(`${baseUrl}/global/health`, {
-			method: 'GET',
-			signal: controller.signal,
-		});
-		clearTimeout(timeout);
-		if (!res.ok) return false;
-		const data = (await res.json()) as { healthy?: boolean };
-		return data.healthy === true;
-	} catch {
-		return false;
-	}
-}
+/** Spawn a temporary opencode server. Auto-kills on process exit. */
+async function startServer(): Promise<string> {
+	console.log('Starting opencode serve...');
+	const proc = spawn('opencode', ['serve', '--port=0', '--hostname=127.0.0.1'], {
+		stdio: ['ignore', 'pipe', 'pipe'],
+		env: { ...process.env, NO_COLOR: '1' },
+		shell: process.platform === 'win32',
+	});
+	serverProc = proc;
 
-/**
- * Discover listen ports of running `opencode` processes.
- * Uses OS-specific commands (tasklist + netstat on Windows, ss/lsof on Unix).
- */
-async function discoverOpenCodePorts(): Promise<number[]> {
-	const isWindows = process.platform === 'win32';
+	let output = '';
+	const url = await new Promise<string>((resolve, reject) => {
+		const timer = setTimeout(() => {
+			proc.kill();
+			reject(new Error('Timeout waiting for opencode serve to start (15s)'));
+		}, 15_000);
 
-	if (isWindows) {
-		// Step 1: find PIDs of opencode.exe processes
-		let tasklistOut: string;
-		try {
-			const result = await execFileAsync(
-				'tasklist',
-				['/FI', 'IMAGENAME eq opencode.exe', '/FO', 'CSV', '/NH'],
-				{ timeout: 5000 },
-			);
-			tasklistOut = result.stdout;
-		} catch {
-			return [];
-		}
-
-		const pids = new Set<string>();
-		for (const line of tasklistOut.split('\n')) {
-			const match = line.match(/"opencode\.exe","(\d+)"/i);
-			if (match) pids.add(match[1]);
-		}
-		if (pids.size === 0) return [];
-
-		// Step 2: find which ports those PIDs are listening on
-		let netstatOut: string;
-		try {
-			const result = await execFileAsync('netstat', ['-ano', '-p', 'TCP'], { timeout: 5000 });
-			netstatOut = result.stdout;
-		} catch {
-			return [];
-		}
-
-		const ports: number[] = [];
-		for (const line of netstatOut.split('\n')) {
-			if (!line.includes('LISTENING')) continue;
-			const parts = line.trim().split(/\s+/);
-			const pid = parts[parts.length - 1];
-			if (!pids.has(pid)) continue;
-			const addrPort = parts[1];
-			const portStr = addrPort?.split(':').pop();
-			if (portStr) {
-				const port = Number.parseInt(portStr, 10);
-				if (port > 0) ports.push(port);
+		let resolved = false;
+		const onData = (chunk: Buffer) => {
+			if (resolved) return;
+			output += chunk.toString();
+			const match = output.match(/opencode server listening on\s+(https?:\/\/[^\s\r\n]+)/);
+			if (match?.[1]) {
+				resolved = true;
+				clearTimeout(timer);
+				resolve(match[1]);
 			}
-		}
-		return ports;
-	}
+		};
 
-	// Linux / macOS: use `ss` or `lsof`
-	try {
-		const { stdout } = await execFileAsync('ss', ['-tlnp'], { timeout: 5000 });
-		const ports: number[] = [];
-		for (const line of stdout.split('\n')) {
-			if (!line.includes('opencode')) continue;
-			const match = line.match(/:(\d+)\s/);
-			if (match) ports.push(Number.parseInt(match[1], 10));
-		}
-		if (ports.length > 0) return ports;
-	} catch {}
-
-	try {
-		const { stdout } = await execFileAsync('lsof', ['-iTCP', '-sTCP:LISTEN', '-P', '-n'], {
-			timeout: 5000,
+		proc.stdout?.on('data', onData);
+		proc.stderr?.on('data', onData);
+		proc.on('error', err => {
+			clearTimeout(timer);
+			reject(err);
 		});
-		const ports: number[] = [];
-		for (const line of stdout.split('\n')) {
-			if (!line.includes('opencode')) continue;
-			const match = line.match(/:(\d+)\s/);
-			if (match) ports.push(Number.parseInt(match[1], 10));
-		}
-		return ports;
-	} catch {}
+		proc.on('exit', code => {
+			if (resolved) return;
+			clearTimeout(timer);
+			reject(new Error(`opencode serve exited with code ${code}\n${output}`));
+		});
+	});
 
-	return [];
+	console.log(`Server: ${url}\n`);
+	return url;
 }
 
-/**
- * Find a working OpenCode server URL.
- * 1. Try canonical port first (4096 or OPENCODE_PORT env).
- * 2. Discover opencode processes and health-check each port.
- * 3. Return first working URL or null.
- */
-async function findWorkingServer(): Promise<string | null> {
-	// Fast path: canonical port
-	const canonicalUrl = getBaseUrl();
-	if (await isOpenCodeServer(canonicalUrl)) {
-		return canonicalUrl;
+function killServer(): void {
+	if (serverProc && !serverProc.killed) {
+		serverProc.kill();
 	}
+}
 
-	// Slow path: discover processes
-	const ports = await discoverOpenCodePorts();
-	for (const port of ports) {
-		const url = `http://127.0.0.1:${port}`;
-		if (await isOpenCodeServer(url)) {
-			return url;
-		}
+// Register cleanup on exit
+process.on('exit', killServer);
+process.on('SIGINT', () => { killServer(); process.exit(0); });
+process.on('SIGTERM', () => { killServer(); process.exit(0); });
+
+// ─── API ──────────────────────────────────────────────────────────────────────
+
+async function api<T>(base: string, ep: string, directory?: string): Promise<T> {
+	let url = `${base}${ep}`;
+	if (directory !== undefined) {
+		const sep = ep.includes('?') ? '&' : '?';
+		url += `${sep}directory=${encodeURIComponent(directory)}`;
 	}
+	const res = await fetch(url);
+	if (!res.ok) throw new Error(`${res.status} ${res.statusText} — ${ep}`);
+	return res.json() as Promise<T>;
+}
 
-	return null;
+async function safeApi<T>(base: string, ep: string, directory?: string, fallback?: T): Promise<T> {
+	try {
+		return await api<T>(base, ep, directory);
+	} catch {
+		if (fallback !== undefined) return fallback;
+		throw new Error(`Failed to fetch ${ep}`);
+	}
 }
 
 /** Проверяет, доступна ли сессия на сервере (с указанием directory) */
@@ -264,16 +219,7 @@ async function checkSessionExists(
 	}
 }
 
-async function api<T>(base: string, ep: string, directory?: string): Promise<T> {
-	let url = `${base}${ep}`;
-	if (directory !== undefined) {
-		const sep = ep.includes('?') ? '&' : '?';
-		url += `${sep}directory=${encodeURIComponent(directory)}`;
-	}
-	const res = await fetch(url);
-	if (!res.ok) throw new Error(`${res.status} ${res.statusText} — ${ep}`);
-	return res.json() as Promise<T>;
-}
+// ─── Session Dumping ──────────────────────────────────────────────────────────
 
 function extractMessageDiffs(messages: OpenCodeMessage[]) {
 	const result: DumpedSessionNode['messageDiffs'] = [];
@@ -318,15 +264,6 @@ function extractUserPreviewText(message: OpenCodeMessage): string {
 		.map(part => part.text?.trim() ?? '')
 		.filter(Boolean)
 		.join(' ');
-}
-
-async function safeApi<T>(base: string, ep: string, directory?: string, fallback?: T): Promise<T> {
-	try {
-		return await api<T>(base, ep, directory);
-	} catch {
-		if (fallback !== undefined) return fallback;
-		throw new Error(`Failed to fetch ${ep}`);
-	}
 }
 
 async function dumpSessionNode(
@@ -420,15 +357,25 @@ async function getSessionsAcrossWorkspaces(base: string, perWorkspaceLimit: numb
 	return merged;
 }
 
+/** Fetch the full server config (includes agent definitions with prompts). */
+async function fetchConfig(base: string, directory?: string): Promise<Record<string, unknown> | null> {
+	try {
+		return await api<Record<string, unknown>>(base, '/config', directory);
+	} catch {
+		return null;
+	}
+}
+
 async function dumpSession(base: string, id: string, directory?: string) {
 	console.log(`\nDumping ${id}...`);
-	const [session, statusMap, pathInfo, vcsInfo, permissions, questions] = await Promise.all([
+	const [session, statusMap, pathInfo, vcsInfo, permissions, questions, config] = await Promise.all([
 		api<Record<string, unknown>>(base, `/session/${id}`, directory),
 		safeApi<SessionStatusMap>(base, '/session/status', directory, {}),
 		safeApi<PathInfo>(base, '/path', directory, {}),
 		safeApi<VcsInfo>(base, '/vcs', directory, {}),
 		safeApi<PermissionRequest[]>(base, '/permission', directory, []),
 		safeApi<QuestionRequest[]>(base, '/question', directory, []),
+		fetchConfig(base, directory),
 	]);
 	const rootNode = await dumpSessionNode(base, session, directory);
 	console.log(
@@ -440,9 +387,31 @@ async function dumpSession(base: string, id: string, directory?: string) {
 		console.log(`  child ${childSessionId}: ${child._meta.messageCount} msgs — ${childTitle}`);
 	}
 
+	// Extract the used agent from the full server config
+	const sessionAgentName = typeof session.agent === 'string' ? session.agent : '';
+	const configAgent: Record<string, unknown> | null =
+		config && typeof config.agent === 'object' && config.agent !== null
+			? (config.agent as Record<string, unknown>)
+			: null;
+	const usedAgent: Record<string, unknown> | null =
+		sessionAgentName && configAgent
+			? (Object.values(configAgent).find(
+					(a: unknown) =>
+						typeof a === 'object' && a !== null && (a as Record<string, unknown>).name === sessionAgentName,
+				) as Record<string, unknown> ?? null)
+			: null;
+
 	const dump = {
 		root: rootNode,
 		session,
+		config,
+		agent: usedAgent
+			? {
+					name: usedAgent.name,
+					prompt: typeof usedAgent.prompt === 'string' ? usedAgent.prompt : null,
+					promptLength: typeof usedAgent.prompt === 'string' ? usedAgent.prompt.length : 0,
+				}
+			: null,
 		status: {
 			current: typeof session.id === 'string' ? statusMap[session.id] : undefined,
 			all: statusMap,
@@ -463,7 +432,7 @@ async function dumpSession(base: string, id: string, directory?: string) {
 			directory: directory ?? '(none)',
 			childCount: rootNode._meta.childCount,
 			totalMessages: rootNode._meta.messageCount,
-			formatVersion: 2,
+			formatVersion: 3,
 		},
 	};
 
@@ -473,15 +442,10 @@ async function dumpSession(base: string, id: string, directory?: string) {
 	console.log(`  Saved: ${out} (${Math.round(fs.statSync(out).size / 1024)} KB)`);
 }
 
+// ─── Main ─────────────────────────────────────────────────────────────────────
+
 async function main() {
-	console.log('Searching for OpenCode server...');
-	const base = await findWorkingServer();
-	if (!base) {
-		console.error('No working OpenCode server found.');
-		console.log('\nHint: start OpenCode TUI first: opencode');
-		process.exit(1);
-	}
-	console.log(`Server: ${base}\n`);
+	baseUrl = await startServer();
 
 	console.log('  [1] Download from last 10 sessions');
 	console.log('  [2] Enter session ID manually\n');
@@ -491,26 +455,26 @@ async function main() {
 	let directories: (string | undefined)[] = [];
 
 	if (choice === '1') {
-		const sessions = (await getSessionsAcrossWorkspaces(base, GLOBAL_WORKSPACE_SAMPLE_LIMIT)).slice(
+		const sessions = (await getSessionsAcrossWorkspaces(baseUrl, GLOBAL_WORKSPACE_SAMPLE_LIMIT)).slice(
 			0,
 			DEFAULT_DUMP_SESSIONS_LIMIT,
 		);
 		if (!sessions.length) {
 			console.log('No sessions.');
+			killServer();
 			return;
 		}
 
-		// Подтягиваем первое сообщение пользователя для превью, если тайтл бесполезный
 		const previews = await Promise.all(
 			sessions.map(async s => {
 				const title = s.title ?? '';
 				if (title && !title.startsWith('New session')) return title;
 				try {
 					const msgs = await api<OpenCodeMessage[]>(
-					base,
-					`/session/${s.id}/message`,
-					s.directory ?? WORKSPACE,
-				);
+						baseUrl,
+						`/session/${s.id}/message`,
+						s.directory ?? WORKSPACE,
+					);
 					const first = msgs.find(message => extractUserPreviewText(message));
 					const text = first ? extractUserPreviewText(first) : '';
 					if (text)
@@ -550,19 +514,17 @@ async function main() {
 		console.log('Enter session ID (ses_...):');
 		const id = await ask('> ');
 		if (id.startsWith('ses_')) {
-			// Сначала пробуем текущий workspace
-			if (await checkSessionExists(base, id, WORKSPACE)) {
+			if (await checkSessionExists(baseUrl, id, WORKSPACE)) {
 				ids = [id];
 				directories = [WORKSPACE];
 			} else {
-				// Спрашиваем путь к проекту
 				console.log(`Session not found in current workspace.`);
 				console.log(`Enter project directory (or press Enter to skip):`);
 				const dir = await ask('> ');
 				if (dir) {
 					let matchedDir: string | undefined;
 					for (const candidate of getDirectoryVariants(dir)) {
-						if (await checkSessionExists(base, id, candidate)) {
+						if (await checkSessionExists(baseUrl, id, candidate)) {
 							matchedDir = candidate;
 							break;
 						}
@@ -574,8 +536,7 @@ async function main() {
 						console.log(`  Session ${id} not found for directory ${dir}.`);
 					}
 				} else {
-					// Пробуем без directory
-					if (await checkSessionExists(base, id)) {
+					if (await checkSessionExists(baseUrl, id)) {
 						ids = [id];
 						directories = [undefined];
 					} else {
@@ -588,21 +549,23 @@ async function main() {
 
 	if (!ids.length) {
 		console.log('Nothing selected.');
+		killServer();
 		return;
 	}
 
-	const targetServer = base;
 	for (let i = 0; i < ids.length; i++) {
 		try {
-			await dumpSession(targetServer, ids[i], directories[i]);
+			await dumpSession(baseUrl, ids[i], directories[i]);
 		} catch (e) {
 			console.error(`  Failed ${ids[i]}:`, e);
 		}
 	}
 	console.log(`\nDone. ${ids.length} session(s) dumped.`);
+	killServer();
 }
 
 main().catch(e => {
 	console.error(e);
+	killServer();
 	process.exit(1);
 });
