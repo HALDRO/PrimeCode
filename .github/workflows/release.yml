@@ -3,30 +3,27 @@ name: Release
 on:
   push:
     tags:
-      - 'v*' # Срабатывает на теги типа v0.1.0, v1.0.0 и т.д.
+      - 'v*'
 
 permissions:
   contents: write
 
 jobs:
-  validate:
+  release:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: '24'
-          cache: 'npm'
+          bun-version: latest
 
       - name: Install dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       - name: Verify version matches tag
         run: |
-          PKG_VERSION="v$(node -p "require('./package.json').version")"
+          PKG_VERSION="v$(bun -e "console.log(require('./package.json').version)")"
           TAG_VERSION="${{ github.ref_name }}"
           echo "package.json version: $PKG_VERSION"
           echo "Git tag: $TAG_VERSION"
@@ -35,30 +32,14 @@ jobs:
             exit 1
           fi
 
-      - name: Lint (Biome + TypeScript)
-        run: npm run lint:biome && npm run lint:tsc
+      - name: Lint
+        run: bun run lint:biome && bun run lint:tsc
 
-      - name: Run tests
-        run: npm test
+      - name: Test
+        run: bun test
 
-  release:
-    needs: validate
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: '24'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build extension
-        run: npm run build
+      - name: Build
+        run: bun run build
 
       - name: Package VSIX
         run: npx @vscode/vsce package --no-dependencies --out primecode-${{ github.ref_name }}.vsix

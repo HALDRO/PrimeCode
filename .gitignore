@@ -5,6 +5,9 @@ dist/
 # Dependencies
 node_modules/
 
+# npm lock (project uses bun)
+package-lock.json
+
 # Packages
 *.vsix
 
