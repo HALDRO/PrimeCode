@@ -20,7 +20,7 @@
 		"lint": "bun run lint:fix && bun run lint:tsc",
 		"lint:fix": "biome check --write --unsafe src/",
 		"format": "biome format --write src/",
-		"test": "vitest run",
+		"test": "vitest run src/",
 		"test:watch": "vitest",
 		"test:coverage": "vitest run --coverage",
 		"test:vscode": "npx @vscode/test-cli",
